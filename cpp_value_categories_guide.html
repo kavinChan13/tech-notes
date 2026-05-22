@@ -240,6 +240,7 @@
       <li><a href="#s8">= default / = delete</a></li>
       <li><a href="#s9">RVO / NRVO / Copy Elision</a></li>
       <li><a href="#s10">noexcept 与移动构造</a></li>
+      <li><a href="#s10b">C++23 deducing this ⭐</a></li>
       <li><a href="#s11">真实工程 Rule of 5 实例</a></li>
       <li><a href="#s12">易错点速查</a></li>
       <li><a href="#s13">面试题集（20 道）</a></li>
@@ -939,6 +940,192 @@ std::vector&lt;<span class="type">B</span>&gt; vb;
     <span class="cm">// pmr 容器的移动构造在跨 allocator 时可能分配 → 可能抛</span>
     <span class="fn">Buffer</span>(<span class="type">Buffer</span>&amp;&amp;) <span class="cm">/* 不能 noexcept */</span> = <span class="kw">default</span>;
 };</pre>
+</section>
+
+<!-- ================================================================
+     §10b C++23 deducing this —— 值类别与 *this 的革命
+     ================================================================ -->
+<section class="chapter" id="s10b">
+  <h2>10b. C++23 deducing this — <code>*this</code> 的值类别终于显式可推导 ⭐</h2>
+
+  <p><strong>P0847R7</strong> 引入"<em>explicit object parameter</em>"，允许成员函数把 <code>this</code> 写成第一个显式参数，从而：① 通过模板推导 <code>*this</code> 的值类别（const / &amp; / &amp;&amp;）；② 一个函数代替原来 4 个重载；③ CRTP 不再需要 derived cast；④ Lambda 可以递归调用自身。这是 C++23 最影响日常代码风格的特性之一。</p>
+
+  <h3>10b.1 老问题 — <code>*this</code> 的值类别要写 4 个重载</h3>
+
+<pre><span class="cm">// 这就是 std::optional 的 value() 在标准里的真实重载数</span>
+<span class="kw">template</span>&lt;<span class="kw">class</span> T&gt;
+<span class="kw">class</span> <span class="type">optional</span> {
+    T storage_;
+<span class="kw">public</span>:
+    T&amp;                <span class="fn">value</span>() &amp;       { <span class="kw">return</span> storage_; }                          <span class="cm">// lvalue</span>
+    <span class="kw">const</span> T&amp;          <span class="fn">value</span>() <span class="kw">const</span> &amp; { <span class="kw">return</span> storage_; }                          <span class="cm">// const lvalue</span>
+    T&amp;&amp;               <span class="fn">value</span>() &amp;&amp;      { <span class="kw">return</span> std::<span class="fn">move</span>(storage_); }              <span class="cm">// rvalue</span>
+    <span class="kw">const</span> T&amp;&amp;         <span class="fn">value</span>() <span class="kw">const</span> &amp;&amp;{ <span class="kw">return</span> std::<span class="fn">move</span>(storage_); }              <span class="cm">// const rvalue</span>
+};</pre>
+
+  <div class="box danger">
+    四个函数体几乎一样，只是返回类型和 <code>*this</code> 值类别不同。维护成本高、易写错、模板化时还要写一堆 <code>const_cast</code> / <code>static_cast</code>。
+  </div>
+
+  <h3>10b.2 C++23 写法 — 一个函数搞定</h3>
+
+<pre><span class="kw">template</span>&lt;<span class="kw">class</span> T&gt;
+<span class="kw">class</span> <span class="type">optional</span> {
+    T storage_;
+<span class="kw">public</span>:
+    <span class="kw">template</span>&lt;<span class="kw">class</span> Self&gt;
+    <span class="kw">auto</span>&amp;&amp; <span class="fn">value</span>(<span class="kw">this</span> Self&amp;&amp; self) {              <span class="cm">// ★ this 是第一个显式参数</span>
+        <span class="kw">return</span> std::<span class="fn">forward</span>&lt;Self&gt;(self).storage_;     <span class="cm">// 自动 forward *this</span>
+    }
+};
+
+<span class="cm">// 调用</span>
+<span class="type">optional</span>&lt;<span class="type">Big</span>&gt; o = ...;
+<span class="kw">auto</span>&amp;        a = o.<span class="fn">value</span>();                <span class="cm">// Self = optional&amp;        → 返回 Big&amp;</span>
+<span class="kw">auto</span>&amp;&amp;       b = std::<span class="fn">move</span>(o).<span class="fn">value</span>();     <span class="cm">// Self = optional&amp;&amp;       → 返回 Big&amp;&amp; (可移动!)</span>
+<span class="kw">const auto</span>&amp; c = std::<span class="kw">as_const</span>(o).<span class="fn">value</span>();  <span class="cm">// Self = const optional&amp; → 返回 const Big&amp;</span></pre>
+
+  <div class="box ok">
+    <b>核心收益</b>：① 1 个模板代替 4 个重载；② 通过引用折叠 + perfect forwarding 自动给出正确的值类别；③ 维护成本骤降。
+  </div>
+
+  <h3>10b.3 语法细节</h3>
+
+  <table>
+    <tr><th>形式</th><th>含义</th><th>类比传统重载</th></tr>
+    <tr><td><code>void f(this Self&amp;&amp; self)</code></td><td>forwarding reference 模板，<strong>Self 推导出 value category</strong></td><td>四组重载 + 引用折叠</td></tr>
+    <tr><td><code>void f(this Self self)</code></td><td>by-value：拷贝/移动当前对象（罕用，Builder 模式有用）</td><td>—</td></tr>
+    <tr><td><code>void f(this const C&amp; self)</code></td><td>固定类型，仅 const lvalue 调用</td><td>等价 <code>void f() const &amp;</code></td></tr>
+    <tr><td><code>void f(this C&amp;&amp; self)</code></td><td>固定类型，仅 rvalue 调用</td><td>等价 <code>void f() &amp;&amp;</code></td></tr>
+  </table>
+
+  <div class="box danger">
+    <b>规则</b>：① 函数体内<strong>不能再用 <code>this</code> 指针</strong>，必须通过 <code>self</code>；② 不能与同名的非 explicit-object-parameter 成员函数共存；③ 不能用于虚函数、构造/析构函数。
+  </div>
+
+  <h3>10b.4 杀手级应用 ① — CRTP 不再需要 <code>static_cast</code></h3>
+
+<pre><span class="cm">// 旧 CRTP — 派生类调用要 static_cast 取回真实类型</span>
+<span class="kw">template</span>&lt;<span class="kw">class</span> D&gt;
+<span class="kw">struct</span> <span class="type">Counted</span> {
+    <span class="kw">int</span> <span class="fn">id</span>() <span class="kw">const</span> {
+        <span class="kw">return</span> <span class="kw">static_cast</span>&lt;<span class="kw">const</span> D&amp;&gt;(*<span class="kw">this</span>).<span class="fn">compute_id</span>();
+    }
+};
+<span class="kw">struct</span> <span class="type">User</span> : <span class="type">Counted</span>&lt;<span class="type">User</span>&gt; {
+    <span class="kw">int</span> <span class="fn">compute_id</span>() <span class="kw">const</span> { <span class="kw">return</span> <span class="num">42</span>; }
+};
+
+<span class="cm">// 新写法 — 完全消除 CRTP 模板基类</span>
+<span class="kw">struct</span> <span class="type">User</span> {
+    <span class="kw">int</span> <span class="fn">compute_id</span>() <span class="kw">const</span> { <span class="kw">return</span> <span class="num">42</span>; }
+    <span class="kw">template</span>&lt;<span class="kw">class</span> Self&gt;
+    <span class="kw">int</span> <span class="fn">id</span>(<span class="kw">this</span> <span class="kw">const</span> Self&amp; self) {
+        <span class="kw">return</span> self.<span class="fn">compute_id</span>();         <span class="cm">// Self 已是 User，无需 cast</span>
+    }
+};</pre>
+
+  <p><strong>影响</strong>：大量库（CRTP 风格的 expression templates、流式 builder、smart pointer 基类）可以彻底重写。<a href="https://github.com/google/cpp-coro" style="color:var(--accent)">cpp-coro</a> / Eigen / Boost.Hana 都开始迁移。</p>
+
+  <h3>10b.5 杀手级应用 ② — 递归 lambda（不再需要 <code>std::function</code> 或 Y-combinator）</h3>
+
+<pre><span class="cm">// C++20 及之前 — 递归 lambda 是地狱</span>
+<span class="kw">auto</span> fact = [](<span class="kw">int</span> n) {
+    <span class="kw">return</span> n &lt;= <span class="num">1</span> ? <span class="num">1</span> : n * fact(n - <span class="num">1</span>);   <span class="cm">// ❌ fact 在自己内部不可见</span>
+};
+<span class="cm">// 老的 workaround: std::function 类型擦除（性能差），或写 Y-combinator</span>
+
+<span class="cm">// C++23 — 通过 deducing this 自然递归</span>
+<span class="kw">auto</span> fact = [](<span class="kw">this</span> <span class="kw">auto</span>&amp; self, <span class="kw">int</span> n) -&gt; <span class="kw">int</span> {
+    <span class="kw">return</span> n &lt;= <span class="num">1</span> ? <span class="num">1</span> : n * <span class="fn">self</span>(n - <span class="num">1</span>);   <span class="cm">// ✅ self 就是 lambda 闭包对象</span>
+};
+
+std::<span class="fn">cout</span> &lt;&lt; <span class="fn">fact</span>(<span class="num">10</span>);   <span class="cm">// 3628800</span></pre>
+
+  <p>编译器对 lambda 自动调用 <code>operator()</code> 时把 lambda 闭包对象作为 self 传入。<strong>零开销</strong>—— 没有 std::function 虚调用、没有堆分配。</p>
+
+  <h3>10b.6 杀手级应用 ③ — 流式 Builder（链式调用自动 forward）</h3>
+
+<pre><span class="kw">class</span> <span class="type">RequestBuilder</span> {
+    std::string url_;
+    std::map&lt;std::string, std::string&gt; headers_;
+    std::string body_;
+<span class="kw">public</span>:
+    <span class="kw">template</span>&lt;<span class="kw">class</span> Self&gt;
+    <span class="kw">auto</span>&amp;&amp; <span class="fn">set_url</span>(<span class="kw">this</span> Self&amp;&amp; self, std::string u) {
+        std::<span class="fn">forward</span>&lt;Self&gt;(self).url_ = std::<span class="fn">move</span>(u);
+        <span class="kw">return</span> std::<span class="fn">forward</span>&lt;Self&gt;(self);          <span class="cm">// ★ 保持值类别链式传递</span>
+    }
+    <span class="kw">template</span>&lt;<span class="kw">class</span> Self&gt;
+    <span class="kw">auto</span>&amp;&amp; <span class="fn">add_header</span>(<span class="kw">this</span> Self&amp;&amp; self, std::string k, std::string v) {
+        std::<span class="fn">forward</span>&lt;Self&gt;(self).headers_[std::<span class="fn">move</span>(k)] = std::<span class="fn">move</span>(v);
+        <span class="kw">return</span> std::<span class="fn">forward</span>&lt;Self&gt;(self);
+    }
+};
+
+<span class="cm">// 调用</span>
+<span class="type">Request</span> r = <span class="type">RequestBuilder</span>{}                       <span class="cm">// rvalue 链</span>
+              .<span class="fn">set_url</span>(<span class="str">"/api"</span>)                       <span class="cm">// 每一步保持 rvalue</span>
+              .<span class="fn">add_header</span>(<span class="str">"Auth"</span>, token)
+              .<span class="fn">build</span>();                              <span class="cm">// rvalue → 触发 move into Request</span>
+
+<span class="type">RequestBuilder</span> b;
+b.<span class="fn">set_url</span>(<span class="str">"/api"</span>).<span class="fn">add_header</span>(<span class="str">"Auth"</span>, t);   <span class="cm">// lvalue 链 — 无意外 move</span></pre>
+
+  <p>过去写 Builder 要么把每个 setter 写两遍（&amp; 版 和 &amp;&amp; 版），要么牺牲值类别正确性。deducing this 一次解决。</p>
+
+  <h3>10b.7 杀手级应用 ④ — 容器 / 视图的统一访问</h3>
+
+<pre><span class="cm">// 你的自定义 Matrix 想要：</span>
+<span class="cm">//   m(i, j)              → const T&amp; / T&amp;</span>
+<span class="cm">//   std::move(m)(i, j)   → T&amp;&amp; (允许移动)</span>
+
+<span class="kw">class</span> <span class="type">Matrix</span> {
+    std::vector&lt;<span class="kw">double</span>&gt; data_;
+    <span class="type">size_t</span> cols_;
+<span class="kw">public</span>:
+    <span class="kw">template</span>&lt;<span class="kw">class</span> Self&gt;
+    <span class="kw">auto</span>&amp;&amp; <span class="kw">operator</span>()(<span class="kw">this</span> Self&amp;&amp; self, <span class="type">size_t</span> i, <span class="type">size_t</span> j) {
+        <span class="kw">return</span> std::<span class="fn">forward</span>&lt;Self&gt;(self).data_[i * self.cols_ + j];
+    }
+};</pre>
+
+  <h3>10b.8 性能与开销</h3>
+
+  <ul>
+    <li><strong>零运行时开销</strong> —— 等价于显式重载的代码（编译器直接特化）</li>
+    <li><strong>二进制可能膨胀</strong>：模板特化为不同值类别会产生多个实例（与手写 4 个重载相同），但通过 extern template / type erasure 可控</li>
+    <li><strong>对调试稍微不友好</strong>：栈帧里看到的是 <code>foo&lt;optional&amp;&amp;&gt;</code>，pretty-printer 需要适配</li>
+  </ul>
+
+  <h3>10b.9 编译器与库支持</h3>
+
+  <table>
+    <tr><th>工具</th><th>支持版本</th></tr>
+    <tr><td>GCC</td><td>14+ (<code>-std=c++23</code>)</td></tr>
+    <tr><td>Clang</td><td>18+</td></tr>
+    <tr><td>MSVC</td><td>19.36 (VS 2022 17.6+)</td></tr>
+    <tr><td>libc++ / libstdc++</td><td>已开始迁移 <code>optional</code>、<code>expected</code> 等到 deducing this</td></tr>
+    <tr><td>Boost.Hana / Eigen / Folly</td><td>2024 起渐进迁移</td></tr>
+  </table>
+
+  <div class="box star">
+    <strong>面试加分</strong>：被问"<code>void f() const &amp;</code> 和 <code>void f() const &amp;&amp;</code> 怎么写共享代码"——传统答案是 <code>const_cast</code> + 一个版本调另一个；<strong>C++23 标准答案</strong>是 deducing this 模板。说出后者，立刻显出对最新标准的把握。
+  </div>
+
+  <h3>10b.10 与值类别五兄弟（§2）的关系</h3>
+
+  <p>本章前面讲过 <code>*this</code> 是 lvalue、<code>std::move(*this)</code> 是 xvalue。deducing this 让<strong>调用方的 <code>*this</code> 值类别能被推导到模板参数 <code>Self</code></strong>，再通过引用折叠 + perfect forwarding 完整保留：</p>
+
+  <table>
+    <tr><th>调用形式</th><th><code>Self</code> 推导为</th><th><code>std::forward&lt;Self&gt;(self)</code> 是</th></tr>
+    <tr><td><code>obj.f()</code></td><td><code>T&amp;</code></td><td>lvalue</td></tr>
+    <tr><td><code>std::as_const(obj).f()</code></td><td><code>const T&amp;</code></td><td>const lvalue</td></tr>
+    <tr><td><code>std::move(obj).f()</code></td><td><code>T</code></td><td>xvalue</td></tr>
+    <tr><td><code>std::move(std::as_const(obj)).f()</code></td><td><code>const T</code></td><td>const xvalue</td></tr>
+  </table>
+
+  <p>这是值类别 + 引用折叠 + 模板推导 + perfect forwarding<strong>四个机制</strong>的集大成应用。理解了它，前面 §2-§4 的知识就活了。</p>
 </section>
 
 <!-- ================================================================
