@@ -92,6 +92,8 @@
   .box.def::before{content:"📖 定义: ";color:var(--accent);font-weight:700;}
   .box.embed{border-color:var(--teal);background:#0d2424;}
   .box.embed::before{content:"🔧 嵌入式落地: ";color:var(--teal);font-weight:700;}
+  .box.telecom{border-color:#60a5fa;background:#0d1a30;}
+  .box.telecom::before{content:"📡 真实案例 · 电信 NETCONF 代理: ";color:#60a5fa;font-weight:700;}
   table{width:100%;border-collapse:collapse;margin:1rem 0;font-size:.9rem;}
   th,td{border:1px solid var(--border);padding:.55rem .85rem;text-align:left;vertical-align:top;}
   th{background:#0d1730;color:var(--accent);}
@@ -1531,6 +1533,70 @@ target_link_libraries(my_app PRIVATE Foo::foo)</code></pre>
     </tr>
   </tbody>
 </table>
+
+<div class="box telecom">
+<strong>电信 C++ 项目中同时踩中了哪些 CMake 坑——真实案例解析</strong>
+
+<p style="margin-top:.6rem;">下面是一个真实电信 OAM 项目（~1300 源文件）的 CMake 结构，对照上面的踩坑清单，逐一分析：</p>
+
+<pre><code><span class="cm"># ❌ 坑 1：用 set(CMAKE_CXX_FLAGS ...) 全局设置编译选项</span>
+<span class="kw">set</span>(CMAKE_CXX_FLAGS <span class="str">"${CMAKE_CXX_FLAGS} -Wall -Wextra -fno-exceptions -Os -fPIC"</span>)
+<span class="cm"># 问题：CMAKE_CXX_FLAGS 是全局变量，覆盖 toolchain 设置，
+#        无法对单个 target 用不同选项（测试和生产需要不同 -fexceptions 标志）</span>
+
+<span class="cm"># ❌ 坑 2：用 GLOB_RECURSE 收集所有源文件</span>
+<span class="kw">file</span>(GLOB_RECURSE NETCONF_SOURCES <span class="str">"*.cpp"</span>)
+add_library(NETCONF-Core OBJECT ${NETCONF_SOURCES})
+<span class="cm"># 问题：新增 .cpp 文件不会触发 CMake 重新生成；
+#        且 GLOB 会包含你不想要的文件（test 目录的 mock 等）</span>
+
+<span class="cm"># ❌ 坑 3：OBJECT 库拼接 + 最终 executable 人工管理 OBJECTS</span>
+add_executable(${PROJECT_NAME}
+    <span class="kw">$&lt;TARGET_OBJECTS:RadParams&gt;</span>
+    <span class="kw">$&lt;TARGET_OBJECTS:${PROJECT_NAME}-main&gt;</span>
+    <span class="kw">$&lt;TARGET_OBJECTS:${PROJECT_NAME}-Core&gt;</span>
+    <span class="kw">$&lt;TARGET_OBJECTS:${PROJECT_NAME}-Controller&gt;</span>
+    <span class="kw">$&lt;TARGET_OBJECTS:${PROJECT_NAME}-NetconfAgent&gt;</span>
+)
+<span class="cm"># 这在 CMake 2.x 时代是常见做法；现代 CMake 推荐 STATIC 或 INTERFACE 库
+#  配合 target_link_libraries 自动传递，而不是手动拼 OBJECTS</span>
+
+<span class="cm"># ❌ 坑 4：依赖通过 pkg-config 全局暴露，缺乏 PUBLIC/PRIVATE 控制</span>
+<span class="fn">pkg_check_modules</span>(LIBNETCONF2 libnetconf2)
+<span class="fn">include_directories</span>(${LIBNETCONF2_INCLUDE_DIRS})    <span class="cm"># 全局污染！</span>
+<span class="fn">target_link_libraries</span>(NETCONF ${LIBNETCONF2_LIBRARIES})  <span class="cm"># 没有 PUBLIC/PRIVATE</span></code></pre>
+
+<p><strong>如果用现代 CMake 重写，应该是这样：</strong></p>
+
+<pre><code><span class="cm"># ✅ 正确：每个 target 独立管理编译选项（使用 generator expressions 区分生产/测试）</span>
+add_library(netconf-core STATIC)
+<span class="kw">target_sources</span>(netconf-core PRIVATE           <span class="cm"># 显式列出，不用 GLOB</span>
+    src/Core/MainComponent.cpp
+    src/Core/LimServiceMoFilter.cpp
+    <span class="cm"># ... 其余源文件</span>
+)
+<span class="kw">target_compile_options</span>(netconf-core PRIVATE
+    -Wall -Wextra -Os -fPIC
+    <span class="kw">$&lt;$&lt;NOT:$&lt;BOOL:${BUILD_TESTS}&gt;&gt;</span>:-fno-exceptions&gt;  <span class="cm"># 生产才禁异常</span>
+    <span class="kw">$&lt;$&lt;BOOL:${BUILD_TESTS}&gt;</span>:-fexceptions&gt;             <span class="cm"># 测试允许异常</span>
+)
+
+<span class="cm"># ✅ 正确：依赖用 IMPORTED target + PUBLIC/PRIVATE 控制</span>
+find_package(PkgConfig REQUIRED)
+<span class="fn">pkg_check_modules</span>(libnetconf2 REQUIRED IMPORTED_TARGET libnetconf2)
+
+<span class="kw">target_link_libraries</span>(netconf-core
+    PRIVATE PkgConfig::libnetconf2    <span class="cm"># libnetconf2 是实现细节，不传播</span>
+    PUBLIC  netconf-domain            <span class="cm"># domain 接口传播给消费方</span>
+)</code></pre>
+
+<p><strong>这个真实案例的核心教训</strong>：</p>
+<ul>
+  <li><strong>GLOB + OBJECT 库 + 全局 FLAGS</strong> 是老项目的典型遗留债务，在小规模时看不出问题，但阻碍了 CI 并行、增量编译、target 级配置差异化</li>
+  <li>电信项目里 <code>-fno-exceptions</code> 在生产开启、测试关闭 的需求非常真实——如果用全局 FLAGS，这个差异就需要 hack 实现；用现代 CMake 的 generator expressions 则是一行搞定</li>
+  <li>这些问题完全可以作为 <strong>Strangler Fig 渐进迁移</strong>的对象：先把 GLOB 改成显式文件列表，再逐模块改 OBJECT 库为 STATIC 库，最后统一 compile_options</li>
+</ul>
+</div>
 
 </section>
 
