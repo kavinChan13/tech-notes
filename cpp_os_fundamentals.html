@@ -143,6 +143,7 @@
     <a href="#cpp-api">C++ API 实战</a>
     <a href="#summary">总结速查</a>
     <a href="#interview">面试深度专题 ⭐</a>
+    <a href="#container-internals">容器底层 ⭐</a>
 </nav>
 
 <div class="container">
@@ -1490,6 +1491,227 @@ sigaction(SIGCHLD, &amp;sa, <span class="kw">nullptr</span>);</code></pre>
 <tr><td>网络</td><td><code>ss -s</code>, <code>tcpdump</code>, <code>bpftrace</code></td></tr>
 <tr><td>Cache miss / 分支误预测</td><td><code>perf stat -d</code>, PMU 硬件计数器</td></tr>
 </table>
+</div>
+</details>
+
+</section>
+
+<!-- ============================================================ -->
+<!--  8. 容器底层：namespace / cgroup v2 / seccomp                  -->
+<!-- ============================================================ -->
+<section id="container-internals">
+<h2>8. 容器底层：namespace / cgroup v2 / seccomp <span class="tag tag-pink">Senior Linux</span></h2>
+
+<div class="card">
+<p>"容器不是虚拟机"是高级面试的高频问题。Docker、containerd、Kubernetes 的隔离能力全部来自 Linux 内核三大原语：<strong>namespace</strong>（看到什么）、<strong>cgroup</strong>（能用多少）、<strong>seccomp / capabilities / LSM</strong>（能做什么）。理解这三者是排查容器内 C++ 服务<em>奇怪现象</em>（OOM、CPU throttle、syscall 被拦截）的前提。</p>
+</div>
+
+<h3>8.1 三大隔离原语的分工</h3>
+<table>
+<thead><tr><th>原语</th><th>解决的问题</th><th>关键 syscall</th><th>docker 选项</th></tr></thead>
+<tbody>
+<tr><td><strong>namespace</strong></td><td>资源<em>可见性</em>隔离（看到什么）</td><td><code>clone(CLONE_NEW*)</code> / <code>unshare</code> / <code>setns</code></td><td>默认全开</td></tr>
+<tr><td><strong>cgroup v2</strong></td><td>资源<em>用量</em>限制（能用多少）</td><td>写 <code>/sys/fs/cgroup/...</code> 文件</td><td><code>--cpus</code> / <code>--memory</code></td></tr>
+<tr><td><strong>capabilities</strong></td><td>把 root 拆成 40+ 细粒度权限</td><td><code>capset</code> / <code>prctl</code></td><td><code>--cap-add</code> / <code>--cap-drop</code></td></tr>
+<tr><td><strong>seccomp-bpf</strong></td><td>过滤进程能调的 syscall</td><td><code>prctl(PR_SET_SECCOMP)</code></td><td><code>--security-opt seccomp=...</code></td></tr>
+<tr><td><strong>LSM (AppArmor/SELinux)</strong></td><td>强制访问控制（MAC）</td><td>内核策略</td><td><code>--security-opt apparmor=...</code></td></tr>
+<tr><td><strong>rootfs (pivot_root)</strong></td><td>切换根文件系统视图</td><td><code>pivot_root</code> + mount ns</td><td>image 机制</td></tr>
+</tbody>
+</table>
+
+<div class="highlight-box">
+<strong>记忆口诀</strong>：namespace = <em>看不见</em>；cgroup = <em>用不多</em>；seccomp/cap = <em>做不了</em>。
+</div>
+
+<h3>8.2 Linux Namespaces 全家族（8 种）</h3>
+<table>
+<thead><tr><th>Namespace</th><th>隔离的资源</th><th>CLONE 标志</th><th>典型用途</th></tr></thead>
+<tbody>
+<tr><td><code>mnt</code></td><td>挂载点视图</td><td><code>CLONE_NEWNS</code></td><td>容器独立 rootfs</td></tr>
+<tr><td><code>pid</code></td><td>PID 编号 + 进程树</td><td><code>CLONE_NEWPID</code></td><td>容器内 PID=1</td></tr>
+<tr><td><code>net</code></td><td>网卡 / 路由 / iptables / 端口</td><td><code>CLONE_NEWNET</code></td><td>容器独立网络栈</td></tr>
+<tr><td><code>ipc</code></td><td>SysV IPC / POSIX 消息队列</td><td><code>CLONE_NEWIPC</code></td><td>避免 IPC key 冲突</td></tr>
+<tr><td><code>uts</code></td><td>hostname / domainname</td><td><code>CLONE_NEWUTS</code></td><td>每容器独立 hostname</td></tr>
+<tr><td><code>user</code></td><td>UID/GID 映射</td><td><code>CLONE_NEWUSER</code></td><td>rootless 容器</td></tr>
+<tr><td><code>cgroup</code></td><td>cgroup 层级视图</td><td><code>CLONE_NEWCGROUP</code></td><td>容器内只看到自己的 cgroup</td></tr>
+<tr><td><code>time</code> (5.6+)</td><td>系统时钟偏移</td><td><code>CLONE_NEWTIME</code></td><td>跨容器恢复 (CRIU)</td></tr>
+</tbody>
+</table>
+
+<h4>手写一个最小容器（不到 60 行 C++）</h4>
+<pre><code><span class="cm">// minimal-container.cpp —— 演示 namespace + cgroup 隔离</span>
+<span class="cm">// 编译: g++ -std=c++20 minimal-container.cpp -o mc</span>
+<span class="cm">// 运行: sudo ./mc /bin/bash</span>
+<span class="kw">#include</span> <span class="str">&lt;sched.h&gt;</span>           <span class="cm">// clone, CLONE_NEW*</span>
+<span class="kw">#include</span> <span class="str">&lt;sys/mount.h&gt;</span>       <span class="cm">// mount, MS_*</span>
+<span class="kw">#include</span> <span class="str">&lt;sys/wait.h&gt;</span>
+<span class="kw">#include</span> <span class="str">&lt;unistd.h&gt;</span>
+<span class="kw">#include</span> <span class="str">&lt;cstdio&gt;</span>
+<span class="kw">#include</span> <span class="str">&lt;cstring&gt;</span>
+
+<span class="kw">static</span> <span class="tp">int</span> <span class="fn">child_fn</span>(<span class="tp">void</span>* arg) {
+    <span class="tp">char</span>** argv = <span class="kw">static_cast</span>&lt;<span class="tp">char</span>**&gt;(arg);
+    <span class="cm">// 隔离 mnt 后必须重新挂 /proc，否则 ps 看到的还是宿主机</span>
+    <span class="fn">sethostname</span>(<span class="str">"container01"</span>, <span class="num">11</span>);
+    <span class="fn">mount</span>(<span class="str">"proc"</span>, <span class="str">"/proc"</span>, <span class="str">"proc"</span>, <span class="num">0</span>, <span class="kw">nullptr</span>);
+    <span class="fn">execvp</span>(argv[<span class="num">0</span>], argv);                <span class="cm">// 把 PID=1 让给用户进程</span>
+    <span class="kw">return</span> <span class="num">127</span>;
+}
+
+<span class="tp">int</span> <span class="fn">main</span>(<span class="tp">int</span> argc, <span class="tp">char</span>** argv) {
+    <span class="kw">static</span> <span class="tp">char</span> stack[<span class="num">1</span> &lt;&lt; <span class="num">20</span>];          <span class="cm">// 子进程栈</span>
+    <span class="tp">int</span> flags = CLONE_NEWPID | CLONE_NEWNS | CLONE_NEWUTS
+              | CLONE_NEWIPC | CLONE_NEWNET | SIGCHLD;
+    <span class="tp">pid_t</span> pid = <span class="fn">clone</span>(child_fn, stack + <span class="kw">sizeof</span>(stack),
+                       flags, argv + <span class="num">1</span>);
+    <span class="fn">waitpid</span>(pid, <span class="kw">nullptr</span>, <span class="num">0</span>);
+    <span class="cm">// 解除挂载留待父进程，避免污染宿主 /proc</span>
+}</code></pre>
+
+<p>跑起来你会看到容器内 <code>ps</code> 只显示自己（PID=1）、<code>hostname</code> 是 <code>container01</code>、网络只有 lo。Docker 干的就是这些事，外加 cgroup 限额 + rootfs + 镜像分层。</p>
+
+<h3>8.3 cgroup v2 —— C++ 服务的资源天花板</h3>
+<p>cgroup v1 多层级混乱（CPU / memory / blkio 分散），v2 统一为<strong>单一层级 + controller 显式启用</strong>。systemd 默认用 v2，容器运行时 (runc、crun) 全面切到 v2。</p>
+
+<table>
+<thead><tr><th>关键文件</th><th>含义</th><th>设置示例</th></tr></thead>
+<tbody>
+<tr><td><code>cpu.max</code></td><td>CPU 配额 / 周期 (μs)</td><td><code>echo "200000 100000" → 2 核</code></td></tr>
+<tr><td><code>cpu.weight</code></td><td>相对权重 (1-10000，默认 100)</td><td><code>echo 500</code></td></tr>
+<tr><td><code>memory.max</code></td><td>内存硬上限（超 → OOM）</td><td><code>echo 4G</code></td></tr>
+<tr><td><code>memory.high</code></td><td>软上限（超 → 收缩 + 节流，不杀）</td><td><code>echo 3G</code></td></tr>
+<tr><td><code>memory.swap.max</code></td><td>swap 限额</td><td><code>echo 0 → 禁 swap</code></td></tr>
+<tr><td><code>io.max</code></td><td>块设备 IOPS / 带宽限制</td><td><code>echo "8:0 rbps=10M"</code></td></tr>
+<tr><td><code>pids.max</code></td><td>进程 + 线程总数限制</td><td><code>echo 200</code></td></tr>
+<tr><td><code>cpu.stat</code></td><td>累计 CPU 用量 + <strong>throttled_usec</strong></td><td>只读，看是否被 throttle</td></tr>
+</tbody>
+</table>
+
+<h4>容器内 C++ 服务必须知道的三件事</h4>
+<div class="card">
+<ol>
+<li><strong><code>std::thread::hardware_concurrency()</code> 在容器内会撒谎</strong>：它读 <code>sysconf(_SC_NPROCESSORS_ONLN)</code>，返回的是宿主机核数，不是 <code>cpu.max</code>。需要自己解析 <code>/sys/fs/cgroup/cpu.max</code>（JVM 11+ 已自动适配，C++ 没有）。线程池如果按 hardware_concurrency 开 64 线程，结果 cgroup 只给 2 核 → 大量 throttle，P99 飙升。</li>
+<li><strong>OOM 杀的可能不是你想的进程</strong>：cgroup OOM killer 在<em>容器内</em>挑 oom_score 最高的杀；如果你的 sidecar 内存更高，被杀的是 sidecar 而不是主进程。看 <code>dmesg | grep -i oom</code> 与 <code>memory.events</code> 文件。</li>
+<li><strong>memory.high 触发的不是 OOM 而是「页回收 + 进程节流」</strong>：表象是 C++ 服务卡顿、syscall 变慢但没崩。<code>memory.pressure</code> (PSI) 文件可以观测压力。</li>
+</ol>
+</div>
+
+<h4>程序里读 cgroup 限额的正确姿势</h4>
+<pre><code><span class="cm">// 从 cgroup v2 读取本进程 CPU 配额，决定线程池大小</span>
+<span class="kw">#include</span> <span class="str">&lt;fstream&gt;</span>
+<span class="kw">#include</span> <span class="str">&lt;sstream&gt;</span>
+<span class="kw">#include</span> <span class="str">&lt;thread&gt;</span>
+
+<span class="kw">unsigned</span> <span class="fn">effective_cpu_count</span>() {
+    std::ifstream f(<span class="str">"/sys/fs/cgroup/cpu.max"</span>);
+    <span class="kw">if</span> (!f) <span class="kw">return</span> std::thread::<span class="fn">hardware_concurrency</span>();
+    std::string quota_s, period_s;
+    f &gt;&gt; quota_s &gt;&gt; period_s;
+    <span class="kw">if</span> (quota_s == <span class="str">"max"</span>) <span class="cm">// 未限额</span>
+        <span class="kw">return</span> std::thread::<span class="fn">hardware_concurrency</span>();
+    <span class="kw">double</span> n = std::<span class="fn">stod</span>(quota_s) / std::<span class="fn">stod</span>(period_s);
+    <span class="kw">return</span> std::<span class="fn">max</span>(<span class="num">1u</span>, <span class="kw">static_cast</span>&lt;<span class="kw">unsigned</span>&gt;(std::<span class="fn">ceil</span>(n)));
+}</code></pre>
+
+<h3>8.4 capabilities —— 把 root 切成 40 块</h3>
+<p>传统 Unix root 拥有<em>一切</em>权限，过于危险。Linux 把 root 拆成 40+ 个 <code>CAP_*</code>。容器默认只授予 14 个常用 cap（<code>CAP_NET_BIND_SERVICE</code>、<code>CAP_CHOWN</code>...），<code>CAP_SYS_ADMIN</code>（号称"新 root"）通常被丢弃。</p>
+
+<table>
+<thead><tr><th>常见 capability</th><th>能力</th><th>谁需要</th></tr></thead>
+<tbody>
+<tr><td><code>CAP_NET_BIND_SERVICE</code></td><td>绑定 &lt;1024 端口</td><td>HTTP 服务 (80/443)</td></tr>
+<tr><td><code>CAP_NET_ADMIN</code></td><td>改路由 / iptables / 网卡</td><td>CNI 插件 / VPN</td></tr>
+<tr><td><code>CAP_SYS_ADMIN</code></td><td>mount、namespace 创建（接近 root）</td><td>容器运行时</td></tr>
+<tr><td><code>CAP_SYS_PTRACE</code></td><td>ptrace / pidfd_getfd</td><td>debugger / strace</td></tr>
+<tr><td><code>CAP_SYS_NICE</code></td><td>提高调度优先级 / 绑核</td><td>低延时 C++ 服务</td></tr>
+<tr><td><code>CAP_IPC_LOCK</code></td><td><code>mlock</code> 锁内存防换出</td><td>数据库 / HFT</td></tr>
+<tr><td><code>CAP_SYS_RAWIO</code></td><td>访问 /dev/mem、ioperm</td><td>裸金属驱动</td></tr>
+<tr><td><code>CAP_BPF</code> (5.8+)</td><td>装载 BPF 程序</td><td>eBPF 观测工具</td></tr>
+</tbody>
+</table>
+
+<div class="highlight-box">
+<strong>低延时 C++ 服务的 cap 清单</strong>：通常需要 <code>CAP_SYS_NICE</code>（绑核 + RT 优先级）、<code>CAP_IPC_LOCK</code>（mlockall 锁页防 swap）、<code>CAP_NET_ADMIN</code>（DPDK / 设置 SO_BUSY_POLL）。Kubernetes 通过 SecurityContext 的 capabilities 字段授予。
+</div>
+
+<h3>8.5 seccomp-bpf —— 拦截 syscall 的最后一道闸</h3>
+<p>seccomp 用 BPF 程序<strong>过滤进程能调的 syscall</strong>。Docker 默认策略拦截了 ~44 个危险 syscall（<code>reboot</code>、<code>kexec_load</code>、<code>open_by_handle_at</code>...）。Chrome、Firefox、Android 的渲染进程都用 seccomp 缩到只剩几十个 syscall。</p>
+
+<pre><code><span class="cm">// libseccomp 写法：禁掉 execve 后任何代码都无法执行外部命令</span>
+<span class="kw">#include</span> <span class="str">&lt;seccomp.h&gt;</span>
+
+<span class="tp">void</span> <span class="fn">harden</span>() {
+    scmp_filter_ctx ctx = <span class="fn">seccomp_init</span>(SCMP_ACT_ALLOW); <span class="cm">// 白名单基线</span>
+    <span class="fn">seccomp_rule_add</span>(ctx, SCMP_ACT_KILL_PROCESS,
+                     <span class="fn">SCMP_SYS</span>(execve), <span class="num">0</span>);
+    <span class="fn">seccomp_rule_add</span>(ctx, SCMP_ACT_KILL_PROCESS,
+                     <span class="fn">SCMP_SYS</span>(execveat), <span class="num">0</span>);
+    <span class="fn">seccomp_rule_add</span>(ctx, SCMP_ACT_KILL_PROCESS,
+                     <span class="fn">SCMP_SYS</span>(ptrace), <span class="num">0</span>);
+    <span class="fn">seccomp_load</span>(ctx);
+    <span class="fn">seccomp_release</span>(ctx);
+}</code></pre>
+
+<div class="card">
+<strong>常见生产故障</strong>：升级 glibc 后程序莫名 <code>EPERM</code>——根因是新 glibc 用了<em>新 syscall</em>（如 <code>clone3</code>、<code>statx</code>、<code>faccessat2</code>），而旧 Docker 的 seccomp 策略不在白名单。解决：升级 Docker 到 20.10.10+ / runc 1.0.3+，或自定义 seccomp profile 放行新 syscall。
+</div>
+
+<h3>8.6 高级工程师视角：容器内 C++ 服务排障清单</h3>
+
+<details>
+<summary>Q1: 服务在容器里 CPU 100% 但 throughput 上不去？</summary>
+<div>
+<p>大概率是 <strong>CFS throttle</strong>。看 <code>cat /sys/fs/cgroup/cpu.stat</code>，<code>throttled_usec</code> 在涨说明被节流。可能原因：</p>
+<ul>
+<li>线程池按 <code>hardware_concurrency()</code> 开线程，远超 <code>cpu.max</code>，每周期都被切。修复见 §8.3 的代码。</li>
+<li>GC / 后台线程被踢出 CPU 周期。低延时服务设置 <code>cpu.cfs_period_us</code> 更短（5ms）减小抖动。</li>
+</ul>
+</div>
+</details>
+
+<details>
+<summary>Q2: 容器内 OOM 杀的不是我的进程？</summary>
+<div>
+<p>cgroup memory OOM killer 在容器内挑分数最高的杀。看 <code>cat memory.events</code> 的 <code>oom_kill</code> 计数和 <code>dmesg</code>。如果你的服务和 sidecar/agent 共一个 cgroup，又比对方内存大，被杀的可能是别人。解决：每个进程独立 cgroup，或调整 <code>oom_score_adj</code>。</p>
+</div>
+</details>
+
+<details>
+<summary>Q3: 程序读到的 /proc/meminfo、/proc/cpuinfo 是宿主机的？</summary>
+<div>
+<p>是的——这俩文件没有 cgroup-aware。解决方案：</p>
+<ul>
+<li><strong>lxcfs</strong>：用户态 FUSE 文件系统，重写 /proc 文件给容器看到 cgroup 视图。</li>
+<li><strong>自己读 cgroup 文件</strong>：<code>cpu.max</code>、<code>memory.max</code>、<code>memory.current</code>。</li>
+<li>升级到 cgroup v2 + Linux 5.8+ 后部分 /proc 信息自动隔离。</li>
+</ul>
+</div>
+</details>
+
+<details>
+<summary>Q4: mlockall 失败 EPERM？</summary>
+<div>
+<p>缺 <code>CAP_IPC_LOCK</code>，或 <code>RLIMIT_MEMLOCK</code> 太小。Kubernetes 加 <code>securityContext.capabilities.add: ["IPC_LOCK"]</code> + 通过 <code>--ulimit memlock=-1</code> 解除限制。</p>
+</div>
+</details>
+
+<details>
+<summary>Q5: 容器内调 ptrace / strace 失败？</summary>
+<div>
+<p>① Docker 默认丢 <code>CAP_SYS_PTRACE</code>，需 <code>--cap-add=SYS_PTRACE</code>；<br>
+② <code>/proc/sys/kernel/yama/ptrace_scope</code> 限制非父进程 ptrace（设 0 允许）；<br>
+③ seccomp 策略可能直接拒 ptrace。</p>
+</div>
+</details>
+
+<details>
+<summary>Q6: 为什么 K8s 推荐 Pod 内多容器，而不是一个容器多进程？</summary>
+<div>
+<p>① 进程隔离更彻底（cgroup / 资源限额独立）；<br>
+② 生命周期独立，sidecar 重启不影响主容器；<br>
+③ 镜像可独立演进；<br>
+④ K8s probes / restart policy 都是容器粒度。<br>
+但要注意：同 Pod 共享 network namespace（同 IP/端口空间），所以 sidecar 通常用 UDS / loopback 与主容器通信。</p>
 </div>
 </details>
 
