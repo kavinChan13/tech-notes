@@ -200,6 +200,8 @@
       <li><a href="#s14">性能分析工具</a></li>
       <li><a href="#s15">微基准的陷阱</a></li>
       <li><a href="#s16">真实工程优化案例</a></li>
+      <li><a href="#s16b">SIMD / 向量化深度 ⭐</a></li>
+      <li><a href="#s16c">PGO + AutoFDO + BOLT ⭐</a></li>
       <li><a href="#s17">面试题集</a></li>
       <li><a href="#s18">速查总表</a></li>
     </ol>
@@ -1322,6 +1324,260 @@ perf stat -r 10 ./bench</pre>
   <div class="box ok">
     所有案例的共同模式：<strong>测量 → 定位 → 简单改动 → 大幅收益</strong>。没有一个用了汇编 / SIMD / lock-free 这种 "高级"技术。<strong>常见性能问题都是基本功</strong>。
   </div>
+</section>
+
+<!-- ================================================================
+     §16b SIMD / 向量化深度
+     ================================================================ -->
+<section class="chapter" id="s16b">
+  <h2>16b. SIMD / 向量化深度 — 从自动向量化到 intrinsics ⭐</h2>
+
+  <p>SIMD（Single Instruction Multiple Data）是 CPU 一条指令同时处理多个数据。x86-64 上 SSE / AVX2（256 bit, 8×float）/ AVX-512（512 bit, 16×float），ARMv8 NEON / SVE。<strong>用对了能让数值循环提速 4-16×</strong>。</p>
+
+  <h3>16b.1 三档实现策略</h3>
+  <table>
+    <tr><th>策略</th><th>难度</th><th>性能</th><th>可移植</th><th>典型场景</th></tr>
+    <tr><td><strong>自动向量化</strong>（写好循环让编译器干）</td><td>★</td><td>~50-90% peak</td><td>✅</td><td>第一选择，能向量化就向量化</td></tr>
+    <tr><td><strong>编译器内置 + #pragma</strong>（OpenMP / <code>__builtin_assume_aligned</code>）</td><td>★★</td><td>~70-95%</td><td>✅</td><td>给编译器更多提示</td></tr>
+    <tr><td><strong>跨平台 SIMD 库</strong>（Highway / xsimd / std::simd C++26）</td><td>★★★</td><td>95%+</td><td>✅</td><td>生产代码首选</td></tr>
+    <tr><td><strong>原生 intrinsics</strong>（<code>_mm256_*</code> / NEON）</td><td>★★★★</td><td>100%</td><td>❌</td><td>极致优化、CPU-specific</td></tr>
+    <tr><td><strong>手写汇编</strong></td><td>★★★★★</td><td>100%</td><td>❌</td><td>几乎不需要</td></tr>
+  </table>
+
+  <h3>16b.2 让自动向量化生效 —— 6 个前提条件</h3>
+  <ol>
+    <li><strong>循环边界编译期可知或运行期常量</strong>（vectorizer 要预测迭代数）</li>
+    <li><strong>无指针别名</strong>—— 用 <code>__restrict__</code> 告诉编译器"两个指针不重叠"</li>
+    <li><strong>循环体无函数调用</strong>（除非内联）</li>
+    <li><strong>数据对齐</strong>—— <code>alignas(64)</code> + <code>std::assume_aligned</code> (C++20)</li>
+    <li><strong>无数据依赖</strong>—— 迭代 i+1 不依赖 i 的结果</li>
+    <li><strong>无早退分支</strong>—— <code>break / continue / return</code> 会阻止向量化（部分能转 masked op）</li>
+  </ol>
+
+  <h3>16b.3 自动向量化诊断（编译器告诉你为什么没向量化）</h3>
+<pre><span class="cm"># GCC: 详细汇报每个循环的向量化结果</span>
+g++ -O3 -fopt-info-vec-all foo.cpp 2&gt;&amp;1 | head -40
+<span class="cm"># 输出示例：</span>
+<span class="cm"># foo.cpp:12:5: optimized: loop vectorized using 32 byte vectors</span>
+<span class="cm"># foo.cpp:25:5: missed: couldn't vectorize loop (no vectype for stmt)</span>
+<span class="cm"># foo.cpp:30:5: missed: not vectorized: data dependency</span>
+
+<span class="cm"># Clang: 用 LLVM remarks</span>
+clang++ -O3 -Rpass=loop-vectorize -Rpass-missed=loop-vectorize -Rpass-analysis=loop-vectorize foo.cpp
+
+<span class="cm"># 看汇编是否真有 ymm/xmm/zmm 指令</span>
+g++ -O3 -S foo.cpp -o - | grep -E 'ymm|zmm|vfma|vmul'</pre>
+
+  <h3>16b.4 三个能让 GCC/Clang 立刻向量化的提示</h3>
+<pre><span class="cm">// ① __restrict__ —— 标记指针无别名</span>
+<span class="kw">void</span> <span class="fn">axpy</span>(<span class="kw">float</span>* __restrict__ y, <span class="kw">const</span> <span class="kw">float</span>* __restrict__ x,
+          <span class="kw">float</span> a, <span class="kw">int</span> n) {
+    <span class="kw">for</span> (<span class="kw">int</span> i = <span class="num">0</span>; i &lt; n; ++i) y[i] += a * x[i];
+}
+<span class="cm">// 不加 restrict：编译器假设 y 与 x 可能重叠 → 不能并行 → 失败</span>
+
+<span class="cm">// ② alignas + assume_aligned (C++20)</span>
+<span class="kw">alignas</span>(<span class="num">64</span>) <span class="kw">float</span> buf[<span class="num">1024</span>];
+<span class="kw">float</span>* p = std::<span class="fn">assume_aligned</span>&lt;<span class="num">64</span>&gt;(buf);
+<span class="kw">for</span> (<span class="kw">int</span> i = <span class="num">0</span>; i &lt; <span class="num">1024</span>; ++i) p[i] *= <span class="num">2.0f</span>;
+<span class="cm">// 对齐后能用更宽的 SIMD（aligned load 比 unaligned 快）</span>
+
+<span class="cm">// ③ #pragma GCC ivdep / #pragma omp simd</span>
+<span class="kw">#pragma</span> GCC ivdep                                       <span class="cm">// 告诉 GCC "我担保没依赖"</span>
+<span class="kw">for</span> (<span class="kw">int</span> i = <span class="num">0</span>; i &lt; n; ++i) ...;
+
+<span class="kw">#pragma</span> omp simd reduction(+:sum) aligned(p:<span class="num">64</span>)        <span class="cm">// OpenMP 直接强制 SIMD</span>
+<span class="kw">for</span> (<span class="kw">int</span> i = <span class="num">0</span>; i &lt; n; ++i) sum += p[i] * p[i];</pre>
+
+  <h3>16b.5 实例：dot product 三种写法对比</h3>
+<pre><span class="cm">// 方案 1：朴素 C++（依赖自动向量化）</span>
+<span class="kw">float</span> <span class="fn">dot_naive</span>(<span class="kw">const</span> <span class="kw">float</span>* a, <span class="kw">const</span> <span class="kw">float</span>* b, <span class="kw">int</span> n) {
+    <span class="kw">float</span> s = <span class="num">0</span>;
+    <span class="kw">for</span> (<span class="kw">int</span> i = <span class="num">0</span>; i &lt; n; ++i) s += a[i] * b[i];
+    <span class="kw">return</span> s;
+}
+<span class="cm">// -O3 后 GCC 13+ 会自动向量化到 AVX2，~1 个 cycle / 4 float</span>
+
+<span class="cm">// 方案 2：std::experimental::simd / C++26 std::simd</span>
+<span class="kw">#include</span> &lt;experimental/simd&gt;
+<span class="kw">namespace</span> stdx = std::experimental;
+<span class="kw">float</span> <span class="fn">dot_stdsimd</span>(<span class="kw">const</span> <span class="kw">float</span>* a, <span class="kw">const</span> <span class="kw">float</span>* b, <span class="kw">int</span> n) {
+    <span class="kw">using</span> V = stdx::native_simd&lt;<span class="kw">float</span>&gt;;
+    V acc{<span class="num">0</span>};
+    <span class="kw">int</span> i = <span class="num">0</span>;
+    <span class="kw">for</span> (; i + V::<span class="fn">size</span>() &lt;= n; i += V::<span class="fn">size</span>()) {
+        V va{&amp;a[i], stdx::vector_aligned};
+        V vb{&amp;b[i], stdx::vector_aligned};
+        acc += va * vb;
+    }
+    <span class="kw">float</span> s = stdx::<span class="fn">reduce</span>(acc);                    <span class="cm">// 跨 lane 求和</span>
+    <span class="kw">for</span> (; i &lt; n; ++i) s += a[i] * b[i];        <span class="cm">// 尾巴</span>
+    <span class="kw">return</span> s;
+}
+
+<span class="cm">// 方案 3：原生 AVX2 intrinsics（最快但只 x86）</span>
+<span class="kw">#include</span> &lt;immintrin.h&gt;
+<span class="kw">float</span> <span class="fn">dot_avx2</span>(<span class="kw">const</span> <span class="kw">float</span>* a, <span class="kw">const</span> <span class="kw">float</span>* b, <span class="kw">int</span> n) {
+    __m256 acc = <span class="fn">_mm256_setzero_ps</span>();
+    <span class="kw">int</span> i = <span class="num">0</span>;
+    <span class="kw">for</span> (; i + <span class="num">8</span> &lt;= n; i += <span class="num">8</span>) {
+        __m256 va = <span class="fn">_mm256_loadu_ps</span>(&amp;a[i]);
+        __m256 vb = <span class="fn">_mm256_loadu_ps</span>(&amp;b[i]);
+        acc = <span class="fn">_mm256_fmadd_ps</span>(va, vb, acc);          <span class="cm">// fused multiply-add</span>
+    }
+    <span class="cm">// 水平归约 8 个 float</span>
+    <span class="kw">alignas</span>(<span class="num">32</span>) <span class="kw">float</span> tmp[<span class="num">8</span>];
+    <span class="fn">_mm256_storeu_ps</span>(tmp, acc);
+    <span class="kw">float</span> s = tmp[<span class="num">0</span>]+tmp[<span class="num">1</span>]+tmp[<span class="num">2</span>]+tmp[<span class="num">3</span>]+tmp[<span class="num">4</span>]+tmp[<span class="num">5</span>]+tmp[<span class="num">6</span>]+tmp[<span class="num">7</span>];
+    <span class="kw">for</span> (; i &lt; n; ++i) s += a[i] * b[i];
+    <span class="kw">return</span> s;
+}</pre>
+
+  <h4>性能感觉（n = 4096，AVX2 机器）</h4>
+  <table>
+    <tr><th>实现</th><th>~耗时</th><th>带宽利用</th></tr>
+    <tr><td>朴素 -O0</td><td>~12 μs</td><td>10%</td></tr>
+    <tr><td>朴素 -O3（自动向量化）</td><td>~1.1 μs</td><td>85%</td></tr>
+    <tr><td>std::simd</td><td>~1.0 μs</td><td>90%</td></tr>
+    <tr><td>AVX2 intrinsics + FMA</td><td>~0.85 μs</td><td>95%+</td></tr>
+  </table>
+
+  <h3>16b.6 跨平台 SIMD 库选型</h3>
+  <table>
+    <tr><th>库</th><th>定位</th><th>状态</th></tr>
+    <tr><td><a href="https://github.com/google/highway" style="color:var(--accent)"><b>Google Highway</b></a></td><td>类似 std::simd，更成熟，Chromium 用</td><td>生产可用</td></tr>
+    <tr><td><a href="https://github.com/xtensor-stack/xsimd" style="color:var(--accent)"><b>xsimd</b></a></td><td>类似但 header-only</td><td>稳定</td></tr>
+    <tr><td><a href="https://ispc.github.io/" style="color:var(--accent)"><b>ISPC</b> (Intel)</td><td>独立的"SPMD on SIMD"编译器，写 SPMD 风格</td><td>Pixar / Embree 使用</td></tr>
+    <tr><td><code>std::experimental::simd</code> → C++26 <code>std::simd</code></td><td>标准库</td><td>libstdc++ 已有 (P1928)</td></tr>
+  </table>
+
+  <h3>16b.7 SIMD 反模式</h3>
+  <div class="box danger">
+    <ul>
+      <li><strong>盲目 intrinsics</strong>：忽略编译器自动向量化能力，写一堆 <code>_mm256_*</code> 反而更慢（cache 用量、寄存器分配）</li>
+      <li><strong>横向操作过多</strong>：跨 lane 的 hadd / permute 极慢（10+ cycles），尽量保持纵向运算</li>
+      <li><strong>分支严重</strong>：if 多的循环 → masked op 也救不了，先用 partition / sort 让数据"同质"</li>
+      <li><strong>未对齐 + AVX-512</strong>：AVX-512 对未对齐特别敏感，可能比 AVX2 还慢</li>
+      <li><strong>误用 AVX-512</strong>：Intel 部分 CPU 上 AVX-512 触发频率降级 → 整个 core 变慢</li>
+    </ul>
+  </div>
+
+  <div class="box tip"><strong>建议流程</strong>：① 写朴素清晰 C++；② <code>-O3 -fopt-info-vec</code> 检查；③ 没向量化 → 用 <code>__restrict__</code> / <code>alignas</code> / <code>#pragma omp simd</code>；④ 仍不行 → Highway / std::simd；⑤ 最后才考虑 intrinsics。绝大多数情况 ②-③ 已经够。</div>
+</section>
+
+<!-- ================================================================
+     §16c PGO + AutoFDO + BOLT
+     ================================================================ -->
+<section class="chapter" id="s16c">
+  <h2>16c. PGO / AutoFDO / BOLT — 用 profile 优化二进制 ⭐</h2>
+
+  <p>编译器优化是"<strong>静态启发式</strong>"，不知道你的程序到底走哪条热路径。PGO（Profile-Guided Optimization）让你<em>跑一次真实负载</em>，把 profile 喂回编译器或 binary 工具，做<strong>更准确的 inline / 函数排序 / 分支预测</strong>。生产级 C++ 服务普遍能拿到 <strong>5-15% 端到端加速</strong>。</p>
+
+  <h3>16c.1 PGO 经典三段流水线</h3>
+<pre><span class="cm"># GCC PGO</span>
+<span class="cm"># 阶段 1: 插桩编译（生成可写 profile 的二进制）</span>
+g++ -O2 -fprofile-generate=./pgo-data myapp.cpp -o myapp.inst
+<span class="cm"># 阶段 2: 跑真实/代表性负载，落 profile 文件</span>
+./myapp.inst &lt; representative_input.bin
+<span class="cm">#   → ./pgo-data/*.gcda</span>
+<span class="cm"># 阶段 3: 用 profile 重新优化编译</span>
+g++ -O2 -fprofile-use=./pgo-data myapp.cpp -o myapp.opt
+
+<span class="cm"># Clang PGO</span>
+clang++ -O2 -fprofile-instr-generate=p.profraw myapp.cpp -o myapp.inst
+./myapp.inst ; llvm-profdata merge -o p.profdata p.profraw
+clang++ -O2 -fprofile-instr-use=p.profdata myapp.cpp -o myapp.opt</pre>
+
+  <h3>16c.2 PGO 帮编译器做对哪些决策</h3>
+  <table>
+    <tr><th>优化</th><th>无 PGO 启发式</th><th>有 PGO</th></tr>
+    <tr><td>inline 决策</td><td>按大小 / 调用深度</td><td>按真实调用频次</td></tr>
+    <tr><td>函数排序 / icache</td><td>按链接顺序</td><td>热函数聚簇，cold 放尾部</td></tr>
+    <tr><td>分支布局</td><td>likely/unlikely 提示</td><td>按真实分布精确预测</td></tr>
+    <tr><td>循环展开 / 向量化</td><td>不知循环跑多少次</td><td>知热循环 → 激进展开</td></tr>
+    <tr><td>寄存器分配</td><td>—</td><td>热代码优先分配 callee-saved</td></tr>
+    <tr><td>indirect call 去虚化</td><td>无法</td><td>看到 95% call site 都是同一个 target → 直接 inline</td></tr>
+  </table>
+
+  <h3>16c.3 PGO 的痛 → AutoFDO 救场</h3>
+  <p>插桩 PGO 三大问题：① 插桩二进制慢（不能直接上线）；② 需"代表性负载"，难找；③ 工作流复杂，工程师抗拒。</p>
+  <p><strong>AutoFDO</strong>（Google 2010s 开源）：直接用 <code>perf record</code> 在<strong>生产环境</strong>采集 sampling profile（无插桩，开销 &lt; 1%），转成 LLVM/GCC 能吃的 profile 格式。</p>
+
+<pre><span class="cm"># 生产机上：开 LBR 采样跑 30 秒</span>
+sudo perf record -e BR_INST_RETIRED.NEAR_TAKEN:uppp -b -- ./myapp prod.bin
+sudo perf script -F +brstack &gt; perf.script
+
+<span class="cm"># 转 LLVM profile</span>
+create_llvm_prof --binary=./myapp --profile=perf.data --out=myapp.afdo
+
+<span class="cm"># 用它重新编译</span>
+clang++ -O2 -fprofile-sample-use=myapp.afdo myapp.cpp -o myapp.opt</pre>
+
+  <div class="box ok">
+    AutoFDO 已经成为 Google / Meta / Microsoft 生产 C++ 服务的<strong>标配编译流程</strong>。CI 每周拉一次最近 24h 的 prod sampling，作为下次发版的 PGO 输入，形成"生产数据 → 编译优化"闭环。
+  </div>
+
+  <h3>16c.4 BOLT — 二进制级 post-link 优化（Meta，2019）</h3>
+  <p><strong>BOLT</strong>（Binary Optimization and Layout Tool）是 Meta 开源的<strong>后链接</strong>优化工具：编译器已经做完了，BOLT 拿成品 ELF + perf profile，<strong>重新排函数和基本块</strong>。本质是"用 profile 重做 layout"，对大型 binary 收益惊人。</p>
+
+  <h4>三步用法</h4>
+<pre><span class="cm"># 0. 编译时加 emit-relocs（保留 BOLT 需要的重定位信息）</span>
+clang++ -O2 -Wl,--emit-relocs myapp.cpp -o myapp
+
+<span class="cm"># 1. 在生产或代表性环境采样</span>
+sudo perf record -e cycles:u -j any,u -- ./myapp prod.bin
+perf2bolt -p perf.data -o myapp.fdata myapp
+
+<span class="cm"># 2. BOLT 优化</span>
+llvm-bolt myapp -o myapp.bolt -data=myapp.fdata -reorder-blocks=ext-tsp \
+  -reorder-functions=hfsort+ -split-functions -split-all-cold \
+  -split-eh -dyno-stats
+
+<span class="cm"># 3. 部署 myapp.bolt</span></pre>
+
+  <h4>BOLT 实测收益（公开数据）</h4>
+  <table>
+    <tr><th>项目</th><th>baseline</th><th>+ AutoFDO</th><th>+ AutoFDO + BOLT</th></tr>
+    <tr><td>Clang 自身编译</td><td>1.0×</td><td>1.05×</td><td><strong>1.20×</strong></td></tr>
+    <tr><td>HHVM (Meta)</td><td>1.0×</td><td>1.06×</td><td><strong>1.21×</strong></td></tr>
+    <tr><td>Linux Kernel build</td><td>1.0×</td><td>—</td><td>1.10×</td></tr>
+    <tr><td>MySQL OLTP</td><td>1.0×</td><td>1.07×</td><td>1.13×</td></tr>
+  </table>
+
+  <h3>16c.5 三者关系总览</h3>
+  <table>
+    <tr><th>技术</th><th>输入</th><th>作用阶段</th><th>典型收益</th><th>工作流成本</th></tr>
+    <tr><td><strong>Instrumented PGO</strong></td><td>插桩二进制 + 代表性输入</td><td>编译时</td><td>5-15%</td><td>高（要造代表性负载）</td></tr>
+    <tr><td><strong>AutoFDO</strong></td><td>生产 perf sampling</td><td>编译时</td><td>3-10%</td><td>低（可上线持续采集）</td></tr>
+    <tr><td><strong>BOLT</strong></td><td>生产 perf sampling</td><td>链接后（二进制级）</td><td>5-20%</td><td>低</td></tr>
+    <tr><td>AutoFDO + BOLT</td><td>同上</td><td>编译时 + 链接后</td><td>10-25%</td><td>中</td></tr>
+  </table>
+
+  <h3>16c.6 ThinLTO + AutoFDO + BOLT 黄金组合</h3>
+<pre><span class="cm"># 这是 Meta / Google 大型 C++ 服务的标准编译流水</span>
+clang++ -O2 -flto=thin \
+        -fprofile-sample-use=myapp.afdo \
+        -fdebug-info-for-profiling \
+        -Wl,--emit-relocs \
+        myapp.cpp -o myapp.elf
+
+llvm-bolt myapp.elf -o myapp.final \
+  -data=myapp.fdata \
+  -reorder-blocks=ext-tsp -reorder-functions=hfsort+ \
+  -split-functions -split-all-cold -split-eh</pre>
+
+  <div class="box tip">
+    <strong>对中型团队的建议</strong>：① 先上 LTO（最简单，5% 起步）；② 再上 AutoFDO（从生产 perf 采集，可持续）；③ 当 binary 超过 100MB 时再考虑 BOLT。每个工具单独上线、单独基准测，叠加效果再做整体评估。
+  </div>
+
+  <h3>16c.7 PGO/BOLT 常见坑</h3>
+  <ul>
+    <li><strong>调试体验下降</strong>：函数顺序乱了，gdb backtrace 不连续 → 保留 <code>-g</code> + 单独的 debug 包</li>
+    <li><strong>profile 老化</strong>：业务流量模式变化后旧 profile 失效，反而降速 → 定期重采集</li>
+    <li><strong>cold 路径变慢</strong>：BOLT 把冷代码放到 binary 尾部，第一次走 cold path 时 icache miss 暴增 → 业务平均 OK，p999 可能恶化</li>
+    <li><strong>build 时间增加</strong>：PGO 三段式至少 build 2 次；BOLT 增加 5-30 分钟</li>
+    <li><strong>perf 权限</strong>：生产采集需要 <code>perf_event_paranoid</code> 调低 + CAP_PERFMON（5.8+）</li>
+  </ul>
 </section>
 
 <!-- ================================================================

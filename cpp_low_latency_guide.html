@@ -193,6 +193,9 @@
       <li><a href="#s15">最坏情况延迟分析</a></li>
       <li><a href="#s16">调优工具 (cyclictest/eBPF)</a></li>
       <li><a href="#s17">真实工程案例 (NETCONF/RAN)</a></li>
+      <li><a href="#s17b">内核旁路 · DPDK/RDMA/XDP ⭐</a></li>
+      <li><a href="#s17c">硬件时间戳 · PTP ⭐</a></li>
+      <li><a href="#s17d">CPU 隔离 · isolcpus/nohz_full ⭐</a></li>
       <li><a href="#s18">反模式</a></li>
       <li><a href="#s19">面试题集</a></li>
       <li><a href="#s20">速查总表</a></li>
@@ -1380,6 +1383,257 @@ HdrHistogram histo{1, 60'000'000, 3};   <span class="cm">// 1ns - 60s 范围, 3 
   <div class="box ok">
     NETCONF / RAN 场景实际不要求 HFT 级别 (ns/百 ns)。但<strong>稳定性</strong>要求很高 — 不能因为某次 GC / page fault 让告警延迟突跳到 500ms。<br>
     <strong>核心模式</strong>：① 启动期预分配；② 热路径零 malloc；③ 关键线程 pin 核；④ 异步化所有 IO；⑤ 用直方图监控延迟分布而不是平均值。
+  </div>
+</section>
+
+<!-- ================================================================
+     §17b 内核旁路 · DPDK / RDMA / XDP / OnLoad
+     ================================================================ -->
+<section class="chapter" id="s17b">
+  <h2>17b. 内核旁路 (Kernel Bypass) — DPDK / RDMA / XDP / OnLoad ⭐</h2>
+
+  <p>普通 socket 一次 send/recv 经历 syscall → 内核协议栈 → 网卡驱动，总延迟约 <strong>10-30 μs</strong>。HFT、5G UPF、CDN 边缘等场景要求 &lt; 5 μs。解决方案：<strong>让用户态直接和网卡 DMA 通信</strong>，绕过内核协议栈。</p>
+
+  <h3>17b.1 四大主流方案</h3>
+  <table>
+    <tr><th>技术</th><th>定位</th><th>典型延迟</th><th>使用门槛</th></tr>
+    <tr><td><strong>DPDK</strong> (Intel)</td><td>用户态网络栈，全套库</td><td>~1-3 μs</td><td>★★★★ (重写网络)</td></tr>
+    <tr><td><strong>RDMA / InfiniBand / RoCE</strong></td><td>远程直接内存访问</td><td>~1-2 μs</td><td>★★★★★ (verbs API)</td></tr>
+    <tr><td><strong>XDP / eBPF</strong></td><td>内核内挂钩点，可保留协议栈</td><td>~5 μs</td><td>★★★ (eBPF 程序)</td></tr>
+    <tr><td><strong>Solarflare OnLoad</strong></td><td>替换 libc.socket，应用零改</td><td>~1.5 μs</td><td>★ (LD_PRELOAD)</td></tr>
+    <tr><td><strong>AF_XDP socket</strong></td><td>Linux 标准接口接 XDP</td><td>~3-5 μs</td><td>★★ (标准 socket API)</td></tr>
+  </table>
+
+  <h3>17b.2 DPDK — 用户态网络全家桶</h3>
+  <p>核心机制：</p>
+  <ul>
+    <li><strong>UIO / VFIO 驱动</strong>把网卡从内核接管到用户态</li>
+    <li><strong>大页内存</strong>（2 MB / 1 GB）做 DMA buffer，避免 TLB miss</li>
+    <li><strong>Poll Mode Driver (PMD)</strong>：用户态轮询网卡描述符，<strong>不用中断</strong></li>
+    <li>线程<strong>独占 CPU</strong>（busy polling），换吞吐与延迟</li>
+    <li>用户态实现 TCP/UDP/ARP/ICMP 等（mTCP / F-Stack / Seastar）</li>
+  </ul>
+
+<pre><span class="cm">// 最小 DPDK rx loop（概念示意）</span>
+<span class="kw">#include</span> <span class="str">&lt;rte_eal.h&gt;</span>
+<span class="kw">#include</span> <span class="str">&lt;rte_ethdev.h&gt;</span>
+<span class="kw">#include</span> <span class="str">&lt;rte_mbuf.h&gt;</span>
+
+<span class="kw">int</span> <span class="fn">main</span>(<span class="kw">int</span> argc, <span class="kw">char</span>** argv) {
+    rte_eal_init(argc, argv);                        <span class="cm">// 大页/亲和性/PMD 初始化</span>
+    struct rte_mempool* pool = rte_pktmbuf_pool_create(
+        <span class="str">"mbuf"</span>, <span class="num">8192</span>, <span class="num">256</span>, <span class="num">0</span>, RTE_MBUF_DEFAULT_BUF_SIZE, rte_socket_id());
+
+    rte_eth_dev_configure(<span class="num">0</span>, <span class="num">1</span>, <span class="num">1</span>, &amp;port_conf);
+    rte_eth_rx_queue_setup(<span class="num">0</span>, <span class="num">0</span>, <span class="num">1024</span>, <span class="num">0</span>, &amp;rx_conf, pool);
+    rte_eth_tx_queue_setup(<span class="num">0</span>, <span class="num">0</span>, <span class="num">1024</span>, <span class="num">0</span>, &amp;tx_conf);
+    rte_eth_dev_start(<span class="num">0</span>);
+
+    <span class="cm">// 热路径：100% CPU 轮询，无中断、无 syscall</span>
+    <span class="kw">struct</span> rte_mbuf* bufs[<span class="num">32</span>];
+    <span class="kw">for</span> (;;) {
+        uint16_t nb = rte_eth_rx_burst(<span class="num">0</span>, <span class="num">0</span>, bufs, <span class="num">32</span>);
+        <span class="kw">for</span> (uint16_t i = <span class="num">0</span>; i &lt; nb; i++) {
+            <span class="cm">// 直接拿到 packet 内存 ptr，自己解析 ethernet/ip/udp</span>
+            process_packet(bufs[i]);
+            rte_pktmbuf_free(bufs[i]);
+        }
+    }
+}</pre>
+
+  <div class="box tip">
+    DPDK 应用必须<strong>整核独占</strong>。一个网卡 → 多 RX queue → 多 lcore（每核一个 worker），用 RSS 哈希分流，无锁。配合 Seastar / F-Stack 这种用户态网络栈，C++ 服务能跑到 100 Mpps。
+  </div>
+
+  <h3>17b.3 RDMA — 远程内存直接读写</h3>
+  <p>InfiniBand / RoCE / iWARP 三类硬件。客户端可以<strong>直接读/写</strong>服务端内存，<strong>CPU 不参与</strong>。延迟 ~1 μs（同机房），吞吐 200+ Gbps。</p>
+
+  <h4>三种通信原语</h4>
+  <table>
+    <tr><th>原语</th><th>语义</th><th>典型用</th></tr>
+    <tr><td><strong>SEND/RECV</strong></td><td>两端配合，类似 socket</td><td>控制平面、握手</td></tr>
+    <tr><td><strong>RDMA WRITE</strong></td><td>主动方写到远端内存，远端 CPU 完全不感知</td><td>分布式 KV、共享日志</td></tr>
+    <tr><td><strong>RDMA READ</strong></td><td>主动方从远端内存读</td><td>分布式缓存、跨主机锁</td></tr>
+    <tr><td>Atomic FA/CAS</td><td>跨主机原子操作</td><td>分布式计数器、锁</td></tr>
+  </table>
+
+<pre><span class="cm">// RDMA 用 ibverbs API（高层有 librdmacm / UCX / OFI）</span>
+<span class="cm">// 1. 创建 Protection Domain、注册内存 (memory region)</span>
+ibv_pd* pd  = ibv_alloc_pd(ctx);
+ibv_mr* mr  = ibv_reg_mr(pd, buf, len, IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_LOCAL_WRITE);
+
+<span class="cm">// 2. 建 Queue Pair (RC mode 类似 TCP)</span>
+ibv_qp* qp  = ibv_create_qp(pd, &amp;qp_init);
+
+<span class="cm">// 3. 把本地 (buf, len, rkey) 通过其他通道（TCP）告知对端</span>
+<span class="cm">// 4. 对端发起 RDMA WRITE：直接写入我的 buf！</span>
+<span class="cm">//    我的 CPU 全程未感知，可被 poll completion queue 知道完成</span>
+ibv_poll_cq(cq, <span class="num">10</span>, wc);</pre>
+
+  <div class="box ok">
+    <strong>典型 C++ 框架</strong>：<a href="https://openucx.org/" style="color:var(--accent)">UCX</a>（NVIDIA/RPI 主导，含 MPI 后端）、<a href="https://github.com/libfabric/libfabric" style="color:var(--accent)">libfabric / OFI</a>。<strong>典型用户</strong>：HPC 集群通信、分布式存储（Ceph / DAOS / WekaIO）、分布式数据库（TiDB Async commit）、AI 训练（NCCL）。
+  </div>
+
+  <h3>17b.4 XDP / eBPF — 在内核里拦截，保留协议栈</h3>
+  <p>XDP（eXpress Data Path）让 eBPF 程序<strong>在驱动收到包后立即运行</strong>，可决定：</p>
+  <ul>
+    <li><code>XDP_DROP</code> — 丢包（DDoS 防护，10x 快于 iptables）</li>
+    <li><code>XDP_PASS</code> — 交给内核协议栈</li>
+    <li><code>XDP_TX</code> — 立即回弹（L4 负载均衡）</li>
+    <li><code>XDP_REDIRECT</code> — 转发到另一网卡或 AF_XDP 用户态 socket</li>
+  </ul>
+  <p>典型用户：<strong>Cloudflare</strong>（10M pps DDoS 过滤）、<strong>Facebook Katran</strong>（L4 LB）、<strong>Cilium</strong>（K8s 网络）。</p>
+
+  <h3>17b.5 选型决策</h3>
+  <table>
+    <tr><th>需求</th><th>推荐</th></tr>
+    <tr><td>金融交易 / HFT 单机延时</td><td>OnLoad（最小改动）或 DPDK</td></tr>
+    <tr><td>同机房分布式服务调用</td><td>RDMA（如果硬件支持）</td></tr>
+    <tr><td>DDoS 防护 / 包过滤</td><td>XDP + eBPF</td></tr>
+    <tr><td>5G UPF / CDN 边缘</td><td>DPDK + 自家协议栈（mTCP / F-Stack）</td></tr>
+    <tr><td>HPC / AI 集群通信</td><td>RDMA + UCX / NCCL</td></tr>
+    <tr><td>主流互联网业务</td><td>普通 epoll 即可，io_uring 是更优 next step</td></tr>
+  </table>
+
+  <div class="box danger">
+    内核旁路<strong>不是免费午餐</strong>：① 失去内核协议栈所有特性（TCP 重传、拥塞控制需自己实现）；② 调试工具断了（tcpdump / netstat 失效）；③ 整核独占，单机吞吐 / 延时双优但功耗大；④ 团队需要专门 DPDK / RDMA 知识。
+  </div>
+</section>
+
+<!-- ================================================================
+     §17c 硬件时间戳 · PTP / PHC
+     ================================================================ -->
+<section class="chapter" id="s17c">
+  <h2>17c. 硬件时间戳 · PTP / PHC — 当 μs 级时间精度成为刚需 ⭐</h2>
+
+  <p>金融做市要求"事件时间戳精度优于 1 μs"（用于审计、回放、判别因果）。NTP 同步精度只有毫秒级，<strong>软件 <code>gettimeofday</code> 误差受 NTP / VDSO / CPU 频率变化影响</strong>。解决方案：<strong>PTP（Precision Time Protocol, IEEE 1588）</strong>+ 网卡硬件时钟（PHC, PTP Hardware Clock）。</p>
+
+  <h3>17c.1 三档时间精度</h3>
+  <table>
+    <tr><th>方案</th><th>精度</th><th>成本</th></tr>
+    <tr><td>NTP</td><td>~ms (千 μs)</td><td>免费，普通网卡</td></tr>
+    <tr><td>软件 PTP（<code>ptp4l</code>）</td><td>~10-100 μs</td><td>免费</td></tr>
+    <tr><td><strong>硬件 PTP（网卡 PHC）</strong></td><td><strong>~50-500 ns</strong></td><td>支持 PHC 的网卡（Mellanox / Solarflare / Intel I210+）</td></tr>
+    <tr><td>White Rabbit / GPS</td><td>~1 ns</td><td>金融交易所、CERN</td></tr>
+  </table>
+
+  <h3>17c.2 PTP 工作原理（极简）</h3>
+  <p>主时钟周期性发 <code>SYNC + FOLLOW_UP</code>，从时钟测出"网络单程延迟"和"主从时钟差"，校准本地 PHC。<strong>关键</strong>：网卡硬件给收发包打时戳（&lt; 100 ns 抖动），不依赖操作系统调度。</p>
+
+<pre><span class="cm"># 一台机器作主，多台机器作从（典型机房部署）</span>
+<span class="cm"># 主</span>
+sudo ptp4l -i eth0 -m -H -s    <span class="cm"># -H = hardware ts</span>
+
+<span class="cm"># 从（同子网）</span>
+sudo ptp4l -i eth0 -m -H       <span class="cm"># 自动发现主</span>
+
+<span class="cm"># 把 PHC 反向同步到系统时钟（让 gettimeofday 也准）</span>
+sudo phc2sys -s eth0 -O 0 -m
+
+<span class="cm"># 看实时偏差</span>
+pmc -u -b 0 'GET CURRENT_DATA_SET'
+<span class="cm"># offsetFromMaster: 28 ns   ← 已经收敛到 28 ns</span></pre>
+
+  <h3>17c.3 C++ 代码读硬件时戳</h3>
+<pre><span class="cm">// 直接读网卡 PHC（精度 ~ns）</span>
+<span class="kw">#include</span> <span class="str">&lt;linux/ptp_clock.h&gt;</span>
+<span class="kw">int</span> phc_fd = <span class="fn">open</span>(<span class="str">"/dev/ptp0"</span>, O_RDONLY);
+<span class="kw">clockid_t</span> clk = ((~(<span class="kw">clockid_t</span>)phc_fd) &lt;&lt; <span class="num">3</span>) | <span class="num">3</span>;
+<span class="ty">timespec</span> ts;
+<span class="fn">clock_gettime</span>(clk, &amp;ts);
+
+<span class="cm">// 收包硬件时戳（SO_TIMESTAMPING + SOF_TIMESTAMPING_RX_HARDWARE）</span>
+<span class="kw">int</span> opt = SOF_TIMESTAMPING_RX_HARDWARE | SOF_TIMESTAMPING_RAW_HARDWARE;
+<span class="fn">setsockopt</span>(sock, SOL_SOCKET, SO_TIMESTAMPING, &amp;opt, <span class="kw">sizeof</span>(opt));
+<span class="cm">// recvmsg 后从 msg.msg_control 拿 SCM_TIMESTAMPING 控制信息</span></pre>
+
+  <div class="box tip">
+    金融 HFT 全套时钟链路：GPS → PTP grandmaster → 机柜 boundary clock → 各服务器 PHC → 业务时间戳。
+    精度可达<strong>整链路 200 ns 以内</strong>，足以判别两个跨机柜事件的因果。
+  </div>
+</section>
+
+<!-- ================================================================
+     §17d CPU 隔离 · isolcpus / nohz_full / RT
+     ================================================================ -->
+<section class="chapter" id="s17d">
+  <h2>17d. CPU 隔离 — isolcpus / nohz_full / cpuset / IRQ affinity ⭐</h2>
+
+  <p>低延时编程的"最后一公里"：<strong>把整个 CPU 核从 Linux 调度器和定时中断里拔出来</strong>，专属给业务线程独占。这样可以消灭：内核线程抢占、ticks 中断 (~250-1000 Hz)、IRQ 中断、负载均衡迁移。</p>
+
+  <h3>17d.1 内核启动参数三件套</h3>
+  <table>
+    <tr><th>参数</th><th>作用</th><th>例</th></tr>
+    <tr><td><code>isolcpus=N-M</code></td><td>调度器不在这些核上放普通任务（你必须显式 pin）</td><td><code>isolcpus=4-15</code></td></tr>
+    <tr><td><code>nohz_full=N-M</code></td><td>这些核单进程运行时<strong>关闭 1kHz tick</strong>（消除最重要的抖动源）</td><td><code>nohz_full=4-15</code></td></tr>
+    <tr><td><code>rcu_nocbs=N-M</code></td><td>RCU 回调不在这些核上跑（把 RCU offload 到别处）</td><td><code>rcu_nocbs=4-15</code></td></tr>
+    <tr><td><code>irqaffinity=0-3</code></td><td>所有 IRQ 默认只送给 0-3 核</td><td>—</td></tr>
+    <tr><td><code>intel_pstate=disable</code></td><td>禁用动态频率，避免降频</td><td>—</td></tr>
+    <tr><td><code>processor.max_cstate=1</code></td><td>禁深度 C-state，避免唤醒延迟</td><td>—</td></tr>
+  </table>
+
+  <h4>/etc/default/grub 示例（4 个 hot core）</h4>
+<pre>GRUB_CMDLINE_LINUX=<span class="str">"isolcpus=4-7 nohz_full=4-7 rcu_nocbs=4-7 \
+  irqaffinity=0-3 intel_pstate=disable processor.max_cstate=1 \
+  intel_idle.max_cstate=0 mce=ignore_ce idle=poll"</span></pre>
+
+  <h3>17d.2 业务程序如何使用这些隔离核</h3>
+<pre><span class="cm">// ① 设置 CPU affinity，把业务线程钉到 isolated 核</span>
+<span class="ty">cpu_set_t</span> set;
+<span class="fn">CPU_ZERO</span>(&amp;set);
+<span class="fn">CPU_SET</span>(<span class="num">4</span>, &amp;set);
+<span class="fn">pthread_setaffinity_np</span>(thread, <span class="kw">sizeof</span>(set), &amp;set);
+
+<span class="cm">// ② 锁内存，禁止换出（防 swap / 缺页）</span>
+<span class="fn">mlockall</span>(MCL_CURRENT | MCL_FUTURE);
+
+<span class="cm">// ③ 提升优先级（可选，配合 SCHED_FIFO/RR）</span>
+<span class="ty">sched_param</span> sp{.sched_priority = <span class="num">80</span>};
+<span class="fn">sched_setscheduler</span>(<span class="num">0</span>, SCHED_FIFO, &amp;sp);   <span class="cm">// 需 CAP_SYS_NICE</span>
+
+<span class="cm">// ④ 预触摸所有内存避免后续缺页</span>
+<span class="kw">for</span> (<span class="kw">char</span>* p = buf; p &lt; buf + size; p += <span class="num">4096</span>) *p = <span class="num">0</span>;</pre>
+
+  <h3>17d.3 IRQ 亲和性 —— 别让网卡中断打扰</h3>
+<pre><span class="cm"># 找网卡 IRQ 号</span>
+grep eth0 /proc/interrupts | awk -F<span class="str">':'</span> <span class="str">'{print $1}'</span>
+
+<span class="cm"># 把它们绑到 housekeeping 核（cpu0-3），不打扰 4-7</span>
+<span class="kw">for</span> irq in 56 57 58 59; do
+  <span class="kw">echo</span> 0-3 &gt; /proc/irq/$irq/smp_affinity_list
+done
+
+<span class="cm"># 设置 RPS / RFS，把 packet 处理也限定在 housekeeping 核</span>
+<span class="kw">echo</span> f &gt; /sys/class/net/eth0/queues/rx-0/rps_cpus</pre>
+
+  <h3>17d.4 测量你的"抖动"</h3>
+<pre><span class="cm"># cyclictest — 实时调度抖动基准测试</span>
+sudo cyclictest -p 80 -t 1 -n -a 4 -i 1000 -l 1000000
+<span class="cm"># 输出：</span>
+<span class="cm">#   T: 0  Min: 1   Act: 2   Avg: 2   Max: 8   ← μs</span>
+<span class="cm"># 没隔离时：Max 可能到 50-500μs；隔离后：Max ≤ 10μs</span>
+
+<span class="cm"># 看本核中断频率（隔离后应几乎为零）</span>
+watch -n1 <span class="str">'grep CPU /proc/interrupts; awk "/CPU/{print $1, \$6}" /proc/interrupts'</span></pre>
+
+  <h3>17d.5 PREEMPT_RT 内核 —— 终极硬实时</h3>
+  <p>如果还不够，上 <code>PREEMPT_RT</code> 实时内核补丁（Linux 6.12 起部分合入主线）：让<strong>几乎所有内核临界区可被抢占</strong>，硬实时延迟可保证在 &lt; 100 μs（甚至 &lt; 10 μs）。代价：吞吐率下降 5-15%。</p>
+
+  <h3>17d.6 完整低延时部署 checklist</h3>
+  <ol>
+    <li>BIOS：关闭 HT、关闭 turbo / SpeedStep、关闭 C-states、内存设最高频</li>
+    <li>内核 cmdline：<code>isolcpus + nohz_full + rcu_nocbs + intel_pstate=disable + idle=poll</code></li>
+    <li>把所有 IRQ / kworker 赶到 housekeeping 核</li>
+    <li>业务进程：mlockall + pin 核 + SCHED_FIFO + 预触内存</li>
+    <li>网卡：DPDK 或 SO_BUSY_POLL + ethtool 调 rx/tx ring</li>
+    <li>定时器：用 timerfd + epoll，不要 setitimer/SIGALRM</li>
+    <li>禁用 transparent huge pages（除非业务受益）：<code>echo never &gt; /sys/kernel/mm/transparent_hugepage/enabled</code></li>
+    <li>用 cyclictest / hwlatdetect 验证抖动收敛</li>
+    <li>P99/P999/P9999 用 HDR Histogram 实时监控</li>
+  </ol>
+
+  <div class="box ok">
+    <strong>价值排序</strong>：隔核 (大头) &gt; mlockall &gt; nohz_full &gt; IRQ 亲和 &gt; SCHED_FIFO &gt; PREEMPT_RT。HFT、5G UPF、PTP grandmaster 这种场景每一条都要上；普通低延时服务一般做前三条已经够。
   </div>
 </section>
 

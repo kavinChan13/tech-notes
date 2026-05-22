@@ -187,6 +187,7 @@
       <li><a href="#s16">presets 与 IDE 集成</a></li>
       <li><a href="#s17">CI — GitHub Actions 完整模板</a></li>
       <li><a href="#s18">真实工程 CMake 模板</a></li>
+      <li><a href="#s18b">构建系统全景 · Bazel/Ninja/Modules ⭐</a></li>
       <li><a href="#s19">易错点速查</a></li>
       <li><a href="#s20">面试题 · 速查</a></li>
     </ol>
@@ -1599,6 +1600,237 @@ enable_coverage(myproject_tests)
 
 include(Catch)
 catch_discover_tests(myproject_tests)</pre>
+</section>
+
+<!-- ================================================================
+     §18b 构建系统多元化与构建加速
+     ================================================================ -->
+<section class="chapter" id="s18b">
+  <h2>18b. 构建系统全景 · Bazel / Ninja / Unity / distcc / C++20 Modules ⭐</h2>
+
+  <p>CMake 不是唯一选择，也不是终点。一个百万行 C++ 项目，全量编译 60 分钟和 5 分钟的差距，靠的不是 CMake 写得有多好，而是<strong>"构建系统选型 + 编译加速管线"</strong>的综合工程。</p>
+
+  <h3>18b.1 主流构建系统横向对比</h3>
+  <table>
+    <tr><th>系统</th><th>哲学</th><th>增量编译</th><th>分布式</th><th>跨语言</th><th>典型用户</th></tr>
+    <tr><td><strong>Make</strong> (1976)</td><td>命令式，文件级依赖</td><td>差（递归 make 灾难）</td><td>distcc / icecc 凑合</td><td>无</td><td>遗留项目</td></tr>
+    <tr><td><strong>CMake + Ninja</strong></td><td>声明式 meta-build</td><td>★★★★ ninja 的全图增量极佳</td><td>+ distcc / sccache</td><td>有限</td><td>Qt / LLVM / Chromium 早期</td></tr>
+    <tr><td><strong>Bazel</strong> (Google)</td><td>密封性 + 远程缓存 + 远程执行</td><td>★★★★★ 内容哈希</td><td>★★★★★ RBE / BuildBuddy</td><td>✅ 一统 Java/Go/Py/C++</td><td>Google / TensorFlow / Envoy / gRPC</td></tr>
+    <tr><td><strong>Buck2</strong> (Meta)</td><td>类 Bazel，Rust 实现，更快</td><td>★★★★★</td><td>★★★★★</td><td>✅</td><td>Meta / Discord</td></tr>
+    <tr><td><strong>Meson + Ninja</strong></td><td>Python 风格 DSL，简洁</td><td>★★★★</td><td>距离 CMake 一档</td><td>有限</td><td>GNOME / systemd / Mesa</td></tr>
+    <tr><td><strong>SCons / Waf</strong></td><td>Python DSL，灵活但慢</td><td>★★★</td><td>—</td><td>有限</td><td>少量遗留</td></tr>
+  </table>
+
+  <h3>18b.2 Ninja —— CMake 的最佳后端</h3>
+  <p>Ninja（Evan Martin，Google 2010）是<strong>极简快速</strong>的构建执行器。CMake 生成 ninja 文件，ninja 解析速度远快于 Make。</p>
+<pre><span class="cm"># 让 CMake 用 ninja 后端</span>
+cmake -G Ninja -B build
+ninja -C build           <span class="cm"># 并行编译，默认 = cpu 核数</span>
+ninja -C build -j 32 -l 28   <span class="cm"># 32 并发，load avg 28 时不再加</span>
+
+<span class="cm"># 看 ninja 实际跑了多久（CRITICAL PATH 分析）</span>
+ninja -C build -t graph &gt; build.dot
+ninja -C build -t deps   <span class="cm"># 看每文件依赖</span>
+ninja -C build -t recompact   <span class="cm"># 压缩 .ninja_deps</span>
+
+<span class="cm"># CMakePresets.json 一行设置默认 generator</span>
+<span class="str">"generator"</span>: <span class="str">"Ninja"</span></pre>
+
+  <div class="box tip">单看构建图启动时间，ninja 比 Make 快 5-50×。所有 CI 都该默认 Ninja。</div>
+
+  <h3>18b.3 Unity / Jumbo Build —— 把多个 .cpp 合一</h3>
+  <p>把 10 个 .cpp 用 <code>#include</code> 合并成一个 TU 编译，<strong>大幅减少模板实例化、头文件解析重复</strong>。Chromium 早期用 "jumbo build" 把构建时间砍半。</p>
+<pre><span class="cm"># CMake 3.16+ 一行启用 Unity Build</span>
+set_target_properties(mylib PROPERTIES
+    UNITY_BUILD ON
+    UNITY_BUILD_BATCH_SIZE <span class="num">8</span>)        <span class="cm"># 每 8 个 .cpp 合一</span>
+
+<span class="cm"># 或全局开</span>
+set(CMAKE_UNITY_BUILD ON)</pre>
+  <div class="box danger">
+    <strong>副作用</strong>：① 匿名命名空间符号冲突（两个 .cpp 都有 <code>static void foo()</code>）；② 同名宏 / using 互相污染；③ <strong>增量编译变差</strong>（改 1 个 .cpp 重编一批）。一般在 CI 全量 build 开 Unity，本地开发关。
+  </div>
+
+  <h3>18b.4 Precompiled Headers (PCH)</h3>
+<pre><span class="cm"># CMake 3.16+ 一行</span>
+target_precompile_headers(mylib PRIVATE
+    &lt;string&gt; &lt;vector&gt; &lt;memory&gt; &lt;unordered_map&gt;
+    <span class="str">"common/internal.h"</span>)</pre>
+  <p>典型项目大模板（&lt;regex&gt;、&lt;chrono&gt;、Boost）编译 PCH 后增量加速 20-50%。注意：PCH 跨编译器选项失效（debug/release 各一份）。</p>
+
+  <h3>18b.5 ccache / sccache / FireBuild —— 编译结果缓存</h3>
+  <table>
+    <tr><th>工具</th><th>语言</th><th>分布式后端</th></tr>
+    <tr><td><strong>ccache</strong></td><td>C/C++</td><td>本地为主，2.x 起支持 Redis / S3</td></tr>
+    <tr><td><strong>sccache</strong> (Mozilla)</td><td>C/C++ + Rust + CUDA</td><td>S3 / Azure / GCS / Redis / memcached / Bazel</td></tr>
+    <tr><td><strong>FireBuild</strong></td><td>命令级缓存（任意命令）</td><td>本地</td></tr>
+  </table>
+<pre><span class="cm"># 标准做法：CMake 集成</span>
+find_program(CCACHE ccache)
+<span class="kw">if</span>(CCACHE)
+    set(CMAKE_CXX_COMPILER_LAUNCHER ${CCACHE})
+    set(CMAKE_C_COMPILER_LAUNCHER   ${CCACHE})
+<span class="kw">endif</span>()
+
+<span class="cm"># sccache + S3 后端（CI 跨机命中）</span>
+export SCCACHE_BUCKET=my-ccache
+export SCCACHE_REGION=us-east-1
+export CMAKE_CXX_COMPILER_LAUNCHER=sccache
+
+<span class="cm"># 命中率监控</span>
+ccache -s        <span class="cm"># cache hit ratio: 87%</span>
+sccache --show-stats</pre>
+
+  <h3>18b.6 distcc / icecream — 分布式编译</h3>
+  <p>把 .cpp 编译任务分发到一组机器跑，本地只做预处理 + 链接。10 台 CI 机就是 10 倍编译能力。</p>
+<pre><span class="cm"># distcc（最老）</span>
+export CC=<span class="str">"distcc gcc"</span>
+export DISTCC_HOSTS=<span class="str">"localhost build1 build2 build3"</span>
+make -j 60
+
+<span class="cm"># icecream（KDE 出品，更智能，自动节点发现）</span>
+sudo apt install icecc
+export PATH=/usr/lib/icecc/bin:$PATH
+make -j 100        <span class="cm"># 节点自动加入 farm</span>
+
+<span class="cm"># 与 ccache 组合 — 先看 cache，没命中才分发</span>
+CMAKE_CXX_COMPILER_LAUNCHER=<span class="str">"ccache;distcc"</span></pre>
+
+  <h3>18b.7 Bazel —— Google 风格的密封 + 远程缓存 + 远程执行</h3>
+  <p>Bazel 三个杀手锏：</p>
+  <ol>
+    <li><strong>密封性 (Hermetic)</strong>：每条编译命令的输入由 BUILD 文件<em>完全声明</em>，无隐式依赖 → 内容哈希做 cache key 100% 准</li>
+    <li><strong>Remote Cache</strong>：把构建产物存远程（gRPC + CAS），<strong>全公司共享</strong>。新 dev 拉代码后第一次 build 几乎全 cache hit</li>
+    <li><strong>Remote Build Execution (RBE)</strong>：编译命令本身也分发到远程集群跑，本地几乎只做 IO</li>
+  </ol>
+
+<pre><span class="cm"># 最小 BUILD.bazel</span>
+cc_library(
+    name = <span class="str">"foo"</span>,
+    srcs = [<span class="str">"foo.cc"</span>],
+    hdrs = [<span class="str">"foo.h"</span>],
+    deps = [<span class="str">"//bar"</span>, <span class="str">"@absl//absl/strings"</span>],
+    visibility = [<span class="str">"//visibility:public"</span>],
+)
+
+cc_binary(
+    name = <span class="str">"myapp"</span>,
+    srcs = [<span class="str">"main.cc"</span>],
+    deps = [<span class="str">":foo"</span>],
+)
+
+cc_test(
+    name = <span class="str">"foo_test"</span>,
+    srcs = [<span class="str">"foo_test.cc"</span>],
+    deps = [<span class="str">":foo"</span>, <span class="str">"@googletest//:gtest_main"</span>],
+)</pre>
+
+  <h4>Bazel 优势</h4>
+  <ul>
+    <li><strong>万亿行级 monorepo</strong>的事实标准（Google / Uber / Twitter / Lyft / Pinterest）</li>
+    <li>跨语言：C++ + Java + Go + Python + Rust 一套构建</li>
+    <li>Remote Cache 让团队级构建从 30 分钟降到 30 秒（cache hit）</li>
+    <li>支持<strong>分级</strong>构建：只 build/test 受改动影响的目标</li>
+  </ul>
+
+  <h4>Bazel 劣势</h4>
+  <ul>
+    <li>启动成本高：BUILD 文件 + WORKSPACE 学习曲线陡</li>
+    <li>整合 GCC/Clang 工具链需写 toolchain rules（CROSSTOOL）</li>
+    <li>与 CMake 生态（vcpkg / conan / find_package）<strong>互通成本极高</strong></li>
+    <li>本地小项目 overhead 大于收益</li>
+  </ul>
+
+  <div class="box tip"><strong>选型经验</strong>：项目 &lt; 50 万行 C++、外部依赖多 → CMake + Ninja + ccache；&gt; 100 万行 + monorepo + 多语言 → 考虑 Bazel / Buck2；中间状态可看 Meson。</div>
+
+  <h3>18b.8 C++20 Modules —— 构建系统的下一站</h3>
+  <p>Modules 解决 C++ 编译模型的根本问题：<strong>头文件被重复解析</strong>。一个 <code>#include &lt;vector&gt;</code> 在每个 TU 都重新展开 ~25 万行预处理代码。Modules 改成"编译一次，二进制 BMI（Binary Module Interface）<em>导入</em>"。</p>
+
+<pre><span class="cm">// math.cppm — module interface unit</span>
+<span class="kw">export module</span> math;
+
+<span class="kw">export</span> <span class="kw">int</span> <span class="fn">square</span>(<span class="kw">int</span> x) { <span class="kw">return</span> x * x; }
+<span class="kw">int</span> <span class="fn">internal_helper</span>() { ... }   <span class="cm">// 不 export = 模块私有</span>
+
+<span class="cm">// main.cpp — consumer</span>
+<span class="kw">import</span> math;
+<span class="kw">import</span> std;            <span class="cm">// C++23: 整个标准库一行导入</span>
+
+<span class="kw">int</span> <span class="fn">main</span>() {
+    std::cout &lt;&lt; <span class="fn">square</span>(<span class="num">5</span>) &lt;&lt; <span class="str">"\n"</span>;
+}</pre>
+
+  <h4>编译器与构建系统支持现状（2026）</h4>
+  <table>
+    <tr><th>工具</th><th>状态</th></tr>
+    <tr><td>Clang 17+</td><td>✅ 完整 modules + std module</td></tr>
+    <tr><td>GCC 14+</td><td>✅ 大部分 features</td></tr>
+    <tr><td>MSVC 19.36+</td><td>✅ 主导实现</td></tr>
+    <tr><td>CMake 3.28+</td><td>✅ <code>FILE_SET CXX_MODULES</code>（实验稳定）</td></tr>
+    <tr><td>Ninja 1.11+</td><td>✅ dyndep 支持模块依赖发现</td></tr>
+    <tr><td>Bazel</td><td>⚠️ 实验性，2025 起改进</td></tr>
+  </table>
+
+  <h4>CMake 启用 modules 示例</h4>
+<pre>cmake_minimum_required(VERSION 3.28)
+project(modules_demo CXX)
+set(CMAKE_CXX_STANDARD 23)
+set(CMAKE_CXX_MODULE_STD ON)
+
+add_library(math_mod)
+target_sources(math_mod PUBLIC
+    FILE_SET CXX_MODULES FILES math.cppm
+)
+
+add_executable(app main.cpp)
+target_link_libraries(app PRIVATE math_mod)</pre>
+
+  <h4>Modules 实测收益</h4>
+  <ul>
+    <li>大量使用 <code>&lt;regex&gt; / &lt;chrono&gt; / Boost</code> 的 TU，编译加速 20-50%</li>
+    <li>纯小文件 / 已用 PCH 的项目，收益 5-15%</li>
+    <li>但 <strong>BMI 不像 .o 那样可缓存</strong>（依赖编译器版本/选项），分布式编译复杂度上升</li>
+  </ul>
+
+  <div class="box danger">
+    <strong>现实建议（2026）</strong>：modules 已可以在新项目里试用，但大型既有项目"全量迁移"成本巨大（要重写所有公共头）。<strong>渐进策略</strong>：① 新增<em>叶子库</em>用 modules；② 公共依赖暂保留传统 header；③ 等 5 年看 Bazel/CMake 大型生态成熟再考虑全面切换。
+  </div>
+
+  <h3>18b.9 编译时间侦测三件套</h3>
+<pre><span class="cm"># ① -ftime-trace (Clang) — 每个 TU 编译火焰图</span>
+clang++ -O2 -ftime-trace -c foo.cpp
+<span class="cm"># 生成 foo.json，丢进 chrome://tracing 查看</span>
+<span class="cm"># 一眼看出哪个头文件 / 模板实例化最贵</span>
+
+<span class="cm"># ② ClangBuildAnalyzer — 全项目聚合</span>
+ClangBuildAnalyzer --all build/ capture.bin
+ClangBuildAnalyzer --analyze capture.bin
+<span class="cm"># 输出：</span>
+<span class="cm">#   Top compile-heaviest files:</span>
+<span class="cm">#     30.5s: bigfile.cpp</span>
+<span class="cm">#   Top template instantiations:</span>
+<span class="cm">#     12.2s: std::vector&lt;MyHugeType&gt;</span>
+
+<span class="cm"># ③ include-what-you-use (IWYU) — 删多余 include</span>
+iwyu_tool.py -p build/ -- -Xiwyu --mapping_file=iwyu.imp &gt; iwyu.out
+fix_includes.py &lt; iwyu.out</pre>
+
+  <h3>18b.10 真实项目编译加速 checklist</h3>
+  <ol>
+    <li>Ninja 替换 Make（5% 起步）</li>
+    <li>ccache + 在 CI 上配 S3 远程后端（命中率 80%+ 时大幅加速）</li>
+    <li>PCH 关键头（&lt;string&gt;/&lt;vector&gt;/项目核心头）</li>
+    <li>Unity Build（CI 全量 OK，本地按需）</li>
+    <li>IWYU 清理多余 include</li>
+    <li>大型类型用 PIMPL / extern template</li>
+    <li>distcc / icecc / sccache 分布式编译（成本 vs 收益评估）</li>
+    <li>Modules：先在新增叶子库试水</li>
+    <li>对超大型 monorepo，评估迁移 Bazel/Buck2</li>
+  </ol>
+
+  <div class="box ok">
+    <strong>典型成绩</strong>：50 万行 C++ 服务，全量编译时间 <strong>40 分钟 → 6 分钟</strong>（Ninja + ccache 远程 + PCH + IWYU + Unity）。性价比最高的组合是<strong>"Ninja + ccache S3 + PCH"</strong>，零代码侵入。
+  </div>
 </section>
 
 <!-- ================================================================
