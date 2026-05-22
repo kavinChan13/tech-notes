@@ -1074,7 +1074,215 @@ m-&gt;len = n;
 <span class="cmt">// C++ 标准做法: 用 std::unique_ptr&lt;char[]&gt; + placement new 的 struct 布局</span></code></pre>
 </div>
 
-<h3 id="s14-7">14.7 高频面试 Q&amp;A</h3>
+<h3 id="s14-7">14.7 std::launder 与对象重启 — 标准里最隐秘的函数</h3>
+<div class="card">
+<p>当你用 placement new 在<strong>同一块内存</strong>构造一个新对象覆盖旧对象时，旧指针/引用对编译器来说"指向的还是旧对象"——这在严格 aliasing 与 const/reference 成员存在时是 UB。<code>std::launder</code>（C++17）是<strong>告诉编译器"忘掉之前的对象身份，重新看待这块内存"</strong>的唯一标准方式。</p>
+
+<h4>问题：placement new 之后旧指针失效的两种情况</h4>
+<pre><code><span class="cmt">// 场景 1：const 成员 / 引用成员</span>
+<span class="kw">struct</span> X { <span class="kw">const</span> <span class="ty">int</span> n; };
+X x{<span class="num">7</span>};
+<span class="kw">new</span> (&amp;x) X{<span class="num">42</span>};         <span class="cmt">// 构造了"新 X"</span>
+<span class="ty">int</span> v = x.n;            <span class="cmt">// ❌ UB! x 还引用旧 X，编译器可能直接折叠为 7</span>
+<span class="ty">int</span> v2 = std::launder(&amp;x)-&gt;n;  <span class="cmt">// ✅ 正确：得到 42</span>
+
+<span class="cmt">// 场景 2：含 virtual 的对象 / 类型布局变了</span>
+<span class="kw">union</span> U {
+    Base b;
+    Derived d;     <span class="cmt">// Base 和 Derived 都有 vtable</span>
+};
+U u; <span class="kw">new</span> (&amp;u) Derived{};
+Base* pb = std::launder(&amp;u.b);   <span class="cmt">// ✅ 强制重新解释这块内存</span></code></pre>
+
+<h4>什么时候<em>必须</em>用 std::launder</h4>
+<table>
+<tr><th>条件（满足任一）</th><th>原因</th></tr>
+<tr><td>新对象与旧对象类型不同（且不是 transparently replaceable）</td><td>编译器对旧类型有别名假设</td></tr>
+<tr><td>类型里有 <code>const</code> 成员、引用成员、或 PMF</td><td>编译器假设这些"永远不变"，可能常量折叠</td></tr>
+<tr><td>类型里有 <code>vtable</code> 且 placement new 替换为不同动态类型</td><td>vptr 已变，旧指针不知道</td></tr>
+</table>
+
+<h4>什么时候<em>不需要</em> std::launder</h4>
+<ul>
+<li><code>placement new</code> 返回的<strong>新指针</strong>直接使用 — 这个指针本身已经是"新身份"</li>
+<li>类型简单（无 const/&amp;/vtable）、新旧类型相同：标准允许"透明替换"，旧指针仍合法（C++17 起规则）</li>
+</ul>
+
+<h4>std::launder 不做什么</h4>
+<div class="warn">
+std::launder <strong>不</strong>等于 reinterpret_cast，<strong>不</strong>能凭空"召唤"对象。它要求：① 那块内存确实存在该类型的对象（已经被构造）；② 你在生命周期内访问。<br>
+违反这两条仍然是 UB —— std::launder 只是消除编译器的"残留旧对象"假设，不是给 UB 颁发牌照。
+</div>
+
+<h4>典型用法：对象池里复用 storage</h4>
+<pre><code><span class="kw">template</span>&lt;<span class="kw">class</span> T, <span class="kw">size_t</span> N&gt;
+<span class="kw">class</span> ObjectPool {
+    <span class="kw">alignas</span>(T) <span class="kw">char</span> storage_[N * <span class="kw">sizeof</span>(T)];
+    std::bitset&lt;N&gt; alive_;
+<span class="kw">public</span>:
+    <span class="kw">template</span>&lt;<span class="kw">class</span>... Args&gt;
+    T* <span class="fn">acquire</span>(Args&amp;&amp;... args) {
+        <span class="kw">for</span> (<span class="ty">size_t</span> i = <span class="num">0</span>; i &lt; N; ++i) {
+            <span class="kw">if</span> (!alive_[i]) {
+                T* p = <span class="kw">new</span> (&amp;storage_[i * <span class="kw">sizeof</span>(T)]) T(<span class="kw">std::forward</span>&lt;Args&gt;(args)...);
+                alive_[i] = <span class="kw">true</span>;
+                <span class="kw">return</span> p;                <span class="cmt">// 新指针无需 launder</span>
+            }
+        }
+        <span class="kw">return</span> <span class="kw">nullptr</span>;
+    }
+    <span class="kw">void</span> <span class="fn">release</span>(T* p) {
+        p-&gt;~T();
+        alive_[<span class="fn">index_of</span>(p)] = <span class="kw">false</span>;
+    }
+    <span class="cmt">// 危险点：若外部缓存了旧 T*，并再 acquire 同一槽，需要 launder</span>
+    T* <span class="fn">at</span>(<span class="ty">size_t</span> i) {
+        <span class="kw">return</span> std::launder(<span class="kw">reinterpret_cast</span>&lt;T*&gt;(&amp;storage_[i * <span class="kw">sizeof</span>(T)]));
+    }
+};</code></pre>
+
+<div class="tip">std::launder 在标准库内部被 <code>std::optional</code>、<code>std::variant</code>、<code>std::any</code> 大量使用——它们都需要在 union/aligned_storage 上 placement new 不同类型的对象。</div>
+</div>
+
+<h3 id="s14-8">14.8 对象生命周期与"reuse of storage"完整规则</h3>
+<div class="card">
+<p>C++ 对象的生命周期模型（[basic.life]）远比"调用构造、调用析构"复杂。理解它是写无锁结构、序列化、对象池、union-based variant 的基础。</p>
+
+<h4>对象的 7 个状态</h4>
+<table>
+<tr><th>状态</th><th>怎么进入</th><th>能做什么</th></tr>
+<tr><td>storage 已分配，对象未开始构造</td><td>malloc / aligned_storage</td><td>memcpy 字节、address-of</td></tr>
+<tr><td>构造中（构造函数执行中）</td><td>new 进入构造</td><td>this 已可用；虚调按当前层 vtable</td></tr>
+<tr><td><b>存活 (alive)</b></td><td>构造正常结束</td><td>访问成员、调用方法、虚调多态</td></tr>
+<tr><td>析构中</td><td>析构函数执行中</td><td>this 仍可用；虚调降级到当前层</td></tr>
+<tr><td>已销毁，storage 仍在</td><td>析构正常结束 / 异常 unwind 调析构</td><td>placement new 重建；不能访问成员</td></tr>
+<tr><td>已销毁且 storage 被复用为新对象</td><td>placement new 不同类型</td><td>必须用 launder / 新指针</td></tr>
+<tr><td>storage 释放</td><td>free / delete / 离开 stack scope</td><td>什么也不能</td></tr>
+</table>
+
+<h4>"transparently replaceable" — 何时旧指针仍能用</h4>
+<p>C++17 起，下列 5 个条件全部满足时，新对象会<strong>透明替换</strong>旧对象，旧的指针、引用、名字仍合法（无需 launder）：</p>
+<ol>
+<li>新旧对象的<strong>类型相同</strong>（忽略 cv 限定）</li>
+<li>新对象与旧对象的 storage 完全重叠（不是子对象或更大对象）</li>
+<li>旧对象不是 const 完整对象</li>
+<li>旧对象不是基类子对象</li>
+<li>新旧对象不能是 const 限定不同的"potentially-overlapping"子对象（[[no_unique_address]] 等）</li>
+</ol>
+
+<pre><code><span class="cmt">// 透明替换 ✅</span>
+<span class="kw">struct</span> Point { <span class="ty">int</span> x, y; };
+Point p{<span class="num">1</span>, <span class="num">2</span>};
+<span class="kw">new</span> (&amp;p) Point{<span class="num">3</span>, <span class="num">4</span>};
+p.x = <span class="num">5</span>;                       <span class="cmt">// ✅ 合法，新对象 p</span>
+
+<span class="cmt">// 非透明 ❌ —— 有 const 成员</span>
+<span class="kw">struct</span> Q { <span class="kw">const</span> <span class="ty">int</span> id; };
+Q q{<span class="num">10</span>};
+<span class="kw">new</span> (&amp;q) Q{<span class="num">20</span>};
+<span class="ty">int</span> a = q.id;                  <span class="cmt">// ❌ UB</span>
+<span class="ty">int</span> a2 = std::launder(&amp;q)-&gt;id; <span class="cmt">// ✅</span></code></pre>
+
+<h4>析构函数显式调用 + 同位置重建：[basic.life]/8</h4>
+<pre><code><span class="cmt">// 安全模式：使用返回的新指针</span>
+<span class="kw">auto</span>* p = <span class="kw">new</span> Foo();
+p-&gt;~Foo();                       <span class="cmt">// 显式析构</span>
+<span class="kw">auto</span>* p2 = <span class="kw">new</span> (p) Foo(<span class="num">42</span>);   <span class="cmt">// 同地址重建</span>
+p2-&gt;use();                       <span class="cmt">// ✅ 用新指针</span>
+<span class="cmt">// p 此时除非满足透明替换条件，否则只能 launder 后使用</span></code></pre>
+
+<h4>面试题：为什么 std::vector 的 reserve+emplace 不需要 launder？</h4>
+<p>因为 vector 的实现内部<strong>每次都用新指针</strong>（<code>data() + idx</code>），并且元素类型与 storage 类型一致。每次 reserve 时整体重新分配 + move construct，老地址 storage 直接释放，根本没有"同地址重建不同对象"的场景。</p>
+</div>
+
+<h3 id="s14-9">14.9 inline namespace — ABI 版本演化的关键武器</h3>
+<div class="card">
+<p><code>inline namespace</code>（C++11）是<strong>实现库版本化、ABI 兼容、平滑迁移</strong>的标准机制。它声明的命名空间，其符号<strong>自动可见</strong>于父命名空间，但 mangled name 里仍带有命名空间前缀——这就是 libstdc++ 怎么让两套 std::string 实现在同一个二进制里共存的奥秘。</p>
+
+<h4>基本语义</h4>
+<pre><code><span class="kw">namespace</span> myapi {
+    <span class="kw">inline namespace</span> v2 {
+        <span class="kw">void</span> <span class="fn">init</span>();        <span class="cmt">// mangled: _ZN5myapi2v24initEv</span>
+    }
+    <span class="kw">namespace</span> v1 {
+        <span class="kw">void</span> <span class="fn">init</span>();        <span class="cmt">// mangled: _ZN5myapi2v14initEv (旧版仍存在)</span>
+    }
+}
+
+<span class="cmt">// 用户代码</span>
+myapi::<span class="fn">init</span>();                <span class="cmt">// ✅ 自动解析为 v2::init —— inline 的作用</span>
+myapi::v1::<span class="fn">init</span>();            <span class="cmt">// ✅ 显式访问旧版本</span></code></pre>
+
+<h4>典型用法 1：libstdc++ Dual ABI</h4>
+<p>2015 年 GCC 5 切换 <code>std::string</code> 从 COW 到 SSO，但要保持与老二进制兼容。libstdc++ 用 inline namespace 区隔：</p>
+<pre><code><span class="cmt">// 简化的 libstdc++ 源码</span>
+<span class="kw">namespace</span> std {
+<span class="kw">#if</span> _GLIBCXX_USE_CXX11_ABI == <span class="num">1</span>
+    <span class="kw">inline namespace</span> __cxx11 {          <span class="cmt">// 新 ABI: SSO string, list 等</span>
+        <span class="kw">class</span> string { ... };
+    }
+<span class="kw">#else</span>
+    <span class="cmt">// 旧 ABI: COW string</span>
+    <span class="kw">class</span> string { ... };
+<span class="kw">#endif</span>
+}
+<span class="cmt">// 同一个 libstdc++.so.6 里实际同时存在两套 std::string 实现</span>
+<span class="cmt">// 你的 .o 用哪一套由 -D_GLIBCXX_USE_CXX11_ABI 决定</span>
+<span class="cmt">// mangled name 不同 → 不会"看似匹配实际崩"</span></code></pre>
+
+<h4>典型用法 2：自家库的版本化导出</h4>
+<pre><code><span class="cmt">// myapi.h —— 用户视角无感升级</span>
+<span class="kw">namespace</span> myapi {
+<span class="kw">#if</span> defined(MYAPI_LEGACY)
+    <span class="kw">inline namespace</span> v1 {
+<span class="kw">#else</span>
+    <span class="kw">inline namespace</span> v2 {
+<span class="kw">#endif</span>
+        <span class="kw">class</span> Connection { ... };
+        <span class="kw">void</span> <span class="fn">connect</span>(<span class="kw">const</span> <span class="kw">char</span>*);
+    }
+    <span class="cmt">// 老用户编译时定义 MYAPI_LEGACY → 链接到 v1 符号</span>
+    <span class="cmt">// 新用户不定义 → 链接到 v2，代码无需改</span>
+}</code></pre>
+
+<h4>典型用法 3：std::literals 的命名空间设计</h4>
+<pre><code><span class="cmt">// 标准库里 literals 的实际声明（简化）</span>
+<span class="kw">namespace</span> std {
+    <span class="kw">inline namespace</span> literals {
+        <span class="kw">inline namespace</span> string_literals {
+            <span class="kw">auto</span> <span class="kw">operator</span><span class="str">""</span>s(<span class="kw">const</span> <span class="kw">char</span>* s, <span class="ty">size_t</span> n);
+        }
+        <span class="kw">inline namespace</span> chrono_literals {
+            <span class="kw">auto</span> <span class="kw">operator</span><span class="str">""</span>ms(<span class="kw">unsigned long long</span>);
+        }
+    }
+}
+<span class="cmt">// 用户三种粒度都能开</span>
+<span class="kw">using namespace</span> std::literals;                <span class="cmt">// 全开</span>
+<span class="kw">using namespace</span> std::string_literals;         <span class="cmt">// 只开 string</span>
+<span class="kw">using namespace</span> std::chrono_literals;         <span class="cmt">// 只开 chrono</span></code></pre>
+
+<h4>inline namespace 的隐藏陷阱</h4>
+<ul>
+<li><strong>不能在两个独立 TU 里把同一名字声明为不同 inline namespace 的成员</strong> — 链接 ODR 违反</li>
+<li><strong>特化要放进正确层</strong>：<code>template&lt;&gt; struct std::hash&lt;Foo&gt;</code> 在 C++11 起允许，但若涉及 inline namespace 包裹的类型，特化路径需匹配</li>
+<li>用 <code>extern "C++"</code> 不能跨越 inline namespace 边界</li>
+</ul>
+
+<h4>查看真实 mangled name</h4>
+<pre><code>$ g++ -c v.cpp
+$ nm v.o | c++filt
+<span class="cmt"># 你会看到:</span>
+0000000000000000 T myapi::v2::init()
+<span class="cmt"># 而不是 myapi::init() —— 这是 inline namespace 真实存在的证据</span>
+
+$ nm v.o | grep init                  <span class="cmt"># 看 mangled</span>
+0000000000000000 T _ZN5myapi2v24initEv  <span class="cmt"># v2 嵌在 mangled name 里</span></code></pre>
+
+<div class="tip">所有<strong>大型 C++ 库</strong>（Abseil、Folly、Boost、Protobuf）都用 inline namespace 做 ABI 版本化。设计公共库时第一件事就是规划 <code>inline namespace v1 { ... }</code>，这样 5 年后想做不兼容升级时你只要加一个 <code>inline namespace v2 { ... }</code> 并把 <code>v1</code> 的 <code>inline</code> 去掉 —— 旧用户照常工作，新用户切换。</div>
+</div>
+
+<h3 id="s14-10">14.10 高频面试 Q&amp;A</h3>
 
 <div class="card">
 <h4>Q1: sizeof 空类为什么是 1 不是 0？</h4>

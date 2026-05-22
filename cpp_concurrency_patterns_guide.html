@@ -193,6 +193,8 @@
       <li><a href="#s9">Pipeline 流水线</a></li>
       <li><a href="#s10">Active Object / Actor</a></li>
       <li><a href="#s11">Work-Stealing</a></li>
+      <li><a href="#s11b">LMAX Disruptor ⭐</a></li>
+      <li><a href="#s11c">Sender/Receiver (C++26) ⭐</a></li>
       <li><a href="#s12">C++20 协程异步模式</a></li>
       <li><a href="#s13">跨线程异常传递</a></li>
       <li><a href="#s14">死锁防御与检测</a></li>
@@ -1169,6 +1171,322 @@ std::vector&lt;std::future&lt;<span class="kw">int</span>&gt;&gt; results;
 
   <div class="box ok">
     <b>核心收益</b>：① 大多数 push/pop 是 lock-free；② 缓存友好（栈式访问 + 偷别人是<em>少数</em>事件）；③ 自动负载均衡。
+  </div>
+</section>
+
+<!-- ================================================================
+     §11b LMAX Disruptor —— 金融级低延时模式
+     ================================================================ -->
+<section class="chapter" id="s11b">
+  <h2>11b. LMAX Disruptor — 极致低延时的"机械同情"模式 ⭐</h2>
+
+  <h3>11b.1 来历与定位</h3>
+  <p>LMAX 是 2010 年代英国一家外汇交易所，单线程 <strong>600 万订单/秒</strong> 的吞吐，靠的不是更多线程，而是一种被命名为 <strong>Disruptor</strong> 的并发模式。核心论文：<a href="https://lmax-exchange.github.io/disruptor/disruptor.html" style="color:var(--accent)">Disruptor: High Performance Alternative To Bounded Queues for Exchanging Data Between Concurrent Threads</a>。它的设计哲学叫 <em>Mechanical Sympathy</em> —— 顺应 CPU 硬件特性。</p>
+
+  <div class="box tip">Disruptor 不是"更快的队列"，而是"一种重新定义的<strong>多写多读、保留顺序、无锁回收</strong>的环形 buffer 协议"。在低延时领域（金融撮合、做市、行情广播、游戏服务器、Aeron）是事实标准。</div>
+
+  <h3>11b.2 与普通无锁队列的根本区别</h3>
+  <table>
+    <tr><th>对比项</th><th>普通 MPMC 无锁队列<br>(moodycamel / Vyukov)</th><th>Disruptor</th></tr>
+    <tr><td>消息所有权</td><td>消费者 pop 取走（移动）</td><td><strong>预分配 slot，复用对象</strong>，不 new/delete</td></tr>
+    <tr><td>消费者关系</td><td>互斥（一条消息一个消费者）</td><td><strong>所有消费者都看到所有事件</strong>，按 barrier 依赖图编排</td></tr>
+    <tr><td>同步原语</td><td>每槽位一个 atomic seq + CAS</td><td>每生产者 / 消费者各有<strong>独立 cursor</strong>，cache line 隔离</td></tr>
+    <tr><td>批量处理</td><td>逐条 push/pop</td><td><strong>批量消费</strong>：一次拉走 N 个，分摊 cache miss</td></tr>
+    <tr><td>等待策略</td><td>spin / yield / sleep 混编</td><td>抽象的 <code>WaitStrategy</code>：BusySpin / Yielding / BlockingWait / TimeoutBlocking</td></tr>
+    <tr><td>GC / 分配</td><td>每消息分配一次</td><td><strong>零分配</strong>（运行时）</td></tr>
+  </table>
+
+  <h3>11b.3 核心结构 — 环形 buffer + 4 个 cursor</h3>
+
+  <div class="diag">
+    <svg viewBox="0 0 760 320" xmlns="http://www.w3.org/2000/svg">
+      <!-- Ring buffer slots -->
+      <text x="20" y="30" fill="#facc15" font-size="13" font-weight="bold">RingBuffer (size = 2^N)</text>
+      <g>
+        <rect x="20"  y="50" width="80" height="60" fill="#0d1730" stroke="#38bdf8"/>
+        <text x="60"  y="75" text-anchor="middle" fill="#7dd3fc" font-size="11">slot 0</text>
+        <text x="60"  y="95" text-anchor="middle" fill="#86efac" font-size="10">已发布</text>
+        <rect x="100" y="50" width="80" height="60" fill="#0d1730" stroke="#38bdf8"/>
+        <text x="140" y="75" text-anchor="middle" fill="#7dd3fc" font-size="11">slot 1</text>
+        <text x="140" y="95" text-anchor="middle" fill="#86efac" font-size="10">已发布</text>
+        <rect x="180" y="50" width="80" height="60" fill="#0d1730" stroke="#38bdf8"/>
+        <text x="220" y="75" text-anchor="middle" fill="#7dd3fc" font-size="11">slot 2</text>
+        <text x="220" y="95" text-anchor="middle" fill="#86efac" font-size="10">已发布</text>
+        <rect x="260" y="50" width="80" height="60" fill="#3d2d1f" stroke="#fb923c"/>
+        <text x="300" y="75" text-anchor="middle" fill="#fdba74" font-size="11">slot 3</text>
+        <text x="300" y="95" text-anchor="middle" fill="#fdba74" font-size="10">写入中</text>
+        <rect x="340" y="50" width="80" height="60" fill="#1a1a2e" stroke="#94a3b8"/>
+        <text x="380" y="75" text-anchor="middle" fill="#94a3b8" font-size="11">slot 4</text>
+        <text x="380" y="95" text-anchor="middle" fill="#94a3b8" font-size="10">空</text>
+        <rect x="420" y="50" width="80" height="60" fill="#1a1a2e" stroke="#94a3b8"/>
+        <text x="460" y="75" text-anchor="middle" fill="#94a3b8" font-size="11">slot 5</text>
+        <text x="500" y="50" fill="#94a3b8" font-size="13">... (环回)</text>
+      </g>
+
+      <!-- Cursors -->
+      <text x="20" y="160" fill="#fb923c" font-size="13" font-weight="bold">Cursors（各占独立 cache line）</text>
+      <rect x="20"  y="180" width="180" height="50" rx="6" fill="#1e3a5f" stroke="#38bdf8"/>
+      <text x="110" y="200" text-anchor="middle" fill="#7dd3fc" font-size="11" font-weight="bold">Producer Cursor = 3</text>
+      <text x="110" y="218" text-anchor="middle" fill="#94a3b8" font-size="10">"我已经申请到 slot 3"</text>
+
+      <rect x="220" y="180" width="180" height="50" rx="6" fill="#3d2d1f" stroke="#fb923c"/>
+      <text x="310" y="200" text-anchor="middle" fill="#fdba74" font-size="11" font-weight="bold">Published Cursor = 2</text>
+      <text x="310" y="218" text-anchor="middle" fill="#94a3b8" font-size="10">"≤2 的 slot 全部可读"</text>
+
+      <rect x="420" y="180" width="160" height="50" rx="6" fill="#1a3326" stroke="#4ade80"/>
+      <text x="500" y="200" text-anchor="middle" fill="#86efac" font-size="11" font-weight="bold">Consumer A = 1</text>
+      <text x="500" y="218" text-anchor="middle" fill="#94a3b8" font-size="10">"我处理到 1"</text>
+
+      <rect x="600" y="180" width="160" height="50" rx="6" fill="#2d1a3a" stroke="#c084fc"/>
+      <text x="680" y="200" text-anchor="middle" fill="#d8b4fe" font-size="11" font-weight="bold">Consumer B = 0</text>
+      <text x="680" y="218" text-anchor="middle" fill="#94a3b8" font-size="10">"我处理到 0"</text>
+
+      <!-- Rule -->
+      <text x="380" y="270" text-anchor="middle" fill="#facc15" font-size="12" font-weight="bold">
+        关键规则
+      </text>
+      <text x="380" y="295" text-anchor="middle" fill="#e2e8f0" font-size="11">
+        生产者新申请的 slot 必须 ≤ min(所有消费者 cursor) + buffer_size
+      </text>
+    </svg>
+  </div>
+
+  <h3>11b.4 简化实现（200 行思路）</h3>
+
+<pre><span class="cm">// disruptor_lite.hpp - 把核心思想写成可跑代码</span>
+<span class="kw">template</span>&lt;<span class="kw">class</span> Event, <span class="type">size_t</span> N&gt;
+<span class="kw">class</span> <span class="type">RingBuffer</span> {
+    <span class="kw">static_assert</span>((N &amp; (N - <span class="num">1</span>)) == <span class="num">0</span>, <span class="str">"N must be power of 2"</span>);
+    Event slots_[N];
+    <span class="kw">static</span> <span class="kw">constexpr</span> <span class="type">size_t</span> MASK = N - <span class="num">1</span>;
+<span class="kw">public</span>:
+    Event&amp; <span class="fn">at</span>(<span class="type">int64_t</span> seq) { <span class="kw">return</span> slots_[seq &amp; MASK]; }
+};
+
+<span class="kw">class</span> <span class="type">Sequence</span> {                          <span class="cm">// 每个 cursor 独占一个 cache line</span>
+    <span class="kw">alignas</span>(<span class="num">64</span>) std::atomic&lt;<span class="type">int64_t</span>&gt; value_{-<span class="num">1</span>};
+    <span class="kw">char</span> _pad[<span class="num">64</span> - <span class="kw">sizeof</span>(std::atomic&lt;<span class="type">int64_t</span>&gt;)];
+<span class="kw">public</span>:
+    <span class="type">int64_t</span> <span class="fn">get</span>() <span class="kw">const</span> { <span class="kw">return</span> value_.<span class="fn">load</span>(std::memory_order_acquire); }
+    <span class="kw">void</span> <span class="fn">set</span>(<span class="type">int64_t</span> v) { value_.<span class="fn">store</span>(v, std::memory_order_release); }
+};
+
+<span class="kw">template</span>&lt;<span class="kw">class</span> Event, <span class="type">size_t</span> N&gt;
+<span class="kw">class</span> <span class="type">Disruptor</span> {
+    <span class="type">RingBuffer</span>&lt;Event, N&gt;     ring_;
+    Sequence                  producer_;       <span class="cm">// 生产者已申请到的最大 seq</span>
+    Sequence                  published_;      <span class="cm">// 已发布的最大 seq</span>
+    std::vector&lt;Sequence*&gt;    consumers_;      <span class="cm">// 所有消费者的 cursor</span>
+
+<span class="kw">public</span>:
+    <span class="cm">// 生产者：申请 slot</span>
+    <span class="type">int64_t</span> <span class="fn">next</span>() {
+        <span class="type">int64_t</span> n = producer_.<span class="fn">get</span>() + <span class="num">1</span>;
+        <span class="cm">// 等到所有消费者都不再用 slot (n - N)</span>
+        <span class="kw">while</span> (n - (<span class="type">int64_t</span>)N &gt; <span class="fn">min_consumer_seq</span>()) {
+            std::this_thread::<span class="fn">yield</span>();         <span class="cm">// 真实库用 WaitStrategy</span>
+        }
+        producer_.<span class="fn">set</span>(n);
+        <span class="kw">return</span> n;
+    }
+
+    Event&amp; <span class="fn">get</span>(<span class="type">int64_t</span> seq) { <span class="kw">return</span> ring_.<span class="fn">at</span>(seq); }
+
+    <span class="cm">// 生产者：发布</span>
+    <span class="kw">void</span> <span class="fn">publish</span>(<span class="type">int64_t</span> seq) { published_.<span class="fn">set</span>(seq); }
+
+    <span class="cm">// 消费者：等到 seq 可读，返回当前最大可读 seq（批量！）</span>
+    <span class="type">int64_t</span> <span class="fn">wait_for</span>(<span class="type">int64_t</span> seq) {
+        <span class="type">int64_t</span> avail;
+        <span class="kw">while</span> ((avail = published_.<span class="fn">get</span>()) &lt; seq) {
+            std::this_thread::<span class="fn">yield</span>();
+        }
+        <span class="kw">return</span> avail;
+    }
+<span class="kw">private</span>:
+    <span class="type">int64_t</span> <span class="fn">min_consumer_seq</span>() {
+        <span class="type">int64_t</span> m = INT64_MAX;
+        <span class="kw">for</span> (<span class="kw">auto</span>* c : consumers_) m = std::<span class="fn">min</span>(m, c-&gt;<span class="fn">get</span>());
+        <span class="kw">return</span> m;
+    }
+};</pre>
+
+<pre><span class="cm">// 使用 — 单生产者 + 两个串行消费者（日志 + 持久化）</span>
+Disruptor&lt;Order, <span class="num">8192</span>&gt; d;
+Sequence logger_cursor, persist_cursor;
+d.<span class="fn">consumers</span>().<span class="fn">push_back</span>(&amp;logger_cursor);
+d.<span class="fn">consumers</span>().<span class="fn">push_back</span>(&amp;persist_cursor);
+
+<span class="cm">// 生产者线程（行情接入）</span>
+<span class="kw">for</span> (;;) {
+    <span class="type">Order</span> o = <span class="fn">read_from_socket</span>();
+    <span class="type">int64_t</span> seq = d.<span class="fn">next</span>();
+    d.<span class="fn">get</span>(seq) = std::move(o);    <span class="cm">// 直接写到 ring 槽位 — 零拷贝</span>
+    d.<span class="fn">publish</span>(seq);
+}
+
+<span class="cm">// 消费者线程</span>
+<span class="type">int64_t</span> cur = <span class="num">0</span>;
+<span class="kw">for</span> (;;) {
+    <span class="type">int64_t</span> end = d.<span class="fn">wait_for</span>(cur);     <span class="cm">// 批量到达</span>
+    <span class="kw">for</span> (<span class="type">int64_t</span> i = cur; i &lt;= end; ++i) {
+        <span class="fn">handle</span>(d.<span class="fn">get</span>(i));         <span class="cm">// 处理 (i - cur + 1) 个事件，cache 友好</span>
+    }
+    logger_cursor.<span class="fn">set</span>(end);
+    cur = end + <span class="num">1</span>;
+}</pre>
+
+  <h3>11b.5 性能为何如此夸张</h3>
+  <table>
+    <tr><th>机制</th><th>带来的收益</th></tr>
+    <tr><td><strong>预分配 + 复用 slot</strong></td><td>运行时零 malloc → 无锁分配器的争用</td></tr>
+    <tr><td><strong>每个 cursor 独占 cache line</strong></td><td>生产者写 producer_cursor 不会 invalidate 消费者 cursor → 无假共享</td></tr>
+    <tr><td><strong>消费者批量拉取</strong></td><td>一次 wait_for 返回 N 个；分摊系统调用 / 内存屏障开销</td></tr>
+    <tr><td><strong>seq 单调递增、power-of-2 mask</strong></td><td>定位 slot 用 <code>&amp;</code> 而非 <code>%</code>，<em>1 个 cycle</em></td></tr>
+    <tr><td><strong>消费者依赖图编排</strong></td><td>logger 必须先于 persist？dependency barrier 自然表达，无需额外锁</td></tr>
+    <tr><td><strong>WaitStrategy 可插拔</strong></td><td>低延时用 BusySpin（吃 100% CPU 换 ~50ns 唤醒）；普通服务用 BlockingWait</td></tr>
+  </table>
+
+  <div class="box star">
+    <strong>面试 Q</strong>：你说 mutex 队列 enqueue 是 100ns 级，Vyukov MPMC 是 30ns，Disruptor 是 10ns —— 它<em>究竟省了什么</em>？<br>
+    <strong>答</strong>：① 没有节点分配；② 生产者不和消费者抢同一个 atomic（各有 cursor）；③ 消费者批量摊销同步开销；④ slot 复用避开 cache 冷启动；⑤ 等待策略可调到 BusySpin 跳过 OS 调度。综合下来一次 enqueue 平均只剩 1 次 atomic store + 1 次 cache 写入。
+  </div>
+
+  <h3>11b.6 C++ 生态</h3>
+  <ul>
+    <li><a href="https://github.com/Abc-Arbitrage/Disruptor-cpp" style="color:var(--accent)"><b>Disruptor-cpp</b></a> — 最完整的 C++ 移植，金融行业常用</li>
+    <li><a href="https://github.com/real-logic/aeron" style="color:var(--accent)"><b>Aeron</b></a> — Disruptor 作者 Martin Thompson 后来做的<strong>跨进程 / 跨主机</strong>版本，基于共享内存 + UDP 多播</li>
+    <li><a href="https://github.com/cameron314/concurrentqueue" style="color:var(--accent)"><b>moodycamel::ConcurrentQueue</b></a> — 不是 Disruptor，但同样追求高吞吐，单消息语义而非广播</li>
+    <li><a href="https://nanomsg.org/" style="color:var(--accent)"><b>NNG / NanoMsg</b></a> — 跨进程消息库，借鉴 Disruptor 思想</li>
+  </ul>
+
+  <div class="box danger">
+    <strong>误用警告</strong>：Disruptor 的<em>所有消费者看见所有事件</em>语义意味着<strong>消息不会被某个消费者"消化掉"</strong>。如果你的需求是工作分发（一个任务一个 worker 处理），Disruptor <em>不是正确选择</em>，moodycamel 或 work-stealing pool 才是。Disruptor 适合：行情广播、日志风扇形输出、事件回放、order pipeline。
+  </div>
+</section>
+
+<!-- ================================================================
+     §11c Sender/Receiver — C++26 结构化并发
+     ================================================================ -->
+<section class="chapter" id="s11c">
+  <h2>11c. Sender/Receiver — C++26 结构化并发 (P2300) ⭐</h2>
+
+  <h3>11c.1 它要解决什么</h3>
+  <p>过去 15 年异步 C++ 的痛点循环出现：</p>
+  <ul>
+    <li><strong>Callback hell</strong> → 引入 <code>std::future</code> → 但 future 不能组合（没有 <code>then</code> / <code>when_all</code> 在标准里）</li>
+    <li><strong>第三方 future</strong>（folly、Boost.Future）各成生态、互不兼容</li>
+    <li><strong>C++20 协程</strong> → 解决了"线性异步代码可读性"，但<em>调度器、取消、组合</em>仍是裸的</li>
+    <li>没有标准的<strong>异步执行抽象</strong> → 每个库（Asio、TBB、CUDA、GPU）自己一套</li>
+  </ul>
+  <p><strong>P2300（std::execution）</strong>由 NVIDIA、Microsoft、Meta、Google 联合推动，进入 <strong>C++26</strong>。它定义一套通用的"<em>异步操作</em> + <em>调度器</em> + <em>结构化取消</em>"代数，标准库、Asio、CUDA、SyCL、Vulkan 都将基于这套接口。</p>
+
+  <h3>11c.2 三大概念</h3>
+  <table>
+    <tr><th>概念</th><th>类比</th><th>职责</th></tr>
+    <tr><td><strong>Scheduler</strong></td><td>"在哪里跑"</td><td>线程池、IO 线程、GPU、协程框架的统一抽象</td></tr>
+    <tr><td><strong>Sender</strong></td><td>"做什么"（懒计算）</td><td>异步操作的描述符；不调度也不执行，可被组合</td></tr>
+    <tr><td><strong>Receiver</strong></td><td>"完成后给谁"</td><td>三个回调入口：<code>set_value</code> / <code>set_error</code> / <code>set_stopped</code></td></tr>
+  </table>
+
+  <h3>11c.3 第一眼代码</h3>
+<pre><span class="kw">#include</span> <span class="str">&lt;execution&gt;</span>          <span class="cm">// C++26 / 现在用 libunifex 或 stdexec</span>
+<span class="kw">namespace</span> ex = std::execution;
+
+<span class="cm">// 1. 取一个调度器</span>
+<span class="kw">static_thread_pool</span> pool(<span class="num">4</span>);
+<span class="kw">auto</span> sched = pool.<span class="fn">get_scheduler</span>();
+
+<span class="cm">// 2. 描述一条异步链</span>
+<span class="kw">auto</span> work = ex::<span class="fn">schedule</span>(sched)
+            | ex::<span class="fn">then</span>([] { <span class="kw">return</span> <span class="fn">load_user</span>(<span class="num">42</span>); })
+            | ex::<span class="fn">then</span>([](User u) { <span class="kw">return</span> <span class="fn">fetch_orders</span>(u); })
+            | ex::<span class="fn">then</span>([](<span class="kw">auto</span> os) { <span class="kw">return</span> os.<span class="fn">size</span>(); });
+
+<span class="cm">// 3. 同步等待结果（也可挂到另一个 sender）</span>
+<span class="kw">auto</span> [count] = ex::<span class="fn">sync_wait</span>(<span class="kw">std::move</span>(work)).<span class="fn">value</span>();</pre>
+
+  <h3>11c.4 关键组合算子</h3>
+  <table>
+    <tr><th>算子</th><th>含义</th><th>类比</th></tr>
+    <tr><td><code>schedule(sched)</code></td><td>"在 sched 上恢复" — 一切异步链的起点</td><td>类似 <code>asio::post(executor)</code></td></tr>
+    <tr><td><code>then(f)</code></td><td>同步变换</td><td>future::then / Promise.then</td></tr>
+    <tr><td><code>let_value(f)</code></td><td>动态产出下一段 sender（依赖前值）</td><td>flatMap</td></tr>
+    <tr><td><code>when_all(s1, s2, ...)</code></td><td>并行等待全部完成</td><td>Promise.all</td></tr>
+    <tr><td><code>when_any(s1, s2, ...)</code></td><td>取最先完成</td><td>Promise.race</td></tr>
+    <tr><td><code>upon_error(f)</code></td><td>错误恢复</td><td>catch</td></tr>
+    <tr><td><code>upon_stopped(f)</code></td><td>取消恢复</td><td>cancellation handler</td></tr>
+    <tr><td><code>stopped_as_optional</code></td><td>把"被取消"翻译成 nullopt</td><td>—</td></tr>
+    <tr><td><code>transfer(sched)</code> / <code>continues_on(sched)</code></td><td>换调度器</td><td>asio::dispatch</td></tr>
+    <tr><td><code>bulk(n, f)</code></td><td>并行 fan-out</td><td>parallel for</td></tr>
+  </table>
+
+  <h3>11c.5 一个完整例子 — 并行读两个文件 + 合并</h3>
+<pre><span class="kw">auto</span> read_file = [](<span class="kw">auto</span> path) {
+    <span class="kw">return</span> ex::<span class="fn">schedule</span>(io_sched)
+         | ex::<span class="fn">then</span>([path]{ <span class="kw">return</span> <span class="fn">slurp</span>(path); });          <span class="cm">// 阻塞 read</span>
+};
+
+<span class="kw">auto</span> work =
+      ex::<span class="fn">when_all</span>(<span class="fn">read_file</span>(<span class="str">"a.json"</span>), <span class="fn">read_file</span>(<span class="str">"b.json"</span>))
+    | ex::<span class="fn">transfer</span>(cpu_sched)                                       <span class="cm">// 切到计算线程池</span>
+    | ex::<span class="fn">then</span>([](std::string a, std::string b) {
+          <span class="kw">return</span> <span class="fn">merge_json</span>(a, b);
+      })
+    | ex::<span class="fn">upon_error</span>([](std::exception_ptr e) { <span class="fn">log_and_default</span>(e); });
+
+<span class="kw">auto</span> result = ex::<span class="fn">sync_wait</span>(<span class="kw">std::move</span>(work));</pre>
+
+  <h3>11c.6 与 C++20 协程的关系 — 不是替代，是底座</h3>
+  <p>P2300 设计时与协程深度兼容：</p>
+  <ul>
+    <li>任何 <code>Task&lt;T&gt;</code> 协程可以变成一个 sender（通过 <code>as_sender</code> / 直接 <code>co_await sender</code>）</li>
+    <li>任何 sender 都可以 <code>co_await</code>，从协程里使用</li>
+    <li>结构化取消通过 <code>std::stop_token</code> 在两边自动传播</li>
+  </ul>
+<pre><span class="cm">// 在协程里用 sender 算子组合</span>
+Task&lt;<span class="type">int</span>&gt; <span class="fn">orchestrate</span>() {
+    <span class="kw">auto</span> [a, b] = <span class="kw">co_await</span> ex::<span class="fn">when_all</span>(
+        ex::<span class="fn">schedule</span>(s) | ex::<span class="fn">then</span>([]{ <span class="kw">return</span> <span class="fn">step1</span>(); }),
+        ex::<span class="fn">schedule</span>(s) | ex::<span class="fn">then</span>([]{ <span class="kw">return</span> <span class="fn">step2</span>(); })
+    );
+    <span class="kw">co_return</span> a + b;
+}</pre>
+
+  <h3>11c.7 结构化并发 (Structured Concurrency) — 取消、生命周期、所有权</h3>
+  <p>Sender/Receiver 不只是"另一种 future"，它强制 <strong>结构化并发</strong>：</p>
+  <ul>
+    <li><strong>子任务不能比父任务活得久</strong>：父结束时所有未完成子 sender 自动收到 <code>set_stopped</code></li>
+    <li><strong>取消是头等公民</strong>：<code>stop_token</code> 由 receiver 提供，沿组合链自动传播，无需手动埋点</li>
+    <li><strong>无悬空回调</strong>：sender 不能"逃出"作用域（不像 <code>std::thread::detach</code>）</li>
+    <li><strong>无 race-on-error</strong>：<code>when_all</code> 任意一个失败 → 其他自动取消，全部等齐再上报</li>
+  </ul>
+
+  <div class="box ok">
+    <strong>这就是 Trio / Kotlin Coroutines / Swift Structured Concurrency 引领过的范式</strong>，C++26 终于跟上。它从根本上消灭一类异步代码 bug：goroutine / detached thread / dangling callback 泄漏。
+  </div>
+
+  <h3>11c.8 现在就能用的实现</h3>
+  <table>
+    <tr><th>库</th><th>定位</th><th>状态</th></tr>
+    <tr><td><a href="https://github.com/NVIDIA/stdexec" style="color:var(--accent)"><b>NVIDIA stdexec</b></a></td><td>P2300 的参考实现，C++20 即可用</td><td>活跃，与 CUDA / GPU 整合</td></tr>
+    <tr><td><a href="https://github.com/facebookexperimental/libunifex" style="color:var(--accent)"><b>libunifex</b></a></td><td>Eric Niebler 在 Meta 的原型，P2300 的灵感来源</td><td>稳定但 API 略老</td></tr>
+    <tr><td><a href="https://github.com/chriskohlhoff/asio" style="color:var(--accent)"><b>Asio</b> (1.30+)</td><td>已实验性支持 sender 适配器（<code>asio::experimental::use_sender</code>）</td><td>逐步对齐 P2300</td></tr>
+    <tr><td>libc++ / libstdc++</td><td>C++26 标准实现</td><td>跟踪中，~2026 进入主干</td></tr>
+  </table>
+
+  <h3>11c.9 决策：什么场景该考虑 S/R？</h3>
+  <table>
+    <tr><th>场景</th><th>推荐</th></tr>
+    <tr><td>跨硬件 / 跨子系统的异步统一接口（CPU+GPU+IO）</td><td>✅ S/R 是唯一标准方案</td></tr>
+    <tr><td>需要结构化取消、复杂依赖图（when_all/when_any 嵌套）</td><td>✅ S/R 的强项</td></tr>
+    <tr><td>纯协程内、流程线性</td><td>❌ 协程已经够，S/R 是过度抽象</td></tr>
+    <tr><td>追求极致低延时单生产单消费</td><td>❌ Disruptor / SPSC 队列更直接</td></tr>
+    <tr><td>遗留代码大量基于 future / callback</td><td>⚠️ 渐进引入，先在边界处适配</td></tr>
+  </table>
+
+  <div class="box star">
+    <strong>Tech Lead 视角</strong>：S/R 之于 C++26 异步生态，相当于 Promises/A+ 之于 JavaScript、Reactive Streams 之于 JVM、Trio 之于 Python。早期投入学习成本高，但 5 年内会变成所有异步库的"通用语言"。值得团队中至少一人提前 1-2 年布局。
   </div>
 </section>
 
