@@ -1163,6 +1163,237 @@ API_EXPORT <span class="kw">void</span> publicFunc();</code></pre>
 </ol>
 </div>
 
+<h2 id="modern-linker">现代链接器与符号管理 进阶 <span style="font-size:0.6em;color:var(--accent-cyan);">★ Senior</span></h2>
+<p class="subtitle" style="border:none;padding:0;margin:8px 0 20px;">lld / mold / gold · visibility · weak / strong · gc-sections · 全局构造顺序 — 大型 C++ 项目链接阶段的真知识</p>
+
+<h3>L1. lld / mold / gold 横向对比</h3>
+<p>BFD ld 是 GNU 的"老古董"链接器，单线程、慢。现代项目应当根据场景选择：</p>
+<table>
+<tr><th>链接器</th><th>开发方</th><th>典型加速</th><th>关键特性</th><th>何时选</th></tr>
+<tr><td><code>ld</code> (BFD)</td><td>GNU</td><td>1×（基线）</td><td>兼容性最好，单线程</td><td>极少新项目</td></tr>
+<tr><td><code>gold</code></td><td>Google (2008)</td><td>2-5×</td><td>多线程、ICF (相同函数折叠)、增量链接</td><td>遗留项目过渡（已停止维护）</td></tr>
+<tr><td><code>lld</code></td><td>LLVM</td><td>5-10×</td><td>跨平台 (ELF/COFF/MachO/Wasm)、ThinLTO 友好</td><td>clang 工具链、跨平台</td></tr>
+<tr><td><code>mold</code></td><td>Rui Ueyama (lld 作者)</td><td>10-50×</td><td>极致并行、 大型 C++ 项目压倒性快</td><td>Chromium/LLVM/Rust 等巨型项目</td></tr>
+</table>
+
+<pre><code><span class="cm"># 切换链接器（GCC 12+ / Clang）</span>
+g++ -fuse-ld=lld  ...      <span class="cm"># 用 lld</span>
+g++ -fuse-ld=mold ...      <span class="cm"># 用 mold</span>
+<span class="cm"># 或者临时</span>
+mold -run cmake --build .
+
+<span class="cm"># CMake 风格</span>
+add_link_options(-fuse-ld=mold)
+
+<span class="cm"># 看真实生效</span>
+ld.lld --version
+readelf -p .comment myapp</code></pre>
+
+<div class="phase-card" style="border-left-color:var(--accent-green)">
+<h4>实测数据感觉（来自社区基准）</h4>
+<ul>
+<li>Chromium 全量链接：BFD ld <strong>53s</strong> → lld <strong>12s</strong> → mold <strong>2s</strong></li>
+<li>Clang 自身链接：BFD ld <strong>32s</strong> → mold <strong>1.6s</strong></li>
+<li>Linux kernel：mold 还不够稳，主线仍用 BFD（kernel 重 incremental）</li>
+</ul>
+<p><strong>选型经验</strong>：用户态 C++ 项目无脑选 mold；底层库 / 嵌入式 / 老编译器选 lld；只有 BFD ld 才支持某些 linker script 极端用法时才回到 BFD。</p>
+</div>
+
+<h3>L2. Symbol Visibility —— 四档完整规则</h3>
+<table>
+<tr><th>visibility</th><th>本 so 内可见</th><th>外部 so 可见</th><th>可被覆盖</th><th>典型用途</th></tr>
+<tr><td><code>default</code></td><td>是</td><td><strong>是（导出）</strong></td><td>是（先到先得）</td><td>公共 API（默认）</td></tr>
+<tr><td><code>protected</code></td><td>是</td><td>是（导出但本 so 内调用<em>不走 PLT</em>）</td><td>否</td><td>性能敏感的公共 API</td></tr>
+<tr><td><code>hidden</code></td><td>是</td><td><strong>否</strong></td><td>否</td><td>所有内部实现细节</td></tr>
+<tr><td><code>internal</code></td><td>是</td><td>否</td><td>否</td><td>架构特定，极少用</td></tr>
+</table>
+
+<h4>实战范式：默认 hidden + 显式 API_EXPORT</h4>
+<pre><code><span class="cm">// CMake</span>
+set_target_properties(mylib PROPERTIES
+    CXX_VISIBILITY_PRESET hidden
+    VISIBILITY_INLINES_HIDDEN ON
+    C_VISIBILITY_PRESET hidden)
+
+<span class="cm">// api_export.h —— 跨平台导出宏</span>
+<span class="kw">#if</span> defined(_WIN32)
+  <span class="kw">#ifdef</span> MYLIB_BUILDING
+    <span class="kw">#define</span> MYLIB_API __declspec(dllexport)
+  <span class="kw">#else</span>
+    <span class="kw">#define</span> MYLIB_API __declspec(dllimport)
+  <span class="kw">#endif</span>
+<span class="kw">#elif</span> defined(__GNUC__)
+  <span class="kw">#define</span> MYLIB_API __attribute__((visibility(<span class="str">"default"</span>)))
+<span class="kw">#else</span>
+  <span class="kw">#define</span> MYLIB_API
+<span class="kw">#endif</span>
+
+<span class="cm">// 公开头文件</span>
+MYLIB_API <span class="kw">void</span> publicFunc();
+MYLIB_API <span class="kw">class</span> <span class="type">Connection</span> { ... };       <span class="cm">// 整个类（含 vtable / RTTI）都导出</span></code></pre>
+
+<div class="phase-card" style="border-left-color:var(--accent-orange)">
+<h4>为什么大型 C++ 项目必须开 hidden？</h4>
+<ol>
+<li><strong>减少符号冲突</strong>：两个 so 里同名 inline 函数 / 模板实例 → ld.so 加载时<em>第一个赢</em>。结果：A 调用自家的 fn() 实际跑的是 B 的实现，且 ABI 不同→崩溃。这是<strong>"so 顺序敏感"bug</strong> 的根源。</li>
+<li><strong>启动加速</strong>：ld.so 不再做巨量符号解析。大型 KDE / Qt 应用启动可加速 30%。</li>
+<li><strong>二进制瘦身</strong>：典型项目 .dynsym 缩小 60-90%。</li>
+<li><strong>优化机会</strong>：编译器对 hidden 符号知道"外部不可能 override"→ 内联更激进。</li>
+</ol>
+<p><strong>历史教训</strong>：libstdc++ 因为历史原因没全 hidden，Google 内部所有用 -fvisibility=hidden 的 C++ 项目都遇到过 std::ostream 全局对象在不同 so 里被复制初始化的诡异 bug。</p>
+</div>
+
+<h4>Version Script —— 更精细的导出控制</h4>
+<pre><code><span class="cm">// myapi.ver</span>
+LIBMYAPI_1.0 {
+    global:
+        myapi_init;
+        myapi_call;
+        _ZN7Connection*;      <span class="cm">// 通配 mangled 名</span>
+    local:
+        *;                    <span class="cm">// 其他全部隐藏</span>
+};
+
+<span class="cm"># 链接时</span>
+g++ -shared -Wl,--version-script=myapi.ver -o libmyapi.so *.o</code></pre>
+
+<p>Version script 比 <code>-fvisibility</code> 更强：可以做<strong>版本化导出</strong>，新增符号属于 <code>LIBMYAPI_2.0</code>，老程序还能正常链接老符号。glibc、OpenSSL 都用这个机制保持几十年 ABI 兼容。</p>
+
+<h3>L3. Weak Symbol 的真实威力</h3>
+<p>弱符号不只是"可以重复定义"——它是 C/C++ 实现<strong>可选依赖、运行时插桩、默认实现可被覆盖</strong>的核心机制。</p>
+
+<h4>用法 ①：声明可选依赖（库可能不存在）</h4>
+<pre><code><span class="cm">// 应用可能链接也可能不链接 libprofiler.so</span>
+<span class="kw">extern</span> <span class="str">"C"</span> <span class="kw">void</span> <span class="type">ProfilerStart</span>(<span class="kw">const</span> <span class="kw">char</span>*) __attribute__((weak));
+<span class="kw">extern</span> <span class="str">"C"</span> <span class="kw">void</span> <span class="type">ProfilerStop</span>() __attribute__((weak));
+
+<span class="kw">int</span> <span class="type">main</span>() {
+    <span class="kw">if</span> (ProfilerStart) {              <span class="cm">// 检查符号是否解析成功</span>
+        ProfilerStart(<span class="str">"my.prof"</span>);
+        run_workload();
+        ProfilerStop();
+    } <span class="kw">else</span> {
+        run_workload();                <span class="cm">// 没装 profiler，正常跑</span>
+    }
+}</code></pre>
+
+<h4>用法 ②：提供默认实现，允许用户覆盖</h4>
+<pre><code><span class="cm">// libmyapi 内部 —— 默认 logger 实现，weak</span>
+__attribute__((weak)) <span class="kw">void</span> <span class="type">myapi_log</span>(<span class="kw">const</span> <span class="kw">char</span>* msg) {
+    fputs(msg, stderr);
+}
+
+<span class="cm">// 用户代码 —— 提供 strong 版本</span>
+<span class="kw">extern</span> <span class="str">"C"</span> <span class="kw">void</span> <span class="type">myapi_log</span>(<span class="kw">const</span> <span class="kw">char</span>* msg) {
+    spdlog::info(msg);              <span class="cm">// 走自家日志</span>
+}
+<span class="cm">// 链接器规则：strong 永远胜 weak，无需任何配置</span></code></pre>
+
+<h4>用法 ③：Function interposition / 系统调用插桩</h4>
+<pre><code><span class="cm">// glibc 内部很多函数都是 weak，可被用户覆盖。例如 malloc：</span>
+<span class="cm">// libc.so.6 内: __attribute__((weak)) void* malloc(size_t);</span>
+
+<span class="cm">// jemalloc / tcmalloc 的核心机制就是提供 strong 的 malloc/free，</span>
+<span class="cm">// 链接时优先匹配（或 LD_PRELOAD 运行时插入）。</span></code></pre>
+
+<h4>COMDAT —— inline 函数 / 模板的"自动 weak"</h4>
+<p>C++ 模板和 inline 函数在多个 TU 都会生成定义，链接器靠 COMDAT 组实现"任选一份保留，剩下丢弃"：</p>
+<pre><code><span class="cm"># 查看一个 .o 里的 COMDAT 组</span>
+readelf -e foo.o | grep -A2 COMDAT
+<span class="cm"># Section group [   12] `.group' [_Z3fooIvEvT_]</span>
+
+<span class="cm"># 看实际链接器是否真把它们 dedup 了</span>
+objdump -h myapp | grep -c '_Z3fooIvEvT_'</code></pre>
+
+<h3>L4. 链接器优化开关速查</h3>
+<table>
+<tr><th>选项</th><th>作用</th><th>典型节省</th><th>风险 / 副作用</th></tr>
+<tr><td><code>-Wl,--gc-sections</code> + <code>-ffunction-sections -fdata-sections</code></td><td>把每个函数/变量放独立 section，链接时 GC 未用到的</td><td>二进制小 10-30%</td><td>注册类全局对象可能被 GC → 用 <code>__attribute__((used))</code> 或 <code>KEEP()</code> linker script</td></tr>
+<tr><td><code>-Wl,--as-needed</code></td><td>只链接<em>实际用到符号</em>的 .so（不再无脑链接命令行所有 -l）</td><td>启动加速，依赖更清</td><td>顺序敏感：先 .o 后 -l</td></tr>
+<tr><td><code>-Wl,--icf=all</code> (lld/gold)</td><td>Identical Code Folding：把字节相同的函数折叠成一个</td><td>5-15%</td><td>函数指针比较会"误相等"（关闭 <code>--icf=safe</code> 可控）</td></tr>
+<tr><td><code>-Wl,-z,now</code></td><td>启动时立即解析全部符号（BIND_NOW），结合 RELRO 防 GOT 改写</td><td>安全 + 后续调用快</td><td>启动稍慢</td></tr>
+<tr><td><code>-Wl,-z,relro</code> + <code>-Wl,-z,now</code></td><td>RELRO：标记 GOT 段只读</td><td>反 ROP 攻击</td><td>无</td></tr>
+<tr><td><code>-Wl,--build-id</code></td><td>嵌入唯一 build ID，便于 debuginfo 分离与符号服务器</td><td>必备生产实践</td><td>无</td></tr>
+<tr><td><code>-Wl,--strip-debug</code> / <code>strip --strip-debug</code></td><td>移除调试信息（保留符号）</td><td>50-90%</td><td>需先 <code>objcopy --only-keep-debug</code> 分离 .debug 文件</td></tr>
+</table>
+
+<h3>L5. 全局对象的初始化顺序（深坑专区）</h3>
+
+<h4>同一 TU 内</h4>
+<p>按声明顺序构造，逆序析构。简单可靠。</p>
+
+<h4>跨 TU —— Static Initialization Order Fiasco (SIOF)</h4>
+<pre><code><span class="cm">// a.cpp</span>
+<span class="type">Foo</span> g_foo = <span class="type">Bar</span>::<span class="type">instance</span>().<span class="type">getX</span>();   <span class="cm">// 用了 b.cpp 的 g_bar</span>
+
+<span class="cm">// b.cpp</span>
+<span class="type">Bar</span> g_bar(42);                            <span class="cm">// 谁先谁后？标准未规定！</span></code></pre>
+
+<p>解决方案三选一：</p>
+<ol>
+<li><strong>Construct on First Use idiom</strong>：把全局对象藏进函数局部 static，<em>第一次调用</em>才构造，顺序由调用关系决定。</li>
+<li><strong>Meyers Singleton</strong>（C++11 起 magic static 线程安全）：
+<pre><code><span class="kw">inline</span> <span class="type">Bar</span>& <span class="type">getBar</span>() {
+    <span class="kw">static</span> <span class="type">Bar</span> instance(<span class="num">42</span>);   <span class="cm">// C++11 保证线程安全初始化</span>
+    <span class="kw">return</span> instance;
+}</code></pre>
+</li>
+<li><strong><code>__attribute__((init_priority(N)))</code></strong>（GCC 特有，101-65535，越小越早）：精确控制 .init_array 中的顺序。仅适用于<em>同一 so 内</em>，跨 so 仍不可控。</li>
+</ol>
+
+<h4>底层机制：.init_array / .ctors</h4>
+<pre><code><span class="cm"># 查看一个 .o / .so 的全局构造函数列表</span>
+readelf -d libfoo.so | grep INIT_ARRAY
+objdump -j .init_array -d libfoo.so
+
+<span class="cm"># 调试：让 gdb 在每个全局构造前停下</span>
+gdb ./myapp
+(gdb) catch syscall                       <span class="cm"># 或</span>
+(gdb) b _GLOBAL__sub_I_*                  <span class="cm"># 全局构造的 mangled 名</span></code></pre>
+
+<div class="phase-card" style="border-left-color:var(--accent-red)">
+<h4>真实事故：so 加载顺序导致 logger 构造前被调用</h4>
+<p>项目结构：<code>libcore.so</code> 提供 Logger 单例（全局 ostream），<code>libplugin.so</code> 的某全局对象 Foo 在构造里写日志。理想顺序：libcore 先初始化。</p>
+<p>但因为 <code>g++ main.o -lplugin -lcore</code> 这个顺序，ld.so 反向解析依赖，<strong>libplugin 先初始化</strong>。Foo 构造时调 Logger，Logger 自身还未构造 → ostream 是 zero-initialized 状态 → 段错误。</p>
+<p><strong>修复</strong>：把 Logger 改 Meyers Singleton（按需构造），或调整链接顺序，或用 <code>__attribute__((init_priority(1000)))</code> 强制 Logger 早构造（同 so 内有效）。<strong>这种 bug 在 release 才出现</strong>—— debug build 因为某些优化不同，构造顺序刚好正确，骗你过测试。</p>
+</div>
+
+<h3>L6. 跨 .so 边界的 C++ 类型坑（ABI 入门）</h3>
+
+<table>
+<tr><th>跨 so 传递</th><th>是否安全</th><th>原因</th></tr>
+<tr><td><code>int</code> / POD struct（C ABI 兼容）</td><td>✅</td><td>C ABI 是稳定的</td></tr>
+<tr><td><code>std::string</code> by value</td><td>⚠️</td><td>两边必须用同版本 libstdc++ + 同 dual ABI 设置（<code>_GLIBCXX_USE_CXX11_ABI</code>）</td></tr>
+<tr><td><code>std::vector&lt;T&gt;</code> by ref/ptr</td><td>⚠️</td><td>同上 + T 的 ABI 也要一致</td></tr>
+<tr><td><code>std::shared_ptr&lt;T&gt;</code></td><td>⚠️</td><td>控制块布局必须一致，跨 libstdc++/libc++ 边界会崩</td></tr>
+<tr><td>抛异常跨 so</td><td>⚠️</td><td>type_info 必须共享（动态链 libstdc++）+ <code>-fvisibility=default</code> for typeinfo</td></tr>
+<tr><td>虚函数跨 so 调用</td><td>⚠️</td><td>派生类的 vtable 由派生方 so 提供，基类的 layout 必须 ABI 稳定（不能加成员变量）</td></tr>
+</table>
+
+<div class="phase-card" style="border-left-color:var(--accent-purple)">
+<h4>三个 ABI 安全设计准则</h4>
+<ol>
+<li><strong>so 之间只暴露 C ABI 头文件</strong>（POD struct + 函数指针），C++ 类型只在 so 内部使用。</li>
+<li><strong>必须暴露 C++ 类时用 PIMPL</strong>：公开头只放指针 + 一两个稳定 inline 接口，所有真实成员藏在 impl 里。这样添加成员/改实现不破坏 ABI。</li>
+<li><strong>所有交付物锁住 toolchain</strong>：编译器版本、libstdc++ 版本、<code>_GLIBCXX_USE_CXX11_ABI</code> 三件套，整条链路必须一致。这是为什么大型 C++ 产品要么 monorepo + 同 toolchain 编译，要么 vendoring libstdc++。</li>
+</ol>
+<p>（ABI 主题的完整深度文档另起一篇，参考路线图 §I.3。）</p>
+</div>
+
+<h3>L7. 调试链接问题的工具速查</h3>
+<table>
+<tr><th>问题</th><th>命令</th><th>看什么</th></tr>
+<tr><td>找 undefined reference</td><td><code>nm -u myapp</code></td><td><code>U</code> 标记的符号</td></tr>
+<tr><td>看 .so 导出了什么</td><td><code>nm -D libfoo.so | grep ' T '</code></td><td>大写 T = 全局函数</td></tr>
+<tr><td>看符号 mangled 名</td><td><code>nm libfoo.so | c++filt</code></td><td>反 mangle</td></tr>
+<tr><td>看依赖的 .so</td><td><code>ldd myapp</code> / <code>readelf -d</code></td><td><code>NEEDED</code> 条目</td></tr>
+<tr><td>诊断 dlopen 失败</td><td><code>LD_DEBUG=libs ./myapp 2&gt;&amp;1 \| head</code></td><td>解析搜索路径</td></tr>
+<tr><td>诊断符号解析</td><td><code>LD_DEBUG=symbols ./myapp</code></td><td>谁解析了谁</td></tr>
+<tr><td>查 RUNPATH/RPATH</td><td><code>readelf -d \| grep PATH</code></td><td>是否硬编码路径</td></tr>
+<tr><td>查 BuildID</td><td><code>file myapp</code> 或 <code>eu-unstrip</code></td><td>匹配 debuginfo</td></tr>
+<tr><td>查动态符号冲突</td><td><code>LD_DEBUG=bindings</code></td><td>每个调用绑到哪个 so</td></tr>
+</table>
+
 <div style="margin-top:60px; padding-top:20px; border-top:1px solid var(--border); text-align:center; color:var(--text-muted); font-size:0.85em;">
   Generated for netconf_agent project &middot; 2026-04-17 &middot; Senior C++ Interview Edition
 </div>

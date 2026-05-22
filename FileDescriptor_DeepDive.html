@@ -1091,6 +1091,170 @@ graph TB
 <span class="fn">timerfd_settime</span>(tfd, <span class="num">0</span>, &ts, <span class="kw">NULL</span>);
 <span class="fn">epoll_ctl</span>(ep, EPOLL_CTL_ADD, tfd, &(<span class="ty">epoll_event</span>){.events=EPOLLIN, .data.fd=tfd});
 <span class="com">// epoll_wait 会在每秒唤醒，read(tfd) 获取到期次数</span></code></pre>
+
+  <h3>9.4 signalfd —— 让信号「排队」并进入 epoll</h3>
+  <p>传统 <code>signal()</code>/<code>sigaction()</code> 的最大痛点：信号处理函数<strong>只能调 async-signal-safe 的函数</strong>（<code>printf</code>、<code>malloc</code>、几乎所有 STL 都不行）。<code>signalfd</code> 把信号变成一个 fd 上的"可读事件"，主循环用普通函数处理。</p>
+
+  <pre data-lang="C++"><code><span class="com">// 1. 先 block 想接管的信号（必须！否则默认 handler 仍会跑）</span>
+<span class="ty">sigset_t</span> mask;
+<span class="fn">sigemptyset</span>(&mask);
+<span class="fn">sigaddset</span>(&mask, SIGINT);
+<span class="fn">sigaddset</span>(&mask, SIGTERM);
+<span class="fn">sigaddset</span>(&mask, SIGHUP);
+<span class="fn">pthread_sigmask</span>(SIG_BLOCK, &mask, <span class="kw">nullptr</span>);   <span class="com">// 多线程必须用 pthread_sigmask</span>
+
+<span class="com">// 2. 建立 signalfd</span>
+<span class="kw">int</span> sfd = <span class="fn">signalfd</span>(-<span class="num">1</span>, &mask, SFD_NONBLOCK | SFD_CLOEXEC);
+<span class="fn">epoll_ctl</span>(ep, EPOLL_CTL_ADD, sfd, &(<span class="ty">epoll_event</span>){.events=EPOLLIN, .data.fd=sfd});
+
+<span class="com">// 3. 主循环里像普通 fd 一样处理</span>
+<span class="kw">if</span> (events[i].data.fd == sfd) {
+    <span class="ty">signalfd_siginfo</span> si;
+    <span class="fn">read</span>(sfd, &si, <span class="kw">sizeof</span>(si));
+    <span class="kw">switch</span> (si.ssi_signo) {
+        <span class="kw">case</span> SIGHUP:  <span class="fn">reload_config</span>();  <span class="kw">break</span>;     <span class="com">// 现在可以放心 malloc / log 了</span>
+        <span class="kw">case</span> SIGINT:
+        <span class="kw">case</span> SIGTERM: g_should_exit = <span class="kw">true</span>; <span class="kw">break</span>;
+    }
+}</code></pre>
+
+  <div class="callout warn">
+    <div class="callout-title">⚠ 三个常见坑</div>
+    <ul>
+      <li><strong>忘记 block</strong>：必须 <code>SIG_BLOCK</code> 才能让信号"排队进 signalfd"，否则信号被默认 handler 抢走，signalfd 永远收不到。</li>
+      <li><strong>多线程用 sigprocmask</strong>：在多线程程序里 <code>sigprocmask</code> 行为未定义，必须用 <code>pthread_sigmask</code>，并且要在<em>创建任何线程之前</em>统一 block。</li>
+      <li><strong>SIGKILL / SIGSTOP 不能 catch</strong>：signalfd 也救不了，这俩永远走内核直杀路径。</li>
+    </ul>
+  </div>
+
+  <h3>9.5 pidfd —— 进程的「稳定句柄」，告别 PID 重用 race</h3>
+  <p>Linux 5.3 引入 <code>pidfd</code> 解决了一个困扰几十年的问题：<strong>PID 会重用</strong>。当你 <code>kill(pid, SIGTERM)</code> 时，目标进程可能已经死了，PID 被别的进程占用，你<em>误杀</em>了无辜者。pidfd 通过持有内核 task 引用确保句柄"指向同一个进程"。</p>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title"><span class="card-icon" style="background:rgba(244,63,94,0.2);color:var(--accent-rose);">✗</span>传统 kill(pid)</div>
+      <pre data-lang="C"><code><span class="kw">pid_t</span> pid = <span class="fn">fork</span>();
+<span class="kw">if</span> (pid == <span class="num">0</span>) <span class="fn">exec</span>(...);
+<span class="com">// ... 几秒钟后</span>
+<span class="fn">kill</span>(pid, SIGTERM);   <span class="com">// pid 可能已被回收并复用！</span></code></pre>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="card-icon" style="background:rgba(16,185,129,0.2);color:var(--accent-emerald);">✓</span>现代 pidfd</div>
+      <pre data-lang="C"><code><span class="kw">int</span> pfd = <span class="fn">pidfd_open</span>(pid, <span class="num">0</span>);
+<span class="com">// ... pfd 锁住 task_struct，pid 永不重用</span>
+<span class="fn">pidfd_send_signal</span>(pfd, SIGTERM, <span class="kw">nullptr</span>, <span class="num">0</span>);
+<span class="com">// 即使 pid 被复用，信号也只送给原来的进程</span></code></pre>
+    </div>
+  </div>
+
+  <h4>pidfd 三大能力（5.3 / 5.4 / 5.6 逐步完善）</h4>
+  <pre data-lang="C++"><code><span class="com">// ① 等待子进程（poll 即可，无需 waitpid 阻塞主线程）</span>
+<span class="kw">int</span> pfd = <span class="fn">pidfd_open</span>(child_pid, <span class="num">0</span>);
+<span class="fn">epoll_ctl</span>(ep, EPOLL_CTL_ADD, pfd, &(<span class="ty">epoll_event</span>){.events=EPOLLIN, .data.fd=pfd});
+<span class="com">// 子进程退出时 pfd 变可读，主循环统一处理</span>
+
+<span class="com">// ② 替代 kill —— 无 race</span>
+<span class="fn">pidfd_send_signal</span>(pfd, SIGTERM, <span class="kw">nullptr</span>, <span class="num">0</span>);
+
+<span class="com">// ③ 从另一进程偷一个 fd 过来（5.6+，需 CAP_SYS_PTRACE）</span>
+<span class="kw">int</span> dup_fd = <span class="fn">syscall</span>(SYS_pidfd_getfd, pfd, target_fd_in_other_proc, <span class="num">0</span>);
+<span class="com">// 用例：debugger、container runtime、checkpoint/restore</span></code></pre>
+
+  <div class="callout tip">
+    <div class="callout-title">▶ 工程价值</div>
+    <ul>
+      <li><strong>systemd</strong>：从 v245 起全面用 pidfd 管理 unit，不再用 PID 文件这种脆弱的机制。</li>
+      <li><strong>Docker / containerd / Kubernetes</strong>：监控容器内 1 号进程退出，pidfd + epoll 是首选，比 SIGCHLD 信号简洁可靠。</li>
+      <li><strong>进程管家 / supervisor</strong>：自写 supervisord 类组件必备。</li>
+    </ul>
+  </div>
+
+  <h3>9.6 memfd_create —— 匿名共享内存的现代姿势</h3>
+  <p>传统跨进程共享内存有 3 条路：① <code>shm_open</code>（POSIX，在 <code>/dev/shm</code> 留名字）；② <code>shmget</code>（SysV，全局 key 命名空间难管理）；③ <code>mmap(MAP_ANONYMOUS|MAP_SHARED)</code> + fork。三种各有缺陷。<code>memfd_create</code> 是<strong>无名字、可传递、可"封印"</strong>的新方案。</p>
+
+  <pre data-lang="C++"><code><span class="com">// 1. 创建匿名 memfd（没有路径，不污染 /dev/shm）</span>
+<span class="kw">int</span> mfd = <span class="fn">memfd_create</span>(<span class="str">"shared-ring"</span>, MFD_CLOEXEC | MFD_ALLOW_SEALING);
+<span class="fn">ftruncate</span>(mfd, <span class="num">4096</span> * <span class="num">1024</span>);
+
+<span class="com">// 2. mmap 到自己地址空间</span>
+<span class="kw">void</span>* buf = <span class="fn">mmap</span>(<span class="kw">nullptr</span>, <span class="num">4096</span> * <span class="num">1024</span>, PROT_READ|PROT_WRITE, MAP_SHARED, mfd, <span class="num">0</span>);
+
+<span class="com">// 3. 通过 UDS + SCM_RIGHTS 把 mfd 传给另一进程（见 §10）</span>
+<span class="fn">send_fd</span>(uds, mfd);
+
+<span class="com">// 4. （可选）封印 —— 锁定大小 / 锁定只读</span>
+<span class="fn">fcntl</span>(mfd, F_ADD_SEALS, F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_WRITE);
+<span class="com">// 此后任何进程 ftruncate / write 都会 -EPERM，</span>
+<span class="com">// 即使是恶意进程拿到 fd 也不能改大小</span></code></pre>
+
+  <h4>memfd vs 其他共享内存方案对比</h4>
+  <table>
+    <thead><tr><th>方案</th><th>命名</th><th>fd 可传</th><th>可封印</th><th>典型场景</th></tr></thead>
+    <tbody>
+      <tr><td><code>memfd_create</code></td><td>仅调试名</td><td><span class="badge badge-green">是</span></td><td><span class="badge badge-green">是</span></td><td>跨进程零拷贝 / Wayland 显存 / Chrome 沙箱</td></tr>
+      <tr><td><code>shm_open</code></td><td><code>/dev/shm/xxx</code></td><td>是</td><td>否</td><td>有亲缘关系的 POSIX 共享内存</td></tr>
+      <tr><td><code>shmget</code> (SysV)</td><td>全局 IPC key</td><td>否</td><td>否</td><td>遗留代码，新代码勿用</td></tr>
+      <tr><td><code>mmap(MAP_ANON|SHARED)</code></td><td>无</td><td>fork 共享</td><td>否</td><td>父子进程共享缓冲区</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout info">
+    <div class="callout-title">▶ 真实案例：Chrome / Wayland / dbus</div>
+    <ul>
+      <li><strong>Chrome IPC</strong>：每条大消息封装在 memfd 里，UDS 只传 fd，避免大块内存在 Browser ↔ Renderer 间拷贝。</li>
+      <li><strong>Wayland</strong>：客户端把渲染好的帧 buffer 放进 memfd，传给 compositor，<em>零拷贝</em>送显。</li>
+      <li><strong>dbus-broker</strong>：消息超阈值时用 memfd 替代正文，省内核缓冲。</li>
+    </ul>
+  </div>
+
+  <h3>9.7 inotify / fanotify / userfaultfd —— 三种「事件 fd」</h3>
+  <div class="grid-3">
+    <div class="card">
+      <div class="card-title"><span class="card-icon" style="background:rgba(6,182,212,0.2);color:var(--accent-cyan);">i</span>inotify</div>
+      <p>监控目录/文件变更（创建、修改、删除、改名）。配 epoll 即可做<strong>配置热加载</strong>、<strong>日志切割侦测</strong>。<code>inotifywait</code> 命令底层就是它。</p>
+      <pre data-lang="C"><code><span class="kw">int</span> ifd = <span class="fn">inotify_init1</span>(IN_NONBLOCK | IN_CLOEXEC);
+<span class="fn">inotify_add_watch</span>(ifd, <span class="str">"/etc/myapp/"</span>,
+                  IN_MODIFY | IN_CREATE | IN_MOVED_TO);
+<span class="com">// epoll → read ifd → 解析 inotify_event 流</span></code></pre>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="card-icon" style="background:rgba(139,92,246,0.2);color:var(--accent-violet);">f</span>fanotify</div>
+      <p>比 inotify 更强：可以<strong>拦截</strong>访问（filesystem 级别 / 全局），常用于<strong>杀毒软件、HIDS、文件审计</strong>。需 <code>CAP_SYS_ADMIN</code>。</p>
+      <pre data-lang="C"><code><span class="kw">int</span> ffd = <span class="fn">fanotify_init</span>(FAN_CLOEXEC | FAN_CLASS_CONTENT,
+                          O_RDONLY);
+<span class="fn">fanotify_mark</span>(ffd, FAN_MARK_ADD | FAN_MARK_MOUNT,
+              FAN_OPEN_PERM,  <span class="com">// 拦截 open，允许/拒绝</span>
+              AT_FDCWD, <span class="str">"/"</span>);</code></pre>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="card-icon" style="background:rgba(245,158,11,0.2);color:var(--accent-amber);">u</span>userfaultfd</div>
+      <p>把<strong>缺页处理交给用户态</strong>。用于 <strong>CRIU 进程检查点</strong>、<strong>KVM live migration</strong>（postcopy）、<strong>分布式共享内存</strong>。</p>
+      <pre data-lang="C"><code><span class="kw">int</span> ufd = <span class="fn">syscall</span>(SYS_userfaultfd, O_CLOEXEC | O_NONBLOCK);
+<span class="com">// ioctl 注册地址范围，缺页时内核把请求写到 ufd</span>
+<span class="com">// 用户态线程 read(ufd) → ioctl UFFDIO_COPY 喂数据回去</span></code></pre>
+    </div>
+  </div>
+
+  <h3>9.8 「一切皆 fd」的选型决策表</h3>
+  <table>
+    <thead><tr><th>需求</th><th>首选 fd 类型</th><th>关键理由</th></tr></thead>
+    <tbody>
+      <tr><td>跨线程唤醒 epoll</td><td><code>eventfd</code></td><td>最轻量，8 字节计数器</td></tr>
+      <tr><td>主循环统一处理信号</td><td><code>signalfd</code></td><td>避开 async-signal-safe 限制</td></tr>
+      <tr><td>定时任务接入 epoll</td><td><code>timerfd</code></td><td>替代 setitimer / SIGALRM 的痛苦</td></tr>
+      <tr><td>稳定监控某个进程</td><td><code>pidfd</code></td><td>无 PID 重用 race</td></tr>
+      <tr><td>跨进程零拷贝大块数据</td><td><code>memfd</code> + UDS 传 fd</td><td>可封印 + 无命名空间污染</td></tr>
+      <tr><td>配置热加载</td><td><code>inotify</code></td><td>低权限即可，事件粒度合适</td></tr>
+      <tr><td>文件访问审计 / 杀毒</td><td><code>fanotify</code></td><td>能拦截 open / 全局监控</td></tr>
+      <tr><td>容器 checkpoint / VM 迁移</td><td><code>userfaultfd</code></td><td>用户态接管缺页</td></tr>
+      <tr><td>高吞吐异步 IO</td><td><code>io_uring</code> fd</td><td>批量提交，零系统调用热路径</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout tip">
+    <div class="callout-title">▶ 高级工程师的洞察</div>
+    <p>"一切皆 fd" 的真正价值不只是 API 统一，而是<strong>所有这些机制都能塞进同一个 epoll 循环</strong>。一个现代 C++ 服务（Reactor 风格）应该只有一个主线程跑 <code>epoll_wait</code>，里面同时监听：socket（业务）、timerfd（超时）、signalfd（信号）、eventfd（唤醒）、pidfd（子进程退出）、inotify（配置热加载）、io_uring（异步 IO）。这就是 systemd、Envoy、Nginx 现代版本的核心架构。</p>
+  </div>
 </section>
 
 <!-- ═══════════════════════ Section 10 ═══════════════════════ -->
