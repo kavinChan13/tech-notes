@@ -193,6 +193,7 @@
       <li><a href="#s9">构造/析构中的异常</a></li>
       <li><a href="#s10">异常 vs 错误码 vs expected</a></li>
       <li><a href="#s11">std::expected (C++23)</a></li>
+      <li><a href="#s11b">error_code / Outcome 生态 ⭐</a></li>
       <li><a href="#s12">异常的性能开销</a></li>
       <li><a href="#s13">真实工程实例</a></li>
       <li><a href="#s14">易错点速查</a></li>
@@ -985,6 +986,203 @@ Result&lt;<span class="kw">int</span>, ParseError&gt; <span class="fn">parse_por
 <span class="kw">if</span> (std::holds_alternative&lt;<span class="kw">int</span>&gt;(r)) {
     LOG(<span class="str">"port = {}"</span>, std::get&lt;<span class="kw">int</span>&gt;(r));
 }</pre>
+</section>
+
+<!-- ================================================================
+     §11b std::error_code / error_category / Outcome 生态
+     ================================================================ -->
+<section class="chapter" id="s11b">
+  <h2>11b. <code>std::error_code</code> / Outcome / LEAF —— 完整的错误处理生态 ⭐</h2>
+
+  <h3>11b.1 为什么需要 <code>std::error_code</code>？</h3>
+  <p>异常和 <code>std::expected</code> 是<strong>错误传递机制</strong>，但"错误<em>本身</em>"用什么类型表达？过去几大派系混战：</p>
+  <ul>
+    <li>C 风格 <code>int errno</code> —— 全局变量、多线程地狱、不携带描述</li>
+    <li>POSIX 错误号 <code>errno</code> 常量（<code>EACCES</code>、<code>ENOENT</code>...）</li>
+    <li>Win32 <code>GetLastError()</code>、HRESULT</li>
+    <li>OpenSSL <code>ERR_get_error()</code>、CURL <code>CURLcode</code> ...</li>
+  </ul>
+  <p>问题：每个库一套错误码 → 跨库传递就要"<em>转换地狱</em>"。C++11 引入 <code>std::error_code</code> + <code>std::error_category</code> 解决：<strong>一个统一的、可扩展、零开销的错误编码体系</strong>。</p>
+
+  <h3>11b.2 核心三件套</h3>
+  <table>
+    <tr><th>类型</th><th>含义</th></tr>
+    <tr><td><code>std::error_code</code></td><td>具体错误：<em>(value, category 指针)</em> 两字段，可拷贝、可比较</td></tr>
+    <tr><td><code>std::error_category</code></td><td>抽象基类，每个错误源（POSIX / Win32 / 自家库）一个 singleton 实例</td></tr>
+    <tr><td><code>std::error_condition</code></td><td>"抽象错误条件"，便于<em>跨平台</em>比较（<code>EAGAIN</code> vs Win32 <code>WSAEWOULDBLOCK</code> 都能匹配 <code>operation_would_block</code>）</td></tr>
+  </table>
+
+  <h3>11b.3 用法（标准库已自带）</h3>
+<pre><span class="kw">#include</span> <span class="str">&lt;system_error&gt;</span>
+<span class="kw">#include</span> <span class="str">&lt;filesystem&gt;</span>
+
+<span class="cm">// 标准库 API 的 noexcept 版接受 error_code 出参，不抛异常</span>
+std::error_code ec;
+<span class="kw">auto</span> size = std::filesystem::<span class="fn">file_size</span>(<span class="str">"/etc/hosts"</span>, ec);
+<span class="kw">if</span> (ec) {
+    std::<span class="fn">println</span>(<span class="str">"error: {} ({}/{})"</span>,
+        ec.<span class="fn">message</span>(),       <span class="cm">// "No such file or directory"</span>
+        ec.<span class="fn">category</span>().<span class="fn">name</span>(),<span class="cm">// "generic"</span>
+        ec.<span class="fn">value</span>());        <span class="cm">// 2 (ENOENT)</span>
+}
+
+<span class="cm">// 跨平台比较 — 不关心具体 POSIX/Win32 值</span>
+<span class="kw">if</span> (ec == std::errc::no_such_file_or_directory) {
+    ...
+}
+
+<span class="cm">// 等价于 std::error_condition 比较，跨 category 兼容</span></pre>
+
+  <h3>11b.4 给自家库定义 error_category（生产模板）</h3>
+<pre><span class="cm">// my_error.hpp</span>
+<span class="kw">enum class</span> MyError {
+    Ok = 0,
+    InvalidArg,
+    ConnectionLost,
+    Timeout,
+    QuotaExceeded,
+};
+
+<span class="kw">class</span> MyErrorCategory : <span class="kw">public</span> std::error_category {
+<span class="kw">public</span>:
+    <span class="kw">const</span> <span class="kw">char</span>* <span class="fn">name</span>() <span class="kw">const</span> <span class="kw">noexcept</span> <span class="kw">override</span> { <span class="kw">return</span> <span class="str">"myapi"</span>; }
+
+    std::string <span class="fn">message</span>(<span class="kw">int</span> ev) <span class="kw">const</span> <span class="kw">override</span> {
+        <span class="kw">switch</span> (<span class="kw">static_cast</span>&lt;MyError&gt;(ev)) {
+            <span class="kw">case</span> MyError::Ok:              <span class="kw">return</span> <span class="str">"ok"</span>;
+            <span class="kw">case</span> MyError::InvalidArg:      <span class="kw">return</span> <span class="str">"invalid argument"</span>;
+            <span class="kw">case</span> MyError::ConnectionLost:  <span class="kw">return</span> <span class="str">"connection lost"</span>;
+            <span class="kw">case</span> MyError::Timeout:         <span class="kw">return</span> <span class="str">"operation timed out"</span>;
+            <span class="kw">case</span> MyError::QuotaExceeded:   <span class="kw">return</span> <span class="str">"quota exceeded"</span>;
+        }
+        <span class="kw">return</span> <span class="str">"unknown"</span>;
+    }
+
+    <span class="cm">// 可选：映射到 std::errc 让跨库比较生效</span>
+    std::error_condition <span class="fn">default_error_condition</span>(<span class="kw">int</span> ev) <span class="kw">const</span> <span class="kw">noexcept</span> <span class="kw">override</span> {
+        <span class="kw">switch</span> (<span class="kw">static_cast</span>&lt;MyError&gt;(ev)) {
+            <span class="kw">case</span> MyError::Timeout:
+                <span class="kw">return</span> std::errc::timed_out;
+            <span class="kw">case</span> MyError::ConnectionLost:
+                <span class="kw">return</span> std::errc::connection_aborted;
+            <span class="kw">default</span>:
+                <span class="kw">return</span> {ev, *<span class="kw">this</span>};
+        }
+    }
+};
+
+<span class="kw">inline</span> <span class="kw">const</span> std::error_category&amp; <span class="fn">my_category</span>() {
+    <span class="kw">static</span> MyErrorCategory cat;            <span class="cm">// magic static 线程安全</span>
+    <span class="kw">return</span> cat;
+}
+
+<span class="cm">// 关键：注册到 std::error_code 框架 — 必须在 std 命名空间特化</span>
+<span class="kw">namespace</span> std {
+    <span class="kw">template</span>&lt;&gt; <span class="kw">struct</span> is_error_code_enum&lt;MyError&gt; : true_type {};
+}
+
+<span class="cm">// 配合 ADL 的隐式构造</span>
+<span class="kw">inline</span> std::error_code <span class="fn">make_error_code</span>(MyError e) <span class="kw">noexcept</span> {
+    <span class="kw">return</span> {<span class="kw">static_cast</span>&lt;<span class="kw">int</span>&gt;(e), <span class="fn">my_category</span>()};
+}</pre>
+
+<pre><span class="cm">// 使用 — 自然像内置错误码一样工作</span>
+std::error_code ec = MyError::Timeout;     <span class="cm">// ✅ 隐式转换</span>
+<span class="kw">if</span> (ec == MyError::Timeout) { ... }         <span class="cm">// ✅ 直接比较</span>
+<span class="kw">if</span> (ec == std::errc::timed_out) { ... }     <span class="cm">// ✅ 跨库语义比较</span>
+std::<span class="fn">println</span>(<span class="str">"err: {}"</span>, ec.<span class="fn">message</span>());     <span class="cm">// "operation timed out"</span></pre>
+
+  <div class="box tip">这是<strong>所有 C++ 库的标准错误传递方式</strong>。boost.asio、boost.beast、std::filesystem、std::regex、std::charconv 全部使用 <code>error_code</code> 作为 noexcept 出参。</div>
+
+  <h3>11b.5 与 <code>std::expected</code> / 异常的组合范式</h3>
+<pre><span class="cm">// 范式 1：双 API — 让调用方选 noexcept 或 throwing</span>
+<span class="kw">class</span> Socket {
+<span class="kw">public</span>:
+    <span class="kw">void</span> <span class="fn">connect</span>(<span class="kw">const</span> Endpoint&amp; ep);                          <span class="cm">// 抛异常版</span>
+    <span class="kw">void</span> <span class="fn">connect</span>(<span class="kw">const</span> Endpoint&amp; ep, std::error_code&amp; ec) <span class="kw">noexcept</span>;  <span class="cm">// noexcept 版</span>
+};
+
+<span class="cm">// 范式 2：std::expected&lt;T, std::error_code&gt; — 类型化错误</span>
+std::expected&lt;Connection, std::error_code&gt; <span class="fn">connect</span>(<span class="kw">const</span> Endpoint&amp; ep) <span class="kw">noexcept</span>;
+
+<span class="kw">auto</span> conn = <span class="fn">connect</span>(ep)
+    .<span class="fn">and_then</span>(authenticate)
+    .<span class="fn">and_then</span>(send_handshake)
+    .<span class="fn">or_else</span>([](std::error_code ec) {
+        <span class="fn">log</span>(<span class="str">"connect failed: {}"</span>, ec.<span class="fn">message</span>());
+        <span class="kw">return</span> std::<span class="fn">unexpected</span>(ec);
+    });
+
+<span class="cm">// 范式 3：std::system_error — 把 error_code 包装成异常</span>
+<span class="kw">throw</span> std::system_error(<span class="fn">make_error_code</span>(MyError::Timeout),
+                        <span class="str">"failed to connect"</span>);
+<span class="cm">// catch (const std::system_error&amp; e) { auto ec = e.code(); ... }</span></pre>
+
+  <h3>11b.6 三大现代错误处理库对比</h3>
+  <table>
+    <tr><th>项</th><th>std::expected (C++23)</th><th>Boost.Outcome (P1095)</th><th>Boost.LEAF</th></tr>
+    <tr><td>类型化</td><td>✅ T 或 E</td><td>✅ T 或 EC 或 异常 ptr</td><td>✅ 但 E 不在签名里</td></tr>
+    <tr><td>错误<em>跨函数</em>携带</td><td>显式 .or_else / 转换</td><td>显式 BOOST_OUTCOME_TRY</td><td><strong>自动</strong>（线程局部"错误信息"）</td></tr>
+    <tr><td>性能（happy path）</td><td>✅ 零开销</td><td>✅</td><td>✅</td></tr>
+    <tr><td>性能（error path）</td><td>✅</td><td>✅</td><td>✅（不抛异常）</td></tr>
+    <tr><td>错误<em>附加信息</em></td><td>难（要扩 E）</td><td>难</td><td><strong>★★★★★</strong>（任意 N 个属性绑定到错误）</td></tr>
+    <tr><td>设计哲学</td><td>函数式 + 显式</td><td>SG14 Lewis Baker 风</td><td>"错误是路径，不是值"</td></tr>
+    <tr><td>学习成本</td><td>低</td><td>中</td><td>高</td></tr>
+  </table>
+
+  <h4>三者的代码风格速览</h4>
+<pre><span class="cm">// === std::expected (C++23) — 简洁但 E 只能塞一个类型</span>
+std::expected&lt;Resp, MyError&gt; <span class="fn">handle</span>(<span class="kw">const</span> Req&amp; r) {
+    <span class="kw">return</span> <span class="fn">parse</span>(r)
+        .<span class="fn">and_then</span>(validate)
+        .<span class="fn">and_then</span>(dispatch);
+}
+
+<span class="cm">// === Boost.Outcome — 类似但有 try 宏简化</span>
+<span class="kw">using</span> Result = OUTCOME_V2_NAMESPACE::result&lt;Resp, std::error_code&gt;;
+Result <span class="fn">handle</span>(<span class="kw">const</span> Req&amp; r) {
+    BOOST_OUTCOME_TRY(<span class="kw">auto</span> p, <span class="fn">parse</span>(r));      <span class="cm">// 自动短路</span>
+    BOOST_OUTCOME_TRY(<span class="fn">validate</span>(p));
+    <span class="kw">return</span> <span class="fn">dispatch</span>(p);
+}
+
+<span class="cm">// === Boost.LEAF — 错误附加任意属性，自动传播</span>
+leaf::result&lt;Resp&gt; <span class="fn">handle</span>(<span class="kw">const</span> Req&amp; r) {
+    BOOST_LEAF_AUTO(p, <span class="fn">parse</span>(r));
+    BOOST_LEAF_CHECK(<span class="fn">validate</span>(p));
+    <span class="kw">return</span> <span class="fn">dispatch</span>(p);
+}
+
+<span class="cm">// 错误处理点：捕获附加上下文</span>
+leaf::<span class="fn">try_handle_all</span>([&amp;]() -&gt; leaf::result&lt;<span class="kw">void</span>&gt; {
+    BOOST_LEAF_CHECK(<span class="fn">handle</span>(req));
+    <span class="kw">return</span> {};
+},
+<span class="cm">// 捕获时声明感兴趣的"侧信息"</span>
+[](MyError e, <span class="kw">const</span> RequestId&amp; rid, <span class="kw">const</span> std::source_location&amp; sl) {
+    <span class="fn">log</span>(<span class="str">"req={} err={} at {}:{}"</span>, rid, <span class="kw">static_cast</span>&lt;<span class="kw">int</span>&gt;(e),
+                                   sl.<span class="fn">file_name</span>(), sl.<span class="fn">line_name</span>());
+});</pre>
+
+  <h3>11b.7 选型决策树</h3>
+  <table>
+    <tr><th>场景</th><th>推荐</th></tr>
+    <tr><td>新代码、纯应用层、追求标准</td><td><code>std::expected&lt;T, std::error_code&gt;</code> + 自家 error_code</td></tr>
+    <tr><td>必须 C++17 兼容</td><td><code>tl::expected</code>（头文件库，与标准 API 一致）</td></tr>
+    <tr><td>错误要携带"附加上下文"（请求 ID、调用栈、用户 ID...）</td><td>Boost.LEAF</td></tr>
+    <tr><td>跨 ABI 边界（C API / .so）</td><td>error_code（POD 字段，C ABI 友好）</td></tr>
+    <tr><td>极致低延时热路径</td><td>error_code 出参（无返回值构造开销）</td></tr>
+    <tr><td>构造失败 / 极端不可恢复</td><td>异常仍然合理</td></tr>
+    <tr><td>遗留 C 风格错误码生态</td><td>包装成 error_category 接入标准框架</td></tr>
+  </table>
+
+  <h3>11b.8 高级工程师的两个观点</h3>
+  <div class="box ok">
+    <strong>① 把 <code>error_code</code> 看作 C++ 错误处理的"通用 IR"</strong>。各种新机制（expected / system_error / Outcome / LEAF）都是包装它。库设计者只要定义自家 enum + error_category，所有上层范式自动适配。
+  </div>
+  <div class="box tip">
+    <strong>② "异常 vs 错误码"是假二分法</strong>。真实大型项目几乎都是<strong>分层</strong>的：低层（系统调用 / 协议解析）用 error_code / expected；中层（业务逻辑）混用；高层（请求边界 / RPC 入口）才统一转换。一个 codebase 内强行 100% noexcept 或 100% 异常往往两边都不讨好。
+  </div>
 </section>
 
 <!-- ================================================================

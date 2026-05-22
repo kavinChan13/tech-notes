@@ -1045,7 +1045,377 @@ FaultInfoMap&amp; Fault4706_4707Handler::getFaultMap&lt;<span class="tp">FaultTy
 <span class="cm">// 效果：编译时间下降 20-50%，目标文件更小</span></code></pre>
 </div>
 
-<h3>9.7 高频面试题 <span class="tag tag-blue">Q&A</span></h3>
+<h3>9.7 Two-Phase Name Lookup —— 完整规则</h3>
+<div class="card">
+<p>模板的名字查找分两阶段（C++ 标准 [temp.res]），这套规则是<strong>跨编译器移植的最大坑</strong>之一。MSVC 历史上不严格实施，导致代码在 GCC/Clang 上才暴露问题。</p>
+
+<h4>① 第一阶段：模板定义点（非依赖名字）</h4>
+<p>"<strong>非依赖名字</strong>"指与模板参数无关、不需要等到实例化才能确定的名字。模板定义时立即查找，遵循普通名字查找规则（不带 ADL）。</p>
+
+<h4>② 第二阶段：实例化点（依赖名字）</h4>
+<p>"<strong>依赖名字</strong>"指出现 <code>T</code>、<code>T::xxx</code>、<code>f(t)</code> （t 类型依赖 T）等的名字。直到模板被实例化为某个具体类型时才查找，此时<strong>会启用 ADL</strong>。</p>
+
+<pre><code><span class="cm">// 经典示例 — 易踩坑</span>
+<span class="kw">void</span> <span class="fn">g</span>(<span class="kw">int</span>) { std::cout &lt;&lt; <span class="str">"int g\n"</span>; }
+
+<span class="kw">template</span> &lt;<span class="kw">typename</span> <span class="tp">T</span>&gt;
+<span class="kw">void</span> <span class="fn">f</span>(<span class="tp">T</span> t) {
+    <span class="fn">g</span>(<span class="num">42</span>);    <span class="cm">// 第 1 阶段：找到上面的 g(int)</span>
+    <span class="fn">g</span>(t);     <span class="cm">// 第 2 阶段：依赖 T，到实例化时再查</span>
+}
+
+<span class="kw">namespace</span> ns {
+    <span class="kw">struct</span> <span class="tp">X</span> {};
+    <span class="kw">void</span> <span class="fn">g</span>(<span class="tp">X</span>) { std::cout &lt;&lt; <span class="str">"ns::g(X)\n"</span>; }
+}
+
+<span class="fn">f</span>(ns::<span class="tp">X</span>{});  <span class="cm">// 输出: "int g" 然后 "ns::g(X)" — 第 2 个走 ADL 找到 ns::g</span></code></pre>
+
+<h4>依赖类型必须用 <code>typename</code> / <code>template</code> 消歧符</h4>
+<pre><code><span class="kw">template</span> &lt;<span class="kw">typename</span> <span class="tp">T</span>&gt;
+<span class="kw">void</span> <span class="fn">f</span>() {
+    <span class="kw">typename</span> <span class="tp">T</span>::iterator it;          <span class="cm">// ✅ typename 告诉编译器这是类型</span>
+    <span class="tp">T</span>::iterator it2;                  <span class="cm">// ❌ 编译器以为是静态成员（C++20 起部分场景可省略）</span>
+
+    t.<span class="kw">template</span> <span class="fn">get</span>&lt;<span class="kw">int</span>&gt;();         <span class="cm">// ✅ .template / ::template / -&gt;template 消歧</span>
+                                       <span class="cm">// 否则 &lt; 会被当成小于号</span>
+}</code></pre>
+
+<h4>典型移植 bug：MSVC 通过 GCC 失败</h4>
+<pre><code><span class="kw">template</span> &lt;<span class="kw">typename</span> <span class="tp">T</span>&gt;
+<span class="kw">struct</span> Base { <span class="kw">void</span> <span class="fn">init</span>() {} };
+
+<span class="kw">template</span> &lt;<span class="kw">typename</span> <span class="tp">T</span>&gt;
+<span class="kw">struct</span> Derived : Base&lt;<span class="tp">T</span>&gt; {
+    <span class="kw">void</span> <span class="fn">run</span>() {
+        <span class="fn">init</span>();                <span class="cm">// ❌ GCC/Clang: 找不到 init</span>
+                                <span class="cm">//    第 1 阶段查 init 时 Base&lt;T&gt; 是依赖类型，跳过</span>
+        <span class="kw">this</span>-&gt;<span class="fn">init</span>();          <span class="cm">// ✅ 加 this-&gt; 让 init 变依赖名字</span>
+        Base&lt;<span class="tp">T</span>&gt;::<span class="fn">init</span>();      <span class="cm">// ✅ 或显式限定</span>
+    }
+};</code></pre>
+
+<div class="card" style="background:rgba(244,114,182,.06);border-left:4px solid var(--accent3)">
+<strong>C++20 变化</strong>：[temp.res.general]/2 放宽规则——在"明显是类型"的位置（如 <code>using A = T::B;</code>、<code>void f(T::B);</code>、<code>T::B var;</code> 作为函数参数等），<code>typename</code> 可以省略。但模板体内的局部变量声明仍需要。
+</div>
+</div>
+
+<h3>9.8 ADL（Argument-Dependent Lookup）与 Hidden Friend</h3>
+<div class="card">
+<p><strong>ADL</strong>（参数依赖查找，又叫 Koenig lookup）：调用未限定函数名 <code>f(x)</code> 时，编译器除了普通查找，还会在 <code>x</code> 的<strong>实参类型所属命名空间</strong>查找。这是 C++ 实现"自由函数像成员函数一样自然"的关键。</p>
+
+<h4>ADL 让你能写 <code>std::cout &lt;&lt; x</code> 而不是 <code>std::operator&lt;&lt;(std::cout, x)</code></h4>
+<pre><code><span class="kw">namespace</span> ns {
+    <span class="kw">struct</span> <span class="tp">Box</span> { <span class="kw">int</span> v; };
+    std::ostream&amp; <span class="kw">operator</span>&lt;&lt;(std::ostream&amp; os, <span class="tp">Box</span> b) {
+        <span class="kw">return</span> os &lt;&lt; <span class="str">"Box{"</span> &lt;&lt; b.v &lt;&lt; <span class="str">"}"</span>;
+    }
+}
+
+ns::<span class="tp">Box</span> b{<span class="num">42</span>};
+std::cout &lt;&lt; b;     <span class="cm">// 找 std::operator&lt;&lt;(ostream&amp;, ns::Box) → 没有</span>
+                    <span class="cm">// ADL 在 ns 里找 operator&lt;&lt; → 找到</span></code></pre>
+
+<h4>ADL 的 4 个"参数所属命名空间"规则</h4>
+<ol>
+<li>参数类型自身的命名空间（含别名）</li>
+<li>类的<strong>直接和间接基类</strong>的命名空间</li>
+<li>类模板的<strong>模板实参</strong>所属命名空间（<code>vector&lt;ns::Box&gt;</code> → 也找 ns）</li>
+<li>类的<strong>外围类</strong>的命名空间</li>
+</ol>
+
+<h4>Hidden Friend Idiom —— 现代 C++ 的关键模式</h4>
+<p>在类内 <code>friend</code> 定义的函数<strong>只能通过 ADL 找到</strong>，不污染外层命名空间，且<strong>编译加速明显</strong>（不参与无关重载决议）。</p>
+
+<pre><code><span class="cm">// ❌ 老写法：所有 operator== 都进 ns 的查找池</span>
+<span class="kw">namespace</span> ns {
+    <span class="kw">struct</span> <span class="tp">Point</span> { <span class="kw">int</span> x, y; };
+    <span class="kw">bool</span> <span class="kw">operator</span>==(<span class="tp">Point</span> a, <span class="tp">Point</span> b) { <span class="kw">return</span> a.x==b.x &amp;&amp; a.y==b.y; }
+}
+
+<span class="cm">// ✅ 新写法：hidden friend</span>
+<span class="kw">namespace</span> ns {
+    <span class="kw">struct</span> <span class="tp">Point</span> {
+        <span class="kw">int</span> x, y;
+        <span class="cm">// 只有通过 Point 实参 ADL 才能找到，且无显式命名空间限定</span>
+        <span class="kw">friend</span> <span class="kw">bool</span> <span class="kw">operator</span>==(<span class="tp">Point</span> a, <span class="tp">Point</span> b) <span class="kw">noexcept</span> {
+            <span class="kw">return</span> a.x==b.x &amp;&amp; a.y==b.y;
+        }
+        <span class="kw">friend</span> std::ostream&amp; <span class="kw">operator</span>&lt;&lt;(std::ostream&amp; os, <span class="tp">Point</span> p) {
+            <span class="kw">return</span> os &lt;&lt; p.x &lt;&lt; <span class="str">','</span> &lt;&lt; p.y;
+        }
+    };
+}</code></pre>
+
+<div class="card" style="background:rgba(52,211,153,.06);border-left:4px solid var(--accent4)">
+<strong>三大收益</strong>：
+<ul>
+<li><strong>编译加速</strong>：模板实例化时，编译器只查与实参类型相关的函数，hidden friend 不出现在重载集中（除非 ADL 触发），重载决议复杂度骤降</li>
+<li><strong>避免歧义重载</strong>：不参与无关命名空间的查找</li>
+<li><strong>更好的概念匹配</strong>：自定义 <code>operator&lt;</code> + Hidden friend 让类型天然满足 <code>std::totally_ordered</code></li>
+</ul>
+<p>Eric Niebler / Howard Hinnant / Niall Douglas 等核心专家都强烈推荐对所有非成员二元运算符使用 hidden friend。<code>std::format</code> 的特化、<code>operator&lt;=&gt;</code> 的实现几乎清一色用这个模式。</p>
+</div>
+
+<h4>禁用 ADL 的技巧（如有需要）</h4>
+<pre><code>std::<span class="fn">vector</span>&lt;<span class="kw">int</span>&gt;{<span class="num">1</span>,<span class="num">2</span>,<span class="num">3</span>};
+(::std::<span class="fn">move</span>)(x);          <span class="cm">// 括号包起来 → 不走 ADL</span>
+<span class="kw">using</span> std::<span class="fn">swap</span>;
+<span class="fn">swap</span>(a, b);             <span class="cm">// 标准 ADL swap 模式 — 优先用户提供的 swap</span></code></pre>
+</div>
+
+<h3>9.9 Tag Dispatch —— 编译期分派的老牌方案</h3>
+<div class="card">
+<p><strong>Tag dispatch</strong>：用<em>空标签类型</em>作为参数把"运行时分支"变成"编译期重载选择"。在 SFINAE / Concepts / <code>if constexpr</code> 出现前，这是<strong>分派算法实现</strong>的主力。</p>
+
+<h4>典型示例：根据迭代器类别选最优实现</h4>
+<pre><code><span class="cm">// 标签类型（标准库的迭代器分类）</span>
+<span class="kw">struct</span> <span class="tp">input_iterator_tag</span>          {};
+<span class="kw">struct</span> <span class="tp">forward_iterator_tag</span>        : input_iterator_tag {};
+<span class="kw">struct</span> <span class="tp">bidirectional_iterator_tag</span>  : forward_iterator_tag {};
+<span class="kw">struct</span> <span class="tp">random_access_iterator_tag</span>  : bidirectional_iterator_tag {};
+
+<span class="cm">// 分派实现</span>
+<span class="kw">template</span> &lt;<span class="kw">class</span> Iter&gt;
+<span class="kw">auto</span> <span class="fn">distance_impl</span>(Iter a, Iter b, std::input_iterator_tag) {
+    <span class="cm">// O(N)：只能 ++ 遍历</span>
+    <span class="kw">typename</span> std::iterator_traits&lt;Iter&gt;::difference_type n = <span class="num">0</span>;
+    <span class="kw">while</span> (a != b) { ++a; ++n; }
+    <span class="kw">return</span> n;
+}
+<span class="kw">template</span> &lt;<span class="kw">class</span> Iter&gt;
+<span class="kw">auto</span> <span class="fn">distance_impl</span>(Iter a, Iter b, std::random_access_iterator_tag) {
+    <span class="cm">// O(1)：直接相减</span>
+    <span class="kw">return</span> b - a;
+}
+
+<span class="cm">// 公共接口</span>
+<span class="kw">template</span> &lt;<span class="kw">class</span> Iter&gt;
+<span class="kw">auto</span> <span class="fn">my_distance</span>(Iter a, Iter b) {
+    <span class="kw">return</span> <span class="fn">distance_impl</span>(a, b,
+        <span class="kw">typename</span> std::iterator_traits&lt;Iter&gt;::iterator_category{});
+}</code></pre>
+
+<h4>Tag dispatch vs <code>if constexpr</code> vs Concepts —— 三方对比</h4>
+<table>
+<tr><th>项</th><th>Tag Dispatch</th><th><code>if constexpr</code> (C++17)</th><th>Concepts (C++20)</th></tr>
+<tr><td>语法清晰</td><td>中</td><td>★★★★</td><td>★★★★★</td></tr>
+<tr><td>错误信息</td><td>差（重载失败）</td><td>中</td><td>★★★★★（一句话）</td></tr>
+<tr><td>支持继承层次（兼容性）</td><td>★★★★★（标签继承）</td><td>不直接支持</td><td>concept refinement</td></tr>
+<tr><td>能否 ADL 扩展</td><td>★★★★★（用户可定义新 tag）</td><td>不能</td><td>concept 可特化</td></tr>
+<tr><td>最低标准</td><td>C++98</td><td>C++17</td><td>C++20</td></tr>
+</table>
+
+<div class="card" style="background:rgba(56,189,248,.06);border-left:4px solid var(--accent)">
+<strong>什么时候仍该用 tag dispatch</strong>：① 库代码要兼容老编译器；② 需要<em>第三方</em>用户为自家类型定义"该类型属于哪个 tag" → tag 系统是 ABI 稳定的扩展点；③ <code>iterator_traits</code>、<code>allocator_traits</code> 等标准库基础设施就是这种模式。
+</div>
+</div>
+
+<h3>9.10 Detection Idiom（<code>void_t</code> / <code>is_detected</code>）</h3>
+<div class="card">
+<p><strong>Detection idiom</strong>：编译期检测"类型 T 是否有成员/操作 X"。比 SFINAE 重载更直接、更可读。</p>
+
+<h4>核心机制：<code>std::void_t</code>（C++17）</h4>
+<pre><code><span class="kw">template</span> &lt;<span class="kw">class</span>...&gt;
+<span class="kw">using</span> void_t = <span class="kw">void</span>;          <span class="cm">// "把任何类型映射到 void" 的工具</span>
+
+<span class="cm">// 检测 T 是否有嵌套 type — primary template (false)</span>
+<span class="kw">template</span> &lt;<span class="kw">class</span> <span class="tp">T</span>, <span class="kw">class</span> = <span class="kw">void</span>&gt;
+<span class="kw">struct</span> has_type : std::false_type {};
+
+<span class="cm">// 偏特化：T::type 有效时匹配</span>
+<span class="kw">template</span> &lt;<span class="kw">class</span> <span class="tp">T</span>&gt;
+<span class="kw">struct</span> has_type&lt;<span class="tp">T</span>, std::void_t&lt;<span class="kw">typename</span> <span class="tp">T</span>::type&gt;&gt; : std::true_type {};
+
+<span class="kw">static_assert</span>( has_type&lt;std::vector&lt;<span class="kw">int</span>&gt;&gt;::value);  <span class="cm">// ✅</span>
+<span class="kw">static_assert</span>(!has_type&lt;<span class="kw">int</span>&gt;::value);                <span class="cm">// ✅</span></code></pre>
+
+<h4>通用 <code>is_detected</code> 模板（基于 <code>void_t</code>）</h4>
+<pre><code><span class="kw">template</span> &lt;<span class="kw">class</span> Default, <span class="kw">class</span> AlwaysVoid,
+          <span class="kw">template</span>&lt;<span class="kw">class</span>...&gt; <span class="kw">class</span> Op, <span class="kw">class</span>... Args&gt;
+<span class="kw">struct</span> detector { <span class="kw">using</span> value_t = std::false_type; <span class="kw">using</span> type = Default; };
+
+<span class="kw">template</span> &lt;<span class="kw">class</span> Default,
+          <span class="kw">template</span>&lt;<span class="kw">class</span>...&gt; <span class="kw">class</span> Op, <span class="kw">class</span>... Args&gt;
+<span class="kw">struct</span> detector&lt;Default, std::void_t&lt;Op&lt;Args...&gt;&gt;, Op, Args...&gt;
+    { <span class="kw">using</span> value_t = std::true_type; <span class="kw">using</span> type = Op&lt;Args...&gt;; };
+
+<span class="kw">template</span> &lt;<span class="kw">template</span>&lt;<span class="kw">class</span>...&gt; <span class="kw">class</span> Op, <span class="kw">class</span>... Args&gt;
+<span class="kw">using</span> is_detected = <span class="kw">typename</span> detector&lt;<span class="kw">void</span>, <span class="kw">void</span>, Op, Args...&gt;::value_t;
+
+<span class="cm">// 使用：检测 T 是否能调 .serialize()</span>
+<span class="kw">template</span> &lt;<span class="kw">class</span> <span class="tp">T</span>&gt;
+<span class="kw">using</span> serialize_t = <span class="kw">decltype</span>(std::declval&lt;<span class="tp">T</span>&gt;().serialize());
+
+<span class="kw">template</span> &lt;<span class="kw">class</span> <span class="tp">T</span>&gt;
+<span class="kw">constexpr bool</span> has_serialize = is_detected&lt;serialize_t, <span class="tp">T</span>&gt;::value;</code></pre>
+
+<h4>C++20 之后：Concepts 一句话搞定</h4>
+<pre><code><span class="kw">template</span> &lt;<span class="kw">class</span> <span class="tp">T</span>&gt;
+<span class="kw">concept</span> Serializable = <span class="kw">requires</span>(<span class="tp">T</span> t) { t.<span class="fn">serialize</span>(); };
+
+<span class="kw">static_assert</span>(Serializable&lt;MyClass&gt;);</code></pre>
+
+<div class="card" style="background:rgba(56,189,248,.06);border-left:4px solid var(--accent)">
+<strong>历史地位</strong>：detection idiom 是 C++11/14/17 时代实现"<em>类型 X 是否支持 Y</em>"检查的工业标准。WG21 的 LFTSv2 把 <code>std::experimental::is_detected</code> 标准化了一段时间，但 C++20 起 Concepts 取代了大部分场景。<strong>读老代码 / 维护 boost 风格库时必备</strong>。
+</div>
+</div>
+
+<h3>9.11 CTAD Deduction Guides —— 类模板参数推导</h3>
+<div class="card">
+<p>C++17 引入 <strong>类模板参数推导</strong>（CTAD），<code>std::pair p{1, "abc"};</code> 不用再写 <code>std::pair&lt;int, const char*&gt;</code>。背后机制是<strong>推导指引</strong> (deduction guide)。</p>
+
+<h4>编译器自动推导（隐式 guide）</h4>
+<pre><code><span class="kw">template</span> &lt;<span class="kw">class</span> <span class="tp">T</span>&gt;
+<span class="kw">struct</span> <span class="fn">Wrapper</span> {
+    <span class="tp">T</span> v;
+    <span class="fn">Wrapper</span>(<span class="tp">T</span> x) : v(std::move(x)) {}
+};
+
+Wrapper w1{<span class="num">42</span>};              <span class="cm">// ✅ T 推导为 int</span>
+Wrapper w2{<span class="str">"hello"</span>};         <span class="cm">// ✅ T 推导为 const char* (可能不是你想要)</span></code></pre>
+
+<h4>显式 Deduction Guide 接管推导</h4>
+<pre><code><span class="kw">template</span> &lt;<span class="kw">class</span> <span class="tp">T</span>&gt;
+<span class="kw">struct</span> Wrapper { ... };
+
+<span class="cm">// 把所有 const char* 推导成 std::string</span>
+Wrapper(<span class="kw">const</span> <span class="kw">char</span>*) -&gt; Wrapper&lt;std::string&gt;;
+
+Wrapper w{<span class="str">"hello"</span>};           <span class="cm">// ✅ Wrapper&lt;std::string&gt;</span></code></pre>
+
+<h4>真实库案例 —— <code>std::pair</code> 与 <code>std::array</code></h4>
+<pre><code><span class="cm">// 标准库 std::pair 的 deduction guide（简化）</span>
+<span class="kw">template</span>&lt;<span class="kw">class</span> T1, <span class="kw">class</span> T2&gt;
+<span class="fn">pair</span>(T1, T2) -&gt; pair&lt;T1, T2&gt;;
+
+<span class="cm">// std::array 的 deduction guide — 通过 fold 推导大小</span>
+<span class="kw">template</span>&lt;<span class="kw">class</span> T, <span class="kw">class</span>... U&gt;
+<span class="fn">array</span>(T, U...) -&gt; array&lt;T, <span class="num">1</span> + <span class="kw">sizeof</span>...(U)&gt;;
+
+std::array a{<span class="num">1</span>,<span class="num">2</span>,<span class="num">3</span>,<span class="num">4</span>};      <span class="cm">// std::array&lt;int, 4&gt;</span></code></pre>
+
+<h4>典型用法 —— 让自家类型支持 CTAD</h4>
+<pre><code><span class="cm">// 锁守卫 — 让 std::lock_guard{mu} 直接工作</span>
+<span class="kw">template</span> &lt;<span class="kw">class</span> M&gt;
+<span class="kw">class</span> <span class="fn">LockGuard</span> {
+    M&amp; mu_;
+<span class="kw">public</span>:
+    <span class="kw">explicit</span> <span class="fn">LockGuard</span>(M&amp; m) : mu_(m) { mu_.<span class="fn">lock</span>(); }
+    ~<span class="fn">LockGuard</span>() { mu_.<span class="fn">unlock</span>(); }
+};
+LockGuard(std::mutex&amp;) -&gt; LockGuard&lt;std::mutex&gt;;       <span class="cm">// 必要时显式</span>
+
+std::mutex m;
+LockGuard g{m};                <span class="cm">// ✅ 自动推导 LockGuard&lt;std::mutex&gt;</span>
+
+<span class="cm">// 异构容器 — 推导出 variant</span>
+<span class="kw">template</span> &lt;<span class="kw">class</span>... Ts&gt;
+<span class="kw">struct</span> Overloaded : Ts... { <span class="kw">using</span> Ts::<span class="kw">operator</span>()...; };
+<span class="kw">template</span> &lt;<span class="kw">class</span>... Ts&gt;
+Overloaded(Ts...) -&gt; Overloaded&lt;Ts...&gt;;     <span class="cm">// ★ 让 visitor 写法成立</span>
+
+std::<span class="fn">visit</span>(Overloaded{
+    [](<span class="kw">int</span> i)    { ... },
+    [](std::string s) { ... }
+}, var);</code></pre>
+
+<h4>陷阱：聚合类型 + CTAD</h4>
+<pre><code><span class="kw">template</span> &lt;<span class="kw">class</span> <span class="tp">T</span>&gt;
+<span class="kw">struct</span> Box { <span class="tp">T</span> v; };
+Box b1{<span class="num">42</span>};                     <span class="cm">// C++17: ❌ 编译错；C++20: ✅ 聚合 CTAD</span>
+
+<span class="cm">// C++17 的 fix：</span>
+<span class="kw">template</span> &lt;<span class="kw">class</span> <span class="tp">T</span>&gt; Box(<span class="tp">T</span>) -&gt; Box&lt;<span class="tp">T</span>&gt;;</code></pre>
+
+<div class="card" style="background:rgba(244,114,182,.06);border-left:4px solid var(--accent3)">
+<strong>建议</strong>：① 不要过度依赖隐式 guide，遇到字符串/容器歧义就显式写 guide；② 模板类公开接口若想被用户类型自然使用，<strong>主动提供 deduction guide</strong>；③ C++20 起聚合类型有自动 guide，但显式写更稳。
+</div>
+</div>
+
+<h3>9.12 模板膨胀深度治理（生产实战）</h3>
+<div class="card">
+<p>9.6 提了膨胀基础，本节深度展开<strong>实战治理工具与方法</strong>——大型 C++ 项目链接成 100MB+ 的二进制 90% 是模板锅。</p>
+
+<h4>① 测量：用工具量化"哪些模板最大"</h4>
+<pre><code><span class="cm"># nm + c++filt + 去重 — 哪些 mangled 名出现最多次</span>
+nm -C myapp | grep <span class="str">' W '</span> | awk <span class="str">'{$1=$2=""; print}'</span> \
+              | sort | uniq -c | sort -rn | head -30
+
+<span class="cm"># bloaty — 二进制各 section 大小可视化</span>
+bloaty myapp -d sections,symbols
+
+<span class="cm"># clang -ftime-trace 看每个 TU 的实例化最贵的模板</span>
+clang++ -ftime-trace -c foo.cpp
+<span class="cm"># 生成 foo.json，丢进 chrome://tracing 看火焰图</span>
+
+<span class="cm"># ClangBuildAnalyzer — 多 TU 汇总，找全局最贵</span>
+ClangBuildAnalyzer --all . capture
+ClangBuildAnalyzer --analyze capture</code></pre>
+
+<h4>② 治理：5 个经典武器</h4>
+<table>
+<tr><th>武器</th><th>用法</th><th>典型节省</th></tr>
+<tr><td><strong><code>extern template</code></strong></td><td>头文件声明 + 一个 .cpp 内统一实例化</td><td>编译时间 20-50%，二进制 5-15%</td></tr>
+<tr><td><strong>Type Erasure / Pimpl</strong></td><td>把模板包装成非模板接口，藏实现</td><td>头文件依赖砍 90%；二进制 30%+</td></tr>
+<tr><td><strong>抽出非依赖部分</strong></td><td><code>vector&lt;T*&gt;</code> 共享一份 <code>vector_base&lt;void*&gt;</code></td><td>vector 实例化代码砍 50%</td></tr>
+<tr><td><strong><code>std::function_ref</code> (C++26)</strong></td><td>callback 参数用 ref 视图替代模板</td><td>跨模板边界传递 callable 零模板膨胀</td></tr>
+<tr><td><strong>PCH + Modules (C++20)</strong></td><td>预编译头 / import std</td><td>编译时间 30-70%</td></tr>
+</table>
+
+<h4>③ vector&lt;T*&gt; 模式实战</h4>
+<pre><code><span class="cm">// 经典：vector_base 处理 void* 公共逻辑</span>
+<span class="kw">class</span> <span class="fn">vector_base</span> {
+<span class="kw">protected</span>:
+    <span class="kw">void</span>*  data_   = <span class="kw">nullptr</span>;
+    <span class="kw">size_t</span> size_   = <span class="num">0</span>;
+    <span class="kw">size_t</span> cap_    = <span class="num">0</span>;
+    <span class="kw">void</span> <span class="fn">grow</span>(<span class="kw">size_t</span> n, <span class="kw">size_t</span> elem_size);   <span class="cm">// 非模板，单份实现</span>
+};
+
+<span class="kw">template</span> &lt;<span class="kw">class</span> <span class="tp">T</span>&gt;
+<span class="kw">class</span> ptr_vector : <span class="kw">private</span> vector_base {
+<span class="kw">public</span>:
+    <span class="kw">void</span> <span class="fn">push_back</span>(<span class="tp">T</span>* p) {
+        <span class="kw">if</span> (size_ == cap_) <span class="fn">grow</span>(cap_*<span class="num">2</span>, <span class="kw">sizeof</span>(<span class="tp">T</span>*));   <span class="cm">// 共用</span>
+        <span class="kw">static_cast</span>&lt;<span class="tp">T</span>**&gt;(data_)[size_++] = p;             <span class="cm">// 类型转换 inline</span>
+    }
+};
+<span class="cm">// 不同 T 类型只生成 push_back / 析构等几个极小的 inline 函数</span></code></pre>
+
+<h4>④ extern template 完整范式</h4>
+<pre><code><span class="cm">// matrix.h</span>
+<span class="kw">template</span> &lt;<span class="kw">class</span> <span class="tp">T</span>&gt;
+<span class="kw">class</span> <span class="fn">Matrix</span> {
+<span class="kw">public</span>:
+    <span class="kw">void</span> <span class="fn">inverse</span>();           <span class="cm">// 实现在 matrix.tpp / matrix.cpp</span>
+    <span class="kw">void</span> <span class="fn">solve</span>(<span class="kw">const</span> <span class="tp">T</span>*, <span class="tp">T</span>*);
+};
+
+<span class="cm">// 头部末尾告知：常用类型已经在 .cpp 实例化，TU 不要重复</span>
+<span class="kw">extern template class</span> Matrix&lt;<span class="kw">float</span>&gt;;
+<span class="kw">extern template class</span> Matrix&lt;<span class="kw">double</span>&gt;;
+
+<span class="cm">// matrix.cpp — 单点实例化</span>
+<span class="kw">#include</span> <span class="str">"matrix.h"</span>
+<span class="kw">template class</span> Matrix&lt;<span class="kw">float</span>&gt;;
+<span class="kw">template class</span> Matrix&lt;<span class="kw">double</span>&gt;;
+<span class="cm">// 其他类型若有用户实例化，编译器仍会按需生成</span></code></pre>
+
+<h4>⑤ 真实经验数据感觉</h4>
+<table>
+<tr><th>项目规模</th><th>未治理</th><th>治理后</th></tr>
+<tr><td>5 万行 + boost</td><td>clean build 8 min</td><td>2 min（PCH+IWYU+extern template）</td></tr>
+<tr><td>50 万行 C++ 服务</td><td>binary 280 MB</td><td>110 MB（visibility=hidden + ICF + extern template）</td></tr>
+<tr><td>Chromium 量级</td><td>—</td><td>jumbo build + mold + 模块化 PCH，仍是 hours 级</td></tr>
+</table>
+
+<div class="card" style="background:rgba(52,211,153,.06);border-left:4px solid var(--accent4)">
+<strong>Tech Lead 视角</strong>：模板膨胀治理是<strong>项目超过 10 万行后的强制基础设施</strong>。新人模板用得越奔放，编译时间越爆炸。CI build 时间从 30 分钟降到 5 分钟，能直接提升整个团队的 PR 节奏。
+</div>
+</div>
+
+<h3>9.13 高频面试题 <span class="tag tag-blue">Q&A</span></h3>
 
 <details>
 <summary>Q1: 模板代码为什么必须放在头文件？</summary>
