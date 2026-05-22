@@ -1590,6 +1590,242 @@ std::atomic&lt;Config*&gt; g_cfg;
 <p><strong>C++20 替代</strong>：<code>std::atomic&lt;std::shared_ptr&lt;T&gt;&gt;</code>。实现简单，但每次 load 都有原子 refcount 开销，性能不如真 RCU。</p>
 </div>
 
+<h3>14.8.1 Hazard Pointer — 完整可工作实现 ⭐</h3>
+<div class="card">
+<p>Hazard Pointer（Maged Michael, 2004）是<strong>无 GC 语言里安全回收无锁数据结构节点</strong>的金标准。核心思想：</p>
+<ol>
+<li>每个读者线程在<em>读之前</em>把"我正在用的指针"写到<strong>线程局部 hazard slot</strong>（全局可见的 atomic）</li>
+<li>写者要回收节点时，<strong>先扫描所有 hazard slot</strong>，若没人持有 → 立即 free；否则放入<em>缓冲列表</em>稍后重试</li>
+</ol>
+<p>结果：读端只多一次 store + 一次 read fence，<strong>O(1) 开销</strong>；写端集中付出扫描开销。</p>
+
+<div class="diagram-wrap">
+<svg viewBox="0 0 720 270" xmlns="http://www.w3.org/2000/svg">
+  <!-- Threads -->
+  <text x="20" y="30" fill="#facc15" font-size="13" font-weight="bold">读者线程的 hazard slot 数组</text>
+
+  <rect x="20" y="50" width="160" height="55" rx="6" fill="#1e3a5f" stroke="#38bdf8"/>
+  <text x="100" y="70" text-anchor="middle" fill="#7dd3fc" font-size="11" font-weight="bold">T1 hazard</text>
+  <text x="100" y="92" text-anchor="middle" fill="#86efac" font-size="11">→ Node A ✓</text>
+
+  <rect x="200" y="50" width="160" height="55" rx="6" fill="#1e3a5f" stroke="#38bdf8"/>
+  <text x="280" y="70" text-anchor="middle" fill="#7dd3fc" font-size="11" font-weight="bold">T2 hazard</text>
+  <text x="280" y="92" text-anchor="middle" fill="#fca5a5" font-size="11">→ nullptr</text>
+
+  <rect x="380" y="50" width="160" height="55" rx="6" fill="#1e3a5f" stroke="#38bdf8"/>
+  <text x="460" y="70" text-anchor="middle" fill="#7dd3fc" font-size="11" font-weight="bold">T3 hazard</text>
+  <text x="460" y="92" text-anchor="middle" fill="#86efac" font-size="11">→ Node C ✓</text>
+
+  <rect x="560" y="50" width="140" height="55" rx="6" fill="#1e3a5f" stroke="#38bdf8"/>
+  <text x="630" y="70" text-anchor="middle" fill="#7dd3fc" font-size="11" font-weight="bold">T4 hazard</text>
+  <text x="630" y="92" text-anchor="middle" fill="#fca5a5" font-size="11">→ nullptr</text>
+
+  <!-- Retired list -->
+  <text x="20" y="145" fill="#fb923c" font-size="13" font-weight="bold">回收线程 retire 列表（待删）</text>
+  <rect x="20" y="160" width="100" height="40" rx="6" fill="#3d2d1f" stroke="#fb923c"/>
+  <text x="70" y="185" text-anchor="middle" fill="#fdba74" font-size="11" font-weight="bold">Node A</text>
+  <rect x="140" y="160" width="100" height="40" rx="6" fill="#3d2d1f" stroke="#fb923c"/>
+  <text x="190" y="185" text-anchor="middle" fill="#fdba74" font-size="11" font-weight="bold">Node B</text>
+  <rect x="260" y="160" width="100" height="40" rx="6" fill="#3d2d1f" stroke="#fb923c"/>
+  <text x="310" y="185" text-anchor="middle" fill="#fdba74" font-size="11" font-weight="bold">Node C</text>
+
+  <!-- Decision -->
+  <text x="400" y="185" fill="#facc15" font-size="11">扫描 hazard：</text>
+  <text x="400" y="210" fill="#fca5a5" font-size="11">A 被 T1 引用 → 保留</text>
+  <text x="400" y="230" fill="#86efac" font-size="11">B 无人引用 → 立即 delete</text>
+  <text x="400" y="250" fill="#fca5a5" font-size="11">C 被 T3 引用 → 保留</text>
+</svg>
+</div>
+
+<h4>最小可用实现（单 hazard slot/线程，单类型）</h4>
+<pre><code><span class="cm">// hazard_ptr_lite.hpp - 60 行实现核心思想</span>
+<span class="kw">template</span>&lt;<span class="kw">class</span> T, <span class="kw">size_t</span> MAX_THREADS = <span class="num">64</span>&gt;
+<span class="kw">class</span> HazardDomain {
+    <span class="kw">struct alignas</span>(<span class="num">64</span>) Slot {                  <span class="cm">// 各占独立 cache line</span>
+        std::atomic&lt;T*&gt; hazard{<span class="kw">nullptr</span>};
+        std::atomic&lt;<span class="kw">bool</span>&gt; active{<span class="kw">false</span>};
+    };
+    Slot slots_[MAX_THREADS];
+    <span class="kw">thread_local</span> <span class="kw">static</span> Slot* my_;          <span class="cm">// 当前线程的 slot</span>
+
+    <span class="kw">struct</span> Retired { T* p; Retired* next; };
+    <span class="kw">thread_local</span> <span class="kw">static</span> Retired* retired_head_;
+    <span class="kw">thread_local</span> <span class="kw">static</span> <span class="kw">size_t</span>   retired_count_;
+
+<span class="kw">public</span>:
+    <span class="kw">void</span> acquire_slot() {
+        <span class="kw">for</span> (<span class="kw">auto</span>&amp; s : slots_) {
+            <span class="kw">bool</span> exp = <span class="kw">false</span>;
+            <span class="kw">if</span> (s.active.compare_exchange_strong(exp, <span class="kw">true</span>)) {
+                my_ = &amp;s; <span class="kw">return</span>;
+            }
+        }
+        <span class="kw">throw</span> std::runtime_error(<span class="str">"too many threads"</span>);
+    }
+
+    <span class="cm">// 读端：保护一个指针</span>
+    T* protect(<span class="kw">const</span> std::atomic&lt;T*&gt;&amp; src) {
+        T* p;
+        <span class="kw">do</span> {
+            p = src.load(std::memory_order_acquire);
+            my_-&gt;hazard.store(p, std::memory_order_seq_cst);   <span class="cm">// ★ 强 fence</span>
+        } <span class="kw">while</span> (p != src.load(std::memory_order_acquire));     <span class="cm">// 双重检查</span>
+        <span class="kw">return</span> p;
+    }
+    <span class="kw">void</span> clear() { my_-&gt;hazard.store(<span class="kw">nullptr</span>, std::memory_order_release); }
+
+    <span class="cm">// 写端：延迟回收</span>
+    <span class="kw">void</span> retire(T* p) {
+        retired_head_ = <span class="kw">new</span> Retired{p, retired_head_};
+        <span class="kw">if</span> (++retired_count_ &gt;= <span class="num">64</span>) scan();         <span class="cm">// 批量扫描</span>
+    }
+<span class="kw">private</span>:
+    <span class="kw">void</span> scan() {
+        <span class="cm">// 1. 收集所有线程当前 hazard</span>
+        std::vector&lt;T*&gt; in_use;
+        <span class="kw">for</span> (<span class="kw">auto</span>&amp; s : slots_)
+            <span class="kw">if</span> (T* h = s.hazard.load(std::memory_order_acquire)) in_use.push_back(h);
+        std::sort(in_use.begin(), in_use.end());
+        <span class="cm">// 2. 遍历 retired，能 free 就 free</span>
+        Retired** prev = &amp;retired_head_;
+        <span class="kw">while</span> (Retired* r = *prev) {
+            <span class="kw">if</span> (std::binary_search(in_use.begin(), in_use.end(), r-&gt;p)) {
+                prev = &amp;r-&gt;next;                <span class="cm">// 仍被引用，下次再试</span>
+            } <span class="kw">else</span> {
+                *prev = r-&gt;next;
+                <span class="kw">delete</span> r-&gt;p; <span class="kw">delete</span> r;
+                --retired_count_;
+            }
+        }
+    }
+};</code></pre>
+
+<h4>读端使用范式（Treiber Stack 的安全 pop）</h4>
+<pre><code><span class="kw">bool</span> pop(T&amp; out) {
+    Node* old;
+    <span class="kw">while</span> (<span class="kw">true</span>) {
+        old = hd_.protect(head_);                <span class="cm">// ① 声明 hazard</span>
+        <span class="kw">if</span> (!old) { hd_.clear(); <span class="kw">return</span> <span class="kw">false</span>; }
+        Node* nxt = old-&gt;next.load(std::memory_order_acquire);
+        <span class="kw">if</span> (head_.compare_exchange_weak(old, nxt,
+                std::memory_order_acquire)) <span class="kw">break</span>;
+    }
+    out = std::move(old-&gt;value);
+    hd_.clear();                                  <span class="cm">// ② 释放 hazard</span>
+    hd_.retire(old);                              <span class="cm">// ③ 延迟回收</span>
+    <span class="kw">return</span> <span class="kw">true</span>;
+}</code></pre>
+
+<div class="tip">关键点是 <code>protect()</code> 里的 <strong>双重检查</strong>：写 hazard 之后必须再 load 一次源指针，确保我登记的指针在写者扫描时还是有效的。这个 pattern 在所有 hazard pointer 实现里都一样。</div>
+
+<h4>生产可用的库</h4>
+<ul>
+<li><a href="https://github.com/facebook/folly/blob/main/folly/synchronization/Hazptr.h" style="color:var(--accent)">folly::hazptr</a> —— Facebook 生产级，支持多 slot/线程、自动清理</li>
+<li><a href="https://github.com/concurrencykit/ck" style="color:var(--accent)">Concurrency Kit (ck)</a> —— C 接口</li>
+<li><a href="https://liburcu.org/" style="color:var(--accent)">liburcu</a> —— 同时提供 RCU 和 hazard pointer 实现</li>
+</ul>
+</div>
+
+<h3>14.8.2 RCU 进阶 — 三种实现风格</h3>
+<div class="card">
+<p>§14.8 给了 RCU 的概念性伪代码。真实 RCU 实现按"<strong>怎么探测 grace period</strong>"分三类，性能差距巨大：</p>
+
+<table>
+<tr><th>实现</th><th>grace period 检测</th><th>读端开销</th><th>典型用户</th></tr>
+<tr><td><b>Classic / sleepable RCU</b></td><td>等所有 CPU 经历一次<strong>上下文切换</strong>（=读临界区一定退出）</td><td><strong>零</strong>（无任何同步）</td><td>Linux 内核 (preempt-disable 内禁抢占)</td></tr>
+<tr><td><b>QSBR (Quiescent State)</b></td><td>每线程周期性显式调 <code>rcu_quiescent_state()</code></td><td><strong>零</strong></td><td>liburcu 默认、DPDK 控制面</td></tr>
+<tr><td><b>Memory Barrier RCU</b></td><td>读端 lock/unlock 用 atomic 计数 + fence；写端等计数清零</td><td>2 次 atomic store / 临界区</td><td>folly::rcu、用户态通用方案</td></tr>
+</table>
+
+<h4>QSBR 模式 — 用户态最快</h4>
+<pre><code><span class="cm">// 适用场景：每条线程主循环都会"自然到达"一个静止点</span>
+<span class="cm">// 例：网络服务的 epoll_wait 返回后</span>
+<span class="kw">void</span> worker_loop() {
+    rcu_register_thread();
+    <span class="kw">while</span> (running) {
+        <span class="kw">int</span> n = epoll_wait(ep, ev, <span class="num">64</span>, -<span class="num">1</span>);
+        rcu_thread_online();                       <span class="cm">// 进入活跃</span>
+        <span class="kw">for</span> (<span class="kw">int</span> i = <span class="num">0</span>; i &lt; n; ++i) handle(ev[i]);  <span class="cm">// 读 RCU 数据零开销</span>
+        rcu_thread_offline();                      <span class="cm">// 静止</span>
+    }
+    rcu_unregister_thread();
+}
+
+<span class="cm">// 更新者</span>
+<span class="kw">void</span> update_route_table(RouteTable* newt) {
+    RouteTable* old = rcu_xchg_pointer(&amp;g_table, newt);
+    synchronize_rcu();         <span class="cm">// 等所有 worker 至少经历一次 online→offline</span>
+    delete_route_table(old);
+}</code></pre>
+
+<h4>定期 grace period vs call_rcu —— 写端两种回收风格</h4>
+<table>
+<tr><th>风格</th><th>语义</th><th>适用</th></tr>
+<tr><td><code>synchronize_rcu()</code></td><td>同步：阻塞当前线程直到 grace period 完成</td><td>更新不频繁，简单直观</td></tr>
+<tr><td><code>call_rcu(p, cb)</code></td><td>异步：把 (p, cb) 放队列，后台线程在下个 grace period 触发 cb</td><td>更新热点，不能阻塞写者</td></tr>
+</table>
+</div>
+
+<h3>14.8.3 C++26 标准化：<code>std::hazard_pointer</code> 与 <code>std::rcu</code></h3>
+<div class="card">
+<p>P1121 / P2530 把 Hazard Pointer 和 RCU 引入 C++26 标准库。手写无锁回收的时代结束了。</p>
+
+<h4><code>std::hazard_pointer</code>（P1121r4，已进 C++26 草案）</h4>
+<pre><code><span class="kw">#include</span> <span class="str">&lt;hazard_pointer&gt;</span>           <span class="cm">// C++26</span>
+
+<span class="kw">struct</span> Node : std::enable_hazard_pointer&lt;Node&gt; {
+    T value; std::atomic&lt;Node*&gt; next;
+};
+std::atomic&lt;Node*&gt; head_;
+
+<span class="kw">bool</span> pop(T&amp; out) {
+    std::hazard_pointer hp = std::make_hazard_pointer();   <span class="cm">// 取槽位</span>
+    Node* old;
+    <span class="kw">do</span> {
+        old = hp.protect(head_);                            <span class="cm">// 受保护读</span>
+        <span class="kw">if</span> (!old) <span class="kw">return</span> <span class="kw">false</span>;
+    } <span class="kw">while</span> (!head_.compare_exchange_weak(old, old-&gt;next));
+    out = std::move(old-&gt;value);
+    hp.reset_protection();
+    old-&gt;retire();                                          <span class="cm">// 通过 CRTP 暴露的延迟回收</span>
+    <span class="kw">return</span> <span class="kw">true</span>;
+}</code></pre>
+
+<h4><code>std::rcu</code>（P2530，C++26 候选）</h4>
+<pre><code><span class="kw">#include</span> <span class="str">&lt;rcu&gt;</span>
+
+<span class="kw">struct</span> Config : std::rcu_obj_base&lt;Config&gt; { <span class="kw">int</span> v; };
+std::atomic&lt;Config*&gt; g_cfg;
+
+<span class="cm">// 读端</span>
+<span class="kw">void</span> reader() {
+    std::rcu_default_domain().lock();             <span class="cm">// 进入读临界区</span>
+    Config* c = g_cfg.load(std::memory_order_acquire);
+    use(c-&gt;v);
+    std::rcu_default_domain().unlock();
+}
+
+<span class="cm">// 写端 - 异步回收</span>
+<span class="kw">void</span> update(<span class="kw">int</span> v) {
+    Config* newc = <span class="kw">new</span> Config{{}, v};
+    Config* old  = g_cfg.exchange(newc, std::memory_order_acq_rel);
+    old-&gt;retire();                                <span class="cm">// 异步 delete（不阻塞）</span>
+}</code></pre>
+
+<div class="tip">在 C++26 来之前可用的实现：<a href="https://github.com/facebook/folly" style="color:var(--accent)">folly::hazptr / folly::rcu</a>（接口与 P1121/P2530 几乎一致）、<a href="https://liburcu.org/" style="color:var(--accent)">liburcu</a>。Folly 的接口就是这两个提案的灵感来源。</div>
+
+<h4>三大无锁回收方案最终对比</h4>
+<table>
+<tr><th>方案</th><th>读开销</th><th>写延迟</th><th>内存占用</th><th>实现复杂度</th><th>C++26</th></tr>
+<tr><td><b>Hazard Pointer</b></td><td>1 store + fence</td><td>低 (本线程 retire 队列)</td><td>O(线程数 × hazard 数)</td><td>中</td><td>✅ <code>std::hazard_pointer</code></td></tr>
+<tr><td><b>RCU (QSBR)</b></td><td>0</td><td>取决于 grace period</td><td>O(待回收节点)</td><td>高（依赖周期性静止点）</td><td>✅ <code>std::rcu</code></td></tr>
+<tr><td><b>Epoch-based (EBR)</b></td><td>1 load + 1 store</td><td>2 epoch 后释放</td><td>O(线程数 × 3 epoch 列表)</td><td>中</td><td>❌ (folly / crossbeam)</td></tr>
+<tr><td><b><code>atomic&lt;shared_ptr&lt;T&gt;&gt;</code></b></td><td>原子 refcount 操作（昂贵）</td><td>立即（refcount=0 时）</td><td>O(对象)</td><td>低</td><td>✅ C++20 已有</td></tr>
+</table>
+
+<div class="tip"><strong>工程选型建议</strong>：① <em>读极重、写罕见</em>（路由表、配置） → RCU；② <em>读写比例接近 + 数据结构指针复杂</em>（无锁栈/队列/树） → Hazard Pointer；③ <em>非热路径或代码简洁优先</em> → <code>atomic&lt;shared_ptr&gt;</code>。三种本质都是"<strong>延后回收以保证读者看到的指针在临界区内始终有效</strong>"——你能解释清楚这句话，无锁内存回收的面试就拿满分了。</div>
+</div>
+
 <h3>14.9 无锁编程性能陷阱</h3>
 <div class="card">
 <table>
