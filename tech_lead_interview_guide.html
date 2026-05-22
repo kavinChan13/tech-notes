@@ -229,6 +229,8 @@
     <a href="#s3">③ 能力提升路径</a>
     <a href="#s4">④ 面试表达 · STAR</a>
     <a href="#s5">⑤ 高频面试问题</a>
+    <a href="#s5b">⑤+ 分布式系统基础 ⭐</a>
+    <a href="#s5c">⑤++ SRE 与 SLI/SLO ⭐</a>
     <a href="#s6">⑥ 避坑指南</a>
     <a href="#s7">⑦ 30/60/90 天行动</a>
   </nav>
@@ -1100,6 +1102,195 @@
       </div>
     </div>
 
+  </section>
+
+  <!-- ============================================================= -->
+  <section id="s5b">
+    <h2><span class="num">05+</span> 分布式系统基础 — Tech Lead 必备 <span style="font-size:13px;color:var(--accent2)">⭐</span></h2>
+    <p class="intro">Tech Lead 面试一定会问"你们系统的架构"。即使你做的是单机服务，也会被追问"如果要扩到多节点 / 多机房，你怎么设计？" 下面是必须能讲清楚的 6 个核心概念。</p>
+
+    <div class="card">
+      <h3>1. CAP 定理 — 一致性 / 可用性 / 分区容错</h3>
+      <p>分布式系统在<strong>网络分区发生时</strong>，必须在「数据一致性 C」和「可用性 A」之间选一个。<strong>P 不可选 —— 网络分区是必然事件</strong>，所以本质是 CP 还是 AP。</p>
+      <table>
+        <tr><th>类型</th><th>含义</th><th>典型系统</th><th>适用</th></tr>
+        <tr><td><strong>CP</strong></td><td>分区时优先一致性，部分节点拒绝写入</td><td>ZooKeeper、etcd、HBase、MongoDB(强一致配置)</td><td>金融交易、配置中心、分布式锁</td></tr>
+        <tr><td><strong>AP</strong></td><td>分区时优先可用性，允许暂时不一致</td><td>Cassandra、DynamoDB、Redis Cluster</td><td>用户画像、社交 feed、计数器</td></tr>
+      </table>
+      <p><strong>常见误解</strong>：MySQL 主从不是 CP，是 AP（异步复制可能丢数据）。要 CP 需用 MySQL Group Replication / Galera Cluster。</p>
+    </div>
+
+    <div class="card">
+      <h3>2. BASE 与最终一致性</h3>
+      <p>CAP 的实际工程化版本：<strong>BA</strong>sically Available + <strong>S</strong>oft state + <strong>E</strong>ventually consistent。</p>
+      <ul>
+        <li><strong>读自己写</strong> (Read-Your-Writes)：用户能立即看到自己刚写的数据 — 用 session 粘住主库一段时间</li>
+        <li><strong>单调读</strong> (Monotonic Reads)：不会看到时间倒退 — 同一用户固定路由到同一副本</li>
+        <li><strong>因果一致</strong> (Causal)：有因果关系的更新顺序保留 — 用 vector clock / Lamport timestamp</li>
+        <li><strong>最终一致</strong>：足够时间后所有副本收敛</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h3>3. 一致性算法：Paxos vs Raft</h3>
+      <table>
+        <tr><th>项</th><th>Paxos</th><th>Raft</th></tr>
+        <tr><td>提出时间</td><td>1989 (Leslie Lamport)</td><td>2014 (Diego Ongaro)</td></tr>
+        <tr><td>设计哲学</td><td>数学完美，工程实现极难</td><td>"为可理解性而设计"，工程友好</td></tr>
+        <tr><td>选主</td><td>无明确 leader 概念</td><td>明确 leader，term 编号</td></tr>
+        <tr><td>实现</td><td>Chubby、Spanner</td><td>etcd、Consul、TiKV、CockroachDB</td></tr>
+        <tr><td>面试常考</td><td>"概念性理解"</td><td><strong>能画出选主 + 日志复制流程</strong></td></tr>
+      </table>
+      <h4>Raft 三阶段简要（必背）</h4>
+      <ol>
+        <li><strong>Leader Election</strong>：超时未收到心跳 → 自增 term → 投票 → 多数派当选</li>
+        <li><strong>Log Replication</strong>：leader 接收写 → 日志附 term + index → 复制到 follower → 多数派持久化后 commit → 回客户端</li>
+        <li><strong>Safety</strong>：commit 的日志永不丢；新 leader 必须包含所有已 commit 日志（投票时检查 log 完整性）</li>
+      </ol>
+      <div class="hl-box" style="background:rgba(79,140,255,0.08);border-left:4px solid var(--accent);padding:12px 16px;border-radius:0 8px 8px 0;margin:12px 0">
+        <strong>面试金句</strong>："Raft 把 Paxos 拆成 Leader Election + Log Replication + Safety 三个独立子问题，每个子问题都有明确不变式。这是工程上 Raft 替代 Paxos 的根本原因。"
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>4. 分布式事务：2PC / 3PC / Saga / TCC</h3>
+      <table>
+        <tr><th>方案</th><th>原理</th><th>优缺点</th><th>典型用</th></tr>
+        <tr><td><strong>2PC</strong></td><td>协调者 prepare → commit/abort</td><td>简单；但<strong>阻塞</strong>，协调者单点</td><td>同机房 DB 事务、XA</td></tr>
+        <tr><td><strong>3PC</strong></td><td>2PC 加 pre-commit 阶段降阻塞</td><td>少阻塞但仍有不一致</td><td>极少用</td></tr>
+        <tr><td><strong>TCC</strong></td><td>Try-Confirm-Cancel 三阶段业务补偿</td><td>性能好但侵入业务</td><td>金融、电商订单</td></tr>
+        <tr><td><strong>Saga</strong></td><td>长事务拆成本地小事务 + 每步补偿</td><td>最终一致；事件驱动友好</td><td>跨服务流程（订单 → 支付 → 物流）</td></tr>
+        <tr><td><strong>本地消息表</strong></td><td>业务 DB 同时写消息表，后台扫描发 MQ</td><td>简单、可靠；延迟较高</td><td>互联网业务最常见</td></tr>
+      </table>
+    </div>
+
+    <div class="card">
+      <h3>5. 限流 / 熔断 / 降级 — 三件套</h3>
+      <table>
+        <tr><th>能力</th><th>常用算法 / 工具</th><th>触发场景</th></tr>
+        <tr><td><strong>限流</strong></td><td>令牌桶、漏桶；<a href="https://github.com/alibaba/Sentinel">Sentinel</a>、Envoy ratelimit、Nginx limit_req</td><td>保护自家服务不被打爆</td></tr>
+        <tr><td><strong>熔断</strong></td><td>状态机 closed / open / half-open；Hystrix（已停止维护）、resilience4j、Sentinel</td><td>下游服务失败率超阈值，快速失败避免雪崩</td></tr>
+        <tr><td><strong>降级</strong></td><td>开关 + fallback 函数</td><td>主功能挂时返回默认值（"猜你喜欢"挂了返回热门榜）</td></tr>
+      </table>
+      <p><strong>面试常追问</strong>：令牌桶 vs 漏桶？令牌桶允许<strong>突发流量</strong>（桶里攒了多少令牌就能瞬间放多少请求）；漏桶严格<strong>恒速放行</strong>。</p>
+    </div>
+
+    <div class="card">
+      <h3>6. 一致性哈希与分片</h3>
+      <p>普通 hash 取模 (key % N) 在节点增删时<strong>几乎全部数据迁移</strong>。一致性哈希将 key 和 节点都 hash 到环上，key 顺时针找最近节点。增删节点只影响相邻一段。</p>
+      <ul>
+        <li><strong>虚拟节点</strong>：每个物理节点对应 100-200 个虚拟点 → 负载更均匀</li>
+        <li>实现：Memcached client、Cassandra 分区、Nginx upstream hash、Envoy ring_hash 负载均衡</li>
+        <li><strong>替代方案</strong>：Jump Consistent Hash (Google, 2014) — 无需虚拟节点，几行代码搞定，但只支持顺序加节点</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h3>必答清单：被问"你们系统怎么扛 10x 流量"</h3>
+      <ol>
+        <li><strong>读写分离</strong>：主库写、从库读（注意主从延迟带来的"读自己写"问题）</li>
+        <li><strong>缓存</strong>：本地缓存 (Caffeine / Guava) + 分布式缓存 (Redis Cluster) 多级</li>
+        <li><strong>分库分表</strong>：按用户 ID hash / 按时间范围 / 按地理</li>
+        <li><strong>异步化</strong>：写操作进 MQ (Kafka)，消费者落库 + 通知</li>
+        <li><strong>限流降级</strong>：网关层 + 业务层双重保护</li>
+        <li><strong>水平扩展 + 无状态</strong>：Pod 可以随时杀掉重启</li>
+        <li><strong>多机房 / 异地多活</strong>：单元化部署，按用户 ID 路由到所属单元</li>
+      </ol>
+    </div>
+  </section>
+
+  <!-- ============================================================= -->
+  <section id="s5c">
+    <h2><span class="num">05++</span> SRE 与 SLI / SLO / Error Budget <span style="font-size:13px;color:var(--accent2)">⭐</span></h2>
+    <p class="intro">SRE (Site Reliability Engineering) 是 Google 提出的"用工程方法解决运维问题"的体系。Tech Lead 必懂的核心：用<strong>定量指标</strong>取代"我感觉系统挺稳的"。被问"你怎么衡量服务质量"时，能讲出 SLI/SLO/Error Budget 三件套，直接拉满印象分。</p>
+
+    <div class="card">
+      <h3>1. 三个核心术语</h3>
+      <table>
+        <tr><th>术语</th><th>含义</th><th>示例</th></tr>
+        <tr><td><strong>SLI</strong> (Service Level Indicator)</td><td><em>可测量的指标</em></td><td>请求成功率、P99 延迟、可用性百分比</td></tr>
+        <tr><td><strong>SLO</strong> (Service Level Objective)</td><td><em>团队对 SLI 的内部目标</em></td><td>"请求成功率 ≥ 99.9%"、"P99 ≤ 200ms"</td></tr>
+        <tr><td><strong>SLA</strong> (Service Level Agreement)</td><td><em>对外承诺，违反要赔钱</em></td><td>"月度可用性 ≥ 99.9% 否则退费"</td></tr>
+      </table>
+      <p>规则：<strong>SLO 必须比 SLA 严格</strong>（SLA - SLO 是缓冲带）。SLA 99.9% 时 SLO 至少应 99.95%。</p>
+    </div>
+
+    <div class="card">
+      <h3>2. Error Budget — 用经济学思维管理稳定性</h3>
+      <p><strong>"99.9% 可用 = 每月有 43.2 分钟的故障预算"</strong>。这个预算就是 Error Budget。</p>
+      <table>
+        <tr><th>可用性 SLO</th><th>月可用时间</th><th>月停机预算</th></tr>
+        <tr><td>99%</td><td>—</td><td>7.2 小时</td></tr>
+        <tr><td>99.9%</td><td>—</td><td>43.2 分钟</td></tr>
+        <tr><td>99.95%</td><td>—</td><td>21.6 分钟</td></tr>
+        <tr><td>99.99% ("四个 9")</td><td>—</td><td>4.32 分钟</td></tr>
+        <tr><td>99.999% ("五个 9")</td><td>—</td><td>26 秒</td></tr>
+      </table>
+
+      <h4>Error Budget 怎么用</h4>
+      <ul>
+        <li><strong>预算还有</strong> → 大胆做<em>新功能</em>、A/B 实验、灰度发布</li>
+        <li><strong>预算花完</strong> → 暂停发布、所有人力转去做稳定性专项</li>
+        <li>把"业务想发版" vs "运维想稳定"的<strong>政治冲突变成可计算的决策</strong></li>
+      </ul>
+
+      <div class="hl-box" style="background:rgba(79,140,255,0.08);border-left:4px solid var(--accent);padding:12px 16px;border-radius:0 8px 8px 0;margin:12px 0">
+        <strong>面试金句</strong>："Error Budget 不是为了零事故，而是把可用性从'信仰'变成'可消费的资源'，让业务和运维用同一种语言对话。"
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>3. 怎么定 SLI —— 4 黄金信号 (Google SRE)</h3>
+      <table>
+        <tr><th>信号</th><th>具体指标</th><th>工具</th></tr>
+        <tr><td><strong>Latency</strong> 延迟</td><td>P50/P95/P99/P999（关注尾部，不是平均）</td><td>Prometheus histogram、HDR Histogram</td></tr>
+        <tr><td><strong>Traffic</strong> 流量</td><td>QPS、RPS、并发连接数</td><td>nginx_http_requests_total</td></tr>
+        <tr><td><strong>Errors</strong> 错误率</td><td>HTTP 5xx / 业务错误码占比</td><td>带 status 标签的 counter</td></tr>
+        <tr><td><strong>Saturation</strong> 饱和度</td><td>CPU / 内存 / 队列长度 / 连接池占用</td><td>node_exporter + 自定义指标</td></tr>
+      </table>
+      <p>另两个常用方法论：</p>
+      <ul>
+        <li><strong>USE Method</strong> (Brendan Gregg)：Utilization / Saturation / Errors —— 资源维度</li>
+        <li><strong>RED Method</strong>：Rate / Errors / Duration —— 微服务请求维度</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h3>4. 监控金字塔 — Logs / Metrics / Traces 三件套</h3>
+      <table>
+        <tr><th>层</th><th>用途</th><th>典型工具</th><th>体积 / 成本</th></tr>
+        <tr><td><strong>Metrics</strong></td><td>定量、时序、告警</td><td>Prometheus / VictoriaMetrics + Grafana</td><td>小 / 低</td></tr>
+        <tr><td><strong>Logs</strong></td><td>事件细节、排错</td><td>ELK / Loki / OpenSearch</td><td>大 / 中</td></tr>
+        <tr><td><strong>Traces</strong></td><td>分布式调用链定位</td><td>Jaeger / Tempo / OpenTelemetry / SkyWalking</td><td>大 / 高（采样）</td></tr>
+      </table>
+      <p>现代趋势：<strong>OpenTelemetry</strong> 统一三件套的 SDK + 协议，再选不同后端存储。</p>
+    </div>
+
+    <div class="card">
+      <h3>5. Postmortem (事故复盘) 文化</h3>
+      <p>Google SRE 的核心实践之一：</p>
+      <ul>
+        <li><strong>Blameless</strong>（无指责）—— 关注系统/流程，不针对个人</li>
+        <li><strong>Timeline 必须精确到分钟</strong> —— 从故障发生到恢复</li>
+        <li><strong>5 Whys 找根因</strong> —— 不只是表象</li>
+        <li><strong>Action Items 必须有 owner + deadline</strong></li>
+        <li><strong>每月 / 每季回顾</strong>是否真的关闭了 Action Items</li>
+      </ul>
+      <p>本仓库 <a href="./em-templates/07-postmortem.html">EM 模板 · Postmortem</a> 是这个流程的可填模板。</p>
+    </div>
+
+    <div class="card">
+      <h3>6. 高频面试题答题模板</h3>
+
+      <h4>Q：你怎么衡量你负责的服务质量？</h4>
+      <p>答：① 定义 SLI（延迟 / 错误率 / 流量 / 饱和度）→ ② 跟产品 + 运维一起定 SLO（如 P99 ≤ 200ms、可用性 99.9%）→ ③ 把剩余 0.1% 当 error budget，预算用完前可以激进发版，用完了停发做稳定性 → ④ Prometheus 监控 + Grafana 看板 + AlertManager 告警 + 月度 SLO review。</p>
+
+      <h4>Q：你怎么定义"线上事故"？</h4>
+      <p>答：分等级，P1（核心功能不可用、营收影响 &gt; X 万）/ P2（部分降级）/ P3（小范围 bug）。每级有<strong>响应时间承诺</strong>（P1 15 分钟内 oncall 介入）+ <strong>升级路径</strong>（30 分钟未恢复升级到 Director）+ <strong>必须 Postmortem</strong>。</p>
+
+      <h4>Q：你的服务出现 P99 飙升怎么办？</h4>
+      <p>答：① 看是否伴随流量突增 (Traffic) → 否则不是过载；② 看上游接口的 P99（trace 上游）；③ 看下游依赖延迟（DB / Redis / 第三方）；④ 看节点饱和度（CPU / GC / 线程池排队）；⑤ 看是否有发版/配置变更（90% 事故是变更导致）。<strong>降级三板斧</strong>：缓存兜底、限流保护、回滚最近变更。</p>
+    </div>
   </section>
 
   <!-- ============================================================= -->

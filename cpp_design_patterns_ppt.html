@@ -1018,6 +1018,114 @@ on_login.<span class="fn">emit</span>(42, <span class="str">"alice"</span>);</pr
 </section>
 
 <!-- =============================================================
+     SLIDE · Hierarchical State Machine (HSM)
+     ============================================================= -->
+<section class="slide" data-cat="behav" data-title="HSM — Hierarchical State Machine 分层状态机 ⭐">
+  <div class="slide-header"><span class="badge behav">行为型</span><span class="badge meta">⭐ 真实系统级</span></div>
+  <h1 class="slide-title">HSM — Hierarchical State Machine 分层状态机</h1>
+  <p class="slide-subtitle">UML statechart / Miro Samek 的核心思想 — 解决"扁平状态机状态爆炸"问题</p>
+
+  <h2>动机：扁平状态机的痛</h2>
+  <p>普通 FSM (上一张) 有 N 个状态、M 个事件 → 最坏情况 N×M 个转移。一个电话机 HSM 的状态可能：</p>
+  <ul>
+    <li>挂机 / 忙 / 振铃 / 拨号 / 通话中 / 来电中 / 静音 / 免提 ...</li>
+    <li>"按音量键"在<strong>每一个</strong>非挂机状态下都要处理一遍 → 重复代码</li>
+  </ul>
+  <p>HSM 把状态组织成<strong>树</strong>：子状态继承父状态的事件处理。父状态处理"按音量键"一次即可。</p>
+
+  <div class="grid-2">
+    <div class="panel red">
+      <h3>扁平 FSM — 状态爆炸</h3>
+      <pre><span class="kw">switch</span> (state) {
+  <span class="kw">case</span> Idle:        <span class="kw">if</span> (e==VolUp) ...; <span class="kw">break</span>;
+  <span class="kw">case</span> Dialing:     <span class="kw">if</span> (e==VolUp) ...; <span class="kw">break</span>;
+  <span class="kw">case</span> Ringing:     <span class="kw">if</span> (e==VolUp) ...; <span class="kw">break</span>;
+  <span class="kw">case</span> Talking:     <span class="kw">if</span> (e==VolUp) ...; <span class="kw">break</span>;
+  <span class="cm">// 每个 case 都重复音量处理</span>
+}</pre>
+    </div>
+    <div class="panel green">
+      <h3>HSM — 状态树继承</h3>
+      <pre><span class="cm">// 状态树
+//   Active (handles VolUp/VolDown)
+//   ├── Idle
+//   ├── OffHook
+//   │   ├── Dialing
+//   │   ├── Talking
+//   │   └── Held
+//   └── Ringing</span>
+<span class="kw">struct</span> <span class="type">Active</span>     { <span class="fn">handle</span>(VolUp e); };
+<span class="kw">struct</span> <span class="type">OffHook</span>    : <span class="type">Active</span> { <span class="fn">handle</span>(HangUp); };
+<span class="kw">struct</span> <span class="type">Talking</span>    : <span class="type">OffHook</span> { <span class="fn">handle</span>(Mute); };</pre>
+    </div>
+  </div>
+
+  <h2>核心机制：事件冒泡 + 进入/退出动作 (entry / exit)</h2>
+  <pre><span class="cm">// 简化 HSM 实现 — 用 std::variant + 静态父子映射</span>
+<span class="kw">enum class</span> <span class="type">St</span> { Active, Idle, OffHook, Dialing, Talking, Ringing };
+
+<span class="cm">// 父表 — 编译期常量</span>
+<span class="kw">constexpr</span> <span class="type">St</span> parent_of[] = {
+    <span class="type">St</span>::Active,    <span class="cm">// Active 自身是根</span>
+    <span class="type">St</span>::Active,    <span class="cm">// Idle → Active</span>
+    <span class="type">St</span>::Active,    <span class="cm">// OffHook → Active</span>
+    <span class="type">St</span>::OffHook,   <span class="cm">// Dialing → OffHook</span>
+    <span class="type">St</span>::OffHook,   <span class="cm">// Talking → OffHook</span>
+    <span class="type">St</span>::Active,    <span class="cm">// Ringing → Active</span>
+};
+
+<span class="kw">class</span> <span class="type">Phone</span> {
+    <span class="type">St</span> state_ = <span class="type">St</span>::Idle;
+<span class="kw">public</span>:
+    <span class="kw">void</span> <span class="fn">dispatch</span>(<span class="type">Event</span> e) {
+        <span class="type">St</span> s = state_;
+        <span class="kw">while</span> (s != <span class="type">St</span>::Active) {                  <span class="cm">// 子→父冒泡</span>
+            <span class="kw">if</span> (<span class="fn">handle</span>(s, e)) <span class="kw">return</span>;             <span class="cm">// 当前层吃了事件</span>
+            s = parent_of[<span class="kw">static_cast</span>&lt;<span class="kw">int</span>&gt;(s)];   <span class="cm">// 向上传</span>
+        }
+        <span class="fn">handle</span>(<span class="type">St</span>::Active, e);                  <span class="cm">// 根层兜底</span>
+    }
+
+    <span class="kw">void</span> <span class="fn">transit</span>(<span class="type">St</span> target) {
+        <span class="cm">// 1. 计算 LCA (最近公共祖先)</span>
+        <span class="cm">// 2. 从 state_ 一路 exit 到 LCA</span>
+        <span class="cm">// 3. 从 LCA 一路 entry 到 target</span>
+        <span class="fn">exit_path</span>(state_, <span class="fn">lca</span>(state_, target));
+        <span class="fn">entry_path</span>(<span class="fn">lca</span>(state_, target), target);
+        state_ = target;
+    }
+};</pre>
+
+  <h2>典型应用</h2>
+  <div class="grid-3">
+    <div class="panel accent">
+      <h3>嵌入式 / RTOS</h3>
+      <p>电话、UI、状态机协议解析。Miro Samek 的 <a href="https://www.state-machine.com/" style="color:var(--accent)"><strong>QP/C++</strong></a> 是工业标准。</p>
+    </div>
+    <div class="panel purple">
+      <h3>游戏 AI</h3>
+      <p>NPC 行为树常用 HSM：Patrol → Combat (有 Aim/Reload/Flee 子状态) → Dead。</p>
+    </div>
+    <div class="panel orange">
+      <h3>协议状态机</h3>
+      <p>TLS、SIP、RTP、QUIC 都是天然的 HSM —— 标准文档里就是 statechart 形式。</p>
+    </div>
+  </div>
+
+  <h2>C++ 生态库</h2>
+  <table>
+    <tr><th>库</th><th>风格</th><th>特点</th></tr>
+    <tr><td><a href="https://www.boost.org/doc/libs/release/libs/sml/" style="color:var(--accent)">Boost.SML</a></td><td>编译期 DSL</td><td>转移表用模板 + 操作符；零开销</td></tr>
+    <tr><td><a href="https://github.com/boost-ext/sml2" style="color:var(--accent)">sml2</a></td><td>更轻量、C++20 concepts</td><td>编译时检查、无虚函数</td></tr>
+    <tr><td><a href="https://www.state-machine.com/" style="color:var(--accent)">QP/C++ (Samek)</a></td><td>运行时 HSM</td><td>嵌入式实时；带 trace 工具</td></tr>
+    <tr><td><a href="https://github.com/digint/tinyfsm" style="color:var(--accent)">TinyFSM</a></td><td>header-only</td><td>编译期分发，零虚函数</td></tr>
+  </table>
+
+  <div class="ok"><b>选型</b>：状态 &lt; 6 个、转移简单 → switch 或 variant；状态 &gt; 10 / 多层 / 协议状态机 → HSM 库；安全关键系统（医疗、航空） → QP 或 Samek 风格的 trace-able HSM。</div>
+  <div class="tip">面试加分点："为什么 TCP 不用扁平 FSM？" → 答 TIME_WAIT、CLOSE_WAIT 等都共享相同的 RST 处理 → 自然适合 HSM。</div>
+</section>
+
+<!-- =============================================================
      SLIDE · Visitor (variant + visit)
      ============================================================= -->
 <section class="slide" data-cat="behav" data-title="Visitor — std::variant + std::visit 现代实现">
@@ -1282,6 +1390,106 @@ std::thread consumer{[&amp;]{
 };</pre>
 
   <div class="tip">类似 Erlang Actor / Akka — 每个 Active Object 一个邮箱 + 一个线程 + 自有状态。<strong>没有锁</strong>，但有 future 延迟开销。</div>
+</section>
+
+<!-- =============================================================
+     SLIDE · Sender / Receiver (C++26 P2300)
+     ============================================================= -->
+<section class="slide" data-cat="concur" data-title="Sender / Receiver — C++26 结构化并发模式 ⭐⭐⭐">
+  <div class="slide-header"><span class="badge concur">并发型</span><span class="badge modern">C++26</span><span class="badge meta">⭐⭐⭐ 范式革命</span></div>
+  <h1 class="slide-title">Sender / Receiver — 异步操作的"代数"</h1>
+  <p class="slide-subtitle">P2300 (std::execution) · 取代 std::future · 通吃 CPU/GPU/IO 调度</p>
+
+  <h2>动机：现有异步模型的痛</h2>
+  <table>
+    <tr><th>方案</th><th>痛点</th></tr>
+    <tr><td>裸 callback</td><td>嵌套地狱、错误传播靠手动、生命周期靠 shared_ptr 兜底</td></tr>
+    <tr><td><code>std::future</code></td><td>无 .then / 无组合算子（标准库里）；类型擦除性能开销</td></tr>
+    <tr><td>第三方 future（folly/Boost）</td><td>各成生态，互不兼容</td></tr>
+    <tr><td>C++20 协程</td><td>解决"线性代码可读性"，但调度器/取消/组合仍是裸的</td></tr>
+  </table>
+  <p><strong>P2300</strong>（NVIDIA + Meta + Microsoft 推动，C++26）给出一套<em>异步执行的通用代数</em>：Scheduler / Sender / Receiver 三个概念覆盖线程池、IO、GPU、协程框架。</p>
+
+  <h2>三大概念（设计模式的"配方"）</h2>
+  <div class="grid-3">
+    <div class="panel accent">
+      <h3>Scheduler</h3>
+      <p><strong>"在哪里跑"</strong>。线程池、IO 线程、GPU、协程框架的统一抽象。</p>
+      <pre><span class="kw">auto</span> sched = pool.<span class="fn">get_scheduler</span>();</pre>
+    </div>
+    <div class="panel purple">
+      <h3>Sender</h3>
+      <p><strong>"做什么"</strong> — 异步操作的<em>描述符</em>，懒求值，可组合。</p>
+      <pre><span class="kw">auto</span> s = ex::<span class="fn">schedule</span>(sched)
+       | ex::<span class="fn">then</span>([]{ <span class="kw">return</span> <span class="fn">work</span>(); });</pre>
+    </div>
+    <div class="panel green">
+      <h3>Receiver</h3>
+      <p><strong>"结果交给谁"</strong> — 三个回调入口：<code>set_value</code> / <code>set_error</code> / <code>set_stopped</code>。</p>
+      <pre><span class="cm">// 通常用户写 sender，</span>
+<span class="cm">// receiver 由组合算子隐式构造</span></pre>
+    </div>
+  </div>
+
+  <h2>典型组合算子（"配方书"）</h2>
+  <pre><span class="cm">// 串行</span>
+<span class="kw">auto</span> chain = ex::<span class="fn">schedule</span>(sched)
+            | ex::<span class="fn">then</span>([]{ <span class="kw">return</span> <span class="fn">step1</span>(); })
+            | ex::<span class="fn">then</span>([](<span class="kw">auto</span> v){ <span class="kw">return</span> <span class="fn">step2</span>(v); });
+
+<span class="cm">// 并行 fan-out + join</span>
+<span class="kw">auto</span> both = ex::<span class="fn">when_all</span>(<span class="fn">load_a</span>(), <span class="fn">load_b</span>())
+           | ex::<span class="fn">then</span>([](<span class="kw">auto</span> a, <span class="kw">auto</span> b){ <span class="kw">return</span> <span class="fn">merge</span>(a, b); });
+
+<span class="cm">// 切换执行上下文（线程池 → GPU → CPU 回写）</span>
+<span class="kw">auto</span> pipeline = <span class="fn">read_file</span>(p)
+              | ex::<span class="fn">continues_on</span>(gpu_sched) | ex::<span class="fn">bulk</span>(N, kernel)
+              | ex::<span class="fn">continues_on</span>(cpu_sched) | ex::<span class="fn">then</span>(write_back);
+
+<span class="cm">// 错误恢复</span>
+<span class="kw">auto</span> safe = chain | ex::<span class="fn">upon_error</span>([](std::exception_ptr e){
+                              <span class="kw">return</span> default_value;
+                          });
+
+<span class="cm">// 取消传播 — 自动！</span>
+<span class="cm">// 父 stop_token 触发 → 整条管线收到 set_stopped</span></pre>
+
+  <h2>与 Active Object / Producer-Consumer 模式的关系</h2>
+  <ul>
+    <li><strong>Active Object</strong> = "把请求放进邮箱" → S/R 是"把请求<em>表达成 sender</em>"，可在任意 scheduler 上调度，更通用</li>
+    <li><strong>Producer-Consumer</strong> = 双向数据流 → S/R 适合"<em>单向请求 → 响应</em>"型异步，流式建议 ranges + execution policy</li>
+    <li><strong>Reactor</strong> = 事件循环驱动 → S/R 可以以 Reactor 为 scheduler 后端</li>
+  </ul>
+
+  <h2>结构化并发 (Structured Concurrency) 契约</h2>
+  <div class="ok">
+    <ul>
+      <li><strong>子任务生命周期不能超过父任务</strong>—— 父结束自动取消所有未完成子 sender</li>
+      <li><strong>取消是头等公民</strong>—— <code>stop_token</code> 由 receiver 提供，沿组合链自动传播</li>
+      <li><strong>无悬空 callback</strong>—— sender 不能"逃出"作用域，比 detach() 安全</li>
+      <li><strong>错误聚合</strong>—— when_all 任一失败，其他自动取消，统一上报</li>
+    </ul>
+  </div>
+
+  <h2>与 C++20 协程的关系 — 不是替代，是底座</h2>
+  <pre><span class="cm">// 任意 sender 都能 co_await，反之亦然</span>
+Task&lt;<span class="kw">int</span>&gt; <span class="fn">orchestrate</span>() {
+    <span class="kw">auto</span> [a, b] = <span class="kw">co_await</span> ex::<span class="fn">when_all</span>(
+        ex::<span class="fn">schedule</span>(s) | ex::<span class="fn">then</span>(step1),
+        ex::<span class="fn">schedule</span>(s) | ex::<span class="fn">then</span>(step2));
+    <span class="kw">co_return</span> a + b;
+}</pre>
+  <p>协程提供"线性代码风格"，S/R 提供"调度与组合代数" → <strong>互补</strong>。Eric Niebler 设计 P2300 时就明确"为协程铺路"。</p>
+
+  <h2>现在就能用的实现</h2>
+  <table>
+    <tr><th>库</th><th>说明</th></tr>
+    <tr><td><a href="https://github.com/NVIDIA/stdexec" style="color:var(--accent)"><b>NVIDIA stdexec</b></a></td><td>P2300 参考实现，C++20 即可用，CUDA / GPU 后端</td></tr>
+    <tr><td><a href="https://github.com/facebookexperimental/libunifex" style="color:var(--accent)"><b>libunifex</b></a></td><td>Eric Niebler 的原型，Meta 生产环境用</td></tr>
+    <tr><td><a href="https://github.com/chriskohlhoff/asio" style="color:var(--accent)"><b>Asio 1.30+</b></a></td><td>实验性 sender 适配 (<code>asio::experimental::use_sender</code>)</td></tr>
+  </table>
+
+  <div class="tip"><b>这就是 Trio / Kotlin Coroutines / Swift Structured Concurrency 引领的范式</b>，C++26 终于跟上。它从根本上消除一类异步代码 bug：goroutine / detached thread / dangling callback 泄漏。Tech Lead 角度看，这是未来 5 年异步 C++ 库的通用语言。</div>
 </section>
 
 <!-- =============================================================
