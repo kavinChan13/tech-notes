@@ -191,6 +191,7 @@
     <li><a href="#sec7">七、面试高频问题与解答</a></li>
     <li><a href="#sec8">八、实战 Checklist 与处理流程</a></li>
     <li><a href="#sec9">九、生产现场 Backtrace 离线解码（Stripped Binary）</a></li>
+    <li><a href="#sec10">十、现代调试器与观测工具 ⭐ (rr / LLDB / pretty-printer / bpftrace)</a></li>
   </ol>
 </div>
 
@@ -1842,6 +1843,254 @@ grep -oE <span class="str">'0x[0-9a-f]{6,}'</span> stack.txt | sort -u | <span c
 <tr><td>TUI 终端报错的兜底</td><td><code>export TERMINFO=/usr/share/terminfo/</code></td></tr>
 </tbody>
 </table>
+</div>
+
+<h2 id="sec10">十、现代调试器与观测工具 ⭐</h2>
+
+<div class="card">
+<p>GDB + ASan 是基础。真正难复现的 race / 偶发 crash / 生产环境黑盒问题，往往要靠这一节里的现代工具：<strong>rr 录制回放</strong>、<strong>LLDB</strong>、<strong>GDB Python pretty-printer</strong>、<strong>bpftrace / eBPF</strong>。Senior C++ 工程师与初级的差距，往往就在这些工具的掌握上。</p>
+</div>
+
+<h3>10.1 rr — Mozilla 的"录制即调试器"，复现 race 神器</h3>
+<div class="card">
+<p><strong>rr</strong>（"record and replay"）由 Mozilla 出品，是 Firefox / Linux 内核开发者的最爱。它先<strong>录制一次进程的全部执行</strong>（含线程调度、信号、syscall 返回），然后允许你<strong>反复确定性回放</strong>，甚至<strong>反向单步</strong>（reverse-step / reverse-continue）。</p>
+
+<h4>核心使用</h4>
+<pre><code><span class="cm"># 1. 安装 (Linux 5.x+)，准备内核参数</span>
+sudo apt install rr
+sudo sysctl -w kernel.perf_event_paranoid=1
+
+<span class="cm"># 2. 录制 — 跑一次问题进程（产生 trace 目录）</span>
+rr record ./myapp problematic_input.bin
+<span class="cm"># 命中 crash → 自动保存 trace</span>
+
+<span class="cm"># 3. 回放 — 进入 GDB 风格的交互</span>
+rr replay
+(rr) c           <span class="cm"># run 到 crash</span>
+(rr) bt          <span class="cm"># 看 backtrace</span>
+(rr) reverse-step <span class="cm"># ★ 反向单步！</span>
+(rr) reverse-continue <span class="cm"># ★ 反向跑到上一个断点</span>
+(rr) watch -l ptr <span class="cm"># 反向 watchpoint</span>
+(rr) reverse-cont <span class="cm"># 自动找到 ptr 最后一次被修改的位置</span></code></pre>
+
+<h4>典型杀手场景</h4>
+<table>
+<thead><tr><th>场景</th><th>没 rr 怎么调</th><th>有 rr</th></tr></thead>
+<tbody>
+<tr><td>偶发 race，难复现</td><td>加日志，等几天，可能再也不出现</td><td>录一次复现 → 100% 反复回放</td></tr>
+<tr><td>UAF：某指针突然指向坏内存</td><td>printf 把所有写操作追踪一遍</td><td><code>watch -l ptr; reverse-continue</code> 直接到上次写点</td></tr>
+<tr><td>"为什么这个变量是 0?"</td><td>逐函数加日志</td><td><code>reverse-cont</code> 到最后一次赋值</td></tr>
+<tr><td>多线程死锁</td><td>难以复现</td><td>录一次，反复研究调度顺序</td></tr>
+</tbody>
+</table>
+
+<div class="tip">rr 的开销大约 1.2-2× 慢，且只支持<strong>单线程或有限并行</strong>（默认序列化所有线程到单核运行）。生产服务量级一般用不上，但<strong>开发期复现一个 bug 后</strong>就再也别让它跑掉。</div>
+
+<h4>rr + Chaos Mode（专门构造 race）</h4>
+<pre><code><span class="cm"># 强制随机化线程调度，提高 race 出现概率</span>
+rr record --chaos ./myapp
+<span class="cm"># 跑 50 次：</span>
+<span class="kw">for</span> i in {1..50}; <span class="kw">do</span>
+  rr record --chaos ./myapp || <span class="kw">break</span>      <span class="cm"># 命中后保留 trace</span>
+<span class="kw">done</span></code></pre>
+</div>
+
+<h3>10.2 LLDB — 跨平台、JIT 友好、脚本化</h3>
+<div class="card">
+<p><strong>LLDB</strong>（LLVM 项目）是 GDB 的现代替代。macOS / iOS 自带；Linux 上 Clang 工具链推荐。比 GDB 启动快、内存少、Python 集成更原生。</p>
+
+<h4>核心命令映射（GDB → LLDB）</h4>
+<table>
+<thead><tr><th>动作</th><th>GDB</th><th>LLDB</th></tr></thead>
+<tbody>
+<tr><td>启动</td><td><code>gdb ./app</code></td><td><code>lldb ./app</code></td></tr>
+<tr><td>设断点</td><td><code>b main</code></td><td><code>br s -n main</code> / 简写 <code>b main</code></td></tr>
+<tr><td>条件断点</td><td><code>b foo.cpp:42 if x &gt; 100</code></td><td><code>br s -f foo.cpp -l 42 -c 'x &gt; 100'</code></td></tr>
+<tr><td>backtrace</td><td><code>bt</code></td><td><code>bt</code></td></tr>
+<tr><td>查变量</td><td><code>p var</code></td><td><code>p var</code></td></tr>
+<tr><td>切线程</td><td><code>thread N</code></td><td><code>thread select N</code></td></tr>
+<tr><td>所有线程 bt</td><td><code>thread apply all bt</code></td><td><code>bt all</code></td></tr>
+<tr><td>加载 core</td><td><code>gdb app core</code></td><td><code>lldb -c core app</code></td></tr>
+</tbody>
+</table>
+
+<h4>LLDB 优势场景</h4>
+<ul>
+<li><strong>Apple 生态</strong>：macOS / iOS / Xcode 唯一选择</li>
+<li><strong>调试 Clang-built 程序</strong>：LLDB 对 Clang 调试信息 (DWARFv5、Modules、Coroutines) 支持比 GDB 更早</li>
+<li><strong>JIT 代码</strong>：与 LLVM 同源，直接支持运行时生成的 IR / native code</li>
+<li><strong>Python 一等公民</strong>：<code>command script import x.py</code> 加载，比 GDB python 集成更直接</li>
+</ul>
+
+<div class="tip">Linux 服务端 C++ 主流仍是 GDB（生态成熟、与各种工具集成），但<strong>本地开发跨 macOS/Linux</strong>的人统一用 LLDB 更省心。</div>
+</div>
+
+<h3>10.3 GDB Python Pretty-Printer — 把 STL 输出变人话</h3>
+<div class="card">
+<p>裸 GDB 打印 <code>std::vector&lt;int&gt;</code> 会显示内部 <code>_M_start / _M_finish / _M_end_of_storage</code> 指针 —— 完全没法看。Pretty-printer 是 GDB Python 扩展，把容器输出成"人可读"形式。</p>
+
+<h4>启用标准库 pretty-printer（libstdc++ / libc++ 都自带）</h4>
+<pre><code><span class="cm"># 编辑 ~/.gdbinit</span>
+python
+import sys
+sys.path.insert(0, <span class="str">'/usr/share/gcc-12/python'</span>)
+<span class="kw">from</span> libstdcxx.v6.printers <span class="kw">import</span> register_libstdcxx_printers
+register_libstdcxx_printers(<span class="kw">None</span>)
+end
+
+<span class="cm"># 现在 print std::vector&lt;int&gt;{1,2,3} 显示:</span>
+<span class="cm">#   $1 = std::vector of length 3, capacity 4 = {1, 2, 3}</span>
+<span class="cm"># 而不是:</span>
+<span class="cm">#   $1 = {&lt;std::_Vector_base&gt; = {_M_impl = {_M_start = 0x...,</span>
+<span class="cm">#         _M_finish = 0x..., _M_end_of_storage = 0x...}}}</span></code></pre>
+
+<h4>给自家类型写 pretty-printer</h4>
+<pre><code><span class="cm"># my_printers.py</span>
+<span class="kw">class</span> RingBufferPrinter:
+    <span class="kw">def</span> __init__(self, val):
+        self.val = val
+
+    <span class="kw">def</span> to_string(self):
+        head = int(self.val[<span class="str">'head_'</span>])
+        tail = int(self.val[<span class="str">'tail_'</span>])
+        cap  = int(self.val[<span class="str">'cap_'</span>])
+        size = (tail - head) % cap
+        <span class="kw">return</span> f<span class="str">'RingBuffer(size={size}, cap={cap}, head={head})'</span>
+
+    <span class="kw">def</span> children(self):
+        <span class="cm"># 让 print 显示元素</span>
+        cap = int(self.val[<span class="str">'cap_'</span>])
+        buf = self.val[<span class="str">'buf_'</span>]
+        <span class="kw">for</span> i <span class="kw">in</span> range(int(self.val[<span class="str">'head_'</span>]), int(self.val[<span class="str">'tail_'</span>])):
+            <span class="kw">yield</span> f<span class="str">'[{i}]'</span>, buf[i % cap]
+
+<span class="kw">def</span> my_lookup(val):
+    <span class="kw">if</span> str(val.type) == <span class="str">'RingBuffer&lt;int&gt;'</span>:
+        <span class="kw">return</span> RingBufferPrinter(val)
+    <span class="kw">return</span> <span class="kw">None</span>
+
+gdb.pretty_printers.append(my_lookup)</code></pre>
+
+<pre><code><span class="cm"># .gdbinit 加载</span>
+source ~/proj/.gdb/my_printers.py
+
+<span class="cm"># 现在</span>
+(gdb) p my_buffer
+$1 = RingBuffer(size=3, cap=64, head=10) = {[10] = 42, [11] = 99, [12] = 7}</code></pre>
+
+<div class="tip">大型 C++ 项目应该<strong>把 pretty-printer 当作代码一部分</strong>：放 <code>.gdb/</code> 目录，CI 强制跑，复杂数据结构（自家 HashMap / SkipList / Ringbuffer / Variant）都有 pretty-printer，所有团队成员调试同一种数据看到的输出一致。</div>
+</div>
+
+<h3>10.4 bpftrace / eBPF — 生产环境无侵入观测 ⭐⭐⭐</h3>
+<div class="card">
+<p><strong>eBPF</strong> 是 Linux 内核里的一个虚拟机，能<strong>动态注入小程序</strong>到几乎任何内核 / 用户态函数入口/出口。<code>bpftrace</code> 是它的 awk 风格脚本前端。</p>
+<p><strong>对 C++ 工程的革命性</strong>：你不再需要为了观测某行为而<em>重启 / 加日志 / 改代码</em>。直接在<strong>正在跑的生产进程</strong>上挂探针，看每一次函数调用、参数、返回值、延迟分布。</p>
+
+<h4>核心用法（一行命令解决问题）</h4>
+<pre><code><span class="cm"># 1. 统计每秒 read() syscall 的次数和延迟分布</span>
+sudo bpftrace -e <span class="str">'
+  tracepoint:syscalls:sys_enter_read { @start[tid] = nsecs; }
+  tracepoint:syscalls:sys_exit_read /@start[tid]/ {
+    @lat = hist((nsecs - @start[tid]) / 1000);
+    delete(@start[tid]);
+  }
+  interval:s:1 { print(@lat); clear(@lat); }
+'</span>
+<span class="cm"># 实时输出 us 级延迟直方图，零侵入</span>
+
+<span class="cm"># 2. 跟踪某进程内某 C++ 函数（用 uprobe）</span>
+sudo bpftrace -e <span class="str">'
+  uprobe:/path/to/myapp:_ZN6Server13handleRequestEv {
+    @[ustack(5)] = count();   /* 调用栈聚合 */
+  }
+  interval:s:5 { print(@); clear(@); }
+'</span>
+
+<span class="cm"># 3. 抓所有打开的文件（不需 strace 那样停整个进程）</span>
+sudo bpftrace -e <span class="str">'
+  tracepoint:syscalls:sys_enter_openat {
+    printf(<span class="str">"%-6d %-16s %s\n"</span>, pid, comm, str(args-&gt;filename));
+  }
+'</span>
+
+<span class="cm"># 4. 谁在执行 send 系统调用 + 字节数</span>
+sudo bpftrace -e <span class="str">'
+  tracepoint:syscalls:sys_enter_sendto {
+    @bytes[comm] = sum(args-&gt;len);
+  }
+'</span></code></pre>
+
+<h4>常用现成脚本（bcc/bpftrace 套件）</h4>
+<table>
+<thead><tr><th>脚本</th><th>用途</th></tr></thead>
+<tbody>
+<tr><td><code>execsnoop</code></td><td>新进程启动监控</td></tr>
+<tr><td><code>opensnoop</code></td><td>文件打开监控</td></tr>
+<tr><td><code>tcpconnect</code> / <code>tcpretrans</code></td><td>TCP 连接 / 重传监控</td></tr>
+<tr><td><code>biolatency</code></td><td>块设备 IO 延迟直方图</td></tr>
+<tr><td><code>profile</code></td><td>无侵入 CPU profiling（替代 perf）</td></tr>
+<tr><td><code>offcputime</code></td><td>线程不在 CPU 上的时间（找阻塞）</td></tr>
+<tr><td><code>memleak</code></td><td>统计未释放的 malloc 调用栈</td></tr>
+<tr><td><code>funclatency</code></td><td>任意函数延迟分布</td></tr>
+</tbody>
+</table>
+
+<h4>对 C++ 服务的实际应用</h4>
+<ul>
+<li><strong>"P99 突涨"</strong>：用 <code>funclatency</code> 抓业务函数延迟分布</li>
+<li><strong>"线程 stuck"</strong>：<code>offcputime</code> 看线程到底卡在哪个 syscall</li>
+<li><strong>"内存涨"</strong>：<code>memleak</code> 抓最近 10s 没释放的 malloc + 调用栈</li>
+<li><strong>"为什么这个进程发了 100MB 网络流量"</strong>：tcptop / tcpretrans</li>
+<li><strong>"我的虚函数调用真有走那个 vtable 项吗"</strong>：用 uprobe 把虚函数地址挂上，统计命中次数</li>
+</ul>
+
+<div class="tip"><strong>Brendan Gregg</strong>（Netflix）是 eBPF 性能观测的布道者，他的 <em>USE Method / RED Method</em> + bpftrace/bcc 工具集是现代 Linux 性能分析的事实标准。<a href="https://brendangregg.com/ebpf.html" style="color:var(--accent)">brendangregg.com/ebpf.html</a> 必读。</div>
+</div>
+
+<h3>10.5 WinDbg / Visual Studio Debugger — Windows 特定</h3>
+<div class="card">
+<p>Windows 平台不能跳过的两个工具：</p>
+<ul>
+<li><strong>WinDbg</strong>（含 WinDbg Preview）：分析 minidump、kernel dump、live kernel debug。配合 <strong>Microsoft Public Symbol Server</strong> (<code>srv*c:\sym*https://msdl.microsoft.com/download/symbols</code>) 可自动下载系统 DLL 的 PDB。</li>
+<li><strong>Visual Studio Debugger</strong>：交互式调试 C++ 程序，原生支持 <strong>natvis</strong>（XML 写的 pretty-printer），比 GDB Python 易上手。MSVC 编译 + VS 调试是 Windows 桌面 C++ 黄金组合。</li>
+</ul>
+
+<h4>natvis 速览（VS 的 pretty-printer）</h4>
+<pre><code><span class="cm">&lt;!-- MyContainers.natvis (放在项目里) --&gt;</span>
+&lt;AutoVisualizer xmlns=<span class="str">"http://schemas.microsoft.com/vstudio/debugger/natvis/2010"</span>&gt;
+  &lt;Type Name=<span class="str">"RingBuffer&amp;lt;*&amp;gt;"</span>&gt;
+    &lt;DisplayString&gt;size={tail_ - head_} cap={cap_}&lt;/DisplayString&gt;
+    &lt;Expand&gt;
+      &lt;Item Name=<span class="str">"[size]"</span>&gt;tail_ - head_&lt;/Item&gt;
+      &lt;Item Name=<span class="str">"[capacity]"</span>&gt;cap_&lt;/Item&gt;
+      &lt;ArrayItems&gt;
+        &lt;Size&gt;tail_ - head_&lt;/Size&gt;
+        &lt;ValuePointer&gt;buf_ + (head_ % cap_)&lt;/ValuePointer&gt;
+      &lt;/ArrayItems&gt;
+    &lt;/Expand&gt;
+  &lt;/Type&gt;
+&lt;/AutoVisualizer&gt;</code></pre>
+</div>
+
+<h3>10.6 现代调试器选型矩阵</h3>
+<div class="card">
+<table>
+<thead><tr><th>场景</th><th>推荐</th></tr></thead>
+<tbody>
+<tr><td>Linux 服务端 C++ 日常调试</td><td>GDB + 自家 pretty-printer</td></tr>
+<tr><td>偶发 race / UAF 复现</td><td><strong>rr record/replay</strong></td></tr>
+<tr><td>macOS / iOS 开发</td><td>LLDB / Xcode</td></tr>
+<tr><td>生产环境无侵入观测</td><td><strong>bpftrace + bcc</strong></td></tr>
+<tr><td>Windows 桌面 / dump 分析</td><td>WinDbg / VS</td></tr>
+<tr><td>Linux 内核 / 驱动调试</td><td>kgdb + kdump，或 crash 工具</td></tr>
+<tr><td>跨架构（嵌入式）远程调试</td><td>gdbserver + 交叉 GDB</td></tr>
+<tr><td>无源代码二进制逆向</td><td>Ghidra / IDA / radare2</td></tr>
+</tbody>
+</table>
+
+<div class="tip">
+<strong>资深工程师的工具栈</strong>：① 平时 GDB；② 难复现的开 rr；③ 容器/生产挂 bpftrace；④ 跨平台开发用 LLDB；⑤ Windows dump 进 WinDbg。能把"问题 → 选哪个工具"的判断练成肌肉记忆，调试效率天差地别。
+</div>
 </div>
 
 <div class="card" style="text-align: center; color: var(--text-dim);">

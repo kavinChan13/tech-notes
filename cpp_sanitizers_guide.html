@@ -195,7 +195,9 @@
       <li><a href="#s11">运行时配置 + 抑制规则</a></li>
       <li><a href="#s12">CI 集成最佳实践</a></li>
       <li><a href="#s13">Fuzz Testing + Sanitizer</a></li>
+      <li><a href="#s13b">Fuzz 进阶 · AFL++/OSS-Fuzz ⭐</a></li>
       <li><a href="#s14">真实工程案例</a></li>
+      <li><a href="#s14b">HWASAN + GWP-ASan 生产化 ⭐</a></li>
       <li><a href="#s15">局限与陷阱</a></li>
       <li><a href="#s16">面试题集</a></li>
       <li><a href="#s17">速查总表</a></li>
@@ -1213,6 +1215,138 @@ clang++ -O1 -g -fsanitize=fuzzer,address,undefined parse_fuzz.cpp -o parse_fuzz
 </section>
 
 <!-- ================================================================
+     §13b Fuzz 进阶 — AFL++ / Honggfuzz / OSS-Fuzz / 结构化 fuzz
+     ================================================================ -->
+<section class="chapter" id="s13b">
+  <h2>13b. Fuzz 进阶 — AFL++ / Honggfuzz / OSS-Fuzz / 结构化 fuzz ⭐</h2>
+
+  <h3>13b.1 主流 fuzzer 横向对比</h3>
+  <table>
+    <tr><th>Fuzzer</th><th>原理</th><th>覆盖率反馈</th><th>持久模式</th><th>适用</th></tr>
+    <tr><td><strong>libFuzzer</strong> (LLVM)</td><td>in-process，与 Sanitizer 同构</td><td>edge coverage</td><td>✅ 原生</td><td>单元/库级 fuzz，CI 集成最简单</td></tr>
+    <tr><td><strong>AFL++</strong></td><td>fork-server，可外部 fuzz 任何二进制</td><td>edge + ctx-sensitive</td><td>✅ persistent mode</td><td>完整应用 fuzz、Closed source 二进制</td></tr>
+    <tr><td><strong>Honggfuzz</strong> (Google)</td><td>多 fuzzer 协作 + 内核 trace</td><td>edge + hw perf counters</td><td>✅</td><td>多线程程序、内核驱动</td></tr>
+    <tr><td><strong>Atheris</strong></td><td>Python 版 libFuzzer</td><td>Python coverage</td><td>—</td><td>Python 代码（C++ bindings 用）</td></tr>
+    <tr><td><strong>syzkaller</strong> (Google)</td><td>内核 syscall fuzz</td><td>kcov</td><td>—</td><td>Linux 内核 / Android</td></tr>
+  </table>
+
+  <h3>13b.2 AFL++ 用法（替代/补充 libFuzzer）</h3>
+<pre><span class="cm"># 1. 用 AFL++ 编译器插桩</span>
+CC=afl-clang-fast CXX=afl-clang-fast++ make
+
+<span class="cm"># 2. 准备 corpus 目录（种子样本，最好 &gt; 100 个）</span>
+mkdir corpus
+cp testdata/*.xml corpus/
+
+<span class="cm"># 3. 启动 fuzz（默认单进程）</span>
+afl-fuzz -i corpus -o findings -- ./myapp @@   <span class="cm"># @@ 替换为输入文件路径</span>
+
+<span class="cm"># 4. 并行 fuzz — 主 + 多 secondary</span>
+afl-fuzz -M main -i corpus -o findings -- ./myapp @@ &amp;
+afl-fuzz -S worker1 -i corpus -o findings -- ./myapp @@ &amp;
+afl-fuzz -S worker2 -i corpus -o findings -- ./myapp @@ &amp;
+
+<span class="cm"># 5. 用 power schedule (AFL++ 特性)</span>
+afl-fuzz -p explore -i corpus -o findings -- ./myapp @@
+
+<span class="cm"># 6. 看 crash</span>
+ls findings/main/crashes/</pre>
+
+  <div class="box tip">
+    <strong>AFL++ vs libFuzzer 选型</strong>：
+    <ul>
+      <li>有源码 + 想集成到 CI / OSS-Fuzz → <strong>libFuzzer</strong></li>
+      <li>纯黑盒二进制 / 闭源 → <strong>AFL++ + QEMU mode</strong>（动态插桩）</li>
+      <li>需要多种变异策略 / 大型并行 fleet → <strong>AFL++</strong></li>
+      <li>想跨 GitHub Action 持续跑公益开源 → <strong>OSS-Fuzz</strong></li>
+    </ul>
+  </div>
+
+  <h3>13b.3 Structure-Aware Fuzzing — 让 fuzz 跨过 magic header / checksum</h3>
+  <p>普通 fuzz 对随机字节输入有效，但对<strong>有严格结构</strong>的格式（JPEG / protobuf / SQL）大部分变异立刻被拒绝，浪费时间。Structure-aware fuzz 让变异基于"格式 grammar"做。</p>
+
+<pre><span class="cm">// libFuzzer + protobuf-mutator —— 直接 fuzz protobuf 消息</span>
+<span class="kw">#include</span> <span class="str">&lt;src/libfuzzer/libfuzzer_macro.h&gt;</span>
+<span class="kw">#include</span> <span class="str">"my_proto.pb.h"</span>
+
+DEFINE_PROTO_FUZZER(<span class="kw">const</span> MyMessage&amp; msg) {
+    <span class="cm">// 输入直接是已经合法的 protobuf — 不浪费 cycles 在 magic header</span>
+    <span class="fn">handle_message</span>(msg);
+}
+
+<span class="cm">// 编译</span>
+clang++ -fsanitize=fuzzer,address my_fuzz.cc my_proto.pb.cc \
+   -lprotobuf-mutator-libfuzzer -lprotobuf-mutator -lprotobuf</pre>
+
+  <h4>常见 grammar fuzzer</h4>
+  <ul>
+    <li><strong>libprotobuf-mutator</strong> — 任意 protobuf 类型</li>
+    <li><strong>FuzzBench domains</strong> — JSON / SQL / XML / JS</li>
+    <li><strong>Domato</strong> — 浏览器 DOM API fuzz</li>
+    <li><strong>Peach / boofuzz</strong> — 网络协议 fuzz</li>
+  </ul>
+
+  <h3>13b.4 OSS-Fuzz 接入（让 Google 免费帮你跑）</h3>
+  <p>OSS-Fuzz 给开源项目提供<strong>全天候多机 fuzzing</strong>。已为 700+ 开源项目找了 1 万+ bug（curl / OpenSSL / SQLite / Envoy / Boost / ICU / FFmpeg ...）</p>
+
+  <h4>接入步骤（10 行 yaml）</h4>
+<pre><span class="cm"># oss-fuzz/projects/myproject/project.yaml</span>
+homepage: https://github.com/me/myproject
+language: c++
+primary_contact: you@example.com
+auto_ccs:
+  - co-maintainer@example.com
+sanitizers:
+  - address
+  - memory
+  - undefined
+fuzzing_engines:
+  - libfuzzer
+  - afl
+  - honggfuzz
+
+<span class="cm"># Dockerfile</span>
+FROM gcr.io/oss-fuzz-base/base-builder
+RUN apt-get update &amp;&amp; apt-get install -y cmake
+COPY . $SRC/myproject
+WORKDIR $SRC/myproject
+COPY build.sh $SRC/
+
+<span class="cm"># build.sh — 告诉 OSS-Fuzz 怎么编译你的 fuzz target</span>
+cmake -DCMAKE_BUILD_TYPE=Release -DFUZZ=ON .
+make -j$(nproc) my_parser_fuzz
+cp my_parser_fuzz $OUT/
+cp -r testdata/seeds $OUT/my_parser_fuzz_seed_corpus</pre>
+
+  <div class="box ok">
+    接入后 OSS-Fuzz <strong>24/7 用上百核 fuzz 你的库</strong>。找到 bug 会自动开 issue、附带触发输入、调用栈、Sanitizer 报告。修复后 90 天自动公开（CVE 流程）。<strong>对任何严肃的开源 C++ 库都该接入</strong>。
+  </div>
+
+  <h3>13b.5 Differential Fuzzing — 找正确性 bug（不只是 crash）</h3>
+  <p>普通 fuzz 只发现 crash。Differential fuzz 同时跑<strong>两个不同实现</strong>同样输入，比较输出 — 找<em>语义差异</em>。</p>
+
+<pre><span class="kw">extern</span> <span class="str">"C"</span> <span class="kw">int</span> <span class="fn">LLVMFuzzerTestOneInput</span>(<span class="kw">const</span> <span class="type">uint8_t</span>* data, <span class="type">size_t</span> size) {
+    <span class="type">Result</span> a = my_parser::<span class="fn">parse</span>(data, size);
+    <span class="type">Result</span> b = ref_parser::<span class="fn">parse</span>(data, size);
+    <span class="cm">// 同样输入两个实现应得同样结果</span>
+    <span class="kw">if</span> (a != b) <span class="fn">__builtin_trap</span>();    <span class="cm">// 触发 ASan 报告</span>
+    <span class="kw">return</span> 0;
+}</pre>
+
+  <p>典型用：自家 SIMD 实现 vs 朴素 fallback、新算法 vs 老算法、跨平台浮点。</p>
+
+  <h3>13b.6 Fuzz 落地经验</h3>
+  <ul>
+    <li><strong>种子 corpus 是关键</strong>：直接从真实流量 / 单元测试样本起步，比从空开始快 100×</li>
+    <li><strong>用 <code>-only_ascii=1</code> / <code>-len_control</code> 等约束参数</strong>缩小搜索空间</li>
+    <li><strong>用 dictionary</strong>（<code>-dict=keywords.txt</code>）让 fuzz 知道关键字（HTTP 方法、SQL 关键字、JSON 标记）</li>
+    <li><strong>同时开多 Sanitizer</strong>（ASan + UBSan 默认双开；MSan 独立跑）</li>
+    <li><strong>覆盖率回归</strong>：跑完用 <code>-merge=1</code> 把 corpus 去重，纳入版本控制</li>
+    <li><strong>fuzz CI</strong>：每 PR 跑 10 分钟基础 fuzz；nightly 跑 8h 深度 fuzz</li>
+  </ul>
+</section>
+
+<!-- ================================================================
      §14 真实工程案例
      ================================================================ -->
 <section class="chapter" id="s14">
@@ -1256,6 +1390,100 @@ clang++ -O1 -g -fsanitize=fuzzer,address,undefined parse_fuzz.cpp -o parse_fuzz
 
   <div class="box ok">
     所有案例的共同模式：<strong>测试期发现 = 几小时；线上事故发现 = 几天 + 巨大代价</strong>。Sanitizer 的投入产出比极高。
+  </div>
+</section>
+
+<!-- ================================================================
+     §14b HWASAN + GWP-ASan — 让 Sanitizer 真的能上生产
+     ================================================================ -->
+<section class="chapter" id="s14b">
+  <h2>14b. HWASan + GWP-ASan — 让 Sanitizer 真的能上生产 ⭐</h2>
+
+  <p>普通 ASan 因为<strong>2-3× 内存 + 2× CPU 开销</strong>无法上生产。Google/Android/Chrome 团队设计了两个"<em>开销可承受</em>"的变种，让 sanitizer 终于能在 prod 抓内存 bug。</p>
+
+  <h3>14b.1 全家桶位置定位</h3>
+  <table>
+    <tr><th>Sanitizer</th><th>开销</th><th>覆盖率</th><th>架构</th><th>定位</th></tr>
+    <tr><td><strong>ASan</strong></td><td>2× CPU, 3× mem</td><td>100%</td><td>x86/ARM 都支持</td><td>开发期 / CI 全开</td></tr>
+    <tr><td><strong>HWASan</strong></td><td>~10% CPU, ~15% mem</td><td>~95%</td><td>ARMv8.5+ (Top-Byte Ignore)</td><td>Android / 嵌入式 prod 候选</td></tr>
+    <tr><td><strong>GWP-ASan</strong></td><td>~0% (采样)</td><td>~1/1000 采样</td><td>任意</td><td>大规模 prod 永远开</td></tr>
+    <tr><td><strong>kASan / kHWASAN</strong></td><td>10×/2×</td><td>—</td><td>内核</td><td>Linux 内核 fuzz / Android</td></tr>
+  </table>
+
+  <h3>14b.2 HWASan — 硬件辅助的轻量 ASan</h3>
+  <p><strong>HWASan</strong>（Hardware-assisted AddressSanitizer）利用 ARMv8.5 的 <strong>Top-Byte Ignore (TBI)</strong> 特性 —— 64 位指针的高 8 位被 CPU 忽略，可拿来放 tag。每次 alloc 给指针 + 内存打同样 tag，访问时硬件比较 tag 一致 → 失败即报错。</p>
+
+  <h4>原理对比</h4>
+  <table>
+    <tr><th>Sanitizer</th><th>每次访问做什么</th><th>shadow 大小</th></tr>
+    <tr><td>ASan</td><td>查 shadow（每 8 字节 → 1 字节）</td><td><strong>1/8 of mem</strong> (~12.5%)</td></tr>
+    <tr><td>HWASan</td><td>比较指针 tag 与 shadow tag（每 16 字节 → 1 字节）</td><td><strong>1/32 of mem</strong> (~3%)</td></tr>
+  </table>
+
+<pre><span class="cm"># 启用 HWASan（需 ARMv8.5+ 硬件）</span>
+clang++ -fsanitize=hwaddress -fno-omit-frame-pointer -O1 -g myapp.cpp -o myapp.hw
+./myapp.hw
+<span class="cm"># 输出形如:</span>
+<span class="cm"># ==12345==ERROR: HWAddressSanitizer: tag-mismatch on address 0x...</span>
+<span class="cm">#   READ of size 4 at 0x...</span>
+
+<span class="cm"># Android 全平台 HWASan build (Pixel 设备)</span>
+m TARGET_PRODUCT=aosp_arm64_hwasan</pre>
+
+  <div class="box ok">
+    <strong>Android 早已默认开 HWASan</strong> 跑 system services 抓内存 bug。Pixel 5+ 设备上的 HWASan-enabled build 是开发期标准镜像。Mali / Adreno GPU 驱动用 HWASan 找到大量历史 bug。
+  </div>
+
+  <h3>14b.3 GWP-ASan — 采样型生产 ASan</h3>
+  <p>GWP（"Guard With Probability"）-ASan 的设计哲学：<strong>不可能全开，但可以采样</strong>。每 N 次（典型 N = 1000-10000）<code>malloc</code> 中挑一次走"特殊路径"：</p>
+  <ul>
+    <li>把这次分配单独放到<strong>带 guard page</strong> 的页面</li>
+    <li>UAF / 越界访问立刻触发 SEGV，dump 完整堆栈 + 分配栈 + 释放栈</li>
+    <li>其余 99.9% 走普通 allocator，<strong>性能影响接近零</strong></li>
+  </ul>
+
+  <h4>使用方式（Chrome / Android 生产实现）</h4>
+<pre><span class="cm">// Chrome 早把 GWP-ASan 集成进 PartitionAlloc：</span>
+<span class="cm">// 用户态启用</span>
+<span class="kw">if</span> (base::FeatureList::<span class="fn">IsEnabled</span>(features::kPartitionAllocGwpAsanMalloc)) {
+    <span class="fn">EnableGwpAsanSampling</span>(<span class="cm">/*sample_rate=*/</span> <span class="num">5000</span>);
+}
+
+<span class="cm">// 命中 GWP-ASan 触发的 UAF 在 crash report 里大概长这样:</span>
+<span class="cm">// GWP-ASan: Use After Free</span>
+<span class="cm">//   Allocated at: malloc -> Vector::reserve -> ...</span>
+<span class="cm">//   Freed     at: free   -> Vector::~Vector -> ...</span>
+<span class="cm">//   Accessed  at: read   -> Worker::run     -> ...</span></pre>
+
+  <h4>独立 GWP-ASan 库</h4>
+<pre><span class="cm"># Scudo allocator (LLVM, Android 默认) 内置 GWP-ASan</span>
+clang++ -fsanitize=scudo -fsanitize-recover=scudo myapp.cpp -o myapp
+SCUDO_OPTIONS=<span class="str">"GWP_ASAN_Enabled=true:GWP_ASAN_SampleRate=5000"</span> ./myapp</pre>
+
+  <div class="box tip">
+    <strong>Tech Lead 价值</strong>：传统的"线上 UAF 调查"是<em>瞎子摸象</em>——core dump 看到的是错误访问点，分配/释放路径完全丢失。GWP-ASan 一旦命中，<strong>三个完整堆栈</strong>（alloc / free / use）都在 crash report 里，10 分钟定位代替 10 小时大海捞针。
+  </div>
+
+  <h3>14b.4 三档 Sanitizer 部署矩阵</h3>
+  <table>
+    <tr><th>阶段</th><th>开什么</th><th>开销容忍</th></tr>
+    <tr><td>本地开发</td><td>ASan + UBSan 默认开</td><td>2-3×</td></tr>
+    <tr><td>CI 单元测试</td><td>ASan/UBSan/TSan/MSan 4 个 matrix job</td><td>3-5× 测试时长</td></tr>
+    <tr><td>CI Fuzz (nightly)</td><td>libFuzzer + ASan + UBSan, 8 小时</td><td>—</td></tr>
+    <tr><td>预发布 / 灰度</td><td>HWASan (ARM)</td><td>10-20%</td></tr>
+    <tr><td>全量生产</td><td>GWP-ASan 采样 (1/5000)</td><td>&lt; 1%</td></tr>
+  </table>
+
+  <h3>14b.5 真实部署案例</h3>
+  <ul>
+    <li><strong>Chrome</strong>：GWP-ASan + PartitionAlloc + MTE（ARM 内存标签）— 浏览器每月还是抓出 Sandbox 内 UAF</li>
+    <li><strong>Android</strong>：System Services 默认 HWASan build；用户态 Scudo + GWP-ASan</li>
+    <li><strong>Google Cloud / Search</strong>：内部所有 C++ 服务默认 GWP-ASan，crash 自动 dedup + 上报 + 追溯到具体 commit</li>
+    <li><strong>Linux Kernel</strong>：syzkaller + kASan/kHWASan 持续 fuzz，自 2018 起找到 5000+ 内核 bug</li>
+  </ul>
+
+  <div class="box ok">
+    <strong>结论</strong>：Sanitizer 不止是"开发工具"。HWASan + GWP-ASan 改变了"<em>线上内存 bug 不可见</em>"的现实，让 C++ 的"内存安全劣势"在工程实践中收敛到接近 Rust 的可调试水平。但前提是<strong>你的团队真的把它部署上线</strong>——绝大多数公司只用 ASan 在 CI，是巨大浪费。
   </div>
 </section>
 
