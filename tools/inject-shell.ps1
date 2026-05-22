@@ -7,11 +7,18 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-# Files that already have their own top nav and should suppress the auto-injected one.
+# Files that already have their own sticky top nav / toolbar / left rail and
+# should suppress the auto-injected topbar (they get the floating Home FAB
+# + scroll-progress bar instead).
 $overlayFiles = @(
     'software_management_guide.html',
     'management_knowledge_system.html',
-    'tech_lead_interview_guide.html'
+    'tech_lead_interview_guide.html',
+    'cpp_os_fundamentals.html',
+    'cpp_templates_guide.html',
+    'cpp_networking_guide.html',
+    'cpp_interview_cards.html',
+    'cpp_memory_leak_guide.html'
 )
 
 # Files we never touch (the entry page has its own theme).

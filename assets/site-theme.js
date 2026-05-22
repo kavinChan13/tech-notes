@@ -10,31 +10,48 @@
 (function () {
   'use strict';
 
-  // -------- 1. Inject top nav bar & progress bar (if missing) --------
-  function ensureShell() {
-    var body = document.body;
-    if (!body) return;
+  function computeIndexHref() {
+    var here = location.pathname.replace(/\\/g, '/');
+    if (here.indexOf('/em-templates/') !== -1) return '../index.html';
+    return './index.html';
+  }
 
-    // Pages that already have their own sticky/fixed top nav should mark
-    // themselves with class `tn-shell-overlay` to suppress this shell.
-    if (body.classList.contains('tn-shell-overlay')) {
-      // Still inject a progress bar (it overlays anything else).
-      if (!document.getElementById('tn-progress')) {
-        var p0 = document.createElement('div');
-        p0.id = 'tn-progress';
-        body.insertBefore(p0, body.firstChild);
-      }
-      return;
-    }
-
-    body.classList.add('tn-shell');
-
-    // Progress bar
+  function injectProgress(body) {
     if (!document.getElementById('tn-progress')) {
       var p = document.createElement('div');
       p.id = 'tn-progress';
       body.insertBefore(p, body.firstChild);
     }
+  }
+
+  function injectHomeFab(body, href) {
+    if (document.querySelector('.tn-home-fab')) return;
+    var fab = document.createElement('a');
+    fab.className = 'tn-home-fab';
+    fab.href = href;
+    fab.title = '返回 Tech Notes 主页';
+    fab.innerHTML = '<span class="tn-arrow" aria-hidden="true">←</span><span>主页</span>';
+    body.appendChild(fab);
+  }
+
+  // -------- 1. Inject top nav bar & progress bar (if missing) --------
+  function ensureShell() {
+    var body = document.body;
+    if (!body) return;
+
+    var indexHref = computeIndexHref();
+
+    // Pages that already have their own sticky/fixed top nav should mark
+    // themselves with class `tn-shell-overlay` to suppress the full shell —
+    // we still want a progress bar and a way back to the index.
+    if (body.classList.contains('tn-shell-overlay')) {
+      injectProgress(body);
+      injectHomeFab(body, indexHref);
+      return;
+    }
+
+    body.classList.add('tn-shell');
+    injectProgress(body);
 
     // Top nav
     if (!document.querySelector('.tn-topbar')) {
@@ -42,21 +59,7 @@
       nav.className = 'tn-topbar';
 
       var title = (document.title || '').split('·')[0].split('|')[0].trim() || 'Document';
-      // Strip overly long suffixes, keep short title for the nav.
       if (title.length > 40) title = title.slice(0, 38) + '…';
-
-      // Compute relative path back to index.html based on current page.
-      var here = location.pathname.replace(/\\/g, '/');
-      var depth = (here.match(/\/[^/]+\/(?=[^/]+$)/g) || []).length;
-      // simpler: count slashes after the repo root we don't know; use href fallback.
-      var indexHref = './index.html';
-      // If page is under a subdirectory (e.g. em-templates/foo.html), go up one.
-      var seg = here.split('/').filter(Boolean);
-      if (seg.length >= 2 && /\.html?$/i.test(seg[seg.length - 1])) {
-        // if there are >= 2 segments after the repo root we can't know,
-        // fall back to checking for known subdirs.
-        if (here.indexOf('/em-templates/') !== -1) indexHref = '../index.html';
-      }
 
       nav.innerHTML =
         '<a class="tn-brand" href="' + indexHref + '">' +
@@ -80,7 +83,7 @@
       footer.innerHTML =
         'Tech Notes · Personal Knowledge Base' +
         '<span class="tn-sep">·</span>' +
-        '<a href="' + ((typeof indexHref !== 'undefined') ? indexHref : './index.html') + '">主页</a>' +
+        '<a href="' + indexHref + '">主页</a>' +
         '<span class="tn-sep">·</span>' +
         '<a href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener">GitHub</a>' +
         '<span class="tn-sep">·</span>' +
