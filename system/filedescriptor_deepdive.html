@@ -1,0 +1,1642 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>File Descriptor 与三级表模型 · 深度解析</title>
+<link rel="stylesheet" href="./assets/site-theme.css">
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<style>
+  :root {
+    --bg-primary: #0a0e17;
+    --bg-secondary: #111827;
+    --bg-card: #1a2234;
+    --bg-code: #0d1117;
+    --accent-blue: #3b82f6;
+    --accent-cyan: #06b6d4;
+    --accent-emerald: #10b981;
+    --accent-amber: #f59e0b;
+    --accent-rose: #f43f5e;
+    --accent-violet: #8b5cf6;
+    --accent-pink: #ec4899;
+    --text-primary: #e2e8f0;
+    --text-secondary: #94a3b8;
+    --text-muted: #64748b;
+    --border-color: #1e293b;
+    --border-accent: #2d3a52;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    line-height: 1.7;
+  }
+
+  .hero {
+    position: relative;
+    min-height: 50vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 70px 20px;
+    background:
+      radial-gradient(ellipse at 30% 40%, rgba(16,185,129,0.12) 0%, transparent 50%),
+      radial-gradient(ellipse at 70% 60%, rgba(59,130,246,0.12) 0%, transparent 50%),
+      linear-gradient(135deg, #0a0e17 0%, #0f1829 100%);
+    overflow: hidden;
+  }
+
+  .hero::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(16,185,129,0.04) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(16,185,129,0.04) 1px, transparent 1px);
+    background-size: 40px 40px;
+    mask-image: radial-gradient(ellipse at center, black 30%, transparent 70%);
+  }
+
+  .hero-content { position: relative; z-index: 1; }
+
+  .hero .tag {
+    display: inline-block;
+    padding: 6px 18px;
+    background: rgba(16,185,129,0.12);
+    border: 1px solid rgba(16,185,129,0.3);
+    border-radius: 20px;
+    color: var(--accent-emerald);
+    font-size: 0.78rem;
+    letter-spacing: 2.5px;
+    margin-bottom: 22px;
+    font-weight: 600;
+  }
+
+  .hero h1 {
+    font-size: 2.8rem;
+    font-weight: 700;
+    background: linear-gradient(135deg, #e2e8f0 0%, #10b981 50%, #3b82f6 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    margin-bottom: 18px;
+    letter-spacing: -0.5px;
+  }
+
+  .hero .subtitle {
+    font-size: 1.08rem;
+    color: var(--text-secondary);
+    max-width: 780px;
+    margin: 0 auto 28px;
+  }
+
+  .hero-hint {
+    font-family: 'Cascadia Code', monospace;
+    font-size: 0.9rem;
+    color: var(--accent-emerald);
+    padding: 10px 20px;
+    background: rgba(0,0,0,0.3);
+    border: 1px solid rgba(16,185,129,0.2);
+    border-radius: 8px;
+    display: inline-block;
+  }
+
+  .container {
+    max-width: 1240px;
+    margin: 0 auto;
+    padding: 0 24px;
+  }
+
+  .toc {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    padding: 28px 34px;
+    margin: -45px auto 50px;
+    position: relative;
+    z-index: 2;
+    max-width: 960px;
+    box-shadow: 0 20px 50px rgba(0,0,0,0.5);
+  }
+
+  .toc h2 {
+    font-size: 0.95rem;
+    color: var(--accent-emerald);
+    margin-bottom: 16px;
+    letter-spacing: 2px;
+  }
+
+  .toc-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 6px;
+  }
+
+  .toc a {
+    color: var(--text-secondary);
+    text-decoration: none;
+    font-size: 0.88rem;
+    padding: 7px 12px;
+    border-radius: 6px;
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .toc a:hover {
+    background: rgba(16,185,129,0.08);
+    color: var(--accent-emerald);
+    transform: translateX(4px);
+  }
+
+  .toc a .num {
+    color: var(--accent-violet);
+    font-weight: 700;
+    font-size: 0.75rem;
+    min-width: 24px;
+  }
+
+  section { margin-bottom: 65px; }
+
+  .section-header {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 30px;
+    padding-bottom: 14px;
+    border-bottom: 2px solid var(--border-color);
+  }
+
+  .section-num {
+    font-size: 0.75rem;
+    font-weight: 700;
+    color: var(--accent-emerald);
+    background: rgba(16,185,129,0.12);
+    padding: 6px 12px;
+    border-radius: 6px;
+    letter-spacing: 1.5px;
+  }
+
+  .section-header h2 {
+    font-size: 1.6rem;
+    font-weight: 600;
+  }
+
+  h3 {
+    font-size: 1.2rem;
+    color: var(--accent-cyan);
+    margin: 30px 0 14px;
+    padding-left: 14px;
+    border-left: 3px solid var(--accent-cyan);
+  }
+
+  h4 {
+    font-size: 1rem;
+    color: var(--accent-amber);
+    margin: 20px 0 10px;
+  }
+
+  p, li {
+    color: var(--text-secondary);
+    font-size: 0.93rem;
+  }
+
+  strong { color: var(--text-primary); }
+
+  ul, ol { margin-left: 22px; margin-bottom: 16px; }
+  li { margin-bottom: 6px; }
+
+  .card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    padding: 22px 26px;
+    margin-bottom: 18px;
+    transition: all 0.3s;
+  }
+
+  .card:hover {
+    border-color: var(--border-accent);
+    transform: translateY(-2px);
+  }
+
+  .card-title {
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 12px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .card-icon {
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 13px;
+    font-weight: 700;
+  }
+
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+
+  @media (max-width: 768px) {
+    .grid-2, .grid-3 { grid-template-columns: 1fr; }
+    .hero h1 { font-size: 1.8rem; }
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 16px 0;
+    font-size: 0.88rem;
+  }
+
+  th {
+    background: rgba(16,185,129,0.1);
+    color: var(--accent-emerald);
+    padding: 12px 14px;
+    text-align: left;
+    font-weight: 600;
+    border-bottom: 2px solid var(--border-accent);
+  }
+
+  td {
+    padding: 11px 14px;
+    border-bottom: 1px solid var(--border-color);
+    color: var(--text-secondary);
+  }
+
+  tr:hover td { background: rgba(255,255,255,0.02); }
+
+  code {
+    font-family: 'Cascadia Code', 'JetBrains Mono', monospace;
+    background: rgba(16,185,129,0.1);
+    color: var(--accent-emerald);
+    padding: 2px 7px;
+    border-radius: 4px;
+    font-size: 0.85em;
+  }
+
+  pre {
+    background: var(--bg-code);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 18px 22px;
+    overflow-x: auto;
+    margin: 18px 0;
+    font-size: 0.82rem;
+    line-height: 1.65;
+    position: relative;
+  }
+
+  pre::before {
+    content: attr(data-lang);
+    position: absolute;
+    top: 10px;
+    right: 14px;
+    color: var(--text-muted);
+    font-size: 0.7rem;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+  }
+
+  pre code {
+    background: none;
+    padding: 0;
+    color: #e6edf3;
+    font-size: inherit;
+  }
+
+  .kw    { color: #ff7b72; }
+  .str   { color: #a5d6ff; }
+  .num   { color: #79c0ff; }
+  .fn    { color: #d2a8ff; }
+  .com   { color: #7ee787; font-style: italic; }
+  .ty    { color: #ffa657; }
+  .mac   { color: #ff7b72; }
+
+  .mermaid-wrapper {
+    background: var(--bg-code);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    padding: 24px;
+    margin: 20px 0;
+    overflow-x: auto;
+  }
+
+  .mermaid {
+    display: flex;
+    justify-content: center;
+  }
+
+  .badge {
+    display: inline-block;
+    padding: 3px 10px;
+    border-radius: 20px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+  }
+
+  .badge-blue { background: rgba(59,130,246,0.15); color: var(--accent-blue); }
+  .badge-green { background: rgba(16,185,129,0.15); color: var(--accent-emerald); }
+  .badge-amber { background: rgba(245,158,11,0.15); color: var(--accent-amber); }
+  .badge-rose { background: rgba(244,63,94,0.15); color: var(--accent-rose); }
+  .badge-violet { background: rgba(139,92,246,0.15); color: var(--accent-violet); }
+  .badge-cyan { background: rgba(6,182,212,0.15); color: var(--accent-cyan); }
+
+  .callout {
+    border-left: 4px solid;
+    padding: 14px 20px;
+    margin: 18px 0;
+    border-radius: 0 8px 8px 0;
+    background: rgba(255,255,255,0.02);
+  }
+
+  .callout.info { border-color: var(--accent-blue); background: rgba(59,130,246,0.05); }
+  .callout.warn { border-color: var(--accent-amber); background: rgba(245,158,11,0.05); }
+  .callout.tip { border-color: var(--accent-emerald); background: rgba(16,185,129,0.05); }
+  .callout.danger { border-color: var(--accent-rose); background: rgba(244,63,94,0.05); }
+
+  .callout-title {
+    font-weight: 700;
+    margin-bottom: 8px;
+  }
+  .callout.info .callout-title { color: var(--accent-blue); }
+  .callout.warn .callout-title { color: var(--accent-amber); }
+  .callout.tip .callout-title { color: var(--accent-emerald); }
+  .callout.danger .callout-title { color: var(--accent-rose); }
+
+  .qa-item {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-left: 4px solid var(--accent-pink);
+    border-radius: 8px;
+    padding: 18px 22px;
+    margin: 14px 0;
+  }
+
+  .qa-item .q {
+    font-weight: 600;
+    color: var(--accent-pink);
+    margin-bottom: 10px;
+    display: flex;
+    align-items: start;
+    gap: 10px;
+  }
+
+  .qa-item .q::before {
+    content: 'Q';
+    background: var(--accent-pink);
+    color: white;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.75rem;
+    flex-shrink: 0;
+    font-weight: 700;
+  }
+
+  .qa-item .a {
+    color: var(--text-secondary);
+    padding-left: 32px;
+    font-size: 0.9rem;
+  }
+
+  .struct-tbl {
+    font-family: 'Cascadia Code', monospace;
+    font-size: 0.82rem;
+    background: var(--bg-code);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 18px 24px;
+    margin: 16px 0;
+    line-height: 1.9;
+  }
+
+  .struct-tbl .hdr {
+    color: var(--accent-emerald);
+    font-weight: 700;
+    margin-bottom: 8px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--border-color);
+  }
+
+  .struct-tbl .field {
+    color: var(--text-secondary);
+    display: flex;
+    gap: 14px;
+  }
+  .struct-tbl .field .name { color: var(--accent-amber); min-width: 180px; }
+  .struct-tbl .field .desc { color: var(--text-muted); font-style: italic; }
+
+  footer {
+    text-align: center;
+    padding: 50px 20px 40px;
+    color: var(--text-muted);
+    font-size: 0.82rem;
+    border-top: 1px solid var(--border-color);
+    margin-top: 60px;
+  }
+</style>
+</head>
+<body>
+<!-- tn-nav:v1 -->
+<style>
+#tn-nav{position:fixed;top:14px;right:14px;z-index:99999;display:flex;gap:6px;align-items:center;
+  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;
+  font-size:12px;line-height:1;font-weight:500;}
+#tn-nav a,#tn-nav .tn-meta{display:inline-flex;align-items:center;gap:4px;
+  background:rgba(20,20,30,.85);color:#fff !important;text-decoration:none !important;
+  padding:7px 11px;border-radius:999px;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+  border:1px solid rgba(255,255,255,.10);box-shadow:0 2px 8px rgba(0,0,0,.18);
+  transition:background .15s,transform .15s;}
+#tn-nav a:hover{background:rgba(56,189,248,.92);transform:translateY(-1px);}
+#tn-nav .tn-meta{background:rgba(20,20,30,.55);cursor:default;}
+@media (max-width:640px){#tn-nav{top:8px;right:8px;font-size:11px;gap:4px;}
+  #tn-nav a,#tn-nav .tn-meta{padding:5px 9px;}}
+@media print{#tn-nav{display:none;}}
+</style>
+<div id="tn-nav">
+  <a href="../index.html" title="&#x8FD4;&#x56DE;&#x4E3B;&#x9875;">&larr; &#x4E3B;&#x9875;</a>
+  <a href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub &#x4ED3;&#x5E93;">&#x1F4C1; Repo</a>
+  <a href="https://github.com/kavinChan13/tech-notes/blob/main/system/filedescriptor_deepdive.html" target="_blank" rel="noopener" title="&#x672C;&#x6587;&#x6E90;&#x7801;">&#x1F4DD; Source</a>
+  <span class="tn-meta" title="&#x9884;&#x8BA1;&#x9605;&#x8BFB;&#x65F6;&#x957F;">&#x23F1; 75 min</span>
+</div>
+<!-- /tn-nav:v1 -->
+<!-- ═══════════════════════ HERO ═══════════════════════ -->
+<div class="hero">
+  <div class="hero-content">
+    <span class="tag">KERNEL INTERNALS · DEEP DIVE</span>
+    <h1>File Descriptor 与三级表模型</h1>
+    <p class="subtitle">一个整数背后的世界——从 <code>int fd = 3</code> 到磁盘上的一块数据，中间经过怎样的三层映射？fork/dup/exec 如何改变这张表？为什么 socket、管道、epoll、timerfd 都是 fd？</p>
+    <div class="hero-hint">int fd = open("/etc/hosts", O_RDONLY);  &nbsp;<span style="color:var(--text-muted);">// fd = 3，但它到底是什么？</span></div>
+  </div>
+</div>
+
+<div class="container">
+
+<!-- ═══════════════════════ TOC ═══════════════════════ -->
+<div class="toc">
+  <h2>&#9776; 目录导航</h2>
+  <div class="toc-grid">
+    <a href="#s1"><span class="num">01</span>fd 的本质：为什么是一个 int</a>
+    <a href="#s2"><span class="num">02</span>三级表详解</a>
+    <a href="#s3"><span class="num">03</span>内核数据结构源码</a>
+    <a href="#s4"><span class="num">04</span>dup/dup2/dup3 语义</a>
+    <a href="#s5"><span class="num">05</span>fork 后的 fd 共享</a>
+    <a href="#s6"><span class="num">06</span>exec 与 FD_CLOEXEC</a>
+    <a href="#s7"><span class="num">07</span>Shell Pipe 原理</a>
+    <a href="#s8"><span class="num">08</span>文件偏移共享语义</a>
+    <a href="#s9"><span class="num">09</span>一切皆 fd：扩展族</a>
+    <a href="#s10"><span class="num">10</span>fd 传递 (SCM_RIGHTS)</a>
+    <a href="#s11"><span class="num">11</span>fd 限制与泄漏</a>
+    <a href="#s12"><span class="num">12</span>/proc/PID/fd 观察</a>
+    <a href="#s13"><span class="num">13</span>高频面试题</a>
+  </div>
+</div>
+
+<!-- ═══════════════════════ Section 1 ═══════════════════════ -->
+<section id="s1">
+  <div class="section-header">
+    <span class="section-num">01</span>
+    <h2>fd 的本质：为什么是一个 int</h2>
+  </div>
+
+  <h3>1.1 从用户视角看 fd</h3>
+  <p>在用户空间，<code>fd</code> 就是一个 <strong>非负小整数</strong>，遵循三条铁律：</p>
+  <ul>
+    <li><strong>0, 1, 2 预留</strong>：stdin / stdout / stderr</li>
+    <li><strong>从 3 开始递增</strong>：open/socket/pipe 等返回当前进程<em>最小可用</em>的非负整数（POSIX 强制要求）</li>
+    <li><strong>进程私有</strong>：进程 A 的 fd=5 与进程 B 的 fd=5 毫无关系（除非通过 SCM_RIGHTS 传递）</li>
+  </ul>
+
+  <pre data-lang="C"><code><span class="kw">int</span> fd1 = <span class="fn">open</span>(<span class="str">"/etc/hosts"</span>, O_RDONLY);      <span class="com">// 3 (最小可用)</span>
+<span class="kw">int</span> fd2 = <span class="fn">open</span>(<span class="str">"/etc/passwd"</span>, O_RDONLY);     <span class="com">// 4</span>
+<span class="fn">close</span>(fd1);                                 <span class="com">// 3 被释放</span>
+<span class="kw">int</span> fd3 = <span class="fn">open</span>(<span class="str">"/etc/group"</span>, O_RDONLY);      <span class="com">// 3 (复用！)</span></code></pre>
+
+  <h3>1.2 为什么内核不直接返回指针？</h3>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title"><span class="card-icon" style="background:rgba(16,185,129,0.2);color:var(--accent-emerald);">✓</span>安全隔离</div>
+      <p>内核指针暴露给用户态是巨大的安全漏洞（KASLR 就是为了防止这个）。int 是进程局部的抽象句柄，用户无法通过它做任何越权操作。</p>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="card-icon" style="background:rgba(59,130,246,0.2);color:var(--accent-blue);">✓</span>引用计数</div>
+      <p>多个 fd 可以指向同一个内核对象（<code>dup()</code> / <code>fork()</code>），int 句柄让引用计数、生命周期管理变得简单。</p>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="card-icon" style="background:rgba(245,158,11,0.2);color:var(--accent-amber);">✓</span>ABI 稳定</div>
+      <p>int 是跨架构/内核版本稳定的 ABI。结构体布局可以演化，但 open() 返回 int 这个契约永远不变。</p>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="card-icon" style="background:rgba(139,92,246,0.2);color:var(--accent-violet);">✓</span>表索引即句柄</div>
+      <p>fd 本质就是 <code>files_struct::fd_array[]</code> 的数组下标，查找 O(1)。</p>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════ Section 2 ═══════════════════════ -->
+<section id="s2">
+  <div class="section-header">
+    <span class="section-num">02</span>
+    <h2>三级表详解</h2>
+  </div>
+
+  <h3>2.1 三层映射全景</h3>
+  <div class="mermaid-wrapper">
+    <div class="mermaid">
+graph TB
+    subgraph USER["用户态"]
+        APP["int fd = 3"]
+    end
+
+    subgraph L1["① Per-Process FD Table (进程私有)"]
+        TASK["task_struct\n进程控制块"]
+        FS["files_struct\nfd_array / fdtable"]
+        TASK --> FS
+        FS --> F0["[0] → file A (stdin)"]
+        FS --> F1["[1] → file B (stdout)"]
+        FS --> F2["[2] → file C (stderr)"]
+        FS --> F3["[3] → file D"]
+        FS --> F4["[4] → file D"]
+    end
+
+    subgraph L2["② System-wide Open File Table (系统级)"]
+        FILE_D["struct file D\npos=1024\nflags=O_RDONLY\nrefcount=2"]
+        FILE_E["struct file E\npos=0\nflags=O_WRONLY\nrefcount=1"]
+    end
+
+    subgraph L3["③ Inode Table (文件元数据)"]
+        INODE1["struct inode\n(/etc/hosts)\nsize=512\nperm=644"]
+        INODE2["struct inode\n(/tmp/x.log)"]
+    end
+
+    subgraph DISK["④ 磁盘 (或设备)"]
+        BLK["Data Blocks"]
+    end
+
+    APP -.-> FS
+    F3 --> FILE_D
+    F4 --> FILE_D
+    FILE_D --> INODE1
+    FILE_E --> INODE2
+    INODE1 --> BLK
+
+    style L1 fill:#1a2234,stroke:#3b82f6
+    style L2 fill:#2a1a3a,stroke:#8b5cf6
+    style L3 fill:#1a3a2a,stroke:#10b981
+    style DISK fill:#3a2a10,stroke:#f59e0b
+    </div>
+  </div>
+
+  <h3>2.2 三层职责划分</h3>
+  <table>
+    <thead><tr><th>层级</th><th>作用域</th><th>关键数据</th><th>回答什么问题</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><span class="badge badge-blue">① FD Table</span></td>
+        <td>进程私有</td>
+        <td>fd → struct file* 的映射<br>FD_CLOEXEC 标志</td>
+        <td>"我的 fd=3 指向哪个打开文件？"</td>
+      </tr>
+      <tr>
+        <td><span class="badge badge-violet">② Open File Table</span></td>
+        <td>系统全局</td>
+        <td>当前偏移 pos<br>打开标志 flags (O_RDONLY/O_APPEND)<br>引用计数</td>
+        <td>"这次打开的上下文是什么？"</td>
+      </tr>
+      <tr>
+        <td><span class="badge badge-green">③ Inode Table</span></td>
+        <td>文件系统级</td>
+        <td>文件大小、权限、时间戳<br>数据块指针<br>文件类型</td>
+        <td>"这个文件本身是什么？"</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>2.3 为什么是三层而不是两层？</h3>
+  <div class="callout info">
+    <div class="callout-title">▶ 设计动机</div>
+    <p><strong>第一层（FD Table）</strong>是进程私有的，保证进程隔离；<strong>第三层（Inode）</strong>是文件实体，必须是系统唯一的（否则硬链接无法共享元数据）。</p>
+    <p>关键是<strong>第二层（Open File Table）的存在意义</strong>：</p>
+    <ol>
+      <li><strong>同一文件可被多次独立打开</strong>——每次 <code>open()</code> 都产生新的 struct file，各自有独立的 <code>pos</code>。所以两个进程分别 open 同一文件读取，偏移量互不干扰。</li>
+      <li><strong>多个 fd 可共享同一 struct file</strong>——<code>dup()</code>、<code>fork()</code> 让多个 fd 指向同一个 struct file，<strong>共享偏移量</strong>。这是 shell 管道/重定向的基础。</li>
+      <li><strong>O_APPEND 原子追加</strong>——每次 write 都定位到文件末尾，需要 struct file 持有 pos 并持锁。</li>
+    </ol>
+  </div>
+</section>
+
+<!-- ═══════════════════════ Section 3 ═══════════════════════ -->
+<section id="s3">
+  <div class="section-header">
+    <span class="section-num">03</span>
+    <h2>内核数据结构源码</h2>
+  </div>
+
+  <h3>3.1 task_struct → files_struct</h3>
+  <p>进程控制块 <code>task_struct</code> 通过 <code>files_struct*</code> 指向 FD 表：</p>
+
+  <pre data-lang="C"><code><span class="com">// include/linux/sched.h (简化)</span>
+<span class="kw">struct</span> <span class="ty">task_struct</span> {
+    <span class="ty">pid_t</span>                pid;
+    <span class="kw">struct</span> <span class="ty">mm_struct</span>*   mm;        <span class="com">// 内存描述符</span>
+    <span class="kw">struct</span> <span class="ty">files_struct</span>* files;     <span class="com">// ← FD 表指针</span>
+    <span class="kw">struct</span> <span class="ty">fs_struct</span>*    fs;        <span class="com">// 当前目录 cwd/root</span>
+    <span class="com">// ...</span>
+};</code></pre>
+
+  <h3>3.2 files_struct 与 fdtable</h3>
+  <pre data-lang="C"><code><span class="com">// include/linux/fdtable.h (简化)</span>
+<span class="kw">struct</span> <span class="ty">files_struct</span> {
+    <span class="ty">atomic_t</span>       count;              <span class="com">// 引用计数 (线程共享时增加)</span>
+    <span class="kw">struct</span> <span class="ty">fdtable</span>* fdt;                <span class="com">// 指向当前 fdtable (可动态扩展)</span>
+    <span class="kw">struct</span> <span class="ty">fdtable</span>  fdtab;              <span class="com">// 初始嵌入的 fdtable</span>
+    <span class="ty">spinlock_t</span>     file_lock;          <span class="com">// 保护 fd 操作</span>
+    <span class="kw">unsigned</span> <span class="kw">int</span>   next_fd;            <span class="com">// 下次分配的 fd 提示</span>
+    <span class="kw">struct</span> <span class="ty">file</span> <span class="kw">__rcu</span>* fd_array[NR_OPEN_DEFAULT];  <span class="com">// 初始 64 个槽位</span>
+};
+
+<span class="kw">struct</span> <span class="ty">fdtable</span> {
+    <span class="kw">unsigned</span> <span class="kw">int</span>      max_fds;          <span class="com">// 当前容量</span>
+    <span class="kw">struct</span> <span class="ty">file</span> <span class="kw">__rcu</span>** fd;              <span class="com">// fd 数组 (可动态 realloc)</span>
+    <span class="kw">unsigned</span> <span class="kw">long</span>*     close_on_exec;    <span class="com">// FD_CLOEXEC 位图</span>
+    <span class="kw">unsigned</span> <span class="kw">long</span>*     open_fds;         <span class="com">// 已打开 fd 位图</span>
+    <span class="kw">unsigned</span> <span class="kw">long</span>*     full_fds_bits;    <span class="com">// 辅助查找空闲 fd</span>
+    <span class="kw">struct</span> <span class="ty">rcu_head</span>    rcu;
+};</code></pre>
+
+  <div class="callout tip">
+    <div class="callout-title">▶ 性能细节</div>
+    <ul>
+      <li><strong>初始 64 槽位嵌入</strong>：<code>fd_array[NR_OPEN_DEFAULT]</code> 直接嵌入 <code>files_struct</code>，绝大多数进程 fd &lt; 64 时零额外分配</li>
+      <li><strong>动态扩容</strong>：超过 64 时分配新的 <code>fdtable</code>，旧的通过 RCU 延迟释放</li>
+      <li><strong>RCU 保护</strong>：读者（fget）无锁，写者（close/dup）持 spinlock</li>
+      <li><strong>位图加速</strong>：<code>open_fds</code> 位图 + <code>full_fds_bits</code> 辅助使分配空闲 fd 是 O(log n)</li>
+    </ul>
+  </div>
+
+  <h3>3.3 struct file —— 第二层的核心</h3>
+  <pre data-lang="C"><code><span class="com">// include/linux/fs.h (简化)</span>
+<span class="kw">struct</span> <span class="ty">file</span> {
+    <span class="kw">struct</span> <span class="ty">path</span>               f_path;        <span class="com">// dentry + vfsmount</span>
+    <span class="kw">struct</span> <span class="ty">inode</span>*             f_inode;       <span class="com">// ← 指向 inode</span>
+    <span class="kw">const</span> <span class="kw">struct</span> <span class="ty">file_operations</span>* f_op;     <span class="com">// 函数表: read/write/poll...</span>
+
+    <span class="ty">atomic_long_t</span>              f_count;       <span class="com">// 引用计数 (dup/fork 增加)</span>
+    <span class="kw">unsigned</span> <span class="kw">int</span>               f_flags;       <span class="com">// O_RDONLY / O_APPEND / O_NONBLOCK</span>
+    <span class="ty">fmode_t</span>                    f_mode;        <span class="com">// FMODE_READ / FMODE_WRITE</span>
+    <span class="kw">struct</span> <span class="ty">mutex</span>              f_pos_lock;    <span class="com">// 保护 f_pos 的原子性</span>
+    <span class="ty">loff_t</span>                     f_pos;         <span class="com">// ← 当前文件偏移量!</span>
+    <span class="kw">struct</span> <span class="ty">fown_struct</span>        f_owner;       <span class="com">// SIGIO 的目标进程</span>
+
+    <span class="kw">void</span>*                      private_data;  <span class="com">// 驱动私有数据</span>
+    <span class="kw">struct</span> <span class="ty">address_space</span>*     f_mapping;     <span class="com">// page cache</span>
+};
+
+<span class="com">// file_operations 是多态的核心 —— "一切皆文件"就靠它</span>
+<span class="kw">struct</span> <span class="ty">file_operations</span> {
+    <span class="ty">ssize_t</span> (*read) (<span class="kw">struct</span> <span class="ty">file</span>*, <span class="kw">char</span> <span class="kw">__user</span>*, <span class="ty">size_t</span>, <span class="ty">loff_t</span>*);
+    <span class="ty">ssize_t</span> (*write)(<span class="kw">struct</span> <span class="ty">file</span>*, <span class="kw">const</span> <span class="kw">char</span> <span class="kw">__user</span>*, <span class="ty">size_t</span>, <span class="ty">loff_t</span>*);
+    <span class="kw">int</span>     (*mmap) (<span class="kw">struct</span> <span class="ty">file</span>*, <span class="kw">struct</span> <span class="ty">vm_area_struct</span>*);
+    <span class="kw">__poll_t</span> (*poll)(<span class="kw">struct</span> <span class="ty">file</span>*, <span class="kw">struct</span> <span class="ty">poll_table_struct</span>*);
+    <span class="kw">long</span>    (*unlocked_ioctl)(<span class="kw">struct</span> <span class="ty">file</span>*, <span class="kw">unsigned</span>, <span class="kw">unsigned</span> <span class="kw">long</span>);
+    <span class="kw">int</span>     (*release)(<span class="kw">struct</span> <span class="ty">inode</span>*, <span class="kw">struct</span> <span class="ty">file</span>*);    <span class="com">// close</span>
+    <span class="com">// ...</span>
+};</code></pre>
+
+  <div class="callout info">
+    <div class="callout-title">▶ 这就是 C 语言版的多态</div>
+    <p>每种文件类型（ext4 / socket / pipe / procfs / tmpfs）都提供自己的 <code>file_operations</code> 实现。<code>sys_read</code> 最终调用的是 <code>file->f_op->read()</code>——一个函数指针。这就是"一切皆文件"的本质：统一的 vtable。</p>
+  </div>
+
+  <h3>3.4 struct inode —— 第三层</h3>
+  <pre data-lang="C"><code><span class="kw">struct</span> <span class="ty">inode</span> {
+    <span class="ty">umode_t</span>                  i_mode;       <span class="com">// 类型 + 权限 (S_IFREG/S_IFDIR...)</span>
+    <span class="ty">kuid_t</span>                   i_uid;
+    <span class="ty">kgid_t</span>                   i_gid;
+    <span class="ty">loff_t</span>                   i_size;       <span class="com">// 文件大小</span>
+    <span class="kw">struct</span> <span class="ty">timespec64</span>       i_atime, i_mtime, i_ctime;
+    <span class="kw">unsigned</span> <span class="kw">long</span>            i_ino;        <span class="com">// inode 号 (ls -i 看到的)</span>
+    <span class="kw">unsigned</span> <span class="kw">int</span>             i_nlink;      <span class="com">// 硬链接计数</span>
+    <span class="ty">atomic_t</span>                 i_count;      <span class="com">// in-memory 引用计数</span>
+    <span class="kw">struct</span> <span class="ty">super_block</span>*     i_sb;         <span class="com">// 所属文件系统</span>
+    <span class="kw">const</span> <span class="kw">struct</span> <span class="ty">inode_operations</span>* i_op;       <span class="com">// 目录操作 (create/unlink/rename)</span>
+    <span class="kw">const</span> <span class="kw">struct</span> <span class="ty">file_operations</span>*  i_fop;      <span class="com">// 默认 file_operations</span>
+    <span class="kw">struct</span> <span class="ty">address_space</span>*   i_mapping;    <span class="com">// page cache</span>
+    <span class="ty">blkcnt_t</span>                 i_blocks;     <span class="com">// 实际占用块数</span>
+    <span class="kw">void</span>*                    i_private;    <span class="com">// 具体 fs 的私有数据</span>
+};</code></pre>
+</section>
+
+<!-- ═══════════════════════ Section 4 ═══════════════════════ -->
+<section id="s4">
+  <div class="section-header">
+    <span class="section-num">04</span>
+    <h2>dup/dup2/dup3 语义</h2>
+  </div>
+
+  <h3>4.1 三个 API 的差异</h3>
+  <table>
+    <thead><tr><th>API</th><th>行为</th><th>典型用法</th></tr></thead>
+    <tbody>
+      <tr><td><code>dup(oldfd)</code></td><td>返回最小空闲 fd，指向同一 struct file</td><td>简单复制</td></tr>
+      <tr><td><code>dup2(oldfd, newfd)</code></td><td>newfd 若已打开先 close，然后 newfd → oldfd 的 file</td><td>Shell 重定向</td></tr>
+      <tr><td><code>dup3(oldfd, newfd, flags)</code></td><td>同 dup2，但支持 O_CLOEXEC；且 oldfd==newfd 时报错</td><td>需要原子设置 CLOEXEC</td></tr>
+    </tbody>
+  </table>
+
+  <h3>4.2 dup 的三级表变化</h3>
+  <div class="mermaid-wrapper">
+    <div class="mermaid">
+graph LR
+    subgraph BEFORE["dup(3) 之前"]
+        B_FDT["FD Table\n[3] ──┐"]
+        B_FILE["struct file\nrefcount=1\npos=100"]
+        B_FDT --> B_FILE
+    end
+    subgraph AFTER["dup(3) 之后 → 返回 4"]
+        A_FDT["FD Table\n[3] ──┐\n[4] ──┤"]
+        A_FILE["struct file\nrefcount=2\npos=100 (共享!)"]
+        A_FDT --> A_FILE
+    end
+    BEFORE --> AFTER
+    </div>
+  </div>
+
+  <pre data-lang="C"><code><span class="com">// dup 的内核实现 (极简化版)</span>
+<span class="ty">SYSCALL_DEFINE1</span>(dup, <span class="kw">unsigned</span> <span class="kw">int</span>, fildes) {
+    <span class="kw">struct</span> <span class="ty">file</span>* file = <span class="fn">fget_raw</span>(fildes);          <span class="com">// file->f_count++</span>
+    <span class="kw">int</span> newfd = <span class="fn">get_unused_fd_flags</span>(<span class="num">0</span>);             <span class="com">// 找最小空闲 fd</span>
+    <span class="fn">fd_install</span>(newfd, file);                         <span class="com">// 填入 FD Table</span>
+    <span class="kw">return</span> newfd;
+}</code></pre>
+
+  <div class="callout warn">
+    <div class="callout-title">⚠ 关键点：dup 只改第一层，不改第二层</div>
+    <p><code>dup</code> 创建的是 FD Table 的新条目，指向<strong>同一个 struct file</strong>。所以 <code>pos</code> 共享——两个 fd 写入会累加到同一个位置。这与"两次 open 同一文件"是完全不同的！</p>
+  </div>
+
+  <h3>4.3 dup2 实现 Shell 重定向</h3>
+  <pre data-lang="C"><code><span class="com">// 实现 `ls > output.txt`</span>
+<span class="kw">int</span> fd = <span class="fn">open</span>(<span class="str">"output.txt"</span>, O_WRONLY | O_CREAT | O_TRUNC, <span class="num">0644</span>);
+<span class="fn">dup2</span>(fd, STDOUT_FILENO);   <span class="com">// fd=1 (stdout) 现在指向 output.txt</span>
+<span class="fn">close</span>(fd);                 <span class="com">// 原始 fd 可关闭，stdout 仍指向 file</span>
+<span class="fn">execvp</span>(<span class="str">"ls"</span>, argv);       <span class="com">// ls 的 printf 输出就写到文件了</span></code></pre>
+
+  <div class="mermaid-wrapper">
+    <div class="mermaid">
+graph TB
+    subgraph STEP1["Step 1: open output.txt"]
+        S1A["[0] stdin\n[1] stdout → TTY\n[2] stderr\n[3] → output.txt"]
+    end
+    subgraph STEP2["Step 2: dup2(3, 1)"]
+        S2A["[0] stdin\n[1] → output.txt (was TTY)\n[2] stderr\n[3] → output.txt"]
+    end
+    subgraph STEP3["Step 3: close(3)"]
+        S3A["[0] stdin\n[1] → output.txt\n[2] stderr\n[3] 空"]
+    end
+    STEP1 --> STEP2 --> STEP3
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════ Section 5 ═══════════════════════ -->
+<section id="s5">
+  <div class="section-header">
+    <span class="section-num">05</span>
+    <h2>fork 后的 fd 共享</h2>
+  </div>
+
+  <h3>5.1 fork 如何复制 FD Table</h3>
+  <div class="mermaid-wrapper">
+    <div class="mermaid">
+graph TB
+    subgraph PARENT["父进程 (PID 100)"]
+        P_FDT["FD Table\n[0] [1] [2] [3]"]
+    end
+
+    subgraph CHILD["子进程 (PID 101) — fork 后"]
+        C_FDT["FD Table\n[0] [1] [2] [3]\n(新拷贝，但指针相同!)"]
+    end
+
+    subgraph SHARED["共享的 Open File Table"]
+        F_STDIN["file: stdin\nrefcount=2 (父+子)"]
+        F_STDOUT["file: stdout\nrefcount=2"]
+        F_FILE3["file: /tmp/log\npos=500\nrefcount=2"]
+    end
+
+    P_FDT -->|"fd=0"| F_STDIN
+    P_FDT -->|"fd=1"| F_STDOUT
+    P_FDT -->|"fd=3"| F_FILE3
+    C_FDT -->|"fd=0"| F_STDIN
+    C_FDT -->|"fd=1"| F_STDOUT
+    C_FDT -->|"fd=3"| F_FILE3
+
+    style SHARED fill:#2a1a3a,stroke:#8b5cf6
+    </div>
+  </div>
+
+  <h3>5.2 关键规则</h3>
+  <ul>
+    <li><code>fork()</code> 复制 FD Table 本身（子进程有独立的 <code>files_struct</code>）</li>
+    <li>但 FD Table 里每个指针指向的 struct file <strong>不复制</strong>，只是 <code>refcount++</code></li>
+    <li>因此父子进程<strong>共享 struct file 的偏移量 pos</strong>——父进程 write 后文件位置前进，子进程下次 write 从新位置继续</li>
+    <li>子进程的 <code>close(fd)</code> 只减少 FD Table 条目，<code>refcount--</code>；只有 refcount 归零时 struct file 才真正释放</li>
+  </ul>
+
+  <h3>5.3 验证实验</h3>
+  <pre data-lang="C"><code><span class="kw">int</span> fd = <span class="fn">open</span>(<span class="str">"/tmp/test.txt"</span>, O_WRONLY | O_CREAT | O_TRUNC, <span class="num">0644</span>);
+<span class="kw">if</span> (<span class="fn">fork</span>() == <span class="num">0</span>) {
+    <span class="com">// 子进程</span>
+    <span class="fn">write</span>(fd, <span class="str">"child\n"</span>, <span class="num">6</span>);   <span class="com">// pos: 0 → 6</span>
+    <span class="fn">exit</span>(<span class="num">0</span>);
+}
+<span class="fn">wait</span>(<span class="kw">nullptr</span>);
+<span class="fn">write</span>(fd, <span class="str">"parent\n"</span>, <span class="num">7</span>);       <span class="com">// pos: 6 → 13 (不是从 0 开始！)</span>
+
+<span class="com">// 文件内容:</span>
+<span class="com">// child</span>
+<span class="com">// parent</span></code></pre>
+
+  <div class="callout danger">
+    <div class="callout-title">✗ 竞争条件：并发 write 到共享 fd</div>
+    <p>父子进程同时 write 到共享 fd 时，<code>pos</code> 的原子性由内核保证（<code>f_pos_lock</code>），但<strong>大块 write 可能被拆分</strong>（Linux 下 PIPE_BUF=4096 以内是原子的，普通文件则取决于文件系统）。生产代码应当用 <code>O_APPEND</code>——内核保证 <code>lseek+write</code> 的原子性。</p>
+  </div>
+</section>
+
+<!-- ═══════════════════════ Section 6 ═══════════════════════ -->
+<section id="s6">
+  <div class="section-header">
+    <span class="section-num">06</span>
+    <h2>exec 与 FD_CLOEXEC</h2>
+  </div>
+
+  <h3>6.1 exec 默认行为：fd 保留</h3>
+  <p>与直觉相反，<code>execve()</code> 默认<strong>不会关闭</strong>进程的 fd——这是 Shell 重定向能工作的前提（先 fork+dup2 再 exec）。</p>
+
+  <h3>6.2 FD_CLOEXEC 标志</h3>
+  <p>某些 fd（如密钥、日志）不应该被子进程继承，这时需要设置 close-on-exec：</p>
+
+  <pre data-lang="C"><code><span class="com">// 方式 1: fcntl 设置 (非原子)</span>
+<span class="kw">int</span> fd = <span class="fn">open</span>(<span class="str">"secret.key"</span>, O_RDONLY);
+<span class="fn">fcntl</span>(fd, F_SETFD, FD_CLOEXEC);   <span class="com">// ← 窗口期有竞争!</span>
+
+<span class="com">// 方式 2: open 时原子设置 (推荐)</span>
+<span class="kw">int</span> fd = <span class="fn">open</span>(<span class="str">"secret.key"</span>, O_RDONLY | O_CLOEXEC);
+
+<span class="com">// 方式 3: 新 API 都有 O_CLOEXEC 对应</span>
+<span class="kw">int</span> sock  = <span class="fn">socket</span>(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, <span class="num">0</span>);
+<span class="kw">int</span> ep    = <span class="fn">epoll_create1</span>(EPOLL_CLOEXEC);
+<span class="kw">int</span> pfd[<span class="num">2</span>]; <span class="fn">pipe2</span>(pfd, O_CLOEXEC);
+<span class="kw">int</span> efd   = <span class="fn">eventfd</span>(<span class="num">0</span>, EFD_CLOEXEC);
+<span class="kw">int</span> dirfd = <span class="fn">openat</span>(AT_FDCWD, <span class="str">"path"</span>, O_DIRECTORY | O_CLOEXEC);</code></pre>
+
+  <div class="callout warn">
+    <div class="callout-title">⚠ 多线程程序必须用 O_CLOEXEC</div>
+    <p>在线程 A 执行 <code>open</code> + <code>fcntl(F_SETFD)</code> 两步之间，线程 B 可能调用 <code>fork+exec</code>，导致 fd 被泄漏到子进程。只有 <code>O_CLOEXEC</code>（open 时原子设置）能完全避免这个窗口。这也是 C++17 <code>std::filesystem</code> 内部始终使用 O_CLOEXEC 的原因。</p>
+  </div>
+
+  <h3>6.3 close_on_exec 位图在内核的位置</h3>
+  <p>每个 <code>fdtable</code> 有一个 <code>close_on_exec</code> 位图（每 bit 对应一个 fd）。<code>execve()</code> 的最后阶段调用 <code>do_close_on_exec()</code> 遍历位图关闭对应 fd。</p>
+</section>
+
+<!-- ═══════════════════════ Section 7 ═══════════════════════ -->
+<section id="s7">
+  <div class="section-header">
+    <span class="section-num">07</span>
+    <h2>Shell Pipe 原理</h2>
+  </div>
+
+  <p>Shell 中 <code>ls | grep foo</code> 是 fd 操作的教科书示例。下面逐步演示内核视图：</p>
+
+  <h3>7.1 创建匿名管道</h3>
+  <pre data-lang="C"><code><span class="kw">int</span> pfd[<span class="num">2</span>];
+<span class="fn">pipe</span>(pfd);   <span class="com">// pfd[0] = 读端, pfd[1] = 写端</span>
+<span class="com">// 内核分配了一个 struct file (管道缓冲区 64KB)，两个 fd 分别以读/写方式指向它</span></code></pre>
+
+  <h3>7.2 fork + dup2 编排</h3>
+  <div class="mermaid-wrapper">
+    <div class="mermaid">
+sequenceDiagram
+    participant Shell as Shell (parent)
+    participant LS as ls 进程
+    participant GREP as grep 进程
+    participant Kernel as Kernel (pipe)
+
+    Shell->>Kernel: pipe(pfd) → pfd[0]=3, pfd[1]=4
+    Shell->>Shell: fork() → ls child
+    Shell->>LS: fork 返回子进程
+    LS->>LS: close(3)  关闭读端
+    LS->>LS: dup2(4, 1)  stdout → pipe写端
+    LS->>LS: close(4)
+    LS->>LS: execvp("ls", ...)
+
+    Shell->>Shell: fork() → grep child
+    Shell->>GREP: fork 返回子进程
+    GREP->>GREP: close(4)  关闭写端
+    GREP->>GREP: dup2(3, 0)  stdin → pipe读端
+    GREP->>GREP: close(3)
+    GREP->>GREP: execvp("grep", "foo")
+
+    Shell->>Shell: close(3); close(4)  父进程两端都关
+    LS->>Kernel: write(stdout) → 管道
+    Kernel->>GREP: read(stdin) ← 管道
+    LS-->>Shell: 退出 (pipe 写端全关)
+    GREP-->>Shell: read 返回 0 (EOF)
+    </div>
+  </div>
+
+  <h3>7.3 最小实现</h3>
+  <pre data-lang="C"><code><span class="com">// 实现: ls | grep foo</span>
+<span class="kw">int</span> pfd[<span class="num">2</span>];
+<span class="fn">pipe</span>(pfd);
+
+<span class="kw">if</span> (<span class="fn">fork</span>() == <span class="num">0</span>) {             <span class="com">// ls 子进程</span>
+    <span class="fn">close</span>(pfd[<span class="num">0</span>]);            <span class="com">// ls 不读管道</span>
+    <span class="fn">dup2</span>(pfd[<span class="num">1</span>], STDOUT_FILENO);<span class="com">// stdout → 管道写端</span>
+    <span class="fn">close</span>(pfd[<span class="num">1</span>]);
+    <span class="fn">execlp</span>(<span class="str">"ls"</span>, <span class="str">"ls"</span>, <span class="kw">NULL</span>);
+}
+<span class="kw">if</span> (<span class="fn">fork</span>() == <span class="num">0</span>) {             <span class="com">// grep 子进程</span>
+    <span class="fn">close</span>(pfd[<span class="num">1</span>]);            <span class="com">// grep 不写管道</span>
+    <span class="fn">dup2</span>(pfd[<span class="num">0</span>], STDIN_FILENO); <span class="com">// stdin ← 管道读端</span>
+    <span class="fn">close</span>(pfd[<span class="num">0</span>]);
+    <span class="fn">execlp</span>(<span class="str">"grep"</span>, <span class="str">"grep"</span>, <span class="str">"foo"</span>, <span class="kw">NULL</span>);
+}
+<span class="fn">close</span>(pfd[<span class="num">0</span>]); <span class="fn">close</span>(pfd[<span class="num">1</span>]);  <span class="com">// 父进程两端都关，否则 EOF 永远不会到达</span>
+<span class="fn">wait</span>(<span class="kw">nullptr</span>); <span class="fn">wait</span>(<span class="kw">nullptr</span>);</code></pre>
+
+  <div class="callout info">
+    <div class="callout-title">▶ 为什么必须关闭不用的管道端？</div>
+    <p>管道的读端在<strong>所有写端都被关闭</strong>后才返回 EOF。如果父进程或任一子进程忘了关写端，grep 的 read 会永远阻塞——这是 shell/IPC 编程中最经典的 bug 之一。</p>
+  </div>
+</section>
+
+<!-- ═══════════════════════ Section 8 ═══════════════════════ -->
+<section id="s8">
+  <div class="section-header">
+    <span class="section-num">08</span>
+    <h2>文件偏移共享语义</h2>
+  </div>
+
+  <h3>8.1 三种"同一文件"的打开方式对比</h3>
+  <div class="mermaid-wrapper">
+    <div class="mermaid">
+graph TB
+    subgraph S1["场景 A: 两次 open - 独立偏移"]
+        A1["进程 fd=3\n= open(/a.txt)"]
+        A2["进程 fd=4\n= open(/a.txt)"]
+        A1 --> AF1["file struct\npos=0, refcount=1"]
+        A2 --> AF2["file struct\npos=0, refcount=1"]
+        AF1 --> AI1["inode /a.txt"]
+        AF2 --> AI1
+    end
+
+    subgraph S2["场景 B: dup - 共享偏移"]
+        B1["进程 fd=3"]
+        B2["进程 fd=4 = dup(3)"]
+        B1 --> BF["file struct\npos=100, refcount=2"]
+        B2 --> BF
+        BF --> BI["inode /a.txt"]
+    end
+
+    subgraph S3["场景 C: fork - 共享偏移"]
+        C1["父 fd=3"]
+        C2["子 fd=3 (fork 后)"]
+        C1 --> CF["file struct\npos=100, refcount=2"]
+        C2 --> CF
+        CF --> CI["inode /a.txt"]
+    end
+
+    style S1 fill:#1a2a3a,stroke:#3b82f6
+    style S2 fill:#2a1a3a,stroke:#8b5cf6
+    style S3 fill:#1a3a2a,stroke:#10b981
+    </div>
+  </div>
+
+  <h3>8.2 对比总结</h3>
+  <table>
+    <thead><tr><th>方式</th><th>struct file</th><th>pos 共享</th><th>flags 共享</th></tr></thead>
+    <tbody>
+      <tr><td>两次 open</td><td>独立</td><td><span class="badge badge-rose">否</span></td><td><span class="badge badge-rose">否</span></td></tr>
+      <tr><td>dup / dup2</td><td>同一个</td><td><span class="badge badge-green">是</span></td><td><span class="badge badge-green">是</span></td></tr>
+      <tr><td>fork 继承</td><td>同一个</td><td><span class="badge badge-green">是</span></td><td><span class="badge badge-green">是</span></td></tr>
+      <tr><td>SCM_RIGHTS 传递</td><td>同一个</td><td><span class="badge badge-green">是</span></td><td><span class="badge badge-green">是</span></td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout tip">
+    <div class="callout-title">▶ 工程启示：日志文件 append</div>
+    <p>多进程写同一日志文件，不要自己 <code>lseek + write</code>（<strong>非原子，会相互覆盖</strong>），而是用 <code>O_APPEND</code> 打开——内核保证每个 write 原子地 seek 到末尾再写。这就是 syslog/logrotate 后日志仍能正确追加的原理。</p>
+  </div>
+</section>
+
+<!-- ═══════════════════════ Section 9 ═══════════════════════ -->
+<section id="s9">
+  <div class="section-header">
+    <span class="section-num">09</span>
+    <h2>一切皆 fd：扩展族</h2>
+  </div>
+
+  <p>Linux 把很多本不是"文件"的东西都封装成了 fd，因为这样可以统一用 <code>read/write/close/epoll</code> 管理。这是 Unix 哲学"万物皆文件"的体现。</p>
+
+  <h3>9.1 fd 家族全图</h3>
+  <table>
+    <thead><tr><th>fd 类型</th><th>创建 API</th><th>作用</th><th>epoll 可用</th></tr></thead>
+    <tbody>
+      <tr><td>普通文件</td><td><code>open()</code></td><td>磁盘文件读写</td><td><span class="badge badge-rose">否 (总是就绪)</span></td></tr>
+      <tr><td>目录</td><td><code>open(O_DIRECTORY)</code></td><td>目录遍历</td><td>否</td></tr>
+      <tr><td>Socket</td><td><code>socket()</code></td><td>网络通信</td><td><span class="badge badge-green">是</span></td></tr>
+      <tr><td>匿名管道</td><td><code>pipe()</code> / <code>pipe2()</code></td><td>父子进程通信</td><td>是</td></tr>
+      <tr><td>命名管道 FIFO</td><td><code>mkfifo + open</code></td><td>无亲缘进程通信</td><td>是</td></tr>
+      <tr><td>Unix Domain Socket</td><td><code>socket(AF_UNIX)</code></td><td>本机进程通信 (可传 fd)</td><td>是</td></tr>
+      <tr><td><code>eventfd</code></td><td><code>eventfd()</code></td><td>计数器/事件通知</td><td>是</td></tr>
+      <tr><td><code>signalfd</code></td><td><code>signalfd()</code></td><td>把信号转成可读事件</td><td>是</td></tr>
+      <tr><td><code>timerfd</code></td><td><code>timerfd_create()</code></td><td>定时器变 fd，与 epoll 集成</td><td>是</td></tr>
+      <tr><td><code>inotifyfd</code></td><td><code>inotify_init()</code></td><td>文件系统变更监控</td><td>是</td></tr>
+      <tr><td><code>epollfd</code></td><td><code>epoll_create1()</code></td><td>epoll 实例本身也是 fd (可嵌套)</td><td>是</td></tr>
+      <tr><td><code>pidfd</code></td><td><code>pidfd_open()</code> (5.3+)</td><td>指向进程的稳定句柄，避免 PID 重用</td><td>是</td></tr>
+      <tr><td><code>memfd</code></td><td><code>memfd_create()</code></td><td>匿名内存 fd，用于共享内存</td><td>否</td></tr>
+      <tr><td><code>userfaultfd</code></td><td><code>userfaultfd()</code></td><td>用户态处理缺页</td><td>是</td></tr>
+      <tr><td><code>io_uring</code></td><td><code>io_uring_setup()</code></td><td>异步 I/O 共享 ring</td><td>是</td></tr>
+      <tr><td>字符设备</td><td><code>open(/dev/xxx)</code></td><td>ttyS0, null, zero, urandom</td><td>视驱动</td></tr>
+    </tbody>
+  </table>
+
+  <h3>9.2 经典组合：eventfd + epoll 实现唤醒</h3>
+  <pre data-lang="C++"><code><span class="com">// 线程 A 阻塞在 epoll_wait，线程 B 如何唤醒它？答：eventfd</span>
+<span class="kw">int</span> efd = <span class="fn">eventfd</span>(<span class="num">0</span>, EFD_NONBLOCK | EFD_CLOEXEC);
+<span class="kw">int</span> ep = <span class="fn">epoll_create1</span>(EPOLL_CLOEXEC);
+
+<span class="ty">epoll_event</span> ev{.events = EPOLLIN, .data.fd = efd};
+<span class="fn">epoll_ctl</span>(ep, EPOLL_CTL_ADD, efd, &ev);
+
+<span class="com">// 线程 A</span>
+<span class="ty">epoll_event</span> events[<span class="num">32</span>];
+<span class="kw">int</span> n = <span class="fn">epoll_wait</span>(ep, events, <span class="num">32</span>, -<span class="num">1</span>);
+<span class="kw">for</span> (<span class="kw">int</span> i = <span class="num">0</span>; i &lt; n; ++i) {
+    <span class="kw">if</span> (events[i].data.fd == efd) {
+        <span class="ty">uint64_t</span> val;
+        <span class="fn">read</span>(efd, &val, <span class="kw">sizeof</span>(val));   <span class="com">// 消费事件</span>
+        <span class="com">// 处理外部任务</span>
+    }
+}
+
+<span class="com">// 线程 B (任意线程，甚至信号处理器)</span>
+<span class="ty">uint64_t</span> one = <span class="num">1</span>;
+<span class="fn">write</span>(efd, &one, <span class="kw">sizeof</span>(one));       <span class="com">// 唤醒 epoll_wait</span></code></pre>
+
+  <h3>9.3 经典组合：timerfd 取代 setitimer</h3>
+  <pre data-lang="C"><code><span class="com">// 传统 setitimer: 信号处理器有严格限制</span>
+<span class="com">// timerfd: 定时到期时 fd 变可读，统一用 epoll 处理</span>
+<span class="kw">int</span> tfd = <span class="fn">timerfd_create</span>(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
+<span class="kw">struct</span> <span class="ty">itimerspec</span> ts = {
+    .it_interval = {.tv_sec = <span class="num">1</span>, .tv_nsec = <span class="num">0</span>},    <span class="com">// 每秒触发</span>
+    .it_value    = {.tv_sec = <span class="num">1</span>, .tv_nsec = <span class="num">0</span>}
+};
+<span class="fn">timerfd_settime</span>(tfd, <span class="num">0</span>, &ts, <span class="kw">NULL</span>);
+<span class="fn">epoll_ctl</span>(ep, EPOLL_CTL_ADD, tfd, &(<span class="ty">epoll_event</span>){.events=EPOLLIN, .data.fd=tfd});
+<span class="com">// epoll_wait 会在每秒唤醒，read(tfd) 获取到期次数</span></code></pre>
+
+  <h3>9.4 signalfd —— 让信号「排队」并进入 epoll</h3>
+  <p>传统 <code>signal()</code>/<code>sigaction()</code> 的最大痛点：信号处理函数<strong>只能调 async-signal-safe 的函数</strong>（<code>printf</code>、<code>malloc</code>、几乎所有 STL 都不行）。<code>signalfd</code> 把信号变成一个 fd 上的"可读事件"，主循环用普通函数处理。</p>
+
+  <pre data-lang="C++"><code><span class="com">// 1. 先 block 想接管的信号（必须！否则默认 handler 仍会跑）</span>
+<span class="ty">sigset_t</span> mask;
+<span class="fn">sigemptyset</span>(&mask);
+<span class="fn">sigaddset</span>(&mask, SIGINT);
+<span class="fn">sigaddset</span>(&mask, SIGTERM);
+<span class="fn">sigaddset</span>(&mask, SIGHUP);
+<span class="fn">pthread_sigmask</span>(SIG_BLOCK, &mask, <span class="kw">nullptr</span>);   <span class="com">// 多线程必须用 pthread_sigmask</span>
+
+<span class="com">// 2. 建立 signalfd</span>
+<span class="kw">int</span> sfd = <span class="fn">signalfd</span>(-<span class="num">1</span>, &mask, SFD_NONBLOCK | SFD_CLOEXEC);
+<span class="fn">epoll_ctl</span>(ep, EPOLL_CTL_ADD, sfd, &(<span class="ty">epoll_event</span>){.events=EPOLLIN, .data.fd=sfd});
+
+<span class="com">// 3. 主循环里像普通 fd 一样处理</span>
+<span class="kw">if</span> (events[i].data.fd == sfd) {
+    <span class="ty">signalfd_siginfo</span> si;
+    <span class="fn">read</span>(sfd, &si, <span class="kw">sizeof</span>(si));
+    <span class="kw">switch</span> (si.ssi_signo) {
+        <span class="kw">case</span> SIGHUP:  <span class="fn">reload_config</span>();  <span class="kw">break</span>;     <span class="com">// 现在可以放心 malloc / log 了</span>
+        <span class="kw">case</span> SIGINT:
+        <span class="kw">case</span> SIGTERM: g_should_exit = <span class="kw">true</span>; <span class="kw">break</span>;
+    }
+}</code></pre>
+
+  <div class="callout warn">
+    <div class="callout-title">⚠ 三个常见坑</div>
+    <ul>
+      <li><strong>忘记 block</strong>：必须 <code>SIG_BLOCK</code> 才能让信号"排队进 signalfd"，否则信号被默认 handler 抢走，signalfd 永远收不到。</li>
+      <li><strong>多线程用 sigprocmask</strong>：在多线程程序里 <code>sigprocmask</code> 行为未定义，必须用 <code>pthread_sigmask</code>，并且要在<em>创建任何线程之前</em>统一 block。</li>
+      <li><strong>SIGKILL / SIGSTOP 不能 catch</strong>：signalfd 也救不了，这俩永远走内核直杀路径。</li>
+    </ul>
+  </div>
+
+  <h3>9.5 pidfd —— 进程的「稳定句柄」，告别 PID 重用 race</h3>
+  <p>Linux 5.3 引入 <code>pidfd</code> 解决了一个困扰几十年的问题：<strong>PID 会重用</strong>。当你 <code>kill(pid, SIGTERM)</code> 时，目标进程可能已经死了，PID 被别的进程占用，你<em>误杀</em>了无辜者。pidfd 通过持有内核 task 引用确保句柄"指向同一个进程"。</p>
+
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-title"><span class="card-icon" style="background:rgba(244,63,94,0.2);color:var(--accent-rose);">✗</span>传统 kill(pid)</div>
+      <pre data-lang="C"><code><span class="kw">pid_t</span> pid = <span class="fn">fork</span>();
+<span class="kw">if</span> (pid == <span class="num">0</span>) <span class="fn">exec</span>(...);
+<span class="com">// ... 几秒钟后</span>
+<span class="fn">kill</span>(pid, SIGTERM);   <span class="com">// pid 可能已被回收并复用！</span></code></pre>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="card-icon" style="background:rgba(16,185,129,0.2);color:var(--accent-emerald);">✓</span>现代 pidfd</div>
+      <pre data-lang="C"><code><span class="kw">int</span> pfd = <span class="fn">pidfd_open</span>(pid, <span class="num">0</span>);
+<span class="com">// ... pfd 锁住 task_struct，pid 永不重用</span>
+<span class="fn">pidfd_send_signal</span>(pfd, SIGTERM, <span class="kw">nullptr</span>, <span class="num">0</span>);
+<span class="com">// 即使 pid 被复用，信号也只送给原来的进程</span></code></pre>
+    </div>
+  </div>
+
+  <h4>pidfd 三大能力（5.3 / 5.4 / 5.6 逐步完善）</h4>
+  <pre data-lang="C++"><code><span class="com">// ① 等待子进程（poll 即可，无需 waitpid 阻塞主线程）</span>
+<span class="kw">int</span> pfd = <span class="fn">pidfd_open</span>(child_pid, <span class="num">0</span>);
+<span class="fn">epoll_ctl</span>(ep, EPOLL_CTL_ADD, pfd, &(<span class="ty">epoll_event</span>){.events=EPOLLIN, .data.fd=pfd});
+<span class="com">// 子进程退出时 pfd 变可读，主循环统一处理</span>
+
+<span class="com">// ② 替代 kill —— 无 race</span>
+<span class="fn">pidfd_send_signal</span>(pfd, SIGTERM, <span class="kw">nullptr</span>, <span class="num">0</span>);
+
+<span class="com">// ③ 从另一进程偷一个 fd 过来（5.6+，需 CAP_SYS_PTRACE）</span>
+<span class="kw">int</span> dup_fd = <span class="fn">syscall</span>(SYS_pidfd_getfd, pfd, target_fd_in_other_proc, <span class="num">0</span>);
+<span class="com">// 用例：debugger、container runtime、checkpoint/restore</span></code></pre>
+
+  <div class="callout tip">
+    <div class="callout-title">▶ 工程价值</div>
+    <ul>
+      <li><strong>systemd</strong>：从 v245 起全面用 pidfd 管理 unit，不再用 PID 文件这种脆弱的机制。</li>
+      <li><strong>Docker / containerd / Kubernetes</strong>：监控容器内 1 号进程退出，pidfd + epoll 是首选，比 SIGCHLD 信号简洁可靠。</li>
+      <li><strong>进程管家 / supervisor</strong>：自写 supervisord 类组件必备。</li>
+    </ul>
+  </div>
+
+  <h3>9.6 memfd_create —— 匿名共享内存的现代姿势</h3>
+  <p>传统跨进程共享内存有 3 条路：① <code>shm_open</code>（POSIX，在 <code>/dev/shm</code> 留名字）；② <code>shmget</code>（SysV，全局 key 命名空间难管理）；③ <code>mmap(MAP_ANONYMOUS|MAP_SHARED)</code> + fork。三种各有缺陷。<code>memfd_create</code> 是<strong>无名字、可传递、可"封印"</strong>的新方案。</p>
+
+  <pre data-lang="C++"><code><span class="com">// 1. 创建匿名 memfd（没有路径，不污染 /dev/shm）</span>
+<span class="kw">int</span> mfd = <span class="fn">memfd_create</span>(<span class="str">"shared-ring"</span>, MFD_CLOEXEC | MFD_ALLOW_SEALING);
+<span class="fn">ftruncate</span>(mfd, <span class="num">4096</span> * <span class="num">1024</span>);
+
+<span class="com">// 2. mmap 到自己地址空间</span>
+<span class="kw">void</span>* buf = <span class="fn">mmap</span>(<span class="kw">nullptr</span>, <span class="num">4096</span> * <span class="num">1024</span>, PROT_READ|PROT_WRITE, MAP_SHARED, mfd, <span class="num">0</span>);
+
+<span class="com">// 3. 通过 UDS + SCM_RIGHTS 把 mfd 传给另一进程（见 §10）</span>
+<span class="fn">send_fd</span>(uds, mfd);
+
+<span class="com">// 4. （可选）封印 —— 锁定大小 / 锁定只读</span>
+<span class="fn">fcntl</span>(mfd, F_ADD_SEALS, F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_WRITE);
+<span class="com">// 此后任何进程 ftruncate / write 都会 -EPERM，</span>
+<span class="com">// 即使是恶意进程拿到 fd 也不能改大小</span></code></pre>
+
+  <h4>memfd vs 其他共享内存方案对比</h4>
+  <table>
+    <thead><tr><th>方案</th><th>命名</th><th>fd 可传</th><th>可封印</th><th>典型场景</th></tr></thead>
+    <tbody>
+      <tr><td><code>memfd_create</code></td><td>仅调试名</td><td><span class="badge badge-green">是</span></td><td><span class="badge badge-green">是</span></td><td>跨进程零拷贝 / Wayland 显存 / Chrome 沙箱</td></tr>
+      <tr><td><code>shm_open</code></td><td><code>/dev/shm/xxx</code></td><td>是</td><td>否</td><td>有亲缘关系的 POSIX 共享内存</td></tr>
+      <tr><td><code>shmget</code> (SysV)</td><td>全局 IPC key</td><td>否</td><td>否</td><td>遗留代码，新代码勿用</td></tr>
+      <tr><td><code>mmap(MAP_ANON|SHARED)</code></td><td>无</td><td>fork 共享</td><td>否</td><td>父子进程共享缓冲区</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout info">
+    <div class="callout-title">▶ 真实案例：Chrome / Wayland / dbus</div>
+    <ul>
+      <li><strong>Chrome IPC</strong>：每条大消息封装在 memfd 里，UDS 只传 fd，避免大块内存在 Browser ↔ Renderer 间拷贝。</li>
+      <li><strong>Wayland</strong>：客户端把渲染好的帧 buffer 放进 memfd，传给 compositor，<em>零拷贝</em>送显。</li>
+      <li><strong>dbus-broker</strong>：消息超阈值时用 memfd 替代正文，省内核缓冲。</li>
+    </ul>
+  </div>
+
+  <h3>9.7 inotify / fanotify / userfaultfd —— 三种「事件 fd」</h3>
+  <div class="grid-3">
+    <div class="card">
+      <div class="card-title"><span class="card-icon" style="background:rgba(6,182,212,0.2);color:var(--accent-cyan);">i</span>inotify</div>
+      <p>监控目录/文件变更（创建、修改、删除、改名）。配 epoll 即可做<strong>配置热加载</strong>、<strong>日志切割侦测</strong>。<code>inotifywait</code> 命令底层就是它。</p>
+      <pre data-lang="C"><code><span class="kw">int</span> ifd = <span class="fn">inotify_init1</span>(IN_NONBLOCK | IN_CLOEXEC);
+<span class="fn">inotify_add_watch</span>(ifd, <span class="str">"/etc/myapp/"</span>,
+                  IN_MODIFY | IN_CREATE | IN_MOVED_TO);
+<span class="com">// epoll → read ifd → 解析 inotify_event 流</span></code></pre>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="card-icon" style="background:rgba(139,92,246,0.2);color:var(--accent-violet);">f</span>fanotify</div>
+      <p>比 inotify 更强：可以<strong>拦截</strong>访问（filesystem 级别 / 全局），常用于<strong>杀毒软件、HIDS、文件审计</strong>。需 <code>CAP_SYS_ADMIN</code>。</p>
+      <pre data-lang="C"><code><span class="kw">int</span> ffd = <span class="fn">fanotify_init</span>(FAN_CLOEXEC | FAN_CLASS_CONTENT,
+                          O_RDONLY);
+<span class="fn">fanotify_mark</span>(ffd, FAN_MARK_ADD | FAN_MARK_MOUNT,
+              FAN_OPEN_PERM,  <span class="com">// 拦截 open，允许/拒绝</span>
+              AT_FDCWD, <span class="str">"/"</span>);</code></pre>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="card-icon" style="background:rgba(245,158,11,0.2);color:var(--accent-amber);">u</span>userfaultfd</div>
+      <p>把<strong>缺页处理交给用户态</strong>。用于 <strong>CRIU 进程检查点</strong>、<strong>KVM live migration</strong>（postcopy）、<strong>分布式共享内存</strong>。</p>
+      <pre data-lang="C"><code><span class="kw">int</span> ufd = <span class="fn">syscall</span>(SYS_userfaultfd, O_CLOEXEC | O_NONBLOCK);
+<span class="com">// ioctl 注册地址范围，缺页时内核把请求写到 ufd</span>
+<span class="com">// 用户态线程 read(ufd) → ioctl UFFDIO_COPY 喂数据回去</span></code></pre>
+    </div>
+  </div>
+
+  <h3>9.8 「一切皆 fd」的选型决策表</h3>
+  <table>
+    <thead><tr><th>需求</th><th>首选 fd 类型</th><th>关键理由</th></tr></thead>
+    <tbody>
+      <tr><td>跨线程唤醒 epoll</td><td><code>eventfd</code></td><td>最轻量，8 字节计数器</td></tr>
+      <tr><td>主循环统一处理信号</td><td><code>signalfd</code></td><td>避开 async-signal-safe 限制</td></tr>
+      <tr><td>定时任务接入 epoll</td><td><code>timerfd</code></td><td>替代 setitimer / SIGALRM 的痛苦</td></tr>
+      <tr><td>稳定监控某个进程</td><td><code>pidfd</code></td><td>无 PID 重用 race</td></tr>
+      <tr><td>跨进程零拷贝大块数据</td><td><code>memfd</code> + UDS 传 fd</td><td>可封印 + 无命名空间污染</td></tr>
+      <tr><td>配置热加载</td><td><code>inotify</code></td><td>低权限即可，事件粒度合适</td></tr>
+      <tr><td>文件访问审计 / 杀毒</td><td><code>fanotify</code></td><td>能拦截 open / 全局监控</td></tr>
+      <tr><td>容器 checkpoint / VM 迁移</td><td><code>userfaultfd</code></td><td>用户态接管缺页</td></tr>
+      <tr><td>高吞吐异步 IO</td><td><code>io_uring</code> fd</td><td>批量提交，零系统调用热路径</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout tip">
+    <div class="callout-title">▶ 高级工程师的洞察</div>
+    <p>"一切皆 fd" 的真正价值不只是 API 统一，而是<strong>所有这些机制都能塞进同一个 epoll 循环</strong>。一个现代 C++ 服务（Reactor 风格）应该只有一个主线程跑 <code>epoll_wait</code>，里面同时监听：socket（业务）、timerfd（超时）、signalfd（信号）、eventfd（唤醒）、pidfd（子进程退出）、inotify（配置热加载）、io_uring（异步 IO）。这就是 systemd、Envoy、Nginx 现代版本的核心架构。</p>
+  </div>
+</section>
+
+<!-- ═══════════════════════ Section 10 ═══════════════════════ -->
+<section id="s10">
+  <div class="section-header">
+    <span class="section-num">10</span>
+    <h2>fd 传递 (SCM_RIGHTS)</h2>
+  </div>
+
+  <p>Unix Domain Socket 可以在进程间传递 fd——不是复制数字 3，而是让另一进程获得一个<strong>指向同一 struct file</strong> 的 fd。这是 systemd socket activation、Chrome 多进程架构、Docker containerd 的基础。</p>
+
+  <div class="mermaid-wrapper">
+    <div class="mermaid">
+graph LR
+    subgraph A["进程 A"]
+        A1["fd=3 → file X"]
+    end
+    subgraph K["内核 (UDS)"]
+        UDS["Unix Socket\n传递 SCM_RIGHTS"]
+    end
+    subgraph B["进程 B"]
+        B1["fd=7 → file X (recv 后)"]
+    end
+    subgraph FILE["Open File Table"]
+        X["struct file X\nrefcount=2 (fd 传递后)"]
+    end
+
+    A1 --> X
+    B1 --> X
+    A1 -.->|"sendmsg(SCM_RIGHTS)"| UDS
+    UDS -.->|"recvmsg"| B1
+    </div>
+  </div>
+
+  <pre data-lang="C"><code><span class="com">// 发送端: 把 fd 通过 UDS 传给另一进程</span>
+<span class="kw">void</span> <span class="fn">send_fd</span>(<span class="kw">int</span> uds, <span class="kw">int</span> fd_to_send) {
+    <span class="kw">char</span> buf[CMSG_SPACE(<span class="kw">sizeof</span>(<span class="kw">int</span>))];
+    <span class="kw">struct</span> <span class="ty">msghdr</span> msg = {<span class="num">0</span>};
+    msg.msg_control = buf;
+    msg.msg_controllen = <span class="kw">sizeof</span>(buf);
+
+    <span class="kw">struct</span> <span class="ty">cmsghdr</span>* cmsg = <span class="fn">CMSG_FIRSTHDR</span>(&msg);
+    cmsg-&gt;cmsg_level = SOL_SOCKET;
+    cmsg-&gt;cmsg_type  = SCM_RIGHTS;
+    cmsg-&gt;cmsg_len   = <span class="fn">CMSG_LEN</span>(<span class="kw">sizeof</span>(<span class="kw">int</span>));
+    *(<span class="kw">int</span>*)<span class="fn">CMSG_DATA</span>(cmsg) = fd_to_send;
+
+    <span class="kw">char</span> dummy = <span class="str">'x'</span>;
+    <span class="kw">struct</span> <span class="ty">iovec</span> io = {&dummy, <span class="num">1</span>};
+    msg.msg_iov = &io;
+    msg.msg_iovlen = <span class="num">1</span>;
+    <span class="fn">sendmsg</span>(uds, &msg, <span class="num">0</span>);
+}
+
+<span class="com">// 接收端</span>
+<span class="kw">int</span> <span class="fn">recv_fd</span>(<span class="kw">int</span> uds) {
+    <span class="kw">char</span> buf[CMSG_SPACE(<span class="kw">sizeof</span>(<span class="kw">int</span>))];
+    <span class="kw">char</span> dummy;
+    <span class="kw">struct</span> <span class="ty">iovec</span> io = {&dummy, <span class="num">1</span>};
+    <span class="kw">struct</span> <span class="ty">msghdr</span> msg = {.msg_iov=&io, .msg_iovlen=<span class="num">1</span>,
+                          .msg_control=buf, .msg_controllen=<span class="kw">sizeof</span>(buf)};
+    <span class="fn">recvmsg</span>(uds, &msg, <span class="num">0</span>);
+    <span class="kw">struct</span> <span class="ty">cmsghdr</span>* cmsg = <span class="fn">CMSG_FIRSTHDR</span>(&msg);
+    <span class="kw">return</span> *(<span class="kw">int</span>*)<span class="fn">CMSG_DATA</span>(cmsg);
+}</code></pre>
+
+  <div class="callout info">
+    <div class="callout-title">▶ 典型应用</div>
+    <ul>
+      <li><strong>systemd socket activation</strong>：systemd 先 bind/listen，把 listen fd 传给 daemon 进程。daemon 崩溃重启不丢连接。</li>
+      <li><strong>Chrome 多进程</strong>：Browser 进程打开文件后把 fd 传给沙箱中的 Renderer（Renderer 没有文件系统权限）。</li>
+      <li><strong>Nginx 平滑升级</strong>：新 master 启动后从老 master 接管 listen fd，零停机升级。</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ═══════════════════════ Section 11 ═══════════════════════ -->
+<section id="s11">
+  <div class="section-header">
+    <span class="section-num">11</span>
+    <h2>fd 限制与泄漏</h2>
+  </div>
+
+  <h3>11.1 限制层级</h3>
+  <table>
+    <thead><tr><th>层级</th><th>限制项</th><th>查看命令</th><th>调整</th></tr></thead>
+    <tbody>
+      <tr><td>进程软限制</td><td><code>RLIMIT_NOFILE</code></td><td><code>ulimit -n</code> / <code>cat /proc/$$/limits</code></td><td><code>ulimit -n 65536</code></td></tr>
+      <tr><td>进程硬限制</td><td>软限制上限</td><td><code>ulimit -Hn</code></td><td>需 root</td></tr>
+      <tr><td>系统全局</td><td>所有进程 fd 总数</td><td><code>cat /proc/sys/fs/file-max</code></td><td><code>sysctl fs.file-max=1048576</code></td></tr>
+      <tr><td>用户级</td><td><code>/etc/security/limits.conf</code></td><td><code>ulimit -a</code></td><td>编辑配置</td></tr>
+      <tr><td>systemd 服务</td><td>unit file 的 <code>LimitNOFILE</code></td><td><code>systemctl show</code></td><td>unit 配置</td></tr>
+    </tbody>
+  </table>
+
+  <pre data-lang="bash"><code><span class="com"># 查看系统当前打开的 fd 总数</span>
+cat /proc/sys/fs/file-nr
+<span class="com"># 输出: 已分配  已分配但未使用  上限</span>
+<span class="com"># 4224    0               9223372036854775807</span>
+
+<span class="com"># 查看进程打开的 fd 数</span>
+ls /proc/&lt;pid&gt;/fd | wc -l
+
+<span class="com"># 查看进程的 fd 限制</span>
+cat /proc/&lt;pid&gt;/limits | grep files</code></pre>
+
+  <h3>11.2 fd 泄漏检测</h3>
+  <pre data-lang="C++"><code><span class="com">// RAII 包装避免泄漏</span>
+<span class="kw">class</span> <span class="ty">FdGuard</span> {
+    <span class="kw">int</span> fd_;
+<span class="kw">public</span>:
+    <span class="kw">explicit</span> <span class="ty">FdGuard</span>(<span class="kw">int</span> fd) : fd_(fd) {}
+    ~<span class="ty">FdGuard</span>() { <span class="kw">if</span> (fd_ &gt;= <span class="num">0</span>) ::<span class="fn">close</span>(fd_); }
+    <span class="ty">FdGuard</span>(<span class="ty">FdGuard</span>&amp;) = <span class="kw">delete</span>;
+    <span class="ty">FdGuard</span>(<span class="ty">FdGuard</span>&amp;&amp; o) <span class="kw">noexcept</span> : fd_(o.fd_) { o.fd_ = -<span class="num">1</span>; }
+    <span class="kw">int</span> <span class="fn">get</span>() <span class="kw">const</span> { <span class="kw">return</span> fd_; }
+    <span class="kw">int</span> <span class="fn">release</span>() { <span class="kw">int</span> f = fd_; fd_ = -<span class="num">1</span>; <span class="kw">return</span> f; }
+};
+
+<span class="com">// 使用</span>
+<span class="ty">FdGuard</span> fd{<span class="fn">open</span>(<span class="str">"/tmp/x"</span>, O_RDONLY | O_CLOEXEC)};
+<span class="kw">if</span> (fd.<span class="fn">get</span>() &lt; <span class="num">0</span>) <span class="kw">return</span> -<span class="num">1</span>;
+<span class="com">// 任何路径退出都自动 close</span></code></pre>
+
+  <div class="callout danger">
+    <div class="callout-title">✗ 常见泄漏来源</div>
+    <ul>
+      <li><strong>异常路径忘记 close</strong>：早期 C 代码常见，用 RAII 解决</li>
+      <li><strong>exec 后遗留</strong>：未设 <code>FD_CLOEXEC</code>，fd 被意外继承到子进程</li>
+      <li><strong>popen/fopen 忘配对 close</strong></li>
+      <li><strong>epoll 事件处理中 accept 的 fd 没加入管理</strong></li>
+      <li><strong>第三方库 bug</strong>：如某些 HTTP 客户端连接池泄漏</li>
+    </ul>
+  </div>
+
+  <h3>11.3 检测工具</h3>
+  <pre data-lang="bash"><code><span class="com"># 1. lsof 列出进程打开的所有 fd</span>
+lsof -p &lt;pid&gt;
+
+<span class="com"># 2. 监控进程 fd 增长趋势</span>
+watch -n 1 <span class="str">'ls /proc/$(pidof myapp)/fd | wc -l'</span>
+
+<span class="com"># 3. Valgrind 可检测未 close 的 fd (需要 --track-fds)</span>
+valgrind --track-fds=yes ./myapp
+
+<span class="com"># 4. strace 跟踪 open/close 配对</span>
+strace -e openat,close -f ./myapp 2&gt;&amp;1 | grep -E <span class="str">'openat|close'</span>
+
+<span class="com"># 5. bpftrace 动态追踪特定进程的 fd 操作</span>
+bpftrace -e <span class="str">'tracepoint:syscalls:sys_enter_openat /comm=="myapp"/
+  { @opens[comm] = count(); }'</span></code></pre>
+</section>
+
+<!-- ═══════════════════════ Section 12 ═══════════════════════ -->
+<section id="s12">
+  <div class="section-header">
+    <span class="section-num">12</span>
+    <h2>/proc/PID/fd 观察</h2>
+  </div>
+
+  <p><code>/proc/&lt;pid&gt;/fd/</code> 是最直观的 fd 可视化工具——每个 fd 都以符号链接方式呈现，指向实际对象。</p>
+
+  <pre data-lang="bash"><code><span class="com"># 查看 nginx master 进程的 fd</span>
+$ ls -la /proc/1234/fd/
+lrwx------ 1 root root 64 Apr 17 10:00 0 -&gt; /dev/null
+lrwx------ 1 root root 64 Apr 17 10:00 1 -&gt; /dev/null
+lrwx------ 1 root root 64 Apr 17 10:00 2 -&gt; /var/log/nginx/error.log
+lr-x------ 1 root root 64 Apr 17 10:00 3 -&gt; /dev/urandom
+lrwx------ 1 root root 64 Apr 17 10:00 5 -&gt; <span class="str">'socket:[12345]'</span>      <span class="com"># Unix socket</span>
+lrwx------ 1 root root 64 Apr 17 10:00 6 -&gt; <span class="str">'socket:[67890]'</span>      <span class="com"># TCP listen</span>
+lrwx------ 1 root root 64 Apr 17 10:00 7 -&gt; <span class="str">'[eventpoll]'</span>        <span class="com"># epoll fd</span>
+lrwx------ 1 root root 64 Apr 17 10:00 8 -&gt; <span class="str">'anon_inode:[eventfd]'</span>
+lrwx------ 1 root root 64 Apr 17 10:00 9 -&gt; /var/log/nginx/access.log
+
+<span class="com"># 查看 fd 的详细信息 (pos/flags)</span>
+$ cat /proc/1234/fdinfo/9
+pos:    1048576            <span class="com"># 当前偏移量</span>
+flags:  0102001            <span class="com"># O_RDWR | O_APPEND | O_LARGEFILE</span>
+mnt_id: 25
+ino:    789456
+
+<span class="com"># epoll fd 的 fdinfo 更有信息量</span>
+$ cat /proc/1234/fdinfo/7
+pos:    0
+flags:  02000002
+tfd:    6 events:       1 data:            6 pos:0 ino:12345 sdev:8    <span class="com"># 监听的 fd=6</span>
+tfd:    5 events:   80000001 data:            5 pos:0 ino:67890 sdev:8 <span class="com"># EPOLLET | EPOLLIN</span></code></pre>
+
+  <h3>12.1 实战：排查"Too many open files"</h3>
+  <pre data-lang="bash"><code><span class="com"># 场景: 服务报错 EMFILE (Too many open files)</span>
+<span class="com"># 1. 确认限制</span>
+cat /proc/&lt;pid&gt;/limits | grep <span class="str">"Max open files"</span>
+
+<span class="com"># 2. 按 fd 类型统计</span>
+ls -la /proc/&lt;pid&gt;/fd/ | awk <span class="str">'{print $NF}'</span> | sort | uniq -c | sort -rn
+<span class="com"># 典型输出:</span>
+<span class="com">#  5000 socket:[...]       ← 网络连接泄漏嫌疑</span>
+<span class="com">#   200 /var/log/...</span>
+<span class="com">#    10 pipe:[...]</span>
+
+<span class="com"># 3. 若大量是 socket，用 ss 定位</span>
+ss -tnp | grep &lt;pid&gt; | awk <span class="str">'{print $5}'</span> | awk -F: <span class="str">'{print $1}'</span> | sort | uniq -c
+<span class="com"># 看哪个远端地址连接数异常</span>
+
+<span class="com"># 4. 临时扩大限制 (应急)</span>
+prlimit --pid &lt;pid&gt; --nofile=65536</code></pre>
+</section>
+
+<!-- ═══════════════════════ Section 13 ═══════════════════════ -->
+<section id="s13">
+  <div class="section-header">
+    <span class="section-num">13</span>
+    <h2>高频面试题</h2>
+  </div>
+
+  <div class="qa-item">
+    <div class="q">什么是文件描述符？它在内核中对应什么数据结构？</div>
+    <div class="a">fd 是进程级的非负小整数，是 <code>files_struct::fdtable::fd[]</code> 的数组下标。它通过三级表定位到实际资源：
+      <ul style="margin-top: 8px;">
+        <li><strong>① FD Table</strong>（进程私有，<code>files_struct</code>）：fd → <code>struct file*</code></li>
+        <li><strong>② Open File Table</strong>（系统级，<code>struct file</code>）：保存 pos、flags、refcount</li>
+        <li><strong>③ Inode Table</strong>（<code>struct inode</code>）：文件大小、权限、数据块位置</li>
+      </ul>
+      关键点：fd 是索引，不是指针，保证安全隔离；多个 fd 可以指向同一 struct file（dup/fork），共享偏移量。
+    </div>
+  </div>
+
+  <div class="qa-item">
+    <div class="q">两次 open 同一个文件，和 dup 同一个 fd，有什么区别？</div>
+    <div class="a">
+      <strong>两次 open</strong>：每次都创建<strong>独立的 struct file</strong>，两个 fd 有<strong>独立的 pos</strong>。一个 fd 写入不影响另一个 fd 的读位置。<br>
+      <strong>dup(fd)</strong>：只在 FD Table 中新增一个指针，<strong>指向同一个 struct file</strong>，<code>f_count++</code>。两个 fd <strong>共享 pos 和 flags</strong>——一个写入会前进共同的偏移量。<br>
+      <strong>工程含义</strong>：shell 重定向 <code>2&gt;&amp;1</code> 用的是 dup2，让 stderr 和 stdout 共享偏移，输出不会互相覆盖；而并行读取同一文件的不同区域需要各自 open。
+    </div>
+  </div>
+
+  <div class="qa-item">
+    <div class="q">fork() 之后父子进程的 fd 是什么关系？</div>
+    <div class="a"><code>fork</code> 复制了父进程的 <code>files_struct</code>，但其中每个指针指向的 <code>struct file</code> 不复制，只把 <code>f_count++</code>。所以：
+      <ul style="margin-top: 8px;">
+        <li>父子进程的 <strong>FD Table 是独立的</strong>——子进程 close 不影响父进程</li>
+        <li>但指向的 <strong>struct file 是共享的</strong>——共享 pos 和 flags</li>
+        <li>父子 write 同一 fd，偏移量会累加（不会互相覆盖）</li>
+        <li>只有所有 refcount 归零时，内核才真正释放 struct file 和 inode 的打开状态</li>
+      </ul>
+      这是 shell 管道的基础。<code>vfork</code> 更极端——甚至连 FD Table 都共享。
+    </div>
+  </div>
+
+  <div class="qa-item">
+    <div class="q">为什么需要 FD_CLOEXEC？什么场景下必须用它？</div>
+    <div class="a"><code>execve</code> 默认<strong>保留</strong>所有 fd（shell 重定向依赖这一点）。但很多场景 fd 不应该被子进程继承：密钥文件、监听 socket、日志 fd、审计记录等。<br>
+      <strong>必须用 O_CLOEXEC（原子设置）的场景</strong>：
+      <ul style="margin-top: 8px;">
+        <li><strong>多线程程序</strong>：<code>open</code> + <code>fcntl(FD_CLOEXEC)</code> 两步之间有窗口期，其他线程可能 fork+exec 泄漏 fd</li>
+        <li><strong>库代码</strong>：库不知道调用者是否多线程，默认应用 O_CLOEXEC</li>
+        <li><strong>安全敏感 fd</strong>：防止恶意子进程通过 <code>/proc/self/fd/N</code> 读取本应隔离的资源</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="qa-item">
+    <div class="q">为什么 socket、pipe、eventfd 都是 fd？这样设计有什么好处？</div>
+    <div class="a">Linux 把几乎所有可读写的内核对象都抽象为 fd，统一通过 <code>read/write/close/epoll</code> 操作。技术上靠 <code>struct file::f_op</code> 函数表实现——每种资源提供自己的 <code>file_operations</code>。
+      <br><strong>好处</strong>：
+      <ul style="margin-top: 8px;">
+        <li><strong>统一接口</strong>：同一个 event loop 可以同时处理网络、定时器、信号、文件变更</li>
+        <li><strong>组合性</strong>：<code>timerfd</code> + <code>signalfd</code> + <code>eventfd</code> + socket 全部注册到一个 epoll，单线程驱动一切</li>
+        <li><strong>RAII 友好</strong>：所有资源生命周期用同一套 close 管理</li>
+        <li><strong>/proc/fd/ 可视化</strong>：ops、SRE 能用同一套工具排查问题</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="qa-item">
+    <div class="q">你怎么实现 Shell 的 "ls | grep foo | wc -l"？</div>
+    <div class="a">关键是两次 <code>pipe</code> + 三次 <code>fork</code> + 正确的 <code>dup2</code> 编排：
+      <ul style="margin-top: 8px;">
+        <li>创建 pipe1 (ls→grep) 和 pipe2 (grep→wc)</li>
+        <li>fork ls：关闭所有不用的端，<code>dup2(pipe1_write, 1)</code>，exec ls</li>
+        <li>fork grep：<code>dup2(pipe1_read, 0)</code> 作为 stdin，<code>dup2(pipe2_write, 1)</code>，exec grep</li>
+        <li>fork wc：<code>dup2(pipe2_read, 0)</code>，exec wc</li>
+        <li>父进程关闭所有 pipe fd（否则写端永不 EOF，grep/wc 永不结束）</li>
+      </ul>
+      核心是：<strong>任何进程必须关闭它不用的所有管道端</strong>——这是内存泄漏/死锁的根源。
+    </div>
+  </div>
+
+  <div class="qa-item">
+    <div class="q">C10K 问题为什么不能用一个进程 1024 个 fd 的 select 解决？</div>
+    <div class="a">三层障碍：
+      <ul style="margin-top: 8px;">
+        <li><strong>fd 上限</strong>：select 的 <code>FD_SETSIZE=1024</code>（编译期硬编码），poll/epoll 无此限制</li>
+        <li><strong>系统调用开销</strong>：select 每次调用都要把 fd_set 从用户态拷贝到内核态，内核再 O(n) 遍历所有 fd 检查状态。10000 fd 时 CPU 大量消耗在这</li>
+        <li><strong>内核通知机制</strong>：select/poll 是"内核主动扫描"，epoll 是"数据到达时回调把 fd 加入就绪链表"，后者是 O(1) 获取就绪事件</li>
+      </ul>
+      解决 C10K/C10M 的标准答案是 epoll(ET) + 非阻塞 I/O + 多 Reactor + SO_REUSEPORT；C100K 以上可能需要 io_uring。
+    </div>
+  </div>
+
+  <div class="qa-item">
+    <div class="q">一个进程最多能打开多少个 fd？</div>
+    <div class="a">三层限制依次生效：
+      <ul style="margin-top: 8px;">
+        <li><strong>进程级软限制</strong>（<code>RLIMIT_NOFILE</code>）：<code>ulimit -n</code>，默认 1024，可用 <code>setrlimit</code> 调大到硬限制</li>
+        <li><strong>进程级硬限制</strong>：普通用户不能突破，需 root（通常 4096 或 1048576）</li>
+        <li><strong>系统级</strong>：<code>/proc/sys/fs/file-max</code>，所有进程 fd 总和</li>
+        <li><strong>物理限制</strong>：每个 struct file 约 256 字节，100 万 fd ≈ 256MB 内核内存</li>
+      </ul>
+      生产服务器常见配置：<code>ulimit -n 1048576</code> + <code>fs.file-max=2097152</code>。systemd 服务额外配置 <code>LimitNOFILE=infinity</code>。
+    </div>
+  </div>
+
+  <div class="qa-item">
+    <div class="q">如何实现进程间传递一个已打开的 socket fd？</div>
+    <div class="a">通过 Unix Domain Socket 的 <code>SCM_RIGHTS</code> 辅助消息（ancillary data）：
+      <ul style="margin-top: 8px;">
+        <li>发送端构造 <code>msghdr</code>，在 <code>cmsghdr</code> 中设置 <code>cmsg_type=SCM_RIGHTS</code>，data 是要传的 fd 整数</li>
+        <li>用 <code>sendmsg()</code> 通过 UDS 发送</li>
+        <li>接收端用 <code>recvmsg()</code>，从 <code>CMSG_DATA</code> 取出 fd</li>
+      </ul>
+      关键点：内核在 recv 时<strong>分配新 fd</strong>（数字不同但指向同一 struct file），引用计数 +1。
+      <br><strong>应用</strong>：systemd socket activation（daemon 从 systemd 继承 listen fd）；Chrome 沙箱（渲染进程从主进程获取文件 fd）；Nginx 平滑升级（新 master 接管老 master 的 listen fd）。
+    </div>
+  </div>
+</section>
+
+</div>
+
+<footer>
+  <p>File Descriptor &amp; Three-Level Table Model &mdash; A Deep Dive from Integer to Disk</p>
+  <p>Covering task_struct, files_struct, struct file, inode, fork/dup/exec semantics, SCM_RIGHTS, and more</p>
+</footer>
+
+<script>
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'dark',
+    themeVariables: {
+      primaryColor: '#1e293b',
+      primaryTextColor: '#e2e8f0',
+      primaryBorderColor: '#334155',
+      lineColor: '#475569',
+      secondaryColor: '#1a2234',
+      tertiaryColor: '#0f172a',
+      fontFamily: 'Segoe UI, PingFang SC, sans-serif',
+      fontSize: '13px',
+      clusterBkg: 'rgba(16,185,129,0.05)',
+      clusterBorder: '#1e293b',
+      edgeLabelBackground: '#1a2234',
+      actorTextColor: '#e2e8f0',
+      actorBkg: '#1e293b',
+      actorBorder: '#10b981',
+      signalColor: '#64748b',
+      signalTextColor: '#e2e8f0'
+    },
+    flowchart: { curve: 'basis', padding: 20 },
+    sequence: { actorMargin: 50, messageFontSize: 12 }
+  });
+</script>
+<script src="./assets/site-theme.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,1764 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>C++ 性能优化方法论 — cache / branch / inline / PGO / perf</title>
+<link rel="stylesheet" href="./assets/site-theme.css">
+<style>
+  :root {
+    --bg: #0b1220; --bg2: #0f172a; --card: #111c33; --border: #1e2a44; --border-soft: #243352;
+    --text: #e2e8f0; --text-dim: #94a3b8; --text-bright: #f1f5f9;
+    --accent: #38bdf8; --green: #4ade80; --yellow: #facc15; --red: #f87171;
+    --purple: #c084fc; --orange: #fb923c; --pink: #f472b6;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    background: radial-gradient(1200px 800px at 20% 10%, #14213d 0%, var(--bg) 60%) fixed;
+    color: var(--text); line-height: 1.75;
+    min-height: 100vh;
+  }
+  .hero {
+    text-align: center; padding: 3rem 2rem 2rem;
+    border-bottom: 1px solid var(--border);
+    background: linear-gradient(180deg, rgba(20,33,61,.6) 0%, transparent 100%);
+  }
+  .hero h1 {
+    font-size: 2.5rem;
+    background: linear-gradient(135deg, #fb923c, #f87171, #facc15);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+    margin-bottom: .5rem;
+  }
+  .hero .sub { color: var(--text-dim); font-size: 1.05rem; }
+  .hero .meta-row { margin-top: 1rem; display: flex; gap: .8rem; justify-content: center; flex-wrap: wrap; }
+  .hero .pill {
+    padding: .25rem .8rem; border-radius: 999px;
+    font-size: .8rem; border: 1px solid var(--border-soft); color: var(--text-dim);
+  }
+  .hero .pill.r { color: var(--red);    border-color: var(--red);    }
+  .hero .pill.g { color: var(--green);  border-color: var(--green);  }
+  .hero .pill.b { color: var(--accent); border-color: var(--accent); }
+  .hero .pill.y { color: var(--yellow); border-color: var(--yellow); }
+
+  .layout {
+    display: grid; grid-template-columns: 280px 1fr;
+    max-width: 1400px; margin: 0 auto; gap: 2rem; padding: 2rem;
+  }
+  @media (max-width: 1000px) {
+    .layout { grid-template-columns: 1fr; padding: 1rem; }
+    .sidebar { position: static; max-height: none; }
+  }
+
+  .sidebar {
+    position: sticky; top: 1rem; align-self: flex-start;
+    max-height: calc(100vh - 2rem); overflow-y: auto;
+    background: rgba(11,18,32,.75); backdrop-filter: blur(8px);
+    border: 1px solid var(--border); border-radius: 10px;
+    padding: 1.2rem 1rem;
+  }
+  .sidebar h3 {
+    color: var(--accent); font-size: .9rem;
+    text-transform: uppercase; letter-spacing: 1px;
+    margin-bottom: .8rem; padding-bottom: .5rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .sidebar ol { list-style: none; padding: 0; counter-reset: tocidx; }
+  .sidebar ol li { counter-increment: tocidx; margin: 2px 0; }
+  .sidebar a {
+    color: var(--text); text-decoration: none; display: block;
+    padding: .35rem .55rem .35rem 2rem; border-radius: 5px;
+    font-size: .85rem; position: relative; transition: all .15s;
+  }
+  .sidebar a::before {
+    content: counter(tocidx, decimal-leading-zero);
+    position: absolute; left: .5rem;
+    color: var(--text-dim); font-family: monospace; font-size: .75rem;
+  }
+  .sidebar a:hover { background: #1c2842; color: var(--accent); }
+  .sidebar a.active { background: #1a3a5e; color: var(--accent); }
+
+  main { min-width: 0; }
+  section.chapter {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 12px; padding: 1.5rem 2rem; margin-bottom: 1.5rem;
+    scroll-margin-top: 1rem;
+  }
+  section.chapter h2 {
+    color: var(--accent); font-size: 1.5rem;
+    margin-bottom: 1rem; padding-bottom: .5rem;
+    border-bottom: 1px solid var(--border);
+  }
+  section.chapter h3 { color: var(--green); font-size: 1.1rem; margin: 1.5rem 0 .7rem; }
+  section.chapter h4 { color: var(--purple); font-size: 1rem; margin: 1rem 0 .5rem; }
+  section.chapter p, section.chapter li { font-size: .96rem; }
+  section.chapter ul, section.chapter ol { padding-left: 1.5rem; margin: .5rem 0; }
+  section.chapter li { margin-bottom: .3rem; }
+
+  pre {
+    background: #0a1020; border: 1px solid var(--border);
+    border-radius: 8px; padding: .9rem 1.1rem; overflow-x: auto;
+    font-family: 'Cascadia Code','Fira Code',Consolas,monospace;
+    font-size: .85rem; line-height: 1.6; margin: .8rem 0;
+  }
+  code {
+    background: #0a1020; color: var(--green); padding: 1px 6px; border-radius: 4px;
+    font-family: 'Cascadia Code','Fira Code',Consolas,monospace; font-size: .9em;
+  }
+  pre code { padding: 0; background: transparent; color: inherit; }
+  .kw{color:#ff7b72;} .type{color:#79c0ff;} .str{color:#a5d6ff;}
+  .cm{color:#6b7a99;font-style:italic;} .num{color:#d2a8ff;}
+  .fn{color:#d2a8ff;} .lit{color:#ffa657;} .pp{color:#ff7b72;}
+
+  .box {
+    background: #0d1730; border-left: 4px solid var(--accent);
+    padding: .9rem 1.2rem; margin: 1rem 0; border-radius: 0 8px 8px 0;
+  }
+  .box.tip    { border-color: var(--yellow); background: #1a1a2e; }
+  .box.tip::before { content: "💡 "; }
+  .box.danger { border-color: var(--red);    background: #2e1a1a; }
+  .box.danger::before { content: "⚠️ "; }
+  .box.ok     { border-color: var(--green);  background: #142a1d; }
+  .box.ok::before { content: "✅ "; }
+  .box.star   { border-color: var(--orange); background: #2a1f0d; }
+  .box.star::before { content: "⭐ 面试加分: "; color: var(--orange); font-weight: 700; }
+  .box.q      { border-color: var(--purple); background: #1f1233; }
+  .box.q::before { content: "❓ 面试问: "; color: var(--purple); font-weight: 700; }
+  .box.perf   { border-color: #34d399; background: #0d2a1f; }
+  .box.perf::before { content: "📊 数据: "; color: #34d399; font-weight: 700; }
+
+  table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: .9rem; }
+  th, td { border: 1px solid var(--border); padding: .55rem .85rem; text-align: left; vertical-align: top; }
+  th { background: #0d1730; color: var(--accent); }
+  tr:nth-child(even) { background: rgba(255,255,255,.02); }
+
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin: 1rem 0; }
+  @media (max-width: 800px) { .grid-2 { grid-template-columns: 1fr; } }
+  .panel {
+    background: #0d1730; border: 1px solid var(--border);
+    border-radius: 8px; padding: 1rem 1.2rem;
+  }
+  .panel.green  { border-left: 4px solid var(--green); }
+  .panel.red    { border-left: 4px solid var(--red); }
+  .panel.yellow { border-left: 4px solid var(--yellow); }
+  .panel.accent { border-left: 4px solid var(--accent); }
+  .panel.purple { border-left: 4px solid var(--purple); }
+  .panel.orange { border-left: 4px solid var(--orange); }
+  .panel h4 { margin-top: 0; }
+
+  .diag { display: flex; justify-content: center; margin: 1.2rem 0; overflow-x: auto; }
+  svg text { font-family: 'Segoe UI', sans-serif; }
+
+  .real-tag {
+    display: inline-block; background: linear-gradient(135deg, #f97316, #ec4899);
+    color: white; padding: 2px 8px; border-radius: 4px;
+    font-size: .72rem; font-weight: bold; margin-right: .35rem; vertical-align: middle;
+  }
+  .mark { background: linear-gradient(transparent 60%, rgba(56,189,248,.25) 60%); padding: 0 2px; }
+
+  .back-top {
+    position: fixed; bottom: 1.5rem; right: 1.5rem;
+    background: var(--card); border: 1px solid var(--border-soft); color: var(--text);
+    width: 44px; height: 44px; border-radius: 50%;
+    cursor: pointer; font-size: 1.1rem; display: none; z-index: 100;
+  }
+  .back-top:hover { background: #1c2842; color: var(--accent); }
+  .back-top.show { display: block; }
+</style>
+</head>
+<body>
+<!-- tn-nav:v1 -->
+<style>
+#tn-nav{position:fixed;top:14px;right:14px;z-index:99999;display:flex;gap:6px;align-items:center;
+  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;
+  font-size:12px;line-height:1;font-weight:500;}
+#tn-nav a,#tn-nav .tn-meta{display:inline-flex;align-items:center;gap:4px;
+  background:rgba(20,20,30,.85);color:#fff !important;text-decoration:none !important;
+  padding:7px 11px;border-radius:999px;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+  border:1px solid rgba(255,255,255,.10);box-shadow:0 2px 8px rgba(0,0,0,.18);
+  transition:background .15s,transform .15s;}
+#tn-nav a:hover{background:rgba(56,189,248,.92);transform:translateY(-1px);}
+#tn-nav .tn-meta{background:rgba(20,20,30,.55);cursor:default;}
+@media (max-width:640px){#tn-nav{top:8px;right:8px;font-size:11px;gap:4px;}
+  #tn-nav a,#tn-nav .tn-meta{padding:5px 9px;}}
+@media print{#tn-nav{display:none;}}
+</style>
+<div id="tn-nav">
+  <a href="../index.html" title="&#x8FD4;&#x56DE;&#x4E3B;&#x9875;">&larr; &#x4E3B;&#x9875;</a>
+  <a href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub &#x4ED3;&#x5E93;">&#x1F4C1; Repo</a>
+  <a href="https://github.com/kavinChan13/tech-notes/blob/main/perf-debug/performance_guide.html" target="_blank" rel="noopener" title="&#x672C;&#x6587;&#x6E90;&#x7801;">&#x1F4DD; Source</a>
+  <span class="tn-meta" title="&#x9884;&#x8BA1;&#x9605;&#x8BFB;&#x65F6;&#x957F;">&#x23F1; 86 min</span>
+</div>
+<!-- /tn-nav:v1 -->
+<div class="hero">
+  <h1>C++ 性能优化 完全指南</h1>
+  <p class="sub">从微架构到工程实践 · cache / branch / inline / PGO/LTO · perf 实战 · 真实优化案例</p>
+  <div class="meta-row">
+    <span class="pill r">核心难度: ★★★★★</span>
+    <span class="pill b">高级岗必考</span>
+    <span class="pill g">阅读时长: ~60 min</span>
+    <span class="pill y">前置: cpp_memory_model / OS_fundamentals</span>
+  </div>
+</div>
+
+<div class="layout">
+  <aside class="sidebar">
+    <h3>目录</h3>
+    <ol>
+      <li><a href="#s1">引言 · 优化方法论金字塔</a></li>
+      <li><a href="#s2">测量先行 · 三大法则</a></li>
+      <li><a href="#s3">性能模型 · latency / throughput</a></li>
+      <li><a href="#s4">CPU 微架构基础</a></li>
+      <li><a href="#s5">缓存层次 · L1/L2/L3</a></li>
+      <li><a href="#s6">False Sharing 假共享 ★</a></li>
+      <li><a href="#s7">数据布局 · SoA vs AoS</a></li>
+      <li><a href="#s8">分支预测与 branchless</a></li>
+      <li><a href="#s9">内存分配优化</a></li>
+      <li><a href="#s10">移动 / 视图 / 零拷贝</a></li>
+      <li><a href="#s11">inline 与函数开销</a></li>
+      <li><a href="#s12">编译器优化 · O3/LTO/PGO</a></li>
+      <li><a href="#s13">锁的性能优化</a></li>
+      <li><a href="#s14">性能分析工具</a></li>
+      <li><a href="#s15">微基准的陷阱</a></li>
+      <li><a href="#s16">真实工程优化案例</a></li>
+      <li><a href="#s16b">SIMD / 向量化深度 ⭐</a></li>
+      <li><a href="#s16c">PGO + AutoFDO + BOLT ⭐</a></li>
+      <li><a href="#s17">面试题集</a></li>
+      <li><a href="#s18">速查总表</a></li>
+    </ol>
+  </aside>
+
+<main>
+
+<!-- ================================================================
+     §1 引言
+     ================================================================ -->
+<section class="chapter" id="s1">
+  <h2>1. 引言 — 性能优化方法论金字塔</h2>
+
+  <p>性能优化常被新人理解为"用各种 trick 把代码改得更快"。<strong>错</strong>。真正的性能工程是<strong>分层方法论</strong>：</p>
+
+  <div class="diag">
+    <svg viewBox="0 0 700 320" width="700" height="320">
+      <g font-size="13" fill="#e2e8f0">
+        <polygon points="350,20 130,300 570,300" fill="none" stroke="#38bdf8" stroke-width="2"/>
+
+        <line x1="200" y1="240" x2="500" y2="240" stroke="#94a3b8" stroke-dasharray="4 3"/>
+        <line x1="240" y1="180" x2="460" y2="180" stroke="#94a3b8" stroke-dasharray="4 3"/>
+        <line x1="280" y1="120" x2="420" y2="120" stroke="#94a3b8" stroke-dasharray="4 3"/>
+        <line x1="320" y1="60" x2="380" y2="60" stroke="#94a3b8" stroke-dasharray="4 3"/>
+
+        <text x="350" y="40" text-anchor="middle" font-weight="700" fill="#fb923c">微优化</text>
+        <text x="350" y="55" text-anchor="middle" font-size="11" fill="#94a3b8">SIMD / 内联汇编</text>
+
+        <text x="350" y="90" text-anchor="middle" font-weight="700" fill="#facc15">编译器优化</text>
+        <text x="350" y="105" text-anchor="middle" font-size="11" fill="#94a3b8">O3 / LTO / PGO / inline</text>
+
+        <text x="350" y="150" text-anchor="middle" font-weight="700" fill="#c084fc">数据布局 / 缓存</text>
+        <text x="350" y="165" text-anchor="middle" font-size="11" fill="#94a3b8">SoA / 对齐 / cache line</text>
+
+        <text x="350" y="210" text-anchor="middle" font-weight="700" fill="#4ade80">算法 / 数据结构</text>
+        <text x="350" y="225" text-anchor="middle" font-size="11" fill="#94a3b8">O(n²) → O(n log n) / 选对容器</text>
+
+        <text x="350" y="270" text-anchor="middle" font-weight="700" fill="#38bdf8">系统设计</text>
+        <text x="350" y="285" text-anchor="middle" font-size="11" fill="#94a3b8">异步化 / 缓存 / 批处理 / 并行</text>
+
+        <text x="350" y="315" text-anchor="middle" font-style="italic" fill="#94a3b8" font-size="12">底层优化收益小 · 上层设计决定数量级</text>
+      </g>
+    </svg>
+  </div>
+
+  <h3>1.1 几个思维误区</h3>
+
+  <div class="box danger">
+    <ol>
+      <li><b>"凭感觉优化"</b> — 90% 直觉是错的。先 profiling 再动手</li>
+      <li><b>"优化所有热点"</b> — 实际只有 1-3 个真热点。其他都是浪费精力</li>
+      <li><b>"用 trick 总是更好"</b> — 反例：循环展开在现代 CPU 上常常被自动做了</li>
+      <li><b>"std::xxx 总是慢"</b> — 多数情况 STL 性能极佳；不要预设</li>
+      <li><b>"汇编优化最赚"</b> — 99.9% 场景，让编译器 -O3 + 你给好数据布局即可</li>
+    </ol>
+  </div>
+
+  <h3>1.2 本章涵盖什么</h3>
+
+  <ul>
+    <li>系统性<strong>方法论</strong>：测量 → 建模 → 定位 → 优化 → 验证</li>
+    <li><strong>底层知识</strong>：CPU / 缓存 / 分支 / 编译器</li>
+    <li><strong>工具链</strong>：perf / vtune / 火焰图 / Google Benchmark</li>
+    <li><strong>真实案例</strong>：5 个生产优化案例</li>
+    <li><strong>面试题</strong>：高级岗必考</li>
+  </ul>
+</section>
+
+<!-- ================================================================
+     §2 测量先行
+     ================================================================ -->
+<section class="chapter" id="s2">
+  <h2>2. 测量先行 — 性能优化的三大法则</h2>
+
+  <h3>2.1 三大法则</h3>
+
+  <div class="grid-2">
+    <div class="panel accent">
+      <h4>法则 1: <strong>测量, 不要猜</strong></h4>
+      <p>"过早优化是万恶之源" — Knuth。<br>没有 profiling 数据 → 不要优化任何东西。<br>"你认为是热点的代码" 与 "实际热点" 重叠率 &lt; 30%。</p>
+    </div>
+    <div class="panel green">
+      <h4>法则 2: <strong>优化前定基线</strong></h4>
+      <p>每次优化前 → 跑一次 benchmark 记录基线。<br>每次优化后 → 对比。看不到 ≥ 5% 改进就回退（噪音范围）。</p>
+    </div>
+    <div class="panel yellow">
+      <h4>法则 3: <strong>优化用户感知的指标</strong></h4>
+      <p>p99 延迟 / 吞吐量 / 资源使用，而不是单次 nanosecond。<br>用户 30 ms 等待感知不到差异，但 100 ms → 1s 是巨大体验差。</p>
+    </div>
+    <div class="panel red">
+      <h4>法则 4 (额外): <strong>20/80 法则</strong></h4>
+      <p>20% 的代码占 80% CPU 时间。优化这 20%。其它代码即便慢 10× 也无所谓。</p>
+    </div>
+  </div>
+
+  <h3>2.2 标准优化流程</h3>
+
+  <ol>
+    <li><b>定义目标</b>：p99 &lt; 50 ms / QPS &gt; 10000 / 内存 &lt; 1 GB</li>
+    <li><b>建立基线</b>：当前指标值 + 测试条件</li>
+    <li><b>profiling</b>：perf record → 火焰图，找 top 3 热点</li>
+    <li><b>假设 + 实验</b>：针对热点提改进方案</li>
+    <li><b>实施</b>：尽量隔离一个变量改</li>
+    <li><b>对比验证</b>：再 benchmark，对比基线</li>
+    <li><b>提交或回退</b>：明显改进保留，否则回退</li>
+    <li><b>监控</b>：上线后持续观察，防止回退</li>
+  </ol>
+
+  <h3>2.3 微基准 — Google Benchmark</h3>
+
+<pre><span class="pp">#include</span> <span class="str">&lt;benchmark/benchmark.h&gt;</span>
+
+<span class="kw">static</span> <span class="kw">void</span> <span class="fn">BM_VectorPushBack</span>(benchmark::State&amp; st) {
+    <span class="kw">for</span> (<span class="kw">auto</span> _ : st) {
+        std::vector&lt;<span class="kw">int</span>&gt; v;
+        <span class="kw">for</span> (<span class="kw">int</span> i = 0; i &lt; st.<span class="fn">range</span>(0); ++i)
+            v.<span class="fn">push_back</span>(i);
+        <span class="fn">benchmark::DoNotOptimize</span>(v);   <span class="cm">// 防编译器优化掉</span>
+    }
+}
+BENCHMARK(BM_VectorPushBack)-&gt;Range(1&lt;&lt;10, 1&lt;&lt;20);
+
+BENCHMARK_MAIN();</pre>
+
+<pre><span class="cm">// 编译运行</span>
+$ g++ -std=c++20 -O3 bench.cpp -lbenchmark -lpthread -o bench
+$ ./bench
+BM_VectorPushBack/1024     5234 ns
+BM_VectorPushBack/4096    21456 ns
+BM_VectorPushBack/16384   89234 ns
+...</pre>
+
+  <div class="box ok">Google Benchmark 自动处理：① 找统计稳定的运行次数；② 防止编译器优化 dead code；③ 报告含均值/标准差。</div>
+
+  <h3>2.4 容易被忽略的几个测量原则</h3>
+
+  <ul>
+    <li><b>warm-up</b>：第一次运行有缓存冷启动，要 burn-in 几次</li>
+    <li><b>固定 CPU 频率</b>：禁用 turbo boost / cpufreq governor 设 performance</li>
+    <li><b>关闭 ASLR + 隔离 CPU</b>：减少噪音</li>
+    <li><b>测多次取分布</b>：单次运行 ±20% 噪音正常</li>
+    <li><b>小样本不可信</b>：跑 100 万次以上才稳定</li>
+    <li><b>注意编译器把代码优化掉</b>：用 <code>DoNotOptimize</code> / <code>ClobberMemory</code></li>
+  </ul>
+</section>
+
+<!-- ================================================================
+     §3 性能模型
+     ================================================================ -->
+<section class="chapter" id="s3">
+  <h2>3. 性能模型 — Latency / Throughput / Utilization</h2>
+
+  <h3>3.1 三个核心指标</h3>
+
+  <table>
+    <tr><th>指标</th><th>定义</th><th>单位</th><th>典型场景</th></tr>
+    <tr><td><b>Latency 延迟</b></td><td>单个操作完成时间</td><td>ns / µs / ms</td><td>响应时间敏感 (API / 高频交易)</td></tr>
+    <tr><td><b>Throughput 吞吐</b></td><td>单位时间完成数</td><td>QPS / MB/s</td><td>批处理 / 数据分析</td></tr>
+    <tr><td><b>Utilization 利用率</b></td><td>资源使用率</td><td>%</td><td>容量规划</td></tr>
+  </table>
+
+  <p>三者关系：<strong>Little's Law</strong> — <code>L = λ × W</code>（队列长度 = 到达率 × 平均等待时间）</p>
+
+  <h3>3.2 用对延迟分布</h3>
+
+  <div class="box danger">
+    <b>误区</b>：用<strong>平均延迟</strong>评估系统。错！<br>
+    平均值掩盖长尾 — 用户体验由<strong>最差的 1%</strong> 决定。
+  </div>
+
+  <table>
+    <tr><th>百分位</th><th>含义</th><th>用途</th></tr>
+    <tr><td>p50</td><td>中位数</td><td>"普通"用户体验</td></tr>
+    <tr><td>p95</td><td>95% 比这快</td><td>常用 SLA 指标</td></tr>
+    <tr><td>p99</td><td>99% 比这快</td><td>大部分公司 SLA</td></tr>
+    <tr><td>p999</td><td>99.9%</td><td>关键服务 / HFT</td></tr>
+    <tr><td>Max</td><td>最差</td><td>异常检测</td></tr>
+  </table>
+
+  <h3>3.3 计算机延迟数字（Jeff Dean 经典表）</h3>
+
+  <p>每个工程师都该熟记的"延迟感觉"：</p>
+
+  <table>
+    <tr><th>操作</th><th>典型延迟</th><th>对比</th></tr>
+    <tr><td>L1 cache 访问</td><td>~ 0.5 ns</td><td>1×</td></tr>
+    <tr><td>分支预测错误</td><td>~ 5 ns</td><td>10×</td></tr>
+    <tr><td>L2 cache 访问</td><td>~ 7 ns</td><td>14×</td></tr>
+    <tr><td>L3 cache 访问</td><td>~ 25 ns</td><td>50×</td></tr>
+    <tr><td>Mutex lock/unlock (无竞争)</td><td>~ 25 ns</td><td>50×</td></tr>
+    <tr><td>主存访问</td><td>~ 100 ns</td><td>200×</td></tr>
+    <tr><td>shared_ptr 拷贝 (atomic 计数)</td><td>~ 25 ns</td><td>50×</td></tr>
+    <tr><td>std::function 调用</td><td>~ 5 ns</td><td>10×</td></tr>
+    <tr><td>虚函数调用</td><td>~ 1-2 ns</td><td>3×</td></tr>
+    <tr><td>系统调用 (getpid)</td><td>~ 50 ns</td><td>100×</td></tr>
+    <tr><td>malloc 小块 (无竞争)</td><td>~ 100 ns</td><td>200×</td></tr>
+    <tr><td>线程上下文切换</td><td>~ 1-5 µs</td><td>10000×</td></tr>
+    <tr><td>SSD 顺序读 1KB</td><td>~ 50 µs</td><td>100000×</td></tr>
+    <tr><td>本机 TCP 往返</td><td>~ 30-100 µs</td><td>—</td></tr>
+    <tr><td>跨数据中心往返</td><td>~ 150 ms</td><td>3 亿×</td></tr>
+  </table>
+
+  <div class="box star">
+    熟记这个表后，给一段代码估算 P99 延迟<strong>不用跑就能给出量级</strong> — 是高级岗的硬通货能力。
+  </div>
+</section>
+
+<!-- ================================================================
+     §4 CPU 微架构
+     ================================================================ -->
+<section class="chapter" id="s4">
+  <h2>4. CPU 微架构基础（你必须知道的）</h2>
+
+  <h3>4.1 现代 CPU 的几个关键事实</h3>
+
+  <ul>
+    <li><b>流水线 (Pipeline)</b>：每个指令分 ~14-20 个阶段（Intel Skylake 14，Apple M1 ~16）</li>
+    <li><b>超标量 (Superscalar)</b>：每周期可发射 4-6 条指令并行执行</li>
+    <li><b>乱序执行 (Out-of-Order)</b>：CPU 自动重排指令以填满流水线</li>
+    <li><b>分支预测 (Branch Prediction)</b>：预测 if/while 分支，错了就 flush 流水线 (~10-20 周期)</li>
+    <li><b>预取 (Prefetcher)</b>：硬件自动预测下次内存访问，提前加载到 cache</li>
+    <li><b>SIMD</b>：单指令多数据 — SSE/AVX (x86), NEON (ARM)</li>
+  </ul>
+
+  <h3>4.2 性能的三大杀手</h3>
+
+  <table>
+    <tr><th>杀手</th><th>开销 (周期)</th><th>典型起因</th></tr>
+    <tr><td><b>Cache miss (L3 → DRAM)</b></td><td>~ 200-300</td><td>随机内存访问 / 大数据集</td></tr>
+    <tr><td><b>分支预测错误</b></td><td>~ 10-20</td><td>不可预测的 if / 数据相关分支</td></tr>
+    <tr><td><b>指令依赖链 (data dependency)</b></td><td>~ 阻塞乱序执行</td><td>循环里的串行更新</td></tr>
+  </table>
+
+  <p>结论：现代 CPU 的速度<strong>不取决于指令条数，而取决于内存访问模式 + 分支可预测性</strong>。</p>
+
+  <h3>4.3 IPC (Instructions Per Cycle)</h3>
+
+  <p>评估代码"是否充分利用 CPU" 的关键指标：</p>
+  <ul>
+    <li>理想 IPC = 4 (Intel) / 6 (Apple M1)</li>
+    <li>实测 IPC &lt; 1 → CPU 大量等待（cache miss / 分支错 / 依赖链）</li>
+    <li>用 <code>perf stat</code> 测：<code>perf stat -e instructions,cycles ./prog</code></li>
+  </ul>
+
+<pre>$ perf stat -e instructions,cycles,cache-references,cache-misses,branches,branch-misses ./bench
+
+  3,541,233,442  instructions
+  1,234,567,890  cycles
+                   #    2.87  IPC                   ← 很好
+     12,345,678  cache-misses              #    9.2% of all cache refs
+        345,678  branch-misses             #    0.5% of all branches</pre>
+
+  <div class="box star">
+    "怎么判断一个程序的 CPU 使用是否健康?" — 答：① IPC ≥ 1.5（越高越好）；② cache-miss 率 &lt; 5%；③ branch-miss 率 &lt; 1%。<code>perf stat</code> 一把出完。
+  </div>
+</section>
+
+<!-- ================================================================
+     §5 缓存层次
+     ================================================================ -->
+<section class="chapter" id="s5">
+  <h2>5. 缓存层次 · L1/L2/L3 与缓存友好编程</h2>
+
+  <h3>5.1 缓存层次（典型 Intel Skylake）</h3>
+
+  <table>
+    <tr><th>层级</th><th>大小</th><th>延迟</th><th>共享</th></tr>
+    <tr><td>L1 (data)</td><td>32 KB / core</td><td>~ 4 cycles (1 ns)</td><td>每核独立</td></tr>
+    <tr><td>L1 (instr)</td><td>32 KB / core</td><td>~ 4 cycles</td><td>每核独立</td></tr>
+    <tr><td>L2</td><td>256 KB ~ 1 MB / core</td><td>~ 12 cycles (3 ns)</td><td>每核独立</td></tr>
+    <tr><td>L3</td><td>4-32 MB</td><td>~ 40 cycles (10 ns)</td><td>所有核共享</td></tr>
+    <tr><td>DRAM</td><td>GB</td><td>~ 200 cycles (60-100 ns)</td><td>—</td></tr>
+  </table>
+
+  <h3>5.2 Cache Line</h3>
+
+  <p>缓存的基本传输单位 — <strong>典型 64 字节</strong>。</p>
+  <ul>
+    <li>读 1 字节也会加载整个 64 字节</li>
+    <li>设计数据结构时按 cache line 对齐 / 紧凑布局 → 局部性提升</li>
+    <li>查看：<code>cat /sys/devices/system/cpu/cpu0/cache/index0/coherency_line_size</code></li>
+    <li>C++17: <code>std::hardware_destructive_interference_size</code></li>
+  </ul>
+
+  <h3>5.3 缓存友好的两个原则</h3>
+
+  <div class="grid-2">
+    <div class="panel green">
+      <h4>① 时间局部性</h4>
+      <p>"刚访问的数据再次被访问" — 编译器/CPU 自动利用。<br>你能做的：<strong>处理完一块再切换到下一块</strong>，不要东一榔头西一棒。</p>
+    </div>
+    <div class="panel accent">
+      <h4>② 空间局部性</h4>
+      <p>"相邻地址被一起访问" — 顺序遍历数组就是典型。<br>你能做的：<strong>用连续容器</strong>（vector），<strong>避免链表</strong>，<strong>访问模式顺序化</strong>。</p>
+    </div>
+  </div>
+
+  <h3>5.4 经典例子：行优先 vs 列优先</h3>
+
+<pre><span class="kw">constexpr</span> <span class="kw">int</span> N = 4096;
+<span class="kw">int</span> a[N][N];
+
+<span class="cm">// ✅ 行优先 — cache 友好 (顺序访问)</span>
+<span class="kw">for</span> (<span class="kw">int</span> i = 0; i &lt; N; ++i)
+    <span class="kw">for</span> (<span class="kw">int</span> j = 0; j &lt; N; ++j)
+        a[i][j] = i + j;            <span class="cm">// 步长 = sizeof(int) = 4 字节</span>
+
+<span class="cm">// ❌ 列优先 — cache miss 风暴</span>
+<span class="kw">for</span> (<span class="kw">int</span> j = 0; j &lt; N; ++j)
+    <span class="kw">for</span> (<span class="kw">int</span> i = 0; i &lt; N; ++i)
+        a[i][j] = i + j;            <span class="cm">// 步长 = N*sizeof(int) = 16 KB → 每次都 cache miss</span></pre>
+
+  <div class="box perf">
+    实测 4096×4096 int 矩阵：行优先 ~30 ms vs 列优先 ~200 ms。<strong>差 7 倍</strong>，仅仅是访问顺序不同！
+  </div>
+
+  <h3>5.5 Cache 友好的容器</h3>
+
+  <table>
+    <tr><th>容器</th><th>cache 友好度</th><th>原因</th></tr>
+    <tr><td>std::vector</td><td>★★★★★</td><td>单块连续内存，最优</td></tr>
+    <tr><td>std::array</td><td>★★★★★</td><td>同上，且栈分配</td></tr>
+    <tr><td>std::deque</td><td>★★★</td><td>分段连续，跨段时 cache miss</td></tr>
+    <tr><td>std::list</td><td>★</td><td>每节点独立分配，每步 cache miss</td></tr>
+    <tr><td>std::map</td><td>★★</td><td>红黑树，节点分散</td></tr>
+    <tr><td>std::unordered_map</td><td>★★</td><td>bucket 数组 + 链表节点</td></tr>
+    <tr><td>absl::flat_hash_map</td><td>★★★★</td><td>open addressing，节点连续</td></tr>
+  </table>
+
+  <div class="box ok">
+    <b>规则</b>：默认<strong>用 vector</strong>。即便算法复杂度更高，缓存友好性常常胜出。N &lt; 1000 时几乎所有场景 vector 优于 list / set。
+  </div>
+</section>
+
+<!-- ================================================================
+     §6 False Sharing
+     ================================================================ -->
+<section class="chapter" id="s6">
+  <h2>6. False Sharing 假共享 ★ (并发性能杀手)</h2>
+
+  <h3>6.1 问题</h3>
+
+  <p>两个变量被不同线程读写，但<strong>恰好在同一 cache line</strong> → CPU 缓存一致性协议（MESI）会让 cache line 在核间反复传输 → 性能暴跌。</p>
+
+  <div class="diag">
+    <svg viewBox="0 0 720 240" width="720" height="240">
+      <g font-size="12" fill="#e2e8f0">
+        <text x="360" y="20" text-anchor="middle" font-size="14" font-weight="700" fill="#facc15">False Sharing</text>
+
+        <rect x="60"  y="40" width="280" height="50" fill="#1a3a5e" stroke="#38bdf8"/>
+        <text x="200" y="60" text-anchor="middle" font-weight="700">Core 0</text>
+        <text x="200" y="78" text-anchor="middle" font-size="11">写 counter[0]</text>
+
+        <rect x="380" y="40" width="280" height="50" fill="#2a1f0d" stroke="#fb923c"/>
+        <text x="520" y="60" text-anchor="middle" font-weight="700">Core 1</text>
+        <text x="520" y="78" text-anchor="middle" font-size="11">写 counter[1]</text>
+
+        <rect x="60"  y="120" width="600" height="50" fill="#1f1233" stroke="#c084fc"/>
+        <text x="360" y="140" text-anchor="middle" font-weight="700">同一 cache line (64 字节)</text>
+        <text x="120" y="158" text-anchor="middle" font-size="11">counter[0]</text>
+        <text x="200" y="158" text-anchor="middle" font-size="11">counter[1]</text>
+        <text x="280" y="158" text-anchor="middle" font-size="11">counter[2]</text>
+        <text x="360" y="158" text-anchor="middle" font-size="11">counter[3]</text>
+        <text x="440" y="158" text-anchor="middle" font-size="11">counter[4]</text>
+        <text x="520" y="158" text-anchor="middle" font-size="11">counter[5]</text>
+        <text x="600" y="158" text-anchor="middle" font-size="11">counter[6]</text>
+
+        <line x1="200" y1="90" x2="120" y2="120" stroke="#38bdf8" stroke-width="2" marker-end="url(#arr)"/>
+        <line x1="520" y1="90" x2="200" y2="120" stroke="#fb923c" stroke-width="2" marker-end="url(#arr)"/>
+
+        <text x="360" y="210" text-anchor="middle" fill="#94a3b8" font-size="12">逻辑上独立的变量, 物理上共享 cache line → MESI 协议反复传输 → 慢 10-100×</text>
+      </g>
+    </svg>
+  </div>
+
+  <h3>6.2 重现</h3>
+
+<pre><span class="cm">// ❌ 假共享 — 4 个 counter 在同一 cache line</span>
+<span class="kw">struct</span> <span class="type">Counters</span> { std::atomic&lt;<span class="type">long</span>&gt; c[4]; };
+<span class="type">Counters</span> g;
+
+<span class="kw">void</span> <span class="fn">work</span>(<span class="kw">int</span> tid) {
+    <span class="kw">for</span> (<span class="kw">int</span> i = 0; i &lt; <span class="num">100'000'000</span>; ++i)
+        g.c[tid].<span class="fn">fetch_add</span>(1, std::memory_order_relaxed);
+}
+<span class="cm">// 4 线程每个写自己的 counter — 应该完全并行</span>
+<span class="cm">// 实测: 比单线程慢 5-10× (假共享)</span></pre>
+
+  <h3>6.3 解决：cache line 对齐</h3>
+
+<pre><span class="kw">struct</span> <span class="type">PaddedCounter</span> {
+    <span class="kw">alignas</span>(std::hardware_destructive_interference_size)   <span class="cm">// 64 字节对齐</span>
+    std::atomic&lt;<span class="type">long</span>&gt; v;
+};
+<span class="type">PaddedCounter</span> counters[4];     <span class="cm">// 每个独占一个 cache line</span>
+
+<span class="cm">// 或手动 padding</span>
+<span class="kw">struct</span> <span class="type">PaddedCounterManual</span> {
+    std::atomic&lt;<span class="type">long</span>&gt; v;
+    <span class="kw">char</span> pad[64 - <span class="kw">sizeof</span>(std::atomic&lt;<span class="type">long</span>&gt;)];
+};</pre>
+
+  <div class="box perf">
+    <b>实测</b>：4 线程 100M 自增 — 假共享版 ~3 s，padding 版 ~0.4 s。<strong>8× 加速</strong>，仅仅靠对齐！
+  </div>
+
+  <h3>6.4 易触发场景</h3>
+
+  <ul>
+    <li>线程池 worker 的<strong>per-worker stats</strong> 紧挨着</li>
+    <li>std::vector&lt;atomic&lt;T&gt;&gt; 中的元素</li>
+    <li>per-thread 计数器数组</li>
+    <li>spinlock 数组</li>
+    <li>RingBuffer 的 head/tail 指针没对齐</li>
+  </ul>
+
+  <h3>6.5 检测工具</h3>
+
+  <ul>
+    <li><code>perf c2c record/report</code> — Cache to Cache，专测假共享</li>
+    <li><code>perf stat -e cache-misses</code> — 高 miss 率是信号</li>
+    <li>Intel VTune — 直观显示 false sharing 热点</li>
+  </ul>
+
+  <div class="box star">
+    "怎么判断你的代码有 false sharing?" — 答：① <code>perf c2c report</code> 显示 hot cache line + multi-core 写；② 多线程加速比 ≪ 线程数；③ atomic 操作明显比单线程慢。修复：cache line padding。
+  </div>
+</section>
+
+<!-- ================================================================
+     §7 数据布局
+     ================================================================ -->
+<section class="chapter" id="s7">
+  <h2>7. 数据布局优化 — SoA vs AoS · 对齐 · padding</h2>
+
+  <h3>7.1 SoA vs AoS</h3>
+
+  <table>
+    <tr><th>风格</th><th>布局</th><th>遍历某字段时</th><th>典型场景</th></tr>
+    <tr><td><b>AoS (Array of Structs)</b></td><td><code>vector&lt;Particle&gt;</code> 每个 particle 是一组字段</td><td>cache miss 多 (跨字段)</td><td>OOP 风格</td></tr>
+    <tr><td><b>SoA (Struct of Arrays)</b></td><td><code>struct Particles { vector&lt;float&gt; x, y, z; }</code></td><td>顺序访问, cache 友好, SIMD 友好</td><td>游戏 / 数据处理</td></tr>
+  </table>
+
+<pre><span class="cm">// AoS — OOP 风格</span>
+<span class="kw">struct</span> <span class="type">Particle</span> {
+    <span class="kw">float</span> x, y, z;
+    <span class="kw">float</span> vx, vy, vz;
+    <span class="kw">int</span> id;
+    <span class="kw">char</span> name[32];
+};
+std::vector&lt;<span class="type">Particle</span>&gt; particles(N);
+
+<span class="cm">// 只想更新 x 坐标</span>
+<span class="kw">for</span> (<span class="kw">auto</span>&amp; p : particles) p.x += dt * p.vx;
+<span class="cm">// 每次跳 sizeof(Particle) = 56 字节 → 加载整个对象</span>
+
+<span class="cm">// SoA — 数据并行风格</span>
+<span class="kw">struct</span> <span class="type">Particles</span> {
+    std::vector&lt;<span class="kw">float</span>&gt; x, y, z;
+    std::vector&lt;<span class="kw">float</span>&gt; vx, vy, vz;
+    std::vector&lt;<span class="kw">int</span>&gt; id;
+};
+
+<span class="cm">// 同样更新 x</span>
+<span class="kw">for</span> (<span class="type">size_t</span> i = 0; i &lt; ps.x.<span class="fn">size</span>(); ++i)
+    ps.x[i] += dt * ps.vx[i];
+<span class="cm">// 顺序访问 → cache 满载 + 编译器自动 SIMD 化</span></pre>
+
+  <div class="box perf">
+    数据并行场景下 SoA 通常 <strong>2-5×</strong> 快于 AoS。但代码可读性差一些。
+  </div>
+
+  <h3>7.2 内存对齐与 padding</h3>
+
+  <p>详细原理见 <code>cpp_object_model.html §2 内存对齐与 Padding</code>。这里只讲<strong>性能层面的优化</strong>。</p>
+
+  <h4>① 字段重排减少 padding</h4>
+
+<pre><span class="cm">// ❌ 24 字节 (含 padding)</span>
+<span class="kw">struct</span> <span class="type">Bad</span> {
+    <span class="kw">char</span>  a;        <span class="cm">// 1 + 7 padding</span>
+    <span class="kw">double</span> b;      <span class="cm">// 8</span>
+    <span class="kw">char</span>  c;        <span class="cm">// 1 + 7 padding</span>
+};
+
+<span class="cm">// ✅ 16 字节</span>
+<span class="kw">struct</span> <span class="type">Good</span> {
+    <span class="kw">double</span> b;      <span class="cm">// 8</span>
+    <span class="kw">char</span>  a, c;     <span class="cm">// 2 + 6 padding</span>
+};
+<span class="cm">// 大小从 24 → 16, vector 内存少 33%</span></pre>
+
+  <h4>② SIMD 友好对齐</h4>
+
+<pre><span class="cm">// AVX 要求 32 字节对齐, 否则用慢的 unaligned load</span>
+<span class="kw">alignas</span>(32) <span class="kw">float</span> data[1024];</pre>
+
+  <h4>③ Cache line 对齐 (并发场景)</h4>
+
+<pre><span class="kw">struct</span> <span class="kw">alignas</span>(64) <span class="type">PerWorkerStats</span> {
+    std::atomic&lt;<span class="type">int64_t</span>&gt; processed;
+    std::atomic&lt;<span class="type">int64_t</span>&gt; errors;
+    <span class="cm">// ... padding 自动到 64 字节</span>
+};</pre>
+
+  <div class="box ok">
+    <b>规则</b>：① 大 struct → 字段按大小降序排（大字段前），减少 padding；② 数据并行 → 考虑 SoA；③ 多线程 atomic 数组 → cache line 对齐。
+  </div>
+</section>
+
+<!-- ================================================================
+     §8 分支预测
+     ================================================================ -->
+<section class="chapter" id="s8">
+  <h2>8. 分支预测 · likely/unlikely · branchless</h2>
+
+  <h3>8.1 分支预测器原理</h3>
+
+  <p>现代 CPU 在条件分支跳转之前<strong>就预测</strong>会走哪条路径，提前执行后续指令。预测错 → 流水线 flush → ~10-20 周期惩罚。</p>
+
+  <p>预测器精度：</p>
+  <ul>
+    <li><b>规律分支</b>（while 循环、固定模式）→ 99%+ 准确</li>
+    <li><b>随机分支</b>（数据相关）→ 50% 准确（近似随机）</li>
+    <li><b>偏置分支</b>（99% 走一边）→ 99% 准确</li>
+  </ul>
+
+  <h3>8.2 经典实验：sort 数据后变快</h3>
+
+<pre>std::vector&lt;<span class="kw">int</span>&gt; v(<span class="num">32768</span>);
+<span class="cm">// 填充 0~256 随机值</span>
+std::<span class="fn">generate</span>(v.<span class="fn">begin</span>(), v.<span class="fn">end</span>(), []{ <span class="kw">return</span> rand() % 256; });
+
+<span class="cm">// 不排序</span>
+<span class="kw">long</span> sum = 0;
+<span class="kw">for</span> (<span class="kw">int</span> x : v) <span class="kw">if</span> (x &gt; 128) sum += x;       <span class="cm">// 6 ms</span>
+
+<span class="cm">// 排序后</span>
+std::<span class="fn">sort</span>(v.<span class="fn">begin</span>(), v.<span class="fn">end</span>());
+<span class="kw">for</span> (<span class="kw">int</span> x : v) <span class="kw">if</span> (x &gt; 128) sum += x;       <span class="cm">// 1.5 ms — 4× 快!</span></pre>
+
+  <div class="box perf">
+    <b>原理</b>：排序后的数据让 if 分支变成"前半段都 false 后半段都 true" → 分支预测 ~99% 准确。乱序数据预测 50% → 大量 flush。
+  </div>
+
+  <h3>8.3 [[likely]] / [[unlikely]] (C++20)</h3>
+
+<pre><span class="kw">if</span> (rc &gt; 0) [[likely]] {                  <span class="cm">// 99% 走这里 → 编译器把它放热路径</span>
+    <span class="fn">handle_data</span>(rc);
+} <span class="kw">else</span> [[unlikely]] {
+    <span class="fn">handle_error</span>(rc);
+}
+
+<span class="cm">// gcc/clang 老写法</span>
+<span class="kw">if</span> (__builtin_expect(rc &gt; 0, 1)) { <span class="cm">/* hot */</span> }</pre>
+
+  <p>编译器据此<strong>重排 basic block</strong>：把 likely 路径放在 fallthrough，unlikely 放跳转目标 → 指令缓存友好 + 分支预测器从一开始就预测对。</p>
+
+  <h3>8.4 Branchless (无分支) 编程</h3>
+
+<pre><span class="cm">// ❌ 有分支</span>
+<span class="kw">int</span> max = (a &gt; b) ? a : b;       <span class="cm">// CPU 视情况而定</span>
+
+<span class="cm">// ✅ 无分支 — 编译器通常自动转 cmov 指令</span>
+<span class="kw">int</span> max = std::<span class="fn">max</span>(a, b);
+
+<span class="cm">// ❌ 数据相关分支</span>
+<span class="kw">for</span> (<span class="kw">int</span> x : v) <span class="kw">if</span> (x &gt; 0) sum += x;
+
+<span class="cm">// ✅ branchless — 用乘法替代</span>
+<span class="kw">for</span> (<span class="kw">int</span> x : v) sum += x * (x &gt; 0);
+
+<span class="cm">// 数据排序去除分支</span>
+<span class="kw">int</span> abs_value = (x ^ (x &gt;&gt; 31)) - (x &gt;&gt; 31);   <span class="cm">// branchless abs</span></pre>
+
+  <div class="box danger">
+    <b>误区</b>：不是所有分支都该消除。<br>
+    ① 高度可预测分支几乎零成本 — 不必费力变 branchless；<br>
+    ② branchless 代码可能让两个路径都执行 → 总计算量更大；<br>
+    ③ 编译器很聪明，<code>std::max</code>/<code>std::min</code>/<code>?:</code> 通常自动 cmov。<br>
+    手动 branchless 仅在<strong>测出</strong>分支预测错率高 + branchless 真有提升时使用。
+  </div>
+</section>
+
+<!-- ================================================================
+     §9 内存分配
+     ================================================================ -->
+<section class="chapter" id="s9">
+  <h2>9. 内存分配优化</h2>
+
+  <h3>9.1 malloc 的真实成本</h3>
+
+  <table>
+    <tr><th>场景</th><th>开销</th></tr>
+    <tr><td>小块 malloc/free (无竞争)</td><td>~ 50-100 ns</td></tr>
+    <tr><td>多线程 malloc 竞争</td><td>~ µs 级</td></tr>
+    <tr><td>brk/mmap 系统调用</td><td>~ µs 级</td></tr>
+    <tr><td>触发 page fault</td><td>~ 几 µs</td></tr>
+    <tr><td>大块 malloc (&gt; 128KB)</td><td>~ µs 级 (走 mmap)</td></tr>
+  </table>
+
+  <p>详细原理见 <code>cpp_memory_leak_guide.html § glibc malloc 内部全景</code>。</p>
+
+  <h3>9.2 优化思路</h3>
+
+  <ol>
+    <li><b>预分配</b>：vector::reserve / string::reserve</li>
+    <li><b>对象池</b>：复用对象，减少分配次数</li>
+    <li><b>arena / linear allocator</b>：批量分配，整体释放（请求处理用）</li>
+    <li><b>SBO 小对象优化</b>：std::string SSO / small_vector</li>
+    <li><b>替换 malloc</b>：jemalloc / tcmalloc / mimalloc（多线程性能更好）</li>
+    <li><b>std::pmr 多态 allocator</b>（C++17）</li>
+  </ol>
+
+  <h3>9.3 reserve 的威力</h3>
+
+<pre><span class="cm">// ❌ 不 reserve — 多次扩容</span>
+std::vector&lt;<span class="kw">int</span>&gt; v;
+<span class="kw">for</span> (<span class="kw">int</span> i = 0; i &lt; <span class="num">1'000'000</span>; ++i) v.<span class="fn">push_back</span>(i);
+<span class="cm">// libstdc++ 2x 增长 → ~20 次 reallocate, 每次复制旧数据</span>
+
+<span class="cm">// ✅ reserve</span>
+std::vector&lt;<span class="kw">int</span>&gt; v;
+v.<span class="fn">reserve</span>(<span class="num">1'000'000</span>);
+<span class="kw">for</span> (<span class="kw">int</span> i = 0; i &lt; <span class="num">1'000'000</span>; ++i) v.<span class="fn">push_back</span>(i);
+<span class="cm">// 一次分配, 0 次扩容</span></pre>
+
+  <div class="box perf">
+    实测 1M push_back — 不 reserve ~5 ms，reserve ~1.5 ms。<strong>3-4×</strong> 提升。
+  </div>
+
+  <h3>9.4 std::pmr (C++17 多态 allocator)</h3>
+
+<pre><span class="pp">#include</span> <span class="str">&lt;memory_resource&gt;</span>
+
+<span class="cm">// 在栈上的 buffer 上分配, 0 次堆分配</span>
+<span class="kw">char</span> buffer[<span class="num">8192</span>];
+std::pmr::monotonic_buffer_resource pool{buffer, <span class="kw">sizeof</span>(buffer)};
+
+std::pmr::vector&lt;<span class="kw">int</span>&gt; v{&amp;pool};
+<span class="kw">for</span> (<span class="kw">int</span> i = 0; i &lt; <span class="num">1000</span>; ++i) v.<span class="fn">push_back</span>(i);
+<span class="cm">// vector 在 buffer 上扩展, 不调 malloc</span>
+
+<span class="cm">// 请求处理结束 → pool 整体释放, 不需要逐个析构</span></pre>
+
+  <h3>9.5 替代 allocator</h3>
+
+  <table>
+    <tr><th>分配器</th><th>特点</th><th>适用</th></tr>
+    <tr><td>glibc malloc (默认)</td><td>通用</td><td>—</td></tr>
+    <tr><td>jemalloc</td><td>多线程性能好, 内存碎片低</td><td>服务器</td></tr>
+    <tr><td>tcmalloc (Google)</td><td>多线程, 含 heap profiler</td><td>Google 出品的服务</td></tr>
+    <tr><td>mimalloc (Microsoft)</td><td>内存效率最高, 速度快</td><td>新项目</td></tr>
+    <tr><td>scudo (LLVM)</td><td>安全性优先 (含 heap-overflow 检测)</td><td>安全敏感</td></tr>
+  </table>
+
+<pre><span class="cm">// 替换 malloc — 无需改代码, 链接时 LD_PRELOAD</span>
+$ LD_PRELOAD=/usr/lib/libtcmalloc.so ./myapp</pre>
+
+  <h3>9.6 SBO (Small Buffer Optimization)</h3>
+
+<pre><span class="cm">// std::string 自带 SSO (~15 / 22 字节)</span>
+<span class="cm">// 自定义 small_vector — boost / folly 提供, std 没有</span>
+<span class="kw">template</span>&lt;<span class="kw">class</span> T, <span class="type">size_t</span> N&gt;
+<span class="kw">class</span> <span class="type">SmallVector</span> {
+    <span class="kw">union</span> {
+        <span class="kw">alignas</span>(T) <span class="kw">char</span> sbo_[N * <span class="kw">sizeof</span>(T)];   <span class="cm">// SBO buffer</span>
+        T* heap_;
+    };
+    <span class="type">size_t</span> size_, cap_;
+    <span class="cm">// size &lt;= N: 用 sbo_; 否则 heap_</span>
+};</pre>
+</section>
+
+<!-- ================================================================
+     §10 移动 / 视图 / 零拷贝
+     ================================================================ -->
+<section class="chapter" id="s10">
+  <h2>10. 移动 · 视图 · 零拷贝</h2>
+
+  <p>(详细见 <code>cpp_value_categories_guide.html</code>。这里聚焦性能数据。)</p>
+
+  <h3>10.1 拷贝 vs 移动</h3>
+
+<pre>std::vector&lt;<span class="kw">int</span>&gt; v(<span class="num">1'000'000</span>);
+std::vector&lt;<span class="kw">int</span>&gt; b = v;             <span class="cm">// 拷贝: 4 MB memcpy ~ 500 µs</span>
+std::vector&lt;<span class="kw">int</span>&gt; c = std::move(v); <span class="cm">// 移动: 3 个指针 swap, ~ 10 ns</span></pre>
+
+  <div class="box perf">移动比拷贝快 <strong>50000×</strong>（对大 vector / string）。这就是为什么移动语义是 C++ 性能革命的核心。</div>
+
+  <h3>10.2 视图替代字符串</h3>
+
+<pre><span class="cm">// ❌ 每次构造临时 string</span>
+<span class="kw">void</span> <span class="fn">log</span>(<span class="kw">const</span> std::string&amp; tag, <span class="kw">const</span> std::string&amp; msg);
+<span class="fn">log</span>(<span class="str">"NET"</span>, <span class="str">"connected"</span>);   <span class="cm">// 两次 std::string 构造 = 2 次 malloc (无 SSO)</span>
+
+<span class="cm">// ✅ string_view — 零拷贝</span>
+<span class="kw">void</span> <span class="fn">log</span>(std::string_view tag, std::string_view msg);
+<span class="fn">log</span>(<span class="str">"NET"</span>, <span class="str">"connected"</span>);   <span class="cm">// 0 malloc, 仅传 ptr+len</span></pre>
+
+  <h3>10.3 接口对比</h3>
+
+  <table>
+    <tr><th>接口风格</th><th>开销 (传 const char*)</th></tr>
+    <tr><td><code>const std::string&amp;</code></td><td>构造临时 string ≈ malloc + strlen + free</td></tr>
+    <tr><td><code>std::string_view</code></td><td>零拷贝</td></tr>
+    <tr><td><code>std::span&lt;const char&gt;</code></td><td>零拷贝</td></tr>
+    <tr><td><code>const char*</code></td><td>零开销但弱类型</td></tr>
+  </table>
+
+  <h3>10.4 完美转发 + emplace 减少临时对象</h3>
+
+<pre>std::vector&lt;std::pair&lt;<span class="type">int</span>, std::string&gt;&gt; v;
+v.<span class="fn">push_back</span>({42, <span class="str">"hello"</span>});      <span class="cm">// 1 次 pair 构造 + 1 次 move</span>
+v.<span class="fn">emplace_back</span>(42, <span class="str">"hello"</span>);     <span class="cm">// 0 次临时 — 原地构造</span></pre>
+</section>
+
+<!-- ================================================================
+     §11 inline 与函数开销
+     ================================================================ -->
+<section class="chapter" id="s11">
+  <h2>11. inline 与函数调用开销</h2>
+
+  <h3>11.1 函数调用真实成本</h3>
+
+  <table>
+    <tr><th>调用方式</th><th>开销</th></tr>
+    <tr><td>普通函数 (已 inline)</td><td>0 ns</td></tr>
+    <tr><td>普通函数 (未 inline)</td><td>~ 1-2 ns (push/pop + jump)</td></tr>
+    <tr><td>虚函数 (vtable)</td><td>~ 1-3 ns (额外 vtable 查找)</td></tr>
+    <tr><td>std::function 调用</td><td>~ 5-10 ns (类型擦除 + 间接)</td></tr>
+    <tr><td>函数指针调用</td><td>~ 1-2 ns</td></tr>
+    <tr><td>系统调用</td><td>~ 50-200 ns</td></tr>
+    <tr><td>动态库 (PLT)</td><td>~ 5 ns 额外</td></tr>
+  </table>
+
+  <h3>11.2 inline 关键字 ≠ 强制 inline</h3>
+
+  <p><code>inline</code> 关键字主要用途：</p>
+  <ul>
+    <li><b>原始</b>：建议编译器 inline (现在编译器自己决定)</li>
+    <li><b>实际</b>：避免链接时 ODR violation</li>
+    <li><b>真正强制</b>：<code>__attribute__((always_inline))</code> (gcc/clang) / <code>__forceinline</code> (MSVC)</li>
+  </ul>
+
+<pre><span class="kw">inline</span> <span class="kw">int</span> <span class="fn">add</span>(<span class="kw">int</span> a, <span class="kw">int</span> b) { <span class="kw">return</span> a + b; }    <span class="cm">// 编译器自己决定</span>
+
+<span class="kw">__attribute__</span>((always_inline))                          <span class="cm">// gcc/clang 强制</span>
+<span class="kw">inline</span> <span class="kw">int</span> <span class="fn">hot_fn</span>() { <span class="cm">/* ... */</span> }
+
+<span class="kw">__attribute__</span>((noinline))                                <span class="cm">// 强制不 inline</span>
+<span class="kw">int</span> <span class="fn">cold_fn</span>() { <span class="cm">/* ... */</span> }</pre>
+
+  <h3>11.3 LTO 后链接器也能 inline</h3>
+
+  <p>没 LTO：<strong>跨翻译单元</strong>函数无法 inline (编译器看不到对方代码)。<br>
+  开 LTO：<strong>整个程序</strong>视角，跨 .o 也能 inline。</p>
+
+  <h3>11.4 虚函数与 devirtualization</h3>
+
+<pre><span class="kw">class</span> <span class="type">Codec</span> {
+<span class="kw">public</span>:
+    <span class="kw">virtual</span> <span class="kw">void</span> <span class="fn">encode</span>(...) = 0;
+};
+
+<span class="kw">class</span> <span class="type">JsonCodec</span> <span class="kw">final</span> : <span class="kw">public</span> <span class="type">Codec</span> {       <span class="cm">// ⭐ final</span>
+    <span class="kw">void</span> <span class="fn">encode</span>(...) <span class="kw">override</span>;
+};
+
+<span class="cm">// final 让编译器在已知具体类型时 devirtualize → inline</span>
+<span class="type">JsonCodec</span> c;
+c.<span class="fn">encode</span>(...);   <span class="cm">// 编译器知道是 JsonCodec final → 直接调用 + 可能 inline</span></pre>
+
+  <div class="box ok">
+    <b>规则</b>：① 让编译器决定 inline，不要瞎标 always_inline；② 派生类标 <code>final</code> 帮助 devirtualize；③ 模板代码天然可 inline。
+  </div>
+</section>
+
+<!-- ================================================================
+     §12 编译器优化
+     ================================================================ -->
+<section class="chapter" id="s12">
+  <h2>12. 编译器优化 · O3 · LTO · PGO</h2>
+
+  <h3>12.1 优化级别</h3>
+
+  <table>
+    <tr><th>级别</th><th>行为</th><th>典型加速</th></tr>
+    <tr><td>-O0</td><td>无优化, 调试用</td><td>基线 (1×)</td></tr>
+    <tr><td>-O1</td><td>基本优化</td><td>2-3×</td></tr>
+    <tr><td>-O2</td><td>全部安全优化</td><td>3-5× (推荐生产)</td></tr>
+    <tr><td>-O3</td><td>O2 + 激进优化 (向量化, inline 阈值高)</td><td>3-7×, 偶尔回退</td></tr>
+    <tr><td>-Ofast</td><td>O3 + 不严格遵守 IEEE 浮点</td><td>计算密集型可加速</td></tr>
+    <tr><td>-Os</td><td>O2 + 优化大小</td><td>嵌入式</td></tr>
+    <tr><td>-Og</td><td>调试友好 + 部分优化</td><td>开发用</td></tr>
+  </table>
+
+  <h3>12.2 LTO (Link Time Optimization)</h3>
+
+<pre>g++ -O2 -flto -c a.cpp -o a.o
+g++ -O2 -flto -c b.cpp -o b.o
+g++ -O2 -flto a.o b.o -o app</pre>
+
+  <ul>
+    <li>编译时把 IR 存到 .o (而不仅是机器码)</li>
+    <li>链接时<strong>跨翻译单元</strong>看到全局信息 → 跨文件 inline / dead code 消除</li>
+    <li>典型收益 5-15% (大型项目)</li>
+    <li>编译时间增加 1.5-3×</li>
+    <li>生产建议<strong>开启</strong></li>
+  </ul>
+
+  <h3>12.3 PGO (Profile-Guided Optimization)</h3>
+
+  <p>用<strong>真实数据</strong>指导编译器优化（哪些函数热、哪些分支常走、哪些值常出现）。</p>
+
+<pre><span class="cm">// 三步流程</span>
+
+<span class="cm">// 1. 编译插桩版</span>
+g++ -O2 -fprofile-generate myapp.cpp -o myapp_pgo
+
+<span class="cm">// 2. 用真实/模拟负载跑, 生成 profile data</span>
+./myapp_pgo &lt; sample_input
+
+<span class="cm">// 3. 用 profile 数据重编</span>
+g++ -O2 -fprofile-use myapp.cpp -o myapp_optimized</pre>
+
+  <ul>
+    <li>典型收益 5-20%</li>
+    <li>有的项目 (比如 Chrome) 收益 30%+</li>
+    <li>编译流程复杂 → 适合大型生产服务</li>
+    <li>变种：<b>BOLT (Facebook)</b> — post-link 阶段优化二进制布局</li>
+  </ul>
+
+  <h3>12.4 自动向量化 (auto-vectorization)</h3>
+
+  <p>O3 / O2 + <code>-mavx2</code> 让编译器自动用 SIMD 指令。</p>
+
+<pre><span class="cm">// 编译器可向量化的循环</span>
+<span class="kw">void</span> <span class="fn">add</span>(<span class="kw">float</span>* a, <span class="kw">float</span>* b, <span class="kw">float</span>* c, <span class="type">size_t</span> n) {
+    <span class="kw">for</span> (<span class="type">size_t</span> i = 0; i &lt; n; ++i)
+        c[i] = a[i] + b[i];
+    <span class="cm">// → 编译为 vaddps 指令, 一次处理 8 个 float (AVX 256)</span>
+}</pre>
+
+  <p>让编译器愿意向量化的条件：</p>
+  <ul>
+    <li>循环次数编译期可分析</li>
+    <li>访问模式简单 (顺序 + stride 1)</li>
+    <li>无数据依赖 (可并行)</li>
+    <li>类型简单 (POD / float / int)</li>
+    <li>用 <code>__restrict__</code> 告诉编译器指针不重叠</li>
+    <li>开 -O3 + -march=native</li>
+  </ul>
+
+  <h3>12.5 推荐的生产编译选项</h3>
+
+<pre>g++ -O2 -flto -DNDEBUG \
+    -march=native -mtune=native \
+    -ffunction-sections -fdata-sections \
+    -Wl,--gc-sections \
+    -fno-omit-frame-pointer \      <span class="cm"># 保留 frame pointer 便于 perf</span>
+    your_app.cpp -o your_app</pre>
+</section>
+
+<!-- ================================================================
+     §13 锁的性能
+     ================================================================ -->
+<section class="chapter" id="s13">
+  <h2>13. 锁的性能优化</h2>
+
+  <h3>13.1 锁的开销层次</h3>
+
+  <table>
+    <tr><th>同步原语</th><th>无竞争开销</th><th>有竞争代价</th></tr>
+    <tr><td>atomic 操作</td><td>~ 5 ns</td><td>cache line 反弹</td></tr>
+    <tr><td>spinlock (atomic_flag)</td><td>~ 10 ns</td><td>核间忙等 (耗 CPU)</td></tr>
+    <tr><td>std::mutex (pthread)</td><td>~ 25 ns</td><td>系统调用 + 调度</td></tr>
+    <tr><td>std::shared_mutex</td><td>~ 50 ns</td><td>更复杂</td></tr>
+    <tr><td>std::condition_variable</td><td>~ 100+ ns</td><td>系统调用</td></tr>
+  </table>
+
+  <h3>13.2 锁优化的几个方向</h3>
+
+  <ol>
+    <li><b>减小锁粒度</b>：只锁数据，不锁 IO/计算</li>
+    <li><b>分片 (sharding)</b>：把一把大锁变成 N 把小锁（按 hash）</li>
+    <li><b>Read-mostly</b>：shared_mutex / COW / RCU</li>
+    <li><b>Lock-free 数据结构</b>：atomic + CAS 循环</li>
+    <li><b>Lock 移除</b>：thread_local / 单线程拥有</li>
+    <li><b>Batching</b>：批量处理减少 lock 次数</li>
+  </ol>
+
+  <h3>13.3 分片示例</h3>
+
+<pre><span class="cm">// ❌ 一把全局锁 — 高并发瓶颈</span>
+<span class="kw">class</span> <span class="type">SessionTable</span> {
+    std::mutex mu_;
+    std::unordered_map&lt;<span class="type">SessionId</span>, <span class="type">Session</span>&gt; m_;
+};
+
+<span class="cm">// ✅ 分片 — 16 把锁, 不同 session 无锁竞争</span>
+<span class="kw">class</span> <span class="type">ShardedSessionTable</span> {
+    <span class="kw">static</span> <span class="kw">constexpr</span> <span class="kw">size_t</span> N = 16;
+    <span class="kw">struct</span> Shard {
+        std::mutex mu;
+        std::unordered_map&lt;<span class="type">SessionId</span>, <span class="type">Session</span>&gt; m;
+    };
+    std::array&lt;Shard, N&gt; shards_;
+
+    Shard&amp; <span class="fn">shard_for</span>(<span class="type">SessionId</span> id) {
+        <span class="kw">return</span> shards_[std::<span class="fn">hash</span>&lt;<span class="type">SessionId</span>&gt;{}(id) % N];
+    }
+<span class="kw">public</span>:
+    <span class="kw">void</span> <span class="fn">insert</span>(<span class="type">SessionId</span> id, <span class="type">Session</span> s) {
+        <span class="kw">auto</span>&amp; sh = <span class="fn">shard_for</span>(id);
+        std::lock_guard lk{sh.mu};
+        sh.m[id] = std::move(s);
+    }
+};</pre>
+
+  <h3>13.4 Lock-Free 计数</h3>
+
+<pre><span class="cm">// 全局热点计数 — 多线程竞争 atomic</span>
+std::atomic&lt;<span class="type">long</span>&gt; g_count{0};
+<span class="kw">void</span> <span class="fn">hit</span>() { g_count.<span class="fn">fetch_add</span>(1, std::memory_order_relaxed); }
+
+<span class="cm">// ✅ thread_local 累加 + 周期性刷新到全局 — 完全无竞争</span>
+thread_local <span class="type">long</span> tl_count = 0;
+std::atomic&lt;<span class="type">long</span>&gt; g_count{0};
+
+<span class="kw">void</span> <span class="fn">hit</span>() { ++tl_count; }
+<span class="kw">void</span> <span class="fn">flush</span>() { g_count += tl_count; tl_count = 0; }    <span class="cm">// 周期性调用</span></pre>
+
+  <div class="box perf">
+    实测：4 线程 100M 计数 — atomic 版 ~1 s（cache line 争抢），thread_local 版 ~50 ms。<strong>20× 加速</strong>。
+  </div>
+</section>
+
+<!-- ================================================================
+     §14 性能分析工具
+     ================================================================ -->
+<section class="chapter" id="s14">
+  <h2>14. 性能分析工具实战</h2>
+
+  <h3>14.1 perf 速查</h3>
+
+<pre><span class="cm"># 基础统计</span>
+perf stat ./prog
+
+<span class="cm"># 详细 CPU 计数器</span>
+perf stat -d ./prog
+perf stat -e cycles,instructions,cache-misses,branch-misses ./prog
+
+<span class="cm"># 采样剖析 (默认 99 Hz)</span>
+perf record -g ./prog                <span class="cm"># -g 启用调用栈</span>
+perf record -F 999 -g ./prog          <span class="cm"># 高频采样</span>
+perf record --call-graph=dwarf ./prog <span class="cm"># DWARF 调用栈 (更准但慢)</span>
+
+<span class="cm"># 看结果</span>
+perf report -g                        <span class="cm"># 交互式</span>
+perf report --stdio                   <span class="cm"># 文本</span>
+
+<span class="cm"># 火焰图</span>
+perf script | stackcollapse-perf.pl | flamegraph.pl &gt; flame.svg
+
+<span class="cm"># 检测 false sharing</span>
+perf c2c record ./prog
+perf c2c report
+
+<span class="cm"># 跟踪系统调用</span>
+strace -c ./prog                      <span class="cm"># 统计</span>
+strace -e openat,read,write ./prog    <span class="cm"># 特定调用</span></pre>
+
+  <h3>14.2 火焰图阅读</h3>
+
+  <p>x 轴 = 总采样数（不是时间！），宽 = 在该函数花的 CPU 时间比例。<br>
+  y 轴 = 调用栈深度，向上 = 子函数。</p>
+
+  <p>看法：</p>
+  <ul>
+    <li>顶部最宽的"平台" = 最热的叶子函数</li>
+    <li>"火焰" 形状（顶尖底宽）= 调用链深</li>
+    <li>颜色无意义，只为区分（默认随机）</li>
+  </ul>
+
+  <h3>14.3 其他工具</h3>
+
+  <table>
+    <tr><th>工具</th><th>用途</th></tr>
+    <tr><td><b>perf</b></td><td>Linux 标配，采样 + 计数器</td></tr>
+    <tr><td><b>VTune</b></td><td>Intel 出品，最详细的微架构分析</td></tr>
+    <tr><td><b>callgrind / kcachegrind</b></td><td>Valgrind 工具，精确指令计数（慢 30×）</td></tr>
+    <tr><td><b>gperftools (Google)</b></td><td>含 cpu profiler / heap profiler</td></tr>
+    <tr><td><b>uftrace</b></td><td>函数级 tracing，类似 ftrace 用户态版</td></tr>
+    <tr><td><b>bpftrace / BCC</b></td><td>eBPF 前端，灵活动态追踪</td></tr>
+    <tr><td><b>strace / ltrace</b></td><td>系统调用 / 库函数调用追踪</td></tr>
+    <tr><td><b>iostat / vmstat / mpstat</b></td><td>系统级资源监控</td></tr>
+  </table>
+
+  <h3>14.4 一个完整的剖析流程</h3>
+
+<pre><span class="cm">## 1. 看整体 — CPU 是不是真在跑业务?</span>
+top -p $(pidof myapp)                 <span class="cm"># CPU% / MEM%</span>
+mpstat -P ALL 1                       <span class="cm"># 每核情况</span>
+
+<span class="cm">## 2. 看 CPU 健康度</span>
+perf stat -d ./myapp 30                  <span class="cm"># 30 秒</span>
+<span class="cm"># 看 IPC / cache miss% / branch miss%</span>
+
+<span class="cm">## 3. 找热点</span>
+perf record -F 99 -g ./myapp -- sleep 30
+perf report --stdio | head -50
+
+<span class="cm">## 4. 火焰图</span>
+perf script | stackcollapse-perf.pl | flamegraph.pl &gt; flame.svg
+
+<span class="cm">## 5. 系统调用是不是瓶颈?</span>
+strace -c -p $(pidof myapp)              <span class="cm"># Ctrl-C 后看统计</span>
+
+<span class="cm">## 6. 锁竞争?</span>
+perf lock record ./myapp
+perf lock report</pre>
+</section>
+
+<!-- ================================================================
+     §15 微基准陷阱
+     ================================================================ -->
+<section class="chapter" id="s15">
+  <h2>15. 微基准 (microbenchmark) 的陷阱</h2>
+
+  <p>微基准的"测出"结论<strong>常常误导</strong>。十大坑：</p>
+
+  <ol>
+    <li>
+      <b>编译器把 dead code 优化掉</b>
+<pre><span class="kw">for</span> (<span class="kw">auto</span> _ : st) {
+    <span class="kw">int</span> x = <span class="fn">heavy</span>();
+    <span class="cm">// x 没用到 → 整个 heavy() 被优化掉</span>
+}
+<span class="cm">// 修复:</span>
+<span class="kw">for</span> (<span class="kw">auto</span> _ : st) {
+    <span class="kw">int</span> x = <span class="fn">heavy</span>();
+    benchmark::<span class="fn">DoNotOptimize</span>(x);
+}</pre>
+    </li>
+    <li><b>常量折叠</b>：<code>add(2, 3)</code> 编译期算成 5</li>
+    <li><b>缓存命中过高</b>：循环数据集 &lt; L1，不代表实际性能</li>
+    <li><b>分支预测过准</b>：固定模式让 predictor 100% 准</li>
+    <li><b>turbo boost</b>：单次基准时 CPU 升频，多线程时降</li>
+    <li><b>CPU 频率波动</b>：governor / 温度</li>
+    <li><b>测量小到测不准</b>：纳秒级测量需要大循环</li>
+    <li><b>内存对齐</b>：栈位置随机 / ASLR 影响</li>
+    <li><b>预热不足</b>：第一次跑 cache 冷</li>
+    <li><b>用户态/内核态切换</b>：syscall 测量含上下文切换</li>
+  </ol>
+
+  <h3>15.1 正确的微基准设置</h3>
+
+<pre><span class="cm"># 1. 关闭 turbo / 固定频率</span>
+echo performance | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor
+
+<span class="cm"># 2. 关闭超线程 (Hyperthreading)</span>
+echo 0 | sudo tee /sys/devices/system/cpu/cpu1/online
+
+<span class="cm"># 3. 隔离 CPU 核 (isolcpus 启动参数)</span>
+taskset -c 2 ./bench   <span class="cm"># 绑核</span>
+
+<span class="cm"># 4. 关闭 ASLR</span>
+echo 0 | sudo tee /proc/sys/kernel/randomize_va_space
+
+<span class="cm"># 5. perf 跑 N 次取分布</span>
+perf stat -r 10 ./bench</pre>
+
+  <div class="box danger">
+    "我的微基准说 X 比 Y 快 2 倍" — 在真实负载里可能毫无差异。<strong>必须</strong>在真实业务负载下复现。
+  </div>
+</section>
+
+<!-- ================================================================
+     §16 真实优化案例
+     ================================================================ -->
+<section class="chapter" id="s16">
+  <h2>16. <span class="real-tag">REAL</span>5 个真实优化案例</h2>
+
+  <h3>16.1 案例 1: NETCONF 解析慢 — string_view 改造</h3>
+
+  <p><b>症状</b>：1000 个 RPC/s 时 CPU 90%，profile 显示 string 构造占 40%。</p>
+  <p><b>原因</b>：解析器把每段 XPath 转成 std::string 传递。</p>
+  <p><b>修复</b>：内部全用 <code>std::string_view</code>，零拷贝。</p>
+  <p><b>效果</b>：CPU 降到 30%，QPS 翻倍。</p>
+
+  <h3>16.2 案例 2: 多线程 stats 假共享</h3>
+
+  <p><b>症状</b>：8 线程加 1 单线程的 8 倍，但实测只快 2 倍。</p>
+  <p><b>原因</b>：每线程 stats 在同一 cache line。</p>
+  <p><b>修复</b>：<code>alignas(64) struct Stats {...};</code></p>
+  <p><b>效果</b>：8 线程吞吐提升到 6.5 倍（接近理论值）。</p>
+
+  <h3>16.3 案例 3: vector::push_back 大 buffer 拷贝</h3>
+
+  <p><b>症状</b>：大批量数据导入慢。</p>
+  <p><b>原因</b>：vector 反复扩容（2x 增长，每次拷贝旧数据）。</p>
+  <p><b>修复</b>：调用前 <code>v.reserve(N)</code> 预分配。</p>
+  <p><b>效果</b>：导入耗时从 8 s 降到 1.5 s。</p>
+
+  <h3>16.4 案例 4: hash map 查找慢</h3>
+
+  <p><b>症状</b>：unordered_map 查找占 CPU 25%。</p>
+  <p><b>原因</b>：① string key 每次 hash 遍历 + ② STL unordered_map 拉链法 cache miss。</p>
+  <p><b>修复</b>：换用 <code>absl::flat_hash_map</code> + key 改 string_view 节省 hash 计算。</p>
+  <p><b>效果</b>：查找耗时降 60%。</p>
+
+  <h3>16.5 案例 5: 日志同步写阻塞</h3>
+
+  <p><b>症状</b>：业务线程偶尔 stuck 100ms+，p99 飙升。</p>
+  <p><b>原因</b>：日志库同步 write，磁盘 IO 延迟阻塞。</p>
+  <p><b>修复</b>：异步日志（producer-consumer + 后台 flusher）。</p>
+  <p><b>效果</b>：p99 从 200ms 降到 5ms。</p>
+
+  <div class="box ok">
+    所有案例的共同模式：<strong>测量 → 定位 → 简单改动 → 大幅收益</strong>。没有一个用了汇编 / SIMD / lock-free 这种 "高级"技术。<strong>常见性能问题都是基本功</strong>。
+  </div>
+</section>
+
+<!-- ================================================================
+     §16b SIMD / 向量化深度
+     ================================================================ -->
+<section class="chapter" id="s16b">
+  <h2>16b. SIMD / 向量化深度 — 从自动向量化到 intrinsics ⭐</h2>
+
+  <p>SIMD（Single Instruction Multiple Data）是 CPU 一条指令同时处理多个数据。x86-64 上 SSE / AVX2（256 bit, 8×float）/ AVX-512（512 bit, 16×float），ARMv8 NEON / SVE。<strong>用对了能让数值循环提速 4-16×</strong>。</p>
+
+  <h3>16b.1 三档实现策略</h3>
+  <table>
+    <tr><th>策略</th><th>难度</th><th>性能</th><th>可移植</th><th>典型场景</th></tr>
+    <tr><td><strong>自动向量化</strong>（写好循环让编译器干）</td><td>★</td><td>~50-90% peak</td><td>✅</td><td>第一选择，能向量化就向量化</td></tr>
+    <tr><td><strong>编译器内置 + #pragma</strong>（OpenMP / <code>__builtin_assume_aligned</code>）</td><td>★★</td><td>~70-95%</td><td>✅</td><td>给编译器更多提示</td></tr>
+    <tr><td><strong>跨平台 SIMD 库</strong>（Highway / xsimd / std::simd C++26）</td><td>★★★</td><td>95%+</td><td>✅</td><td>生产代码首选</td></tr>
+    <tr><td><strong>原生 intrinsics</strong>（<code>_mm256_*</code> / NEON）</td><td>★★★★</td><td>100%</td><td>❌</td><td>极致优化、CPU-specific</td></tr>
+    <tr><td><strong>手写汇编</strong></td><td>★★★★★</td><td>100%</td><td>❌</td><td>几乎不需要</td></tr>
+  </table>
+
+  <h3>16b.2 让自动向量化生效 —— 6 个前提条件</h3>
+  <ol>
+    <li><strong>循环边界编译期可知或运行期常量</strong>（vectorizer 要预测迭代数）</li>
+    <li><strong>无指针别名</strong>—— 用 <code>__restrict__</code> 告诉编译器"两个指针不重叠"</li>
+    <li><strong>循环体无函数调用</strong>（除非内联）</li>
+    <li><strong>数据对齐</strong>—— <code>alignas(64)</code> + <code>std::assume_aligned</code> (C++20)</li>
+    <li><strong>无数据依赖</strong>—— 迭代 i+1 不依赖 i 的结果</li>
+    <li><strong>无早退分支</strong>—— <code>break / continue / return</code> 会阻止向量化（部分能转 masked op）</li>
+  </ol>
+
+  <h3>16b.3 自动向量化诊断（编译器告诉你为什么没向量化）</h3>
+<pre><span class="cm"># GCC: 详细汇报每个循环的向量化结果</span>
+g++ -O3 -fopt-info-vec-all foo.cpp 2&gt;&amp;1 | head -40
+<span class="cm"># 输出示例：</span>
+<span class="cm"># foo.cpp:12:5: optimized: loop vectorized using 32 byte vectors</span>
+<span class="cm"># foo.cpp:25:5: missed: couldn't vectorize loop (no vectype for stmt)</span>
+<span class="cm"># foo.cpp:30:5: missed: not vectorized: data dependency</span>
+
+<span class="cm"># Clang: 用 LLVM remarks</span>
+clang++ -O3 -Rpass=loop-vectorize -Rpass-missed=loop-vectorize -Rpass-analysis=loop-vectorize foo.cpp
+
+<span class="cm"># 看汇编是否真有 ymm/xmm/zmm 指令</span>
+g++ -O3 -S foo.cpp -o - | grep -E 'ymm|zmm|vfma|vmul'</pre>
+
+  <h3>16b.4 三个能让 GCC/Clang 立刻向量化的提示</h3>
+<pre><span class="cm">// ① __restrict__ —— 标记指针无别名</span>
+<span class="kw">void</span> <span class="fn">axpy</span>(<span class="kw">float</span>* __restrict__ y, <span class="kw">const</span> <span class="kw">float</span>* __restrict__ x,
+          <span class="kw">float</span> a, <span class="kw">int</span> n) {
+    <span class="kw">for</span> (<span class="kw">int</span> i = <span class="num">0</span>; i &lt; n; ++i) y[i] += a * x[i];
+}
+<span class="cm">// 不加 restrict：编译器假设 y 与 x 可能重叠 → 不能并行 → 失败</span>
+
+<span class="cm">// ② alignas + assume_aligned (C++20)</span>
+<span class="kw">alignas</span>(<span class="num">64</span>) <span class="kw">float</span> buf[<span class="num">1024</span>];
+<span class="kw">float</span>* p = std::<span class="fn">assume_aligned</span>&lt;<span class="num">64</span>&gt;(buf);
+<span class="kw">for</span> (<span class="kw">int</span> i = <span class="num">0</span>; i &lt; <span class="num">1024</span>; ++i) p[i] *= <span class="num">2.0f</span>;
+<span class="cm">// 对齐后能用更宽的 SIMD（aligned load 比 unaligned 快）</span>
+
+<span class="cm">// ③ #pragma GCC ivdep / #pragma omp simd</span>
+<span class="kw">#pragma</span> GCC ivdep                                       <span class="cm">// 告诉 GCC "我担保没依赖"</span>
+<span class="kw">for</span> (<span class="kw">int</span> i = <span class="num">0</span>; i &lt; n; ++i) ...;
+
+<span class="kw">#pragma</span> omp simd reduction(+:sum) aligned(p:<span class="num">64</span>)        <span class="cm">// OpenMP 直接强制 SIMD</span>
+<span class="kw">for</span> (<span class="kw">int</span> i = <span class="num">0</span>; i &lt; n; ++i) sum += p[i] * p[i];</pre>
+
+  <h3>16b.5 实例：dot product 三种写法对比</h3>
+<pre><span class="cm">// 方案 1：朴素 C++（依赖自动向量化）</span>
+<span class="kw">float</span> <span class="fn">dot_naive</span>(<span class="kw">const</span> <span class="kw">float</span>* a, <span class="kw">const</span> <span class="kw">float</span>* b, <span class="kw">int</span> n) {
+    <span class="kw">float</span> s = <span class="num">0</span>;
+    <span class="kw">for</span> (<span class="kw">int</span> i = <span class="num">0</span>; i &lt; n; ++i) s += a[i] * b[i];
+    <span class="kw">return</span> s;
+}
+<span class="cm">// -O3 后 GCC 13+ 会自动向量化到 AVX2，~1 个 cycle / 4 float</span>
+
+<span class="cm">// 方案 2：std::experimental::simd / C++26 std::simd</span>
+<span class="kw">#include</span> &lt;experimental/simd&gt;
+<span class="kw">namespace</span> stdx = std::experimental;
+<span class="kw">float</span> <span class="fn">dot_stdsimd</span>(<span class="kw">const</span> <span class="kw">float</span>* a, <span class="kw">const</span> <span class="kw">float</span>* b, <span class="kw">int</span> n) {
+    <span class="kw">using</span> V = stdx::native_simd&lt;<span class="kw">float</span>&gt;;
+    V acc{<span class="num">0</span>};
+    <span class="kw">int</span> i = <span class="num">0</span>;
+    <span class="kw">for</span> (; i + V::<span class="fn">size</span>() &lt;= n; i += V::<span class="fn">size</span>()) {
+        V va{&amp;a[i], stdx::vector_aligned};
+        V vb{&amp;b[i], stdx::vector_aligned};
+        acc += va * vb;
+    }
+    <span class="kw">float</span> s = stdx::<span class="fn">reduce</span>(acc);                    <span class="cm">// 跨 lane 求和</span>
+    <span class="kw">for</span> (; i &lt; n; ++i) s += a[i] * b[i];        <span class="cm">// 尾巴</span>
+    <span class="kw">return</span> s;
+}
+
+<span class="cm">// 方案 3：原生 AVX2 intrinsics（最快但只 x86）</span>
+<span class="kw">#include</span> &lt;immintrin.h&gt;
+<span class="kw">float</span> <span class="fn">dot_avx2</span>(<span class="kw">const</span> <span class="kw">float</span>* a, <span class="kw">const</span> <span class="kw">float</span>* b, <span class="kw">int</span> n) {
+    __m256 acc = <span class="fn">_mm256_setzero_ps</span>();
+    <span class="kw">int</span> i = <span class="num">0</span>;
+    <span class="kw">for</span> (; i + <span class="num">8</span> &lt;= n; i += <span class="num">8</span>) {
+        __m256 va = <span class="fn">_mm256_loadu_ps</span>(&amp;a[i]);
+        __m256 vb = <span class="fn">_mm256_loadu_ps</span>(&amp;b[i]);
+        acc = <span class="fn">_mm256_fmadd_ps</span>(va, vb, acc);          <span class="cm">// fused multiply-add</span>
+    }
+    <span class="cm">// 水平归约 8 个 float</span>
+    <span class="kw">alignas</span>(<span class="num">32</span>) <span class="kw">float</span> tmp[<span class="num">8</span>];
+    <span class="fn">_mm256_storeu_ps</span>(tmp, acc);
+    <span class="kw">float</span> s = tmp[<span class="num">0</span>]+tmp[<span class="num">1</span>]+tmp[<span class="num">2</span>]+tmp[<span class="num">3</span>]+tmp[<span class="num">4</span>]+tmp[<span class="num">5</span>]+tmp[<span class="num">6</span>]+tmp[<span class="num">7</span>];
+    <span class="kw">for</span> (; i &lt; n; ++i) s += a[i] * b[i];
+    <span class="kw">return</span> s;
+}</pre>
+
+  <h4>性能感觉（n = 4096，AVX2 机器）</h4>
+  <table>
+    <tr><th>实现</th><th>~耗时</th><th>带宽利用</th></tr>
+    <tr><td>朴素 -O0</td><td>~12 μs</td><td>10%</td></tr>
+    <tr><td>朴素 -O3（自动向量化）</td><td>~1.1 μs</td><td>85%</td></tr>
+    <tr><td>std::simd</td><td>~1.0 μs</td><td>90%</td></tr>
+    <tr><td>AVX2 intrinsics + FMA</td><td>~0.85 μs</td><td>95%+</td></tr>
+  </table>
+
+  <h3>16b.6 跨平台 SIMD 库选型</h3>
+  <table>
+    <tr><th>库</th><th>定位</th><th>状态</th></tr>
+    <tr><td><a href="https://github.com/google/highway" style="color:var(--accent)"><b>Google Highway</b></a></td><td>类似 std::simd，更成熟，Chromium 用</td><td>生产可用</td></tr>
+    <tr><td><a href="https://github.com/xtensor-stack/xsimd" style="color:var(--accent)"><b>xsimd</b></a></td><td>类似但 header-only</td><td>稳定</td></tr>
+    <tr><td><a href="https://ispc.github.io/" style="color:var(--accent)"><b>ISPC</b> (Intel)</td><td>独立的"SPMD on SIMD"编译器，写 SPMD 风格</td><td>Pixar / Embree 使用</td></tr>
+    <tr><td><code>std::experimental::simd</code> → C++26 <code>std::simd</code></td><td>标准库</td><td>libstdc++ 已有 (P1928)</td></tr>
+  </table>
+
+  <h3>16b.7 SIMD 反模式</h3>
+  <div class="box danger">
+    <ul>
+      <li><strong>盲目 intrinsics</strong>：忽略编译器自动向量化能力，写一堆 <code>_mm256_*</code> 反而更慢（cache 用量、寄存器分配）</li>
+      <li><strong>横向操作过多</strong>：跨 lane 的 hadd / permute 极慢（10+ cycles），尽量保持纵向运算</li>
+      <li><strong>分支严重</strong>：if 多的循环 → masked op 也救不了，先用 partition / sort 让数据"同质"</li>
+      <li><strong>未对齐 + AVX-512</strong>：AVX-512 对未对齐特别敏感，可能比 AVX2 还慢</li>
+      <li><strong>误用 AVX-512</strong>：Intel 部分 CPU 上 AVX-512 触发频率降级 → 整个 core 变慢</li>
+    </ul>
+  </div>
+
+  <div class="box tip"><strong>建议流程</strong>：① 写朴素清晰 C++；② <code>-O3 -fopt-info-vec</code> 检查；③ 没向量化 → 用 <code>__restrict__</code> / <code>alignas</code> / <code>#pragma omp simd</code>；④ 仍不行 → Highway / std::simd；⑤ 最后才考虑 intrinsics。绝大多数情况 ②-③ 已经够。</div>
+</section>
+
+<!-- ================================================================
+     §16c PGO + AutoFDO + BOLT
+     ================================================================ -->
+<section class="chapter" id="s16c">
+  <h2>16c. PGO / AutoFDO / BOLT — 用 profile 优化二进制 ⭐</h2>
+
+  <p>编译器优化是"<strong>静态启发式</strong>"，不知道你的程序到底走哪条热路径。PGO（Profile-Guided Optimization）让你<em>跑一次真实负载</em>，把 profile 喂回编译器或 binary 工具，做<strong>更准确的 inline / 函数排序 / 分支预测</strong>。生产级 C++ 服务普遍能拿到 <strong>5-15% 端到端加速</strong>。</p>
+
+  <h3>16c.1 PGO 经典三段流水线</h3>
+<pre><span class="cm"># GCC PGO</span>
+<span class="cm"># 阶段 1: 插桩编译（生成可写 profile 的二进制）</span>
+g++ -O2 -fprofile-generate=./pgo-data myapp.cpp -o myapp.inst
+<span class="cm"># 阶段 2: 跑真实/代表性负载，落 profile 文件</span>
+./myapp.inst &lt; representative_input.bin
+<span class="cm">#   → ./pgo-data/*.gcda</span>
+<span class="cm"># 阶段 3: 用 profile 重新优化编译</span>
+g++ -O2 -fprofile-use=./pgo-data myapp.cpp -o myapp.opt
+
+<span class="cm"># Clang PGO</span>
+clang++ -O2 -fprofile-instr-generate=p.profraw myapp.cpp -o myapp.inst
+./myapp.inst ; llvm-profdata merge -o p.profdata p.profraw
+clang++ -O2 -fprofile-instr-use=p.profdata myapp.cpp -o myapp.opt</pre>
+
+  <h3>16c.2 PGO 帮编译器做对哪些决策</h3>
+  <table>
+    <tr><th>优化</th><th>无 PGO 启发式</th><th>有 PGO</th></tr>
+    <tr><td>inline 决策</td><td>按大小 / 调用深度</td><td>按真实调用频次</td></tr>
+    <tr><td>函数排序 / icache</td><td>按链接顺序</td><td>热函数聚簇，cold 放尾部</td></tr>
+    <tr><td>分支布局</td><td>likely/unlikely 提示</td><td>按真实分布精确预测</td></tr>
+    <tr><td>循环展开 / 向量化</td><td>不知循环跑多少次</td><td>知热循环 → 激进展开</td></tr>
+    <tr><td>寄存器分配</td><td>—</td><td>热代码优先分配 callee-saved</td></tr>
+    <tr><td>indirect call 去虚化</td><td>无法</td><td>看到 95% call site 都是同一个 target → 直接 inline</td></tr>
+  </table>
+
+  <h3>16c.3 PGO 的痛 → AutoFDO 救场</h3>
+  <p>插桩 PGO 三大问题：① 插桩二进制慢（不能直接上线）；② 需"代表性负载"，难找；③ 工作流复杂，工程师抗拒。</p>
+  <p><strong>AutoFDO</strong>（Google 2010s 开源）：直接用 <code>perf record</code> 在<strong>生产环境</strong>采集 sampling profile（无插桩，开销 &lt; 1%），转成 LLVM/GCC 能吃的 profile 格式。</p>
+
+<pre><span class="cm"># 生产机上：开 LBR 采样跑 30 秒</span>
+sudo perf record -e BR_INST_RETIRED.NEAR_TAKEN:uppp -b -- ./myapp prod.bin
+sudo perf script -F +brstack &gt; perf.script
+
+<span class="cm"># 转 LLVM profile</span>
+create_llvm_prof --binary=./myapp --profile=perf.data --out=myapp.afdo
+
+<span class="cm"># 用它重新编译</span>
+clang++ -O2 -fprofile-sample-use=myapp.afdo myapp.cpp -o myapp.opt</pre>
+
+  <div class="box ok">
+    AutoFDO 已经成为 Google / Meta / Microsoft 生产 C++ 服务的<strong>标配编译流程</strong>。CI 每周拉一次最近 24h 的 prod sampling，作为下次发版的 PGO 输入，形成"生产数据 → 编译优化"闭环。
+  </div>
+
+  <h3>16c.4 BOLT — 二进制级 post-link 优化（Meta，2019）</h3>
+  <p><strong>BOLT</strong>（Binary Optimization and Layout Tool）是 Meta 开源的<strong>后链接</strong>优化工具：编译器已经做完了，BOLT 拿成品 ELF + perf profile，<strong>重新排函数和基本块</strong>。本质是"用 profile 重做 layout"，对大型 binary 收益惊人。</p>
+
+  <h4>三步用法</h4>
+<pre><span class="cm"># 0. 编译时加 emit-relocs（保留 BOLT 需要的重定位信息）</span>
+clang++ -O2 -Wl,--emit-relocs myapp.cpp -o myapp
+
+<span class="cm"># 1. 在生产或代表性环境采样</span>
+sudo perf record -e cycles:u -j any,u -- ./myapp prod.bin
+perf2bolt -p perf.data -o myapp.fdata myapp
+
+<span class="cm"># 2. BOLT 优化</span>
+llvm-bolt myapp -o myapp.bolt -data=myapp.fdata -reorder-blocks=ext-tsp \
+  -reorder-functions=hfsort+ -split-functions -split-all-cold \
+  -split-eh -dyno-stats
+
+<span class="cm"># 3. 部署 myapp.bolt</span></pre>
+
+  <h4>BOLT 实测收益（公开数据）</h4>
+  <table>
+    <tr><th>项目</th><th>baseline</th><th>+ AutoFDO</th><th>+ AutoFDO + BOLT</th></tr>
+    <tr><td>Clang 自身编译</td><td>1.0×</td><td>1.05×</td><td><strong>1.20×</strong></td></tr>
+    <tr><td>HHVM (Meta)</td><td>1.0×</td><td>1.06×</td><td><strong>1.21×</strong></td></tr>
+    <tr><td>Linux Kernel build</td><td>1.0×</td><td>—</td><td>1.10×</td></tr>
+    <tr><td>MySQL OLTP</td><td>1.0×</td><td>1.07×</td><td>1.13×</td></tr>
+  </table>
+
+  <h3>16c.5 三者关系总览</h3>
+  <table>
+    <tr><th>技术</th><th>输入</th><th>作用阶段</th><th>典型收益</th><th>工作流成本</th></tr>
+    <tr><td><strong>Instrumented PGO</strong></td><td>插桩二进制 + 代表性输入</td><td>编译时</td><td>5-15%</td><td>高（要造代表性负载）</td></tr>
+    <tr><td><strong>AutoFDO</strong></td><td>生产 perf sampling</td><td>编译时</td><td>3-10%</td><td>低（可上线持续采集）</td></tr>
+    <tr><td><strong>BOLT</strong></td><td>生产 perf sampling</td><td>链接后（二进制级）</td><td>5-20%</td><td>低</td></tr>
+    <tr><td>AutoFDO + BOLT</td><td>同上</td><td>编译时 + 链接后</td><td>10-25%</td><td>中</td></tr>
+  </table>
+
+  <h3>16c.6 ThinLTO + AutoFDO + BOLT 黄金组合</h3>
+<pre><span class="cm"># 这是 Meta / Google 大型 C++ 服务的标准编译流水</span>
+clang++ -O2 -flto=thin \
+        -fprofile-sample-use=myapp.afdo \
+        -fdebug-info-for-profiling \
+        -Wl,--emit-relocs \
+        myapp.cpp -o myapp.elf
+
+llvm-bolt myapp.elf -o myapp.final \
+  -data=myapp.fdata \
+  -reorder-blocks=ext-tsp -reorder-functions=hfsort+ \
+  -split-functions -split-all-cold -split-eh</pre>
+
+  <div class="box tip">
+    <strong>对中型团队的建议</strong>：① 先上 LTO（最简单，5% 起步）；② 再上 AutoFDO（从生产 perf 采集，可持续）；③ 当 binary 超过 100MB 时再考虑 BOLT。每个工具单独上线、单独基准测，叠加效果再做整体评估。
+  </div>
+
+  <h3>16c.7 PGO/BOLT 常见坑</h3>
+  <ul>
+    <li><strong>调试体验下降</strong>：函数顺序乱了，gdb backtrace 不连续 → 保留 <code>-g</code> + 单独的 debug 包</li>
+    <li><strong>profile 老化</strong>：业务流量模式变化后旧 profile 失效，反而降速 → 定期重采集</li>
+    <li><strong>cold 路径变慢</strong>：BOLT 把冷代码放到 binary 尾部，第一次走 cold path 时 icache miss 暴增 → 业务平均 OK，p999 可能恶化</li>
+    <li><strong>build 时间增加</strong>：PGO 三段式至少 build 2 次；BOLT 增加 5-30 分钟</li>
+    <li><strong>perf 权限</strong>：生产采集需要 <code>perf_event_paranoid</code> 调低 + CAP_PERFMON（5.8+）</li>
+  </ul>
+</section>
+
+<!-- ================================================================
+     §17 面试题
+     ================================================================ -->
+<section class="chapter" id="s17">
+  <h2>17. 面试题集（25 道分层）</h2>
+
+  <h3>17.1 基础</h3>
+  <ol>
+    <li>性能优化的方法论是什么? (测量 → 定位 → 修复 → 验证)</li>
+    <li>Latency 与 throughput 区别? 什么时候关心哪个?</li>
+    <li>Jeff Dean 延迟数字 — 列出 5 条</li>
+    <li>什么是 cache line? 典型大小?</li>
+    <li>什么是 false sharing? 怎么解决?</li>
+    <li>SoA vs AoS? 各自适合什么场景?</li>
+    <li>为什么 vector 通常比 list 快? 即便插入 O(1)?</li>
+  </ol>
+
+  <h3>17.2 中级</h3>
+  <ol start="8">
+    <li>怎么测一个函数的 CPU 健康度? (perf stat 关注什么)</li>
+    <li>分支预测错误的开销? 怎么减少?</li>
+    <li>[[likely]] / [[unlikely]] 实际效果? 编译器做了什么?</li>
+    <li>std::string SSO 是什么? 为什么 string 移动有时不快?</li>
+    <li>shared_ptr 的拷贝为什么是 atomic? 性能影响?</li>
+    <li>std::function 调用比直接函数指针慢多少? 为什么?</li>
+    <li>O2 与 O3 区别? 生产为什么常用 O2?</li>
+  </ol>
+
+  <h3>17.3 高级</h3>
+  <ol start="15">
+    <li>LTO 解决什么问题? PGO 又是什么?</li>
+    <li>编译器自动向量化的条件?</li>
+    <li>__restrict__ 关键字解决什么问题?</li>
+    <li>jemalloc / tcmalloc 比 glibc malloc 快在哪?</li>
+    <li>std::pmr 怎么用? 解决什么问题?</li>
+    <li>怎么定位 false sharing? (perf c2c)</li>
+    <li>火焰图怎么读? 顶部宽 / 底部宽各代表什么?</li>
+    <li>给一段代码估算 P99 延迟 (要求记住 Jeff Dean 数字)</li>
+    <li>shared_mutex 一定比 mutex 快吗? 反例?</li>
+    <li>什么是 thread_local? 为什么对计数器有奇效?</li>
+    <li>怎么写微基准不被编译器优化掉?</li>
+  </ol>
+
+  <h3>17.4 速答示范（第 4 题）</h3>
+
+  <div class="box q">
+    <b>问</b>：什么是 cache line? 典型大小?
+  </div>
+
+  <p><b>答</b>：</p>
+  <ul>
+    <li>Cache line = 缓存的<strong>基本传输单位</strong>，CPU 在 cache 与 DRAM 之间一次只搬这么多字节</li>
+    <li>典型 <strong>64 字节</strong>（x86/ARM 主流）；某些 ARM 是 128 字节</li>
+    <li>读 1 字节也会加载整个 64 字节 → 顺序访问 8 个相邻 int 几乎免费</li>
+    <li>查看：<code>cat /sys/devices/system/cpu/cpu0/cache/index0/coherency_line_size</code></li>
+    <li>C++17：<code>std::hardware_destructive_interference_size</code> (避免假共享) / <code>hardware_constructive_interference_size</code> (主动共享)</li>
+  </ul>
+
+  <p>面试官可能追问："cache line 概念怎么影响数据结构设计?" — 答：① 数据布局紧凑（同时访问的字段放一起）；② 多线程 atomic 数组要对齐到 cache line（防假共享）；③ 优先用连续容器（vector / array）。</p>
+</section>
+
+<!-- ================================================================
+     §18 速查总表
+     ================================================================ -->
+<section class="chapter" id="s18">
+  <h2>18. 速查总表</h2>
+
+  <h3>18.1 优化优先级（从高到低）</h3>
+  <ol>
+    <li>系统设计：异步化 / 缓存 / 批处理 / 并行 (10×)</li>
+    <li>算法 / 数据结构：O(n²) → O(n log n) (10×)</li>
+    <li>数据布局：缓存友好 / SoA / 对齐 (3-10×)</li>
+    <li>编译器优化：O2 + LTO + PGO (1.5-2×)</li>
+    <li>微优化：SIMD / 内联汇编 (1.1-1.5×)</li>
+  </ol>
+
+  <h3>18.2 常用编译选项</h3>
+
+<pre><span class="cm"># 性能优化</span>
+g++ -O2 -flto -DNDEBUG -march=native
+
+<span class="cm"># 调试 + 优化</span>
+g++ -Og -g -fno-omit-frame-pointer
+
+<span class="cm"># PGO 三步</span>
+g++ -O2 -fprofile-generate ...
+./run_workload
+g++ -O2 -fprofile-use ...
+
+<span class="cm"># 启用 sanitizer (开发用)</span>
+g++ -O1 -g -fsanitize=address,undefined</pre>
+
+  <h3>18.3 perf 5 大命令</h3>
+
+<pre>perf stat -d ./prog                       <span class="cm"># 整体 CPU 计数器</span>
+perf record -g ./prog                     <span class="cm"># 采样剖析</span>
+perf report                               <span class="cm"># 看结果</span>
+perf script | stackcollapse | flamegraph  <span class="cm"># 火焰图</span>
+perf c2c record &amp; perf c2c report         <span class="cm"># 假共享检测</span></pre>
+
+  <h3>18.4 关键延迟数字</h3>
+
+<pre>L1 hit         ~ 1 ns
+L2 hit         ~ 3 ns
+L3 hit         ~ 10 ns
+DRAM           ~ 100 ns
+mutex          ~ 25 ns
+syscall        ~ 50 ns
+malloc         ~ 100 ns
+context switch ~ 1-5 µs
+SSD read       ~ 50 µs
+TCP RTT        ~ 100 µs (LAN)</pre>
+
+  <h3>18.5 设计准则</h3>
+  <ul>
+    <li>测量先于优化</li>
+    <li>找 top 3 热点，不优化其他</li>
+    <li>顺序访问 / 连续内存 / 紧凑布局</li>
+    <li>多线程 atomic 数组必须 cache line 对齐</li>
+    <li>预分配 (reserve) 几乎总是好的</li>
+    <li>移动 / string_view / span 替代拷贝</li>
+    <li>thread_local 是减少锁竞争的杀手锏</li>
+    <li>O2 + LTO + (PGO) 是免费的几十 percent 提升</li>
+  </ul>
+</section>
+
+<section class="chapter">
+  <h2>19. 下一步</h2>
+  <ol>
+    <li><b>Sanitizer 全家桶</b>（下一份）— ASan / UBSan / TSan / MSan / LSan</li>
+    <li><b>现代 CMake</b> — target-based / conan / clang-tidy CI</li>
+    <li>读 <code>cpp_memory_model.html</code> — 与本章 false sharing / atomic 配套</li>
+    <li>装 perf + flamegraph，用本章命令分析自己的项目</li>
+    <li>跑 Google Benchmark — 测一个真实热点的优化前后</li>
+  </ol>
+</section>
+
+</main>
+</div>
+
+<button class="back-top" id="backTop" onclick="window.scrollTo({top:0,behavior:'smooth'})">↑</button>
+
+<script>
+  const links = document.querySelectorAll('.sidebar a');
+  const sections = document.querySelectorAll('section.chapter');
+  function highlight() {
+    let cur = sections[0];
+    sections.forEach(s => {
+      const r = s.getBoundingClientRect();
+      if (r.top < window.innerHeight * 0.3) cur = s;
+    });
+    links.forEach(a => a.classList.toggle('active', a.getAttribute('href') === '#' + cur.id));
+    document.getElementById('backTop').classList.toggle('show', window.scrollY > 400);
+  }
+  window.addEventListener('scroll', highlight, { passive: true });
+  highlight();
+</script>
+<script src="./assets/site-theme.js" defer></script>
+</body>
+</html>
