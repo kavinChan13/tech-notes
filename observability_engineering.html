@@ -68,6 +68,8 @@
   .pillar-icon{font-size:2.5rem;margin-bottom:.5rem;}
   .pillar-name{color:var(--accent);font-weight:700;font-size:1.1rem;}
   .pillar-desc{color:var(--text-dim);font-size:.88rem;margin-top:.4rem;}
+  .box.telecom{border-color:#60a5fa;background:#0d1a30;}
+  .box.telecom::before{content:"📡 真实案例 · 电信 NETCONF 代理: ";color:#60a5fa;font-weight:700;}
 </style>
 </head>
 <body>
@@ -1427,6 +1429,46 @@ DLT_DECLARE_CONTEXT(my_context);
   <div class="matrix-row"><span class="key">追踪</span><span>简化版 W3C Trace（只传 trace_id，不需要全量 OTel Span）；通过 DLT context id 关联</span></div>
   <div class="matrix-row"><span class="key">上报策略</span><span>优先级队列：安全事件 &gt; 错误 &gt; 统计；断网时本地缓冲，联网后续传</span></div>
   <div class="matrix-row"><span class="key">分析工具</span><span>DLT Viewer（标准）；Vector CANalyzer（高端）；自研解析脚本</span></div>
+</div>
+
+<div class="box telecom">
+<strong>电信 NETCONF OAM 代理的轻量可观测性实践——在没有 OTel 的环境里怎么做</strong>
+
+<p style="margin-top:.6rem;">这是一个真实的生产级电信 C++ 进程（~1300 源文件，管理 5G 基站 O-RU），它不使用 OpenTelemetry，但有完整的可观测性能力。</p>
+
+<p><strong>日志层（对应 Logs 支柱）</strong>：使用标准 OAM Framework 日志（封装了 SysLog / 后端可接 ELK），关键操作（NETCONF RPC 收发、Scenario 状态变化、告警上报）都有结构化日志点。代码中有专门的 <code>RpcLogger</code> 类，把所有 NETCONF RPC 以 Chrome Tracing 格式落盘——在问题排查时直接用浏览器打开 <code>chrome://tracing</code> 就能看到每个 RPC 的时序。</p>
+
+<p><strong>指标层（对应 Metrics 支柱）</strong>：通过 OAM Framework 的性能计数器（PM Agent）暴露关键指标，例如：</p>
+<ul style="margin:.3rem 0;">
+  <li>每个 O-RU 的 NETCONF session 状态（Active / Reconnecting / Failed）</li>
+  <li>告警规则触发次数、转发延迟</li>
+  <li>Scenario 执行耗时（每个 Task 类型的 P99）</li>
+</ul>
+<p>这些指标通过 PM Agent 上报到网管系统（不是 Prometheus，是电信行业的 PDDB/OAM 生态）。</p>
+
+<p><strong>追踪层（对应 Tracing 支柱）</strong>：没有完整的分布式追踪，但有两个替代手段：</p>
+<ol style="margin:.3rem 0;">
+  <li><strong>LIM Task ID 贯穿</strong>：每个从 BTS Controller 下来的 LIM Task 都有唯一 ID，这个 ID 贯穿了从 Controller → Facade → RadioAgent → Dispatcher → Scenario → NETCONF RPC 的全链路日志，实现了"穷人版 Trace ID"</li>
+  <li><strong>Chrome Tracing</strong>：<code>RpcLogger</code> 以 <code>{"ph":"B","name":"editConfig","ts":123456}</code> 格式记录每个 RPC 的开始/结束，可以在 Chrome 里看到清晰的时序瀑布图——这是<strong>不需要任何额外工具链的轻量 Tracing</strong></li>
+</ol>
+
+<p><strong>这个案例的核心教训</strong>：</p>
+<ul style="margin:.3rem 0;">
+  <li>可观测性不必从 OpenTelemetry 开始——用业务系统已有的 ID（LIM Task ID）做关联，本质上和 Trace ID 一样</li>
+  <li>Chrome Tracing 格式（JSON 数组，每条带 <code>ph/name/ts/pid/tid</code>）极其简单，只需 100 行代码就能实现，但排查时效果惊人</li>
+  <li>OTel 的真正价值在于<strong>标准化 + 跨语言 + 跨后端</strong>——如果系统已经有自研方案且不需要跨语言互通，不必强制迁移</li>
+</ul>
+
+<p>Chrome Tracing 日志格式（可直接用 <code>chrome://tracing</code> 打开）：</p>
+<pre><code>[
+  {"ph":"B","name":"editConfig","cat":"NETCONF","ts":1716345600000,"pid":1,"tid":42},
+  {"ph":"E","name":"editConfig","cat":"NETCONF","ts":1716345600045,"pid":1,"tid":42,
+   "args":{"ru_id":"RU-01","status":"ok","rpc_type":"ArrayCarrier"}},
+  {"ph":"B","name":"Scenario::CarrierCreate","cat":"Scenario","ts":1716345600050,"pid":1,"tid":42},
+  <span class="cm">// ... 每个 RPC / Scenario 步骤都记录</span>
+]</code></pre>
+
+<p style="color:var(--text-dim);font-size:.88rem;">对应 OTel 概念：<code>ph:"B"</code>（begin）≈ span 开始，<code>ph:"E"</code>（end）≈ span 结束，<code>args</code> ≈ span attributes，<code>tid</code> ≈ span 所在线程（也是 RadioAgent 的 Dispatcher 线程）。</p>
 </div>
 
 </section>
