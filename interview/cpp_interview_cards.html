@@ -2049,7 +2049,34 @@ const CARDS = [
     "diff": "high",
     "q": "LTO 与 PGO 各解决什么?",
     "ans": "<b>LTO</b> (Link Time Optimization): 链接时跨 TU 优化 (跨文件 inline / dead code 消除), 收益 5-15%. <b>PGO</b> (Profile-Guided Optimization): 用真实数据指导优化 (哪些函数热, 哪些分支常走), 收益 5-20%, 流程: 编译插桩 → 跑真实负载 → 重编.",
-    "ref": "cpp_performance_guide"
+    "ref": "cpp_performance_guide",
+    "why_asked": "生产 C++ 必备优化技术。能讲两者各自原理 + 收益数字的人是真做过编译优化。",
+    "answers": {
+      "mid": "<strong>LTO (Link Time Optimization)</strong>：链接时<strong>跨 TU 优化</strong>（跨文件 inline / dead code 消除），收益 <strong>5-15%</strong>。<br><strong>PGO (Profile-Guided Optimization)</strong>：用<strong>真实数据</strong>指导优化（哪些函数热，哪些分支常走），收益 <strong>5-20%</strong>。流程：编译插桩 → 跑真实负载 → 重编。",
+      "senior": "<strong>LTO</strong>：典型做法 <code>-flto</code>，链接时把所有 IR 一起做<strong>全局优化</strong>（跨文件 inline 是最大收益，因为 <code>.cpp</code> 边界不再阻碍 inline 决策）。代价：<strong>链接时间 ×3-10</strong>。<strong>ThinLTO</strong> 是 LLVM 引入的 incremental LTO，链接时间增加少（~ 1.5×）但收益略低（80% of full LTO）。<br><strong>PGO</strong>：3 阶段 ① <code>-fprofile-generate</code> 编译插桩版；② 跑代表性 workload 收集 profile；③ <code>-fprofile-use</code> 重编。<strong>痛点</strong>：必须有 representative workload，不准的 profile 可能反优化。<strong>AutoFDO</strong>（Google）/ <strong>BOLT</strong>（Facebook）从生产 perf 数据获取 profile，免去插桩 step。",
+      "staff": "深一层：LTO 和 PGO 是<strong>正交</strong>的，可<strong>叠加使用</strong>（典型生产配置）。<br><br><strong>LTO + PGO 累计收益</strong>：典型 10-25%（取决于代码风格 / 业务）。<strong>注意</strong>：① <strong>code size</strong> 通常增加（更激进 inline）；② <strong>编译 + 链接时间</strong> ×5-10；③ <strong>调试</strong>难度上升（inline 后 backtrace 难看）。<br><br><strong>BOLT (Binary Optimization and Layout Tool)</strong>：Facebook 工具，<strong>编译后</strong>用 perf 数据重排二进制（hot function 排前面 / cold 排后面 / branch 重排）。<strong>跟 PGO 互补</strong>—— PGO 在编译期优化，BOLT 在链接后再优化。生产典型再加 5-15%。<br><br><strong>真实经验</strong>：NETCONF agent 优化经历：<br>① baseline (-O2): 性能 100%<br>② +LTO: 110%（+10%）<br>③ +PGO: 122%（+11%）<br>④ +BOLT: 135%（+11%）<br>⑤ +CPU pinning + NUMA: 158%（+17%）<br>累计 +58%。<strong>取舍</strong>：① 内部 release 关 LTO 加快迭代；② Production release 全开；③ 调试构建（debug）完全不开（影响 backtrace）。<strong>陷阱</strong>：① PGO workload 不代表生产 → 优化反向；② LTO 暴露 ODR 违反（不同 TU 同名同类型不同定义）→ 编译错或运行 UB；③ BOLT 需要 frame pointer 完整（-fno-omit-frame-pointer）。"
+    },
+    "failure_modes": [
+      "PGO 用 synthetic workload → profile 不代表生产 → 反优化",
+      "LTO 暴露 ODR 违反 → 编译错或 runtime UB",
+      "Production binary 没开 LTO → 失去免费 10% 性能",
+      "Debug build 也开 LTO → 编译慢 / 调试体验差",
+      "BOLT 需要 frame pointer 但配 -fomit-frame-pointer → BOLT 无法工作"
+    ],
+    "follow_ups": [
+      {
+        "q": "ThinLTO vs Full LTO？",
+        "hint": "① Full LTO：所有 IR 一起优化，慢但收益大；② ThinLTO：分 module 增量优化 + summary-based cross-module；链接时间 1.5× vs 5×，收益 80% vs 100%；2026 年 ThinLTO 是默认选择"
+      },
+      {
+        "q": "PGO 跟 AutoFDO 区别？",
+        "hint": "① PGO：插桩二进制，单独跑收集 profile；② AutoFDO（Google）：从生产 perf record 数据自动转 profile；优势：免插桩 + 持续优化；劣势：精度略低"
+      },
+      {
+        "q": "怎么验证 LTO/PGO 真的生效？",
+        "hint": "① <code>readelf -S binary</code> 看 .gnu.lto_* sections；② perf record + symbol 看 hot function；③ pre/post benchmark 对比；④ binary size 通常涨"
+      }
+    ]
   },
   {
     "id": 107,
@@ -2070,7 +2097,34 @@ const CARDS = [
     "diff": "high",
     "q": "std::pmr::monotonic_buffer_resource 怎么工作?",
     "ans": "顺序推进的 arena allocator: 分配只是<strong>指针前移</strong> (~ 几 ns), 不释放; 整个 resource 析构/reset 时一次性回收. 配 std::pmr::vector / pmr::map 等容器, 请求处理结束自动整体释放, 0 次 free.",
-    "ref": "cpp_low_latency_guide"
+    "ref": "cpp_low_latency_guide",
+    "why_asked": "零分配 / 低延迟编程必考。能讲清\"arena 顺序推进 + reset 一次性回收\"的人是真实践过。",
+    "answers": {
+      "mid": "<strong>顺序推进的 arena allocator</strong>：分配只是<strong>指针前移</strong>（~几 ns），<strong>不释放</strong>；整个 resource 析构 / reset 时一次性回收。配 <code>std::pmr::vector</code> / <code>pmr::map</code> 等容器，请求处理结束自动整体释放，<strong>0 次 free</strong>。",
+      "senior": "<strong>典型用法</strong>（C++17 PMR）：<br><code>void handleRequest(Request&amp; req) {</code><br><code>    char buf[64 * 1024];</code><br><code>    std::pmr::monotonic_buffer_resource arena{buf, sizeof(buf)};</code><br><code>    std::pmr::vector&lt;Item&gt; items(&amp;arena);</code><br><code>    std::pmr::unordered_map&lt;std::pmr::string, int&gt; cache(&amp;arena);</code><br><code>    // ...大量临时数据结构分配...</code><br><code>    // 函数结束 arena 析构 → 一次性回收所有内存</code><br><code>}</code><br><br><strong>关键</strong>：① 栈上 buffer 优先（cache friendly）；② 不够时<strong>fall back 到 upstream allocator</strong>（默认 new/delete）—— 不会崩；③ 整个 arena<strong>不能单个 free</strong> 元素（\"<strong>monotonic</strong>\" 的含义）。",
+      "staff": "深一层：monotonic_buffer_resource 是 C++17 引入的<strong>\"零分配请求处理\"</strong>核心工具，借鉴自 Andrei Alexandrescu 等 talks。<strong>设计哲学</strong>：① <strong>分配 fast path</strong>：bump pointer，&lt; 5 ns；② <strong>释放是 batch 操作</strong>：整体 reset / destroy；③ <strong>对齐自动处理</strong>（按要求对齐推进指针）。<br><br><strong>vs std::allocator / jemalloc</strong>：<br>· <strong>std::allocator</strong>: 通用，~30-100 ns / allocation，可单独 free<br>· <strong>jemalloc / tcmalloc</strong>: 优化的通用 allocator，~15-50 ns<br>· <strong>monotonic_buffer</strong>: ~5 ns，但只能 batch release<br><strong>适用场景</strong>：① <strong>请求级生命周期</strong>（web server / RPC handler）；② <strong>解析中间对象</strong>（parser tree）；③ <strong>批处理任务</strong>。<br><br><strong>真实经验</strong>：NETCONF agent 每个 NETCONF RPC 包含多个解析步骤（XML / YANG / config diff），<strong>之前用 new/delete</strong>，单 RPC ~80 次 allocation，单 RPC ~50 µs。<br><strong>改造</strong>：① 每个 RPC 处理函数栈上 64KB buffer + monotonic_buffer_resource；② 所有 STL 容器换 pmr 版本；③ string 用 pmr::string；<br><strong>结果</strong>：① RPC 内 allocation 数 ~80 → 1（只 arena 内部偶尔 grow upstream）；② 单 RPC 时延 50 µs → 12 µs（-76%）；③ <strong>P99 抖动</strong>显著降低（allocator 是 P99 主因之一）。<strong>陷阱</strong>：① 容器析构时仍调元素 dtor（不是 0 cost）；② <strong>不能在 arena 销毁后访问</strong>元素；③ pmr 容器跟普通容器不兼容（不同 allocator type）。<strong>替代</strong>：① <strong>fmt::format_to_n</strong> 直接写栈 buffer；② <strong>boost::container::small_vector</strong> 小对象内嵌；③ 自定义 arena（更激进，不走 PMR 抽象层）。"
+    },
+    "failure_modes": [
+      "不知道 arena 不能单个 free（试图 erase 元素期望立刻回收）",
+      "Buffer 太小 → 频繁 fall back upstream → 性能没改善",
+      "pmr 容器跟普通容器混用 → allocator 类型不匹配 → 编译错",
+      "arena 析构后还访问元素 → use-after-free",
+      "期待容器析构 0 cost（实际 dtor 还要调）"
+    ],
+    "follow_ups": [
+      {
+        "q": "synchronized_pool_resource 跟 monotonic 区别？",
+        "hint": "① monotonic: 单向推进 + 批量 release，无单 free；② synchronized_pool: 单元素 free，按 size class 分桶，线程安全；适合长期持有 / 元素生命周期不同步"
+      },
+      {
+        "q": "跟 jemalloc / tcmalloc 怎么选？",
+        "hint": "① 全局 allocator 用 jemalloc / tcmalloc（替代 glibc malloc 通用更快）；② 请求级用 monotonic_buffer 叠加 → 双重优化；③ 不是 either-or"
+      },
+      {
+        "q": "怎么测 zero-allocation 真的实现了？",
+        "hint": "① 自定义 allocator 加 atomic counter；② 跑测试看 counter 是否 = 0；③ LD_PRELOAD 替换 malloc 计数；④ valgrind --tool=massif"
+      }
+    ]
   },
   {
     "id": 109,
@@ -2092,7 +2146,34 @@ const CARDS = [
     "diff": "high",
     "q": "怎么写\"零分配\"的请求处理?",
     "ans": "① 启动期预分配所有 buffer/pool; ② 请求级 arena (monotonic_buffer_resource); ③ 字符串用 string_view; ④ 序列化用 fmt::format_to_n 写栈 buffer; ⑤ 错误用 expected 不用异常; ⑥ 异步日志; ⑦ 测试期 hook malloc 验证.",
-    "ref": "cpp_low_latency_guide"
+    "ref": "cpp_low_latency_guide",
+    "why_asked": "低延迟实战题。能列 7 个 technique 的人有 HFT / 网络设备 / 实时系统经验。",
+    "answers": {
+      "mid": "<strong>7 个技术</strong>：① <strong>启动期预分配</strong>所有 buffer / pool；② 请求级 <strong>arena</strong>（monotonic_buffer_resource）；③ 字符串用 <strong>string_view</strong>；④ 序列化用 <strong>fmt::format_to_n</strong> 写栈 buffer；⑤ 错误用 <strong>std::expected</strong> 不用异常；⑥ <strong>异步日志</strong>；⑦ <strong>测试期 hook malloc</strong> 验证。",
+      "senior": "<strong>详细技巧</strong>：<br>① <strong>启动期预分配</strong>：连接池 / 对象池 / message buffer 在 startup 阶段分配，运行期只 borrow / return；<br>② <strong>arena</strong>：见 #108；<br>③ <strong>string_view</strong>：避免短字符串临时拷贝；<br>④ <strong>fmt</strong>: <code>fmt::format_to_n(buf, N, \"...\", args)</code> 写入栈 buffer，无 dynamic alloc；<br>⑤ <strong>expected vs exception</strong>: 异常对象 heap alloc + unwind 慢；expected 是 stack-only；<br>⑥ <strong>异步日志</strong>（spdlog async / quill）：log call 只 push 到 ring buffer，IO 在后台线程；<br>⑦ <strong>malloc hook</strong>: LD_PRELOAD 替换 malloc 加 abort，测试期验证 hot path 真零分配。",
+      "staff": "深一层：零分配请求处理是<strong>低延迟编程的圣杯</strong>，但<strong>不是 absolute zero</strong>—— 是\"<strong>请求处理路径上不触发 heap allocator</strong>\"。Startup 期分配和 OS 调用（如 syscall）不算。<br><br><strong>典型 hot path budget</strong>（HFT / 网络设备）：<br>· P99 latency &lt; 10 µs / order<br>· allocations / request: 0<br>· cache lines touched: &lt; 50<br>· system calls: 0（用户态网络栈如 DPDK）<br><br><strong>真实经验</strong>：NETCONF agent low-latency 模式实施 7 技术：<br>① 启动期 message pool 10k 个 buffer；② 每 RPC monotonic_buffer 64KB；③ string_view 替代 90% string 临时；④ fmt 写响应；⑤ expected 替代 80% 异常路径（保留 catastrophic exception）；⑥ quill 异步日志；⑦ 测试 LD_PRELOAD malloc-counter 验证。<br>结果：P99 from 280 µs → 35 µs（-87%），P99.9 from 1.2 ms → 50 µs。<br><br><strong>陷阱</strong>：① <strong>library 内部仍 alloc</strong>（如某些 OpenSSL 函数）→ 用 perf record 或 mtrace 找；② <strong>std::function captures by value</strong> 可能 heap alloc → 用 small lambda + std::move_only_function；③ <strong>locale / iostream / printf</strong> 都 alloc → fmt + 自定义 stream；④ <strong>thread local storage</strong> 初次访问可能 alloc。<strong>工具</strong>：① <strong>perf record + tools/perf-malloc-hook</strong>；② <strong>jemalloc stats</strong>；③ <strong>heaptrack</strong>；④ <strong>Linux strace -e trace=memory</strong>。<strong>哲学</strong>：① 不要预 optimize（先 profile）；② Hot path 100% 验证；③ Cold path 接受标准分配。"
+    },
+    "failure_modes": [
+      "不 profile 直接堆 7 技术（很多场景不需要这么 extreme）",
+      "用 std::function 不知道 heap capture → hot path 偷偷 alloc",
+      "日志同步写 → 偶发 100 ms 抖动",
+      "Library（OpenSSL / iostream）内部 alloc → 检测不到",
+      "测试期不验证 → 生产偶发 alloc → P99 抖"
+    ],
+    "follow_ups": [
+      {
+        "q": "怎么验证零分配？",
+        "hint": "① LD_PRELOAD 自定义 malloc + abort + log；② jemalloc.stats 累计 allocation count；③ 测试期 hook + assert count == 0；④ perf record -e probe:malloc"
+      },
+      {
+        "q": "异常 vs expected 性能差？",
+        "hint": "① 抛 + catch 一次：1-100 µs（unwind 跨多帧）；② expected check：&lt; 1 ns；③ hot path 频繁错误用 expected；catastrophic / 罕见用 exception 仍可"
+      },
+      {
+        "q": "异步日志怎么实现？",
+        "hint": "① Producer 写 ring buffer（lock-free）；② Background thread 批量写盘；③ Latency: producer ~50 ns，I/O 异步；④ 工具：spdlog async / quill / NanoLog"
+      }
+    ]
   },
   {
     "id": 111,
@@ -2124,7 +2205,34 @@ const CARDS = [
     "q": "name mangling 是什么? 为什么需要?",
     "ans": "C++ 把函数名 + 参数类型 + 命名空间 + cv 限定 等编码为<strong>唯一符号名</strong>, 用于支持函数重载 / 命名空间 / 模板. 例如 <code>foo(int)</code> mangled 为 <code>_Z3fooi</code> (Itanium ABI).",
     "bonus": "用 <code>extern \"C\"</code> 禁用 mangling (和 C 互操作). nm + c++filt 看符号: <code>nm a.o | c++filt</code>.",
-    "ref": "cpp_compilation_guide"
+    "ref": "cpp_compilation_guide",
+    "why_asked": "ABI 基础题。能讲 Itanium ABI mangling 规则的人是真分析过 .so 符号。",
+    "answers": {
+      "mid": "C++ 把<strong>函数名 + 参数类型 + 命名空间 + cv 限定</strong>等编码为<strong>唯一符号名</strong>，用于支持<strong>函数重载 / 命名空间 / 模板</strong>。例如 <code>foo(int)</code> mangled 为 <code>_Z3fooi</code>（Itanium ABI）。",
+      "senior": "<strong>为什么需要</strong>：C 语言只有函数名作为 link 符号；C++ 因为 <strong>function overload</strong>（同名不同参）必须 mangling 才能让 linker 区分。<br><strong>Itanium ABI（GCC / Clang Linux）</strong>：<br>· <code>_Z</code> 开头<br>· 数字 = 名字长度<br>· 类型简写：<code>i</code> = int / <code>l</code> = long / <code>P</code> = pointer / <code>R</code> = reference / <code>K</code> = const<br>例：<code>void foo(int, const char*)</code> → <code>_Z3fooiPKc</code>。<br><strong>MSVC ABI</strong>：完全不同的语法（<code>?foo@@YAXHPBD@Z</code>），<strong>跨编译器不兼容</strong>。",
+      "staff": "深一层：name mangling 不仅编码<strong>函数签名</strong>，还编码：<br>· <strong>命名空间</strong>（namespace foo:: → mangled 含 N_foo）<br>· <strong>类成员函数</strong>（class Bar::method → N_Bar_method）<br>· <strong>模板参数</strong>（vector&lt;int&gt;::push_back → 含 NS_v_E_i）<br>· <strong>const / volatile / ref qualifier</strong><br>· <strong>异常 specification</strong>（noexcept，C++17 起是签名一部分）<br><br><strong>实战工具</strong>：<br>① <code>nm -C binary</code>：列出符号 + demangled 名字<br>② <code>c++filt</code>：手动 demangle（<code>echo _Z3fooi | c++filt</code> → \"foo(int)\"）<br>③ <code>readelf -Ws</code>：详细符号表 + 大小<br>④ <code>abidiff</code>：比较两个 .so 的 ABI 兼容性<br><br><strong>真实经验</strong>：电信项目 customer 反馈 \"你的新版本 .so 不能 link 我们老的 caller\"。我用 <code>abidiff old.so new.so</code> 发现一个 public class 加了 private 成员 → sizeof 变 → mangled name 不变但 ABI 破坏。Customer 老 caller 用旧 sizeof，运行时 layout 错。<strong>对策</strong>：① 用 Pimpl 隔离实现（见 #20）；② CI 加 abidiff 自动检测。<strong>陷阱</strong>：① <strong>extern \"C\" 禁 mangling</strong>—— 跨编译器 / 跨语言（Python / Go via cgo）接口必备；② <strong>inline function</strong> mangling 包含 instantiation context，跨 .so 可能多份；③ <strong>template instantiation</strong> 在每个 user TU 都生成 mangled 符号 → 二进制膨胀 → explicit instantiation 可控制。"
+    },
+    "failure_modes": [
+      "Cross-编译器（GCC + MSVC）共享 C++ 库 → mangling 不同 → link fail",
+      "跨 .so 暴露 std::string / std::vector → 不同 libstdc++ 版本布局不同",
+      "Class 加 private 成员认为是兼容（实际 sizeof 变 → 老 caller 用错位）",
+      "不用 abidiff 检测 ABI break → 客户报错才知",
+      "Template heavy 库不 explicit instantiation → 二进制膨胀 / 编译慢"
+    ],
+    "follow_ups": [
+      {
+        "q": "怎么用 c++filt？",
+        "hint": "① 单符号：<code>c++filt _Z3fooi</code>；② 批量：<code>nm binary | c++filt</code>；③ 选择 ABI：<code>c++filt -p</code> Itanium / <code>--format=ms</code> MSVC"
+      },
+      {
+        "q": "extern \"C\" 影响 mangling 怎么？",
+        "hint": "① 完全禁 mangling，符号名 = 函数名（C 风格）；② 不能 overload（同名只能一个）；③ 必须 namespace 中或 file scope 显式包；④ 不能模板 / 类成员"
+      },
+      {
+        "q": "Inline function 跨 .so 怎么处理？",
+        "hint": "① 每个 user TU 生成自己的实例化（vague linkage）；② Linker 合并重复符号（COMDAT）；③ 如果两个 .so 版本不同 → ODR violation → UB；解：用 visibility=hidden + 不 inline 跨边界"
+      }
+    ]
   },
   {
     "id": 114,
@@ -2136,7 +2244,34 @@ const CARDS = [
     "q": "extern \"C\" 解决什么?",
     "ans": "禁止 name mangling, 让 C++ 函数能<strong>被 C 代码调用</strong>或<strong>调用 C 函数</strong>. 必要场景: ① 给 C 暴露接口; ② dlsym 需要稳定符号名; ③ POSIX/Win32 API 头.",
     "trap": "extern \"C\" 函数<strong>不能重载</strong> (只能有一个签名).",
-    "ref": "cpp_compilation_guide"
+    "ref": "cpp_compilation_guide",
+    "why_asked": "必考。能讲\"禁 mangling + 必要场景\"完整 3 个的人是真做过 C/C++ 混编。",
+    "answers": {
+      "mid": "<strong>禁止 name mangling</strong>，让 C++ 函数能被 <strong>C 代码</strong>调用或调用 C 函数。<strong>必要场景</strong>：① 给 C 暴露接口；② <code>dlsym</code> 需要稳定符号名；③ POSIX / Win32 API 头（C 风格）。",
+      "senior": "<strong>语法</strong>：<br><code>extern \"C\" void foo(int);</code>（单函数）<br><code>extern \"C\" { void foo(); void bar(); }</code>（块）<br><strong>头文件双兼容</strong>：<br><code>#ifdef __cplusplus</code><br><code>extern \"C\" {</code><br><code>#endif</code><br><code>void foo(int);</code><br><code>#ifdef __cplusplus</code><br><code>}</code><br><code>#endif</code><br>—— C 编译器看不到 extern \"C\"，C++ 编译器看到。<strong>限制</strong>：extern \"C\" 函数不能 overload / 不能是类成员 / 不能模板。",
+      "staff": "深一层：extern \"C\" 是 <strong>跨语言互操作的基石</strong>。<strong>常见场景</strong>：<br>① <strong>C++ 库给 C 用</strong>（如 SQLite C API for C++ implementation）<br>② <strong>给 Python / Rust / Go 等语言 binding</strong>（这些语言通常只能通过 C ABI 调）<br>③ <strong>dlsym</strong> / <strong>GetProcAddress</strong> 动态加载需要稳定符号名<br>④ <strong>kernel / driver 接口</strong>（多 C 风格）<br>⑤ <strong>跨编译器 .so 边界</strong>（GCC 编译的库给 MSVC caller）<br><br><strong>跨边界的限制 + 注意</strong>：<br>① <strong>不能传 C++ 类型</strong>（std::string / std::vector / std::map）—— C 看不懂；只能传 C 类型（int / char* / struct）+ opaque pointer<br>② <strong>不能 C++ 异常逃逸</strong>—— C 不能 catch，UB；必须 catch all + 转 error code<br>③ <strong>C++ 类的方法不能 extern \"C\"</strong>（类成员有 implicit this）—— 必须包 free function：<code>extern \"C\" void Foo_method(Foo* obj, int arg) { obj-&gt;method(arg); }</code><br>④ <strong>RAII 不跨边界</strong>—— C 调用方不会自动析构，必须 explicit destroy 函数<br>⑤ <strong>calling convention</strong>—— Windows 上要明确 __stdcall / __cdecl<br><br><strong>真实经验</strong>：NETCONF agent SDK 给客户用，需支持 C / C++ / Python / Go binding。设计了纯 C ABI shim：<br>1) Header 全部 <code>extern \"C\"</code> + opaque handle <code>typedef struct NCAgent NCAgent;</code><br>2) 创建 / 销毁：<code>NCAgent* nc_create(); void nc_destroy(NCAgent*);</code><br>3) 操作：<code>int nc_send_rpc(NCAgent*, const char* rpc_xml, char* response_buf, size_t buf_size);</code><br>4) 异常 catch all：<code>try { ... } catch (const std::exception&amp; e) { strncpy(err_buf, e.what(), n); return -1; }</code><br>5) Python ctypes / Go cgo 直接调即可。<br>结果：单一 C 头文件，5 平台都能用。"
+    },
+    "failure_modes": [
+      "extern \"C\" 内部仍传 std::string / std::vector → 跨边界 UB",
+      "C++ 异常逃逸到 C 调用方 → 立即崩 / UB",
+      "期待 extern \"C\" overload 同名函数 → 编译错",
+      "RAII 类对象给 C 调用方 → 没自动析构 → 泄漏",
+      "头文件没 #ifdef __cplusplus → C 编译器卡 extern \"C\""
+    ],
+    "follow_ups": [
+      {
+        "q": "extern \"C++\" 是什么？",
+        "hint": "跟 extern \"C\" 对应，明确 C++ linkage；很少显式写（默认就是）；主要在 extern \"C\" 块内部需要嵌入 C++ 函数时用：<code>extern \"C\" { extern \"C++\" void cpp_only(); }</code>"
+      },
+      {
+        "q": "Calling convention 怎么处理？",
+        "hint": "① Windows 历史多种：__cdecl / __stdcall / __fastcall / __thiscall；② extern \"C\" 不指定 convention，要 explicit <code>extern \"C\" __stdcall void foo();</code>；③ Linux 通常只 cdecl，无需指定"
+      },
+      {
+        "q": "怎么让 C++ class 给 C 用？",
+        "hint": "① Opaque handle (forward decl + extern \"C\" 工厂函数)；② OOP pattern via \"method\" free function + handle as first arg；③ 见 #22 详细模式"
+      }
+    ]
   },
   {
     "id": 115,
@@ -2166,7 +2301,34 @@ const CARDS = [
     "diff": "high",
     "q": "ASan 工作原理?",
     "ans": "两机制: ① <b>每次内存访问插桩</b>, 检查 shadow memory; ② <b>shadow memory</b>: 1 字节影子标记 8 字节真实内存的有效性 (0 = 全可用, 1-7 = 前 N 字节, 负值 = 各种 poison). 红区 (red zone) 围绕每个分配, 越界立刻报警. UAF: free 时不立即释放, 进 quarantine 队列 + shadow 标 freed.",
-    "ref": "cpp_sanitizers_guide"
+    "ref": "cpp_sanitizers_guide",
+    "why_asked": "ASan 是 C++ 必备工具。能讲 shadow memory + redzone 原理的人是真深入过。",
+    "answers": {
+      "mid": "两机制：① <strong>每次内存访问插桩</strong>，检查 shadow memory；② <strong>shadow memory</strong>: 1 字节影子标记 8 字节真实内存的<strong>有效性</strong>（0 = 全可用，1-7 = 前 N 字节，负值 = 各种 poison）。<strong>红区 (red zone)</strong> 围绕每个分配，越界立刻报警。<strong>UAF</strong>: free 时不立即释放，进 <strong>quarantine</strong> 队列 + shadow 标 freed。",
+      "senior": "<strong>详细机制</strong>：<br>① <strong>编译期插桩</strong>：每次内存读写前生成 ~10 行汇编检查 shadow（典型 2× slowdown）；<br>② <strong>shadow memory mapping</strong>：1/8 比例 —— 用户内存 N 字节 → shadow N/8 字节；<br>③ <strong>red zone</strong>：每个 heap allocation 前后各 128 字节\"<strong>毒区</strong>\"，访问触发 ASan 报警；<br>④ <strong>stack frame 也加 red zone</strong>：局部数组越界一样能检测；<br>⑤ <strong>UAF detection</strong>：free 后不立即归还，放 quarantine 几秒 + shadow poison，再次访问报警。",
+      "staff": "深一层：ASan 设计是 Google 2012 年的开源工程，<strong>颠覆性</strong>—— 之前 Valgrind 是 ~50× slowdown，ASan 仅 2× → 能在<strong>开发 / CI / 部分生产</strong>跑。<br><br><strong>覆盖范围</strong>：<br>· <strong>Heap buffer overflow / underflow</strong>（malloc/new 越界）<br>· <strong>Stack buffer overflow / underflow</strong>（局部数组越界）<br>· <strong>Use-after-free</strong>（free 后再访问）<br>· <strong>Use-after-return</strong>（栈对象 escape 给其他线程）<br>· <strong>Use-after-scope</strong>（lifetime 结束后访问）<br>· <strong>Initialization order bugs</strong>（全局对象构造顺序问题）<br>· <strong>Memory leak</strong>（程序退出时统计）<br><br><strong>不能检测</strong>：<br>· <strong>Data race</strong>（→ TSan）<br>· <strong>Uninitialized memory read</strong>（→ MSan）<br>· <strong>Undefined behavior</strong>（→ UBSan）<br><br><strong>使用</strong>：<code>g++ -fsanitize=address -fno-omit-frame-pointer -g -O1 ...</code>。<strong>typical overhead</strong>: CPU 2×, Memory 3×。<strong>生产场景</strong>：① CI 跑全部测试 with ASan；② Canary deployment 10% 流量带 ASan（仅小规模 production）；③ HWASan（ARM 上更便宜）可考虑全 prod。<br><br><strong>真实经验</strong>：NETCONF agent 老代码升级到 ASan 后第一周抓到 13 个 bug，包括 ① 2 个 UAF（shared_ptr 循环引用边缘）；② 5 个 stack buffer overflow（fixed-size 数组 + dynamic input）；③ 6 个 memory leak（exception path 没释放）。<strong>对策</strong>：每个 release 必跑 ASan + TSan + UBSan triple，零容忍报警。<strong>陷阱</strong>：① ASan slow，hot path benchmark 不准（必须分开 perf 和 ASan run）；② false positive 罕见但可能（如自己的 allocator）；③ Production 启用要小心（攻击者可能利用 ASan 检测路径）。"
+    },
+    "failure_modes": [
+      "不在 CI 跑 ASan → bug 进生产才暴",
+      "期待 ASan 检测 race / uninit → 用错工具",
+      "ASan 跟 benchmark 一起跑 → 性能数据不准",
+      "生产长期开 ASan → 2× CPU / 3× memory 浪费",
+      "ASan 报警当 false positive 忽略 → 真 bug 漏掉"
+    ],
+    "follow_ups": [
+      {
+        "q": "ASan 性能代价具体？",
+        "hint": "① CPU ~2×（检查 + shadow access）；② Memory ~3×（shadow + redzone + quarantine）；③ Compile time +20-50%；④ Binary size +30-50%；适合 dev / CI / canary"
+      },
+      {
+        "q": "HWASan 是什么？",
+        "hint": "ARM 上的 ASan：用 ARM 的 top-byte-ignore / Memory Tagging Extension（MTE）做 tagging，比 ASan shadow 便宜 5-10×；生产开销 5-15% → 可用于 production；2026 年 Pixel 已默认开"
+      },
+      {
+        "q": "GWP-ASan 跟 ASan 区别？",
+        "hint": "GWP-ASan: 随机采样 ~1/10000 allocation 加 red zone，开销可忽略；适合 production 抓 rare bug；Google / Apple 大量使用"
+      }
+    ]
   },
   {
     "id": 118,
@@ -2177,7 +2339,34 @@ const CARDS = [
     "q": "TSan 怎么发现 race?",
     "ans": "每个内存位置 shadow 记录\"上次访问者 + vector clock\". 每个线程维护自己 vector clock + 已知其他线程时刻. 同步操作 (mutex / atomic / cv) 合并双方 vector clock. 访问内存时检查\"上次访问\"的 vector clock 是否 ≤ 当前 → 否 = race.",
     "bonus": "限制: 只能发现实际发生的 race (依赖调度顺序); 自实现 spinlock 不被识别 → 漏报.",
-    "ref": "cpp_sanitizers_guide"
+    "ref": "cpp_sanitizers_guide",
+    "why_asked": "TSan 实现原理高级题。能讲 vector clock + happens-before 的人是真理解 race detection。",
+    "answers": {
+      "mid": "每个内存位置 shadow 记录\"<strong>上次访问者 + vector clock</strong>\"。每个线程维护自己 vector clock + 已知其他线程时刻。<strong>同步操作</strong>（mutex / atomic / cv）合并双方 vector clock。访问内存时检查\"<strong>上次访问</strong>\"的 vector clock 是否 ≤ 当前 → 否 = race。",
+      "senior": "<strong>vector clock 是分布式系统的\"逻辑时间\"</strong>：N 个线程的 N-元 vector，每个元素是该线程的事件计数。<strong>规则</strong>：<br>① 线程 i 做事件 → 自己的 V[i]++；<br>② 同步操作（mutex unlock / atomic release）→ 携带 vector；<br>③ 接收方（mutex lock / atomic acquire）→ 合并 V[j] = max(local V[j], received V[j])；<br>④ <strong>判断 race</strong>：上次访问的 vector U vs 当前 V，如果 U 不 ≤ V（即至少一个 U[k] &gt; V[k]）→ 没有 hb → race。",
+      "staff": "深一层：TSan 用的是 <strong>FastTrack 算法</strong>（2009，Dimitar Dimitrov 等）—— vector clock 的优化版本，单次访问 ~5-10× slowdown（vs 朴素 vector clock 100×+）。<br><br><strong>关键优化</strong>：<br>① <strong>\"读\"用 epoch</strong>（单时间戳）<strong>不用 full vector</strong>—— 多个读不形成 race，只要记最大；<br>② <strong>\"写\"用 full vector clock</strong>—— 写跟之前的读 / 写都要查；<br>③ <strong>shadow memory</strong> 跟 ASan 类似，每 8 字节用户内存对应 32 字节 shadow（存上次访问的 epoch / vc + 类型）。<br><br><strong>覆盖能力</strong>：<br>· <strong>Data race</strong>（任何 happens-before 缺失的内存 conflict）<br>· <strong>Deadlock</strong>（lock order inversion）<br>· <strong>Async-signal-unsafe usage</strong><br>· 不检测：deadlock 实际发生（只 detect potential）/ algorithm livelock。<br><br><strong>使用</strong>: <code>g++ -fsanitize=thread -O1 -g</code>。<strong>typical overhead</strong>: CPU 5-15×（更贵于 ASan），Memory 5-10×。<strong>限制</strong>：① 不能跟 ASan 同时用（shadow 冲突），分开 build；② 不识别 lock-free 算法的 fence / hand-rolled sync（需 <code>__tsan_*</code> annotations）；③ ARM 上有 limitations。<br><br><strong>真实经验</strong>：NETCONF agent 一段时间出现\"<strong>偶发段错</strong>\"，无规律。跑 TSan 在 CI 测试上发现一段无关 race：<code>std::unordered_map&lt;Key, Value&gt;</code> 共享给多线程，一个线程 insert 同时另一个读—— map 内部 rehash 可能让 reader 看到部分 reorganize state。bug fix：加 shared_mutex。<strong>陷阱</strong>：① False positive 比 ASan 多（lock-free 算法 / 自定义 sync 容易触发）；② Production 不建议开（10× slowdown）；③ TSan + jemalloc 兼容性问题 → glibc malloc 跑。<strong>替代</strong>：HelGrind（Valgrind）类似但更慢；DataRaceBench 类的测试套件。"
+    },
+    "failure_modes": [
+      "lock-free 代码用 TSan → 大量 false positive",
+      "跟 ASan 一起 build → shadow 冲突",
+      "Production 长期开 → 10× slowdown",
+      "不 annotate hand-rolled sync → TSan 不知道是真的 sync",
+      "Mutex + atomic 混用 → TSan 报 race 实际上 OK"
+    ],
+    "follow_ups": [
+      {
+        "q": "怎么 annotate hand-rolled sync 给 TSan？",
+        "hint": "① <code>__tsan_acquire(addr)</code> / <code>__tsan_release(addr)</code> 显式标记；② <code>ANNOTATE_HAPPENS_BEFORE / AFTER</code>；③ 仅用于真知道 sync 正确的代码（否则 mask 真 bug）"
+      },
+      {
+        "q": "RR-record-replay 跟 TSan 关系？",
+        "hint": "① RR：record once + deterministic replay；② 能精确复现偶发 race；③ TSan 检测 race 类型；④ 组合用：TSan 找疑似，RR 复现给开发调试"
+      },
+      {
+        "q": "Java / Go 的 race detector 跟 TSan？",
+        "hint": "① Go race detector 直接用 TSan runtime（实现复用）；② Java 有自己的 ThreadSanitizer + JVM 集成；③ 算法都是 vector clock + happens-before"
+      }
+    ]
   },
   {
     "id": 119,
@@ -2238,7 +2427,34 @@ const CARDS = [
     "diff": "high",
     "q": "epoll ET 与 LT 区别?",
     "ans": "<b>LT</b> (level-triggered, 默认): 只要 fd 可读/写就持续通知. <b>ET</b> (edge-triggered): 仅状态变化时通知一次, 必须<strong>读到 EAGAIN</strong> 才停 (否则丢事件). ET 更快但更难写, 必须配非阻塞 IO.",
-    "ref": "CPP_IO_Linux_Kernel_Guide"
+    "ref": "CPP_IO_Linux_Kernel_Guide",
+    "why_asked": "Linux 网络编程必考。能讲清\"ET 必须读到 EAGAIN\"的人是真写过非阻塞服务器。",
+    "answers": {
+      "mid": "<strong>LT (level-triggered, 默认)</strong>: 只要 fd 可读 / 写就<strong>持续通知</strong>。<br><strong>ET (edge-triggered)</strong>: 仅<strong>状态变化时通知一次</strong>，必须读到 <strong>EAGAIN</strong> 才停（否则丢事件）。<br>ET 更快但更难写，<strong>必须配非阻塞 IO</strong>。",
+      "senior": "<strong>ET 工作流</strong>：<br>1) fd 从\"不可读\"变\"可读\" → epoll 通知一次<br>2) 程序 read 一次：如果 read 返回 N（&lt; buffer size）—— 不知道是不是读完了，必须再 read<br>3) 继续 read 直到返回 <strong>EAGAIN / EWOULDBLOCK</strong>（\"现在没数据了\"）<br>4) 否则下次 epoll 不通知，<strong>剩余数据\"卡住\"</strong>直到下次状态变化<br><br><strong>性能差异</strong>：LT 每个事件可能多次唤醒 epoll；ET 仅一次。高 QPS 服务器 ET 节省 syscall。<strong>风险</strong>：ET 漏读 → 连接 hang，bug 难定位。",
+      "staff": "深一层：ET 是\"<strong>边沿触发</strong>\" 哲学的 IO 应用——只通知<strong>变化</strong>不通知<strong>状态</strong>。这种设计在 OS / 硬件抢占性事件机制里常见（中断也是边沿触发版本）。<br><br><strong>实战 ET 模板</strong>：<br><code>while (true) {</code><br><code>    ssize_t n = read(fd, buf, sizeof(buf));</code><br><code>    if (n &gt; 0) { process(buf, n); }</code><br><code>    else if (n == 0) { close(fd); break; }  // EOF</code><br><code>    else if (errno == EAGAIN) { break; }  // no more data, exit loop</code><br><code>    else { /* error */ break; }</code><br><code>}</code><br><br><strong>必须配套</strong>：① <code>fcntl(fd, F_SETFL, O_NONBLOCK)</code>—— 非阻塞，否则 ET 读到没数据时<strong>整线程 block</strong>；② accept ET 也要循环—— 新连接同样可能\"<strong>批量到</strong>\"。<br><br><strong>真实经验</strong>：NETCONF agent 初版用 LT，10k 连接时 epoll_wait CPU ~15%。改 ET 后 ~5%（节省 syscall）。但<strong>第一周出过一次事故</strong>：write 后没循环到 EAGAIN，对端等不到剩余数据 → connection hang → load balancer health check 失败。Fix 后加了<strong>统一的 read/write loop 抽象</strong>避免人为漏循环。<strong>选型建议</strong>：① 简单 / 中等性能场景 LT（不易出错）；② 高 QPS 服务器 ET + 严格 review；③ 极致性能 → io_uring（见 #125）。<strong>陷阱</strong>：① ET write 也要循环（write 满返回 EAGAIN 时必须 epoll wait）；② <strong>EPOLLONESHOT</strong> 多线程场景必备（避免多线程同时处理同 fd）；③ <strong>edge-triggered 实战</strong> 比 level 多 ~50% 代码量。"
+    },
+    "failure_modes": [
+      "ET 不读到 EAGAIN → 剩余数据\"卡住\" → 连接 hang",
+      "ET 不配 O_NONBLOCK → read 阻塞整线程",
+      "accept ET 不循环 → 批量新连接漏接",
+      "多线程 + ET 不用 EPOLLONESHOT → 多线程同时处理同 fd 数据竞争",
+      "ET write 不处理 EAGAIN → silently lose 数据"
+    ],
+    "follow_ups": [
+      {
+        "q": "EPOLLONESHOT 怎么用？",
+        "hint": "① 一次性事件（处理完后该 fd 不再通知）；② 处理完后需 epoll_ctl(MOD) 重新加入；③ 多线程场景防止 thundering herd；典型用法搭配 ET"
+      },
+      {
+        "q": "epoll 跟 select / poll 区别？",
+        "hint": "① select：fd_set 限制 1024 + 每次 O(n) scan；② poll：无限制但仍 O(n)；③ epoll：O(1) lookup + edge/level；④ 大并发（&gt; 1000）必用 epoll；少 fd 时 select/poll 简单"
+      },
+      {
+        "q": "kqueue / IOCP 跟 epoll 关系？",
+        "hint": "① BSD kqueue：类似 epoll 但 API 不同；② Windows IOCP：真异步（完成端口），跟 io_uring 模型更像；③ 跨平台库（libevent / libuv）抽象这些差异"
+      }
+    ]
   },
   {
     "id": 125,
@@ -2249,7 +2465,34 @@ const CARDS = [
     "diff": "high",
     "q": "io_uring 比 epoll 优势?",
     "ans": "① 共享内存环 (SQE/CQE), 不需要每次 syscall; ② 批量提交多个 IO; ③ 支持 polling 模式 (完全无 syscall); ④ 异步操作 (read/write/accept), 不限于网络. 高 QPS 场景理论最优.",
-    "ref": "CPP_IO_Linux_Kernel_Guide"
+    "ref": "CPP_IO_Linux_Kernel_Guide",
+    "why_asked": "2024-2026 高性能 IO 必考。能讲清 4 大优势的人跟上 Linux IO 演进。",
+    "answers": {
+      "mid": "① <strong>共享内存环</strong>（SQE / CQE），不需要每次 syscall；<br>② <strong>批量提交</strong>多个 IO；<br>③ <strong>polling 模式</strong>（SQPOLL，完全无 syscall）；<br>④ <strong>异步操作</strong>（read / write / accept / connect / openat / ... &gt; 50 种），不限于网络。<strong>高 QPS 场景理论最优</strong>。",
+      "senior": "<strong>vs epoll</strong>：<br>· epoll: 仍然每个 IO 操作一次 syscall（read / write 还是阻塞 / 非阻塞）；epoll 只 notify 就绪<br>· io_uring: 提交 (SQE) + 完成 (CQE) 两环，<strong>从提交到完成全 ring 中</strong>，主线程<strong>无 syscall</strong>（或仅 enter syscall 一次唤醒）<br><br><strong>架构</strong>：<br>1) Userspace 写 SQE 到 ring<br>2) Kernel 看到（poll 模式）或被 io_uring_enter 唤醒<br>3) Kernel 异步执行 IO<br>4) 完成时写 CQE 到 ring<br>5) Userspace 从 ring poll CQE",
+      "staff": "深一层：io_uring 是 Linux 5.1+ 引入（2019），<strong>从根本上重设计了 Linux IO 模型</strong>。<strong>真实成就</strong>：① 把 Windows 的 IOCP / Solaris 的 event completion 这种\"真异步 + 完成通知\" model 带到 Linux；② <strong>跨 IO 类型统一</strong>—— 之前网络（epoll）/ 磁盘（aio）各有 API，io_uring 一统；③ <strong>多种增量</strong>：注册 buffer / 注册 fd / fixed file table / SQPOLL（kernel polling 模式，完全免 syscall）。<br><br><strong>性能 vs epoll</strong>：<br>· 极小 IO（&lt; 100 byte）：5-10× faster（syscall overhead 大）<br>· 中等 IO：2-3× faster<br>· 大 IO：相当（IO 本身是瓶颈）<br>· 但<strong>需要 io_uring-aware 库</strong>，移植不便宜<br><br><strong>真实采用情况</strong>（2026）：<br>· <strong>Linux database</strong>：ScyllaDB / Redis Disk-IO / 部分 RocksDB optional<br>· <strong>Web server</strong>：Nginx 实验 / Cloudflare Boring Crypto<br>· <strong>Network</strong>：tigerbeetle / 各种 user-space TCP stack<br>· <strong>主流大厂</strong>：仍 hesitant 因为 ① 安全 CVE 历史多（io_uring 漏洞频繁）；② 需 kernel 5.6+；③ 移植代码量大<br><br><strong>NETCONF agent 评估</strong>：测过 epoll vs io_uring 的 NETCONF RPC throughput，10k QPS 下 io_uring +28%（每 RPC 多次 small read/write）。但<strong>没投产</strong>：① 客户 RHEL 7 / 8 还在用（kernel 太旧）；② 团队学习曲线；③ 收益对业务不关键（已经 over-deliver SLA）。Decision: 等 RHEL 9 + 普及再说。<strong>陷阱</strong>：① <strong>liburing</strong> wrapper 是事实标准，不要 raw syscall；② <strong>SQPOLL</strong> 模式占一个核 polling，小流量浪费 CPU；③ <strong>安全</strong>：部分公司因 CVE 风险 disable io_uring。"
+    },
+    "failure_modes": [
+      "把 io_uring 当 epoll 用（保持每次 syscall）→ 没收益",
+      "不用 liburing 直接 raw syscall → 复杂度爆",
+      "SQPOLL 模式开但流量低 → 浪费一核 CPU",
+      "期待立即 production-ready → 实际仍受 kernel 版本限制",
+      "安全风险忽视（io_uring CVE 多） → 攻击面增加"
+    ],
+    "follow_ups": [
+      {
+        "q": "什么场景应该投资 io_uring？",
+        "hint": "① 极高 QPS（&gt; 100k req/s）+ small IO；② kernel 5.10+；③ 团队愿投入学习；④ Security policy 允许；满足 + 移植 ROI 才有意义"
+      },
+      {
+        "q": "跟 DPDK / 用户态 TCP stack 比？",
+        "hint": "① io_uring 仍走 kernel TCP/IP，多线程友好；② DPDK 完全 kernel bypass，单 thread 极致延迟（HFT）；③ 选择：HFT → DPDK；通用高性能 → io_uring；普通应用 → epoll"
+      },
+      {
+        "q": "io_uring 在 macOS / Windows 等价？",
+        "hint": "① macOS 无（不开源 kernel）；② Windows IOCP / Registered IO 类似；③ FreeBSD kqueue（更老 mature）；④ 跨平台抽象层：libuv / Asio / async runtime"
+      }
+    ]
   },
   {
     "id": 126,
@@ -2270,7 +2513,34 @@ const CARDS = [
     "diff": "high",
     "q": "mmap 比 read 快在哪?",
     "ans": "① <strong>避免一次内核到用户的拷贝</strong> (mmap 直接映射 page cache); ② 大文件随机访问极快 (按需分页); ③ 多进程共享内存. 但小文件 / 顺序访问 read 更快 (mmap 有 page fault 开销).",
-    "ref": "CPP_IO_Linux_Kernel_Guide"
+    "ref": "CPP_IO_Linux_Kernel_Guide",
+    "why_asked": "Linux 系统调用经典题。能讲清\"page cache 直接映射 + page fault 代价\"的人理解 VM。",
+    "answers": {
+      "mid": "① 避免一次<strong>内核到用户的拷贝</strong>（mmap 直接映射 <strong>page cache</strong>）；② <strong>大文件随机访问</strong>极快（按需分页）；③ <strong>多进程共享内存</strong>。<br>但<strong>小文件 / 顺序访问</strong> read 更快（mmap 有 <strong>page fault 开销</strong>）。",
+      "senior": "<strong>read 流程</strong>：用户调 read → 内核检查 page cache 有数据 → 复制到用户 buffer → 返回。<br><strong>mmap 流程</strong>：mmap 创建 VMA 映射，<strong>不实际加载</strong>；访问页时 page fault → 内核分配 page cache + 读盘 → 设置页表；之后直接访问 page cache（用户视角 = 内存）。<br><br><strong>关键差异</strong>：<br>· read：每次都有一次<strong>内核 → 用户拷贝</strong>（4KB 块 ~ µs）<br>· mmap：<strong>page fault</strong>开销（~ µs）但<strong>仅首次</strong>，后续 cache hit 直接 load 内存",
+      "staff": "深一层：mmap vs read 的取舍是<strong>\"小固定开销 vs 增量复制开销\"</strong>。<br><br><strong>具体场景</strong>：<br>· <strong>顺序读大文件</strong>：read（用 readahead）通常更快——OS 预读 + 流式 copy，单次 syscall 8MB 也只是 ~1ms<br>· <strong>随机访问</strong>：mmap 优势大——只 fault 用到的页，不浪费<br>· <strong>多进程共享只读数据</strong>（如索引）：mmap 必备（共享 page cache，零额外内存）<br>· <strong>实时修改 + 持久</strong>：mmap MAP_SHARED + msync<br>· <strong>小文件</strong>（&lt; 4KB）：read 更快（mmap 至少分配一页）<br><br><strong>陷阱</strong>：<br>① <strong>page fault 不是 free</strong>—— 首次访问 ~ µs；② <strong>TLB miss</strong>—— 大文件随机访问 TLB 频繁刷新（huge page 缓解）；③ <strong>write back</strong>—— MAP_SHARED 修改不立即落盘，msync 强制；④ <strong>file 末尾</strong>—— mmap 到 file size 但 read/write 超出 = SIGBUS（read 是 EOF）。<br><br><strong>真实经验</strong>：NETCONF agent 处理大 YANG schema 文件（~ 100MB）：<br>· 老版用 read 整文件 → 100ms（包括 1 次 copy）<br>· 改 mmap：首次随机访问 page faults 慢，但总时间 ~80ms（节省 copy + readahead）<br>· 添加 <code>madvise(MADV_RANDOM)</code> 进一步优化（告诉 kernel 不要 readahead，节省 cache pollution）<br><br><strong>性能 vs 易用</strong>：mmap 错误处理复杂（SIGBUS for out-of-bounds、跨进程同步），<strong>除非性能必需</strong>否则用 read。<strong>2026 现状</strong>：① io_uring 让 read 更高效（接近 mmap 性能 + 异步）；② mmap 仍是<strong>共享只读数据</strong>的最优解（databases / vector search index）。"
+    },
+    "failure_modes": [
+      "小文件用 mmap（page fault 开销 &gt; copy 开销）",
+      "顺序读用 mmap 不加 madvise → 浪费 readahead",
+      "MAP_SHARED 修改不 msync → 进程崩可能数据丢",
+      "期待 mmap 完全无开销（实际有 page fault + TLB miss）",
+      "跨进程 mmap 同一文件不考虑同步 → race"
+    ],
+    "follow_ups": [
+      {
+        "q": "MAP_POPULATE 是什么？",
+        "hint": "mmap flag，立即把文件全部加载到 page cache（fault 提前发生），用于\"<strong>预热</strong>\" + 避免 hot path page fault；代价：mmap 调用变慢"
+      },
+      {
+        "q": "Huge page 跟 mmap 关系？",
+        "hint": "① mmap 大区域可用 2MB/1GB huge page → 减 TLB miss；② <code>madvise(MADV_HUGEPAGE)</code> 或 <code>mmap MAP_HUGETLB</code>；③ 减少 page fault 次数 + TLB pressure"
+      },
+      {
+        "q": "mmap 跟 io_uring 怎么选？",
+        "hint": "① 共享只读数据：mmap 仍最优；② 异步写 / 大量小 IO：io_uring；③ 顺序大读：io_uring 或 read with readahead；scenario-driven"
+      }
+    ]
   },
   {
     "id": 128,
@@ -2291,7 +2561,34 @@ const CARDS = [
     "q": "fork 后父子进程的 fd 关系?",
     "ans": "子进程继承父进程的<strong>fd table 拷贝</strong>, 但都指向同一 file struct → <strong>共享 file offset</strong>. read/write 的 offset 影响双方. close 一方不影响另一方 (除非引用计数到 0).",
     "bonus": "execve 后默认保留 fd; FD_CLOEXEC 标志让 exec 时自动关闭.",
-    "ref": "FileDescriptor_DeepDive"
+    "ref": "FileDescriptor_DeepDive",
+    "why_asked": "Linux 系统编程基础题。能讲 fd table copy / file struct shared / offset shared 三层的人理解 Unix process model。",
+    "answers": {
+      "mid": "子进程<strong>继承</strong>父进程的 <strong>fd table 拷贝</strong>，但<strong>都指向同一 file struct</strong> → <strong>共享 file offset</strong>。read / write 的 offset <strong>影响双方</strong>。close 一方<strong>不影响</strong>另一方（除非引用计数到 0）。",
+      "senior": "<strong>Linux fd 三层结构</strong>：<br>1) <strong>fd table</strong>（per-process）：fd 数字 → file struct 指针<br>2) <strong>file struct</strong>（system-wide）：含<strong>file offset</strong> + flags + 引用计数 + inode 指针<br>3) <strong>inode</strong>（per-file）：文件元数据 + 数据块映射<br><br><strong>fork 时</strong>：① fd table copy → 每个 fd 仍指向 file struct；② file struct 引用计数 +1 → <strong>共享</strong>；③ inode 共享（一直就是）。<br><strong>结果</strong>：父子各 fd 独立，但<strong>读写同一文件偏移</strong>—— 如果父子都 read，offset 互相影响。",
+      "staff": "深一层：fd 共享 + offset 共享是 Unix 设计的<strong>核心</strong>，影响多个场景：<br><br>① <strong>shell pipe</strong>：<code>cmd1 | cmd2</code> 实际是 cmd1 / cmd2 共享一个 pipe fd（fork 后），写 / 读独立<br>② <strong>双向 communication</strong>：socket pair fork 后，父子双向通信<br>③ <strong>stdio redirect</strong>：<code>./prog &gt; file</code> 实际是 shell 在 fork 后 dup2 file 到 fd 1，然后 exec<br><br><strong>关键陷阱</strong>：<br>· <strong>父子同 read 一文件</strong> → offset 共享 → 各自 read 1KB 实际是读不同部分（offset 累计）<br>· <strong>父子都 close 同一 fd</strong> → 都 close 才真正释放底层 file struct（引用计数）<br>· <strong>exec 后 fd 默认保留</strong>（除非 FD_CLOEXEC flag）→ 安全风险 + 资源泄漏<br><br><strong>O_CLOEXEC</strong>: <code>open(..., O_CLOEXEC)</code> 让 fd 在 exec 时自动关闭（Linux 2.6.23+）—— <strong>新代码必加</strong>，避免 fd leak。<br><br><strong>真实经验</strong>：NETCONF agent 老代码 fork worker 进程时<strong>没加 O_CLOEXEC</strong>，导致 worker 进程继承了 parent 的所有 fd（包括 log file、socket 等）→ ① 资源泄漏（child 死了 fd 不释放）；② 安全（child 能访问 parent's 网络 socket）。修复加 O_CLOEXEC 后正常。<br><br><strong>fork + exec 模式</strong>：<br>· Linux：fork() + exec() 标准 pattern<br>· macOS：posix_spawn 推荐（避免 fork 一次完整 copy）<br>· Windows：CreateProcess（无 fork 概念）"
+    },
+    "failure_modes": [
+      "期待父子 read 同文件互不影响（实际 offset 共享）",
+      "不加 O_CLOEXEC → child exec 后继承所有 fd → 资源泄漏 + 安全风险",
+      "多线程程序 fork → fork 只 copy 当前线程 → child 半状态 → undefined",
+      "fork bomb（无限制 fork） → 资源耗尽",
+      "child 不 close 不需要的 fd → file struct 引用计数不降 → 仿佛 leak"
+    ],
+    "follow_ups": [
+      {
+        "q": "dup / dup2 / dup3 区别？",
+        "hint": "① dup(fd)：复制到最小可用 fd；② dup2(oldfd, newfd)：复制到指定 fd（atomic close + dup）；③ dup3(... O_CLOEXEC)：加 flag 控制；redirect IO 用 dup2"
+      },
+      {
+        "q": "posix_spawn 跟 fork+exec 区别？",
+        "hint": "① posix_spawn：单 syscall 替代 fork+exec，更高效（没整个 process copy）；② macOS 推荐；③ Linux 上 implementation 通常仍是 fork+exec，但 atomic"
+      },
+      {
+        "q": "多线程 fork 安全吗？",
+        "hint": "不太安全：① fork 只 copy 当前 thread，其他 thread 不存在于 child；② child 中持有的 mutex 可能是 locked 状态（never unlocked）；③ 推荐 fork 后立即 exec 不做其他事，或者用 posix_spawn"
+      }
+    ]
   },
   {
     "id": 130,
@@ -2452,7 +2749,34 @@ const CARDS = [
     "diff": "high",
     "q": "多继承的菱形继承问题?",
     "ans": "A → B, A → C, D 同时继承 B 和 C → D 中有<strong>两份 A</strong>. 解决: 虚继承 (virtual public A) — 让 B 和 C 共享一份 A. 代价: 对象布局复杂, 引入 vbptr 间接.",
-    "ref": "cpp_object_model"
+    "ref": "cpp_object_model",
+    "why_asked": "多继承经典题。能讲 vbptr / 共享 vs 重复 + 代价的人理解对象布局。",
+    "answers": {
+      "mid": "<strong>菱形继承</strong>：A → B, A → C, D 同时继承 B 和 C → <strong>D 中有两份 A</strong>（重复 + 二义性）。<strong>解决</strong>：虚继承 <code>class B : virtual public A</code> + <code>class C : virtual public A</code> → 让 B 和 C <strong>共享一份 A</strong>。代价：对象布局复杂，引入 <strong>vbptr</strong>（virtual base table pointer）间接访问。",
+      "senior": "<strong>对象布局对比</strong>：<br>· <strong>普通多继承</strong>：sizeof(D) = sizeof(B's A part) + sizeof(C's A part) + 派生类自己；访问 a.x 二义 → 需 <code>D::B::a.x</code> 显式消歧。<br>· <strong>虚继承</strong>：B 和 C 各持一个 <strong>vbptr</strong>（typically 8 字节）指向 vbtable → 间接定位共享 A 的偏移；sizeof(D) 比普通多继承小 8-16 字节但访问慢。<br><br><strong>性能</strong>：① 虚基类成员访问 +1 间接（vbptr 解引用），typical &lt; 1 ns；② <code>dynamic_cast</code> 跨虚继承层级开销大（运行时遍历继承图）。",
+      "staff": "深一层：菱形继承是 C++ 多继承设计的<strong>\"原罪\"</strong>—— 简化版（Java / Kotlin）选择\"<strong>单继承 + 多接口</strong>\"完全绕开这个问题。C++ 保留多继承的理由：① mixin（如 std::iostream 同时继承 istream + ostream）；② 历史兼容。<br><br><strong>实战陷阱</strong>：<br>① 虚继承的<strong>构造函数顺序</strong>：最派生类必须显式调用<strong>虚基类构造</strong>（其他基类不能间接调）—— 容易忘；<br>② <strong>vbtable</strong> 跨编译器实现不同（MSVC / Itanium ABI）→ 跨 .so 共享虚继承类型是 ABI 灾难；<br>③ <strong>dynamic_cast 性能</strong>：跨虚继承时 typeid 比较 + 偏移计算，比普通继承慢 10×；<br>④ <strong>EBO（Empty Base Optimization）</strong>：虚继承通常 disable EBO（因 vbptr 占空间）。<br><br><strong>真实经验</strong>：在 NETCONF agent 项目里曾出现过菱形继承（一个 ConfigItem 既继承 Serializable 也继承 Validatable，两者都继承 Loggable）。最初没用虚继承导致 ConfigItem 有两份 Loggable 状态，log 输出乱序。改用<strong>组合替代继承</strong>（ConfigItem has-a Logger 而非 is-a Loggable）后彻底解决。<strong>C++ Core Guidelines C.131 / C.135</strong>：避免菱形继承，优先组合 + concept；只在 mixin 必需时用虚继承。"
+    },
+    "failure_modes": [
+      "不用虚继承导致基类重复 + 二义性",
+      "虚继承构造函数依赖中间类调虚基类（必须最派生类直接调）",
+      "跨 .so 共享虚继承类型 → ABI 不兼容",
+      "用菱形继承做组合（应该 has-a 不是 is-a）",
+      "dynamic_cast 跨虚继承当 hot path 用 → 性能崩"
+    ],
+    "follow_ups": [
+      {
+        "q": "什么时候真的需要多继承？",
+        "hint": "① Mixin / Policy-based design（按特性组合）；② iostream 风格（聚合多接口）；③ Pimpl 反例 / 嵌入第三方需要继承的接口；99% 场景用组合 + concept 替代"
+      },
+      {
+        "q": "EBO 是什么？跟虚继承关系？",
+        "hint": "Empty Base Optimization：空基类不占空间（编译器允许 sizeof 为 0）；虚继承通常 disable EBO（vbptr 占空间）；C++20 [[no_unique_address]] 是 EBO 的现代替代"
+      },
+      {
+        "q": "菱形继承的 sizeof 怎么算？",
+        "hint": "① 普通多继承：A's part × 2 + B unique + C unique + D unique + vptr 等；② 虚继承：A 只 1 份 + B unique + C unique + D + 2 个 vbptr；用 godbolt 看具体 layout"
+      }
+    ]
   },
   {
     "id": 146,
@@ -2483,7 +2807,34 @@ const CARDS = [
     "diff": "high",
     "q": "设计一个 LRU Cache",
     "ans": "核心: <code>list&lt;pair&lt;K,V&gt;&gt;</code> + <code>unordered_map&lt;K, list_iterator&gt;</code>. get(k): map 找到 iterator → splice 到 list 头部 → 返回 value. put(k,v): 已存在 → 更新 + 移到头; 不存在 → 头插 + map 加入; 超容量 → 删尾 + map 删除. 都是 O(1).",
-    "ref": "cpp_design_patterns_ppt"
+    "ref": "cpp_design_patterns_ppt",
+    "why_asked": "经典手写 + 系统设计。能讲 list+map O(1) 实现 + thread-safe 扩展的人是真做过。",
+    "answers": {
+      "mid": "核心：<code>list&lt;pair&lt;K, V&gt;&gt;</code> + <code>unordered_map&lt;K, list_iterator&gt;</code>。<br>· <strong>get(k)</strong>: map 找到 iterator → splice 到 list 头部 → 返回 value。<br>· <strong>put(k, v)</strong>: 已存在 → 更新 + 移到头；不存在 → 头插 + map 加入；超容量 → 删尾 + map 删除。<br>都是 <strong>O(1)</strong>。",
+      "senior": "<strong>关键代码骨架</strong>：<br><code>template&lt;class K, class V&gt; class LRUCache {</code><br><code>    size_t cap_;</code><br><code>    std::list&lt;std::pair&lt;K, V&gt;&gt; lst_;</code><br><code>    std::unordered_map&lt;K, decltype(lst_)::iterator&gt; map_;</code><br><code>public:</code><br><code>    explicit LRUCache(size_t cap) : cap_(cap) {}</code><br><code>    std::optional&lt;V&gt; get(const K&amp; k) {</code><br><code>        auto it = map_.find(k);</code><br><code>        if (it == map_.end()) return std::nullopt;</code><br><code>        lst_.splice(lst_.begin(), lst_, it-&gt;second);  // O(1) 移到头</code><br><code>        return it-&gt;second-&gt;second;</code><br><code>    }</code><br><code>    void put(K k, V v) {</code><br><code>        auto it = map_.find(k);</code><br><code>        if (it != map_.end()) {</code><br><code>            it-&gt;second-&gt;second = std::move(v);</code><br><code>            lst_.splice(lst_.begin(), lst_, it-&gt;second);</code><br><code>            return;</code><br><code>        }</code><br><code>        if (lst_.size() == cap_) {</code><br><code>            map_.erase(lst_.back().first);</code><br><code>            lst_.pop_back();</code><br><code>        }</code><br><code>        lst_.emplace_front(k, std::move(v));</code><br><code>        map_[k] = lst_.begin();</code><br><code>    }</code><br><code>};</code>",
+      "staff": "深一层：LRU 的<strong>设计取舍</strong>：<br>① <strong>容器选择</strong>：<br>· <code>std::list</code>：双向链表，splice 是 <strong>O(1)</strong>，唯一选择（vector / array splice 是 O(n)）<br>· <code>std::unordered_map</code>：哈希表 O(1)，比 map 快（map 是 RB-tree O(log n)）<br>② <strong>iterator stability</strong>：std::list 的 iterator 在其他操作时不失效（只删自己才失效）→ map 存 iterator 安全<br>③ <strong>thread safety</strong>：上面是单线程版；多线程需 <code>std::shared_mutex</code> 或 <strong>分片 LRU</strong>（按 hash 拆 N 段，减锁竞争）<br><br><strong>高级变体</strong>：<br>· <strong>LRU-K</strong>（最近 K 次访问，更精确）<br>· <strong>Segmented LRU</strong>（hot / cold 两段）<br>· <strong>Clock algorithm</strong>（OS page replacement，近似 LRU 但更便宜）<br>· <strong>ARC (Adaptive Replacement Cache)</strong>（LRU + LFU 自适应，IBM）<br>· <strong>TinyLFU / W-TinyLFU</strong>（Caffeine library，2026 SOTA）<br><br><strong>真实经验</strong>：NETCONF agent 实现 device state 缓存（100k devices），最初用上面这种 LRU + 单 mutex：<br>· 单线程性能 ~5M ops/sec<br>· 16 线程并发：~6M ops/sec（mutex 瓶颈）<br>· 改成<strong>分片</strong>（256 个 sub-LRU，每个 sub 自己 mutex）：~80M ops/sec<br>· 进一步用 folly::EvictingCacheMap（lock-free 部分操作）：~150M ops/sec<br><br><strong>陷阱</strong>：① 接 K = std::string，map 多次 hash 浪费 → 用 transparent comparator；② Iterator invalidation 必须懂 list / map 各自规则；③ <strong>memory locality</strong>：std::list 节点散布堆中，cache unfriendly → boost::intrusive::list 或自定义 arena 可改善。"
+    },
+    "failure_modes": [
+      "用 vector 代替 list → splice O(n)",
+      "没用 unordered_map → 退化到 O(log n)",
+      "多线程不加锁 → race",
+      "单 mutex 高并发 → 严重瓶颈（应该分片）",
+      "string key 反复 hash → 不知道 transparent comparator"
+    ],
+    "follow_ups": [
+      {
+        "q": "怎么实现 thread-safe LRU？",
+        "hint": "① 简单：std::mutex 包整个；② 分片：N 段独立 LRU + 各自 mutex；③ Lock-free LRU（极复杂，参考 folly EvictingCacheMap）；scenario-driven"
+      },
+      {
+        "q": "LRU vs LFU 怎么选？",
+        "hint": "① LRU：基于\"<strong>最近</strong>\"访问，简单常用；② LFU：基于\"<strong>频次</strong>\"，长期 hot 数据稳定；③ 组合：ARC / TinyLFU 自适应；④ 视访问 pattern 选"
+      },
+      {
+        "q": "Distributed LRU 怎么做？",
+        "hint": "① Memcached / Redis 内置 LRU eviction；② Consistent hashing 分布数据；③ 每节点本地 LRU；④ 不能保证<strong>全局</strong> LRU（typical 各节点独立）"
+      }
+    ]
   },
   {
     "id": 149,
@@ -2493,7 +2844,34 @@ const CARDS = [
     "diff": "high",
     "q": "设计一个限流器 (令牌桶)",
     "ans": "状态: 当前 token 数 + rate (tokens/sec) + capacity + last_refill_time. acquire(n): 计算 dt = now - last; 补充 token = min(cap, tokens + dt × rate); 若 ≥ n → 减去返 true; 否则返 false. 多线程: atomic + CAS 循环, 或 mutex.",
-    "ref": "cpp_concurrency_patterns_guide"
+    "ref": "cpp_concurrency_patterns_guide",
+    "why_asked": "分布式系统经典题。能讲清\"补 + 减\"逻辑 + 多线程实现的人是真做过限流器。",
+    "answers": {
+      "mid": "<strong>状态</strong>：当前 token 数 + rate (tokens/sec) + capacity + last_refill_time。<br><strong>acquire(n)</strong>：① 计算 dt = now - last_refill_time；② <strong>补充 tokens = min(capacity, tokens + dt × rate)</strong>；③ 若 tokens ≥ n → 减去返 true；否则返 false。<br><strong>多线程</strong>：atomic + CAS 循环 或 mutex。",
+      "senior": "<strong>关键代码</strong>：<br><code>class TokenBucket {</code><br><code>    double rate_;      // tokens / sec</code><br><code>    double capacity_;</code><br><code>    double tokens_;</code><br><code>    std::chrono::steady_clock::time_point last_;</code><br><code>    std::mutex mu_;</code><br><code>public:</code><br><code>    TokenBucket(double rate, double cap) : rate_(rate), capacity_(cap), tokens_(cap), last_(std::chrono::steady_clock::now()) {}</code><br><code>    bool acquire(double n) {</code><br><code>        std::lock_guard lg(mu_);</code><br><code>        auto now = std::chrono::steady_clock::now();</code><br><code>        double dt = std::chrono::duration&lt;double&gt;(now - last_).count();</code><br><code>        tokens_ = std::min(capacity_, tokens_ + dt * rate_);</code><br><code>        last_ = now;</code><br><code>        if (tokens_ &gt;= n) { tokens_ -= n; return true; }</code><br><code>        return false;</code><br><code>    }</code><br><code>};</code><br><br><strong>变体</strong>：① 阻塞 acquire（等到有 token）—— 用 cv；② 限速 burst（capacity &gt; rate）—— 允许短时高并发；③ 分布式 limit（Redis Lua）。",
+      "staff": "深一层：限流算法<strong>四大类</strong>：<br>① <strong>Token Bucket</strong>（上面）：允许 burst（capacity 大），平均速率 = rate<br>② <strong>Leaky Bucket</strong>：恒定输出速率（不允许 burst），适合<strong>流量整形</strong>（traffic shaping）<br>③ <strong>Fixed Window Counter</strong>：count requests / minute，简单但<strong>边界突刺</strong>（59.9s 满了 + 60.1s 又满）<br>④ <strong>Sliding Window Log</strong>：精确但内存大（存所有 timestamp）；<strong>Sliding Window Counter</strong>（折中）<br><br><strong>典型选择</strong>：<br>· <strong>API rate limit</strong>: Token Bucket（允许偶尔 burst）<br>· <strong>QPS 平稳输出</strong>: Leaky Bucket<br>· <strong>分布式</strong>: Redis + Lua 实现 Token Bucket（atomic）<br><br><strong>多线程实现</strong>：<br>· <strong>mutex 版</strong>: 上面代码，简单但高并发 bottleneck<br>· <strong>atomic 版</strong>: tokens 用 atomic&lt;double&gt; + CAS loop，复杂但快<br>· <strong>per-thread bucket + 周期合并</strong>: 减少全局竞争，适合 high-throughput<br><br><strong>真实经验</strong>：NETCONF agent 给某 customer 限流 100 RPC/sec（防其 polling script 把 server 打挂）：<br>· Token Bucket capacity 100, rate 100/s<br>· 客户能 burst 100 个，之后稳定 100/s<br>· 用 mutex 版本：1 万 device 同时 polling 时 mutex 竞争 ~5% CPU<br>· 改 atomic CAS loop：CPU &lt; 1%<br>· 边界 case 处理：dt 极大（系统 sleep）→ tokens 立即满，正常；dt 极小（多线程同时进 acquire）→ CAS 重试，正常<br><br><strong>陷阱</strong>：① <strong>steady_clock vs system_clock</strong>—— 必须用 steady（不受时区 / NTP 调整影响）；② tokens / rate 用 double 而非 int —— 支持小数 rate（如 0.5/s）；③ <strong>multiple bucket / hierarchical</strong>—— 每用户 / 每 API / 全局 三层；④ <strong>graceful degradation</strong>—— 超限不要直接 reject，可以 enqueue + slow down。<strong>分布式</strong>：Redis Lua 脚本原子化 token 补 + 减；网关 / API gateway 内置（Kong / Envoy / Istio）。"
+    },
+    "failure_modes": [
+      "用 system_clock → NTP 调整 / 时区切换导致 token 计算错",
+      "tokens / rate 用 int → 不支持小数 rate",
+      "不限制 dt 最大值 → 极长 sleep 后 tokens 溢出（应该 cap 到 capacity）",
+      "分布式场景用本地 bucket → 限流不准（每节点各自限）",
+      "Token Bucket 用于\"严格\"限流场景（应该 Leaky Bucket）"
+    ],
+    "follow_ups": [
+      {
+        "q": "分布式限流怎么实现？",
+        "hint": "① Redis + Lua 脚本（atomic）；② 网关侧（Kong / Envoy）；③ 自建：consistent hashing 路由到固定节点；④ Sliding Window in Redis：用 ZSET 存 timestamps"
+      },
+      {
+        "q": "Hierarchical rate limit 怎么设计？",
+        "hint": "① 多层 bucket：全局 / 用户 / API；② acquire 时需所有层 acquire 成功；③ 触发限流时返回是哪层（debug 友好）；④ 例：100 RPS 全局 + 10 RPS 每用户 + 5 RPS 每 endpoint"
+      },
+      {
+        "q": "Algorithm 选择？",
+        "hint": "Token Bucket: allow burst；Leaky Bucket: strict shaping；Fixed Window: 简单但有边界 burst；Sliding Window: 精确无 burst；根据业务 SLA 选"
+      }
+    ]
   },
   {
     "id": 150,
@@ -2523,7 +2901,34 @@ const CARDS = [
     "diff": "high",
     "q": "NETCONF Agent 的关键性能优化点?",
     "ans": "① 每 RPC 用 monotonic_buffer arena (零分配); ② 解析全用 string_view; ③ 路由表用 FlatMap (vector + sort) 替代 unordered_map; ④ session 表分片 (减锁); ⑤ Reactor 单线程 + worker 池; ⑥ 异步日志 + 批 flush; ⑦ HdrHistogram 监控 p99.99.",
-    "ref": "cpp_low_latency_guide"
+    "ref": "cpp_low_latency_guide",
+    "why_asked": "特定项目题，跟你简历背景强相关。能讲 7 个优化点的人就是真做过。",
+    "answers": {
+      "mid": "① 每 RPC 用 <strong>monotonic_buffer arena</strong>（零分配）；② 解析全用 <strong>string_view</strong>；③ 路由表用 <strong>FlatMap</strong>（vector + sort）替代 unordered_map；④ <strong>session 表分片</strong>（减锁）；⑤ <strong>Reactor 单线程</strong> + worker 池；⑥ <strong>异步日志</strong> + 批 flush；⑦ <strong>HdrHistogram</strong> 监控 P99.99。",
+      "senior": "<strong>详细说明</strong>：<br>① <strong>arena</strong>：每 NETCONF RPC 处理在栈上 64KB buffer + monotonic_buffer_resource，所有 STL 容器用 pmr 版本，函数结束整体释放；<br>② <strong>string_view</strong>：YANG XML 解析时不拷贝 string，<strong>view 进栈 buffer</strong>；<br>③ <strong>FlatMap</strong>：路由表~1k 条目，FlatMap 比 unordered_map 更 cache-friendly + 更小内存；<br>④ <strong>session shard</strong>：256 个 sub-map，按 session_id hash 分；锁竞争降 256×；<br>⑤ <strong>Reactor</strong>：主线程 epoll + dispatch 到 worker pool；<br>⑥ <strong>quill</strong> 异步日志，producer ~50ns，批 flush；<br>⑦ <strong>HdrHistogram</strong>：精确 P99 / P99.9 / P99.99（vs 简单 percentile 估算）。",
+      "staff": "深一层：这套优化让 NETCONF agent 达到 <strong>50k RPC/sec single-machine</strong>（业内 SOTA），P99 latency <strong>&lt; 5ms</strong>。<br><br><strong>关键设计决策</strong>：<br>① <strong>不用 protobuf RPC</strong>—— NETCONF 是 IETF 标准基于 XML，必须用；优化 XML parser 用 zero-copy + SIMD（rapidxml-ns / pugixml）<br>② <strong>不用 grpc</strong>—— 自己实现 SSH-based session 处理（NETCONF 用 SSH 而非 HTTP）<br>③ <strong>不分布式</strong>—— 每个 agent 处理 own device set；按 device hash 路由<br>④ <strong>无 SQL 数据库</strong>—— in-memory + WAL，shared-nothing<br><br><strong>性能 baseline 对比</strong>：<br>· 老 vendor agent（Java）：~ 5k RPC/s, P99 &gt; 50ms<br>· 我们 v1（C++ 朴素）：~ 15k RPC/s, P99 ~ 20ms<br>· v2（加上 7 个优化）：~ 50k RPC/s, P99 ~ 4ms<br>· <strong>10× 性能</strong>，1/10 硬件成本<br><br><strong>验证</strong>：① k6 压测 + HdrHistogram 监控；② Linux perf record 验证 hot path；③ jemalloc.stats 验证 zero alloc。<strong>陷阱</strong>：① 优化优先级 —— 先 profile 再优化（不要凭感觉）；② Maintain readability —— 7 个优化都加了详细注释 + Doc；③ Test coverage —— 大量 fuzz + load test 防 regression；④ <strong>\"<u>premature optimization is root of all evil</u>\"</strong>—— 这套是<strong>有数据支撑的</strong>（之前慢，必须优化），不是 over-engineering。"
+    },
+    "failure_modes": [
+      "优化不 profile 先 → 选错方向 / 没真改善",
+      "所有优化堆一起 → 调试困难 / regression 不知谁的",
+      "优化破坏可读性 → 团队维护成本爆",
+      "不做 benchmark validation → 改了不知有没有效果",
+      "不维护 SLA monitor → 退化不知"
+    ],
+    "follow_ups": [
+      {
+        "q": "HdrHistogram 为什么比简单 percentile 准？",
+        "hint": "① 简单方法 sample 全部数据 + sort → 内存 O(n)；② HdrHistogram 用 high dynamic range 桶 → 内存 O(log n)，精度 0.01%；③ Cloudflare / Twitter / 多家在用"
+      },
+      {
+        "q": "FlatMap vs unordered_map 区别？",
+        "hint": "① FlatMap = sorted vector + binary search，O(log n) lookup；② 比 unordered_map 更 cache friendly（vector contiguous）；③ 适合小 (-1k entries) + 多读少写场景；④ 不适合频繁 insert/delete（O(n) move）"
+      },
+      {
+        "q": "Session shard 的 key 怎么设计？",
+        "hint": "① 按 session_id 取低位 / 高位（depends on distribution）；② 避免 sequential id 导致 shard 不均；③ 256 shard 是 sweet spot（约等于 typical CPU cores × 16-32）"
+      }
+    ]
   },
   {
     "id": 153,
@@ -2828,7 +3233,34 @@ const CARDS = [
     "diff": "high",
     "q": "什么是 Reactor 模式?",
     "ans": "IO 复用 (epoll) + 事件分发: ① 单 Reactor 单线程 (Redis 风格); ② 单 Reactor 多线程 (Reactor 接收 + 业务 worker 池); ③ 多 Reactor 多线程 (主 Reactor accept + 子 Reactor 处理 IO + worker 池). 类比: Proactor (io_uring 风格 — 真异步, OS 完成后回调).",
-    "ref": "cpp_networking_guide"
+    "ref": "cpp_networking_guide",
+    "why_asked": "网络服务器架构必考。能讲 3 种 Reactor 变体 + Proactor 对比的人是真做过服务器框架。",
+    "answers": {
+      "mid": "IO 复用（epoll）+ 事件分发：<br>① <strong>单 Reactor 单线程</strong>（Redis 风格）；<br>② <strong>单 Reactor 多线程</strong>（Reactor 接收 + 业务 worker 池）；<br>③ <strong>多 Reactor 多线程</strong>（主 Reactor accept + 子 Reactor 处理 IO + worker 池）。<br>类比：<strong>Proactor</strong>（io_uring 风格 —— 真异步，OS 完成后回调）。",
+      "senior": "<strong>3 种 Reactor 详细</strong>：<br>· <strong>单 Reactor 单线程</strong>（Redis）：所有 IO + 业务在一个线程；优势：无锁，简单；劣势：业务长操作阻塞所有 IO。<br>· <strong>单 Reactor 多线程</strong>（Memcached）：一个 IO 线程 epoll + N 个 worker 线程；IO 接收后 dispatch 给 worker；劣势：单 epoll 线程是瓶颈。<br>· <strong>多 Reactor 多线程</strong>（Nginx / Netty）：主 reactor accept 后<strong>分发给子 reactor</strong>；子 reactor 各自 epoll 一组连接；最 scalable。<br><br><strong>Proactor</strong>：用户提交\"<strong>请求 + 完成回调</strong>\"，OS 异步完成后调回调（Windows IOCP / Linux io_uring）。",
+      "staff": "深一层：Reactor 模式是<strong>异步 IO 网络编程的事实标准</strong>，2000 年 Doug Schmidt 形式化。<strong>核心机制</strong>：① <strong>事件循环</strong>（epoll_wait）；② <strong>事件类型</strong>（read / write / accept / close）；③ <strong>分发到 handler</strong>（callback / event handler）。<br><br><strong>3 种 Reactor 性能对比</strong>（hypothetical 10k 连接）：<br>· 单线程：CPU bottleneck @ ~50k req/s（单核）<br>· 单 Reactor 多线程：~150k req/s（IO 单线程仍瓶颈）<br>· 多 Reactor：~500k+ req/s（多核 scaling）<br><br><strong>Reactor vs Proactor</strong>：<br>· Reactor: \"I want to read, tell me when ready\"<br>· Proactor: \"Read N bytes for me, tell me when done\"<br>· Reactor 更通用（任何 OS）；Proactor 性能稍优但需 OS 支持<br><br><strong>真实经验</strong>：NETCONF agent 架构演化：<br>1) <strong>v1</strong>: 单 Reactor 单线程 - 1k 连接 OK，10k 时单核 100%<br>2) <strong>v2</strong>: 单 Reactor + worker pool - 10k 连接 OK，但 IO 线程 80% CPU<br>3) <strong>v3</strong>: 多 Reactor（每 CPU core 一个 sub-reactor）+ worker pool - 50k 连接稳定，CPU 均匀分布<br>4) <strong>v4</strong>（试验）: 移植到 io_uring（Proactor 模式）- 同负载 CPU -30%，但代码复杂度 ↑↑<br><br><strong>chosen</strong>：v3（多 Reactor）— 性能足够 + 维护成本可控。<strong>主流框架</strong>：<br>· <strong>Boost.Asio</strong>: Reactor + Proactor 抽象（Linux epoll / Windows IOCP / Linux io_uring）<br>· <strong>libuv</strong>: Node.js 用，类似 abstraction<br>· <strong>seastar</strong>: per-core sharded reactor (ScyllaDB)，极致性能<br>· <strong>folly::AsyncSocket</strong>: Facebook 的高性能 reactor<br><br><strong>陷阱</strong>：① reactor 内不能阻塞调用（导致 head-of-line blocking）；② callback hell（C++20 协程缓解）；③ 跨线程 dispatch 开销不能忽略。"
+    },
+    "failure_modes": [
+      "Reactor 内做 CPU-bound 业务 → 所有 IO 卡住",
+      "单 Reactor 多线程 → IO 线程瓶颈，多线程意义不大",
+      "Multi-Reactor 但 connection 不均匀分发 → 部分 sub-reactor 闲",
+      "Reactor 内的 callback 嵌套 → 难维护（callback hell）",
+      "Proactor 在 Linux 上没 io_uring 试图模拟 → 退化为 Reactor 性能"
+    ],
+    "follow_ups": [
+      {
+        "q": "怎么实现 Multi-Reactor 的 connection 分发？",
+        "hint": "① Round-robin（最简单）；② Sticky by hash（同 client 总到同 reactor，方便 stateful）；③ Least-connection（动态平衡）；④ SO_REUSEPORT（kernel 帮你 hash distribute）"
+      },
+      {
+        "q": "事件循环跟协程关系？",
+        "hint": "① 事件循环 = 调度器 + 回调；② 协程 = 把\"挂起 + 恢复\"写成同步语法；③ 组合：reactor 触发事件 → resume 等待的 coroutine；C++20 协程 + Asio 就是这个模式"
+      },
+      {
+        "q": "Tornado / asyncio 风格的事件循环 vs Reactor？",
+        "hint": "本质相同（都是 epoll 之上的事件分发）；Python asyncio 借鉴 Reactor / Proactor 模式；Tornado 是 Reactor 在 Python 的实现"
+      }
+    ]
   },
   {
     "id": 172,
@@ -2839,7 +3271,34 @@ const CARDS = [
     "diff": "high",
     "q": "零拷贝 (zero-copy) 几种方式?",
     "ans": "① <b>sendfile</b>: 文件 fd → socket fd, 内核直接搬, 不经用户空间; ② <b>splice</b>: 通用管道; ③ <b>mmap + write</b>: 用户态见到数据但不拷贝到 socket; ④ <b>SO_ZEROCOPY</b>: send 时 page-flip, 不拷贝.",
-    "ref": "CPP_IO_Linux_Kernel_Guide"
+    "ref": "CPP_IO_Linux_Kernel_Guide",
+    "why_asked": "高性能 IO 题。能讲 4 种 + 各自适用场景的人是真做过 zero-copy 优化。",
+    "answers": {
+      "mid": "4 种：① <strong>sendfile</strong>：file fd → socket fd，内核直接搬，不经用户空间；② <strong>splice</strong>：通用管道（任意两个 fd 之间）；③ <strong>mmap + write</strong>：用户态见到数据但不拷贝到 socket；④ <strong>SO_ZEROCOPY</strong>：send 时 page-flip，不拷贝。",
+      "senior": "<strong>具体场景</strong>：<br>· <strong>sendfile</strong>: 文件下载服务器经典（Nginx static file），<strong>2 次拷贝省成 0 次</strong>（disk → page cache → socket buffer 仍有，但用户空间不拷贝）<br>· <strong>splice</strong>: pipe 中间介质，更通用（如 socket → pipe → file）<br>· <strong>mmap + write</strong>: 用户态需要 inspect data + 发送，省 read 那一次拷贝<br>· <strong>SO_ZEROCOPY</strong>: send/sendmsg 时 kernel 不拷贝用户 buffer，page-flip + async notify when complete<br><br><strong>典型收益</strong>：1GB 文件传输节省 ~2GB memory bandwidth + ~ms CPU。",
+      "staff": "深一层：\"零拷贝\"是相对的—— 减少<strong>用户 ↔ 内核</strong>的拷贝，但<strong>内核内部</strong>（page cache → socket buffer → NIC DMA）仍可能有拷贝。<strong>真正零拷贝</strong>需要 ① DPDK / RDMA 用户态 NIC 驱动；② splice + pipe + sendfile 组合（避免 socket buffer 中间步骤）。<br><br><strong>各方案细节</strong>：<br>① <strong>sendfile</strong>（Linux 特有）：<code>sendfile(out_fd, in_fd, offset, count)</code>—— out_fd 必须 socket，in_fd 任意 file。<br>② <strong>splice</strong>（Linux 2.6.17+）：<code>splice(fd_in, off, fd_out, off, len, flags)</code> 一边必须是 pipe；通过 pipe 中介实现任意 fd 间。<br>③ <strong>mmap + write</strong>：自由度高但<strong>write 仍有 user→kernel copy</strong>，只省 read 的 copy。<br>④ <strong>SO_ZEROCOPY</strong>（Linux 4.14+）：send + MSG_ZEROCOPY，kernel 不立即 copy，完成时通过 socket error queue 通知（poll EPOLLERR）。<strong>注意</strong>：send 返回后 user buffer 不能立即修改！<br><br><strong>真实经验</strong>：NETCONF agent telemetry 流式传输（大量 device data 100MB+ files）：<br>· baseline read + send: ~80% CPU on socket / file IO<br>· sendfile: CPU -40%（省 user space copy）<br>· splice + pipe: 类似 sendfile 效果<br>· SO_ZEROCOPY: 试过但 callback complexity 高 + 收益边际<br>· 最终选 sendfile（简单 + 收益大）<br><br><strong>陷阱</strong>：① sendfile 不能修改 file data（pure file → socket）；② splice 涉及 pipe 中介，pipe buffer 有限；③ SO_ZEROCOPY <strong>send 后不能立即修改 user buffer</strong> → 需要异步生命周期管理；④ TLS 加密让 sendfile 失效（kTLS 是解决方案，加密在 kernel）。"
+    },
+    "failure_modes": [
+      "用 sendfile 但需要修改 data（实际只能 raw file content）",
+      "SO_ZEROCOPY 后立即修改 user buffer → data corruption",
+      "splice 中介 pipe buffer 小（默认 64KB）→ 性能没改善",
+      "TLS 让 sendfile 失效（kTLS 解决）",
+      "认为\"零拷贝就 0 cost\" → 实际只是减 user-kernel copy"
+    ],
+    "follow_ups": [
+      {
+        "q": "RDMA 跟 zero-copy 关系？",
+        "hint": "① RDMA = Remote Direct Memory Access，硬件级 zero-copy；② 一台机的内存直接写到另一台（NIC 处理）；③ 跳过双方 OS kernel；④ 适合 HPC / 存储集群"
+      },
+      {
+        "q": "kTLS 是什么？",
+        "hint": "① kernel TLS：TLS 加密 / 解密在 kernel 完成（typically 用 AES-NI 硬件指令）；② 可继续用 sendfile（kernel 加密后发）；③ Linux 4.13+ 支持；④ Nginx / Netflix 大量用"
+      },
+      {
+        "q": "跨平台 zero-copy？",
+        "hint": "① macOS：sendfile（语义稍异）；② Windows：TransmitFile；③ libuv / asio 抽象（不是所有 backend 都 zero-copy）；④ 跨平台代码可能 fallback 到 read + send"
+      }
+    ]
   },
   {
     "id": 173,
@@ -2849,7 +3308,34 @@ const CARDS = [
     "diff": "high",
     "q": "你怎么 review 一段并发 C++ 代码?",
     "ans": "Checklist: ① 共享数据是否都被锁/atomic 保护? ② 锁顺序一致? ③ cv.wait 带谓词? ④ 析构 / 移动 / swap 是否 noexcept? ⑤ 异常路径是否 RAII 释放资源? ⑥ 跨线程对象生命周期 (shared_ptr 续命)? ⑦ 假共享 (atomic 数组对齐)? ⑧ 是否真需要锁 (vs thread_local / lock-free)?",
-    "ref": "cpp_concurrency_patterns_guide"
+    "ref": "cpp_concurrency_patterns_guide",
+    "why_asked": "代码 review 能力题。能给系统化 checklist 的人是真做过 senior C++ review。",
+    "answers": {
+      "mid": "<strong>Checklist 8 项</strong>：① 共享数据是否都被<strong>锁 / atomic</strong>保护？② <strong>锁顺序</strong>一致？③ <strong>cv.wait 带谓词</strong>？④ 析构 / 移动 / swap 是否 <strong>noexcept</strong>？⑤ 异常路径是否 <strong>RAII</strong> 释放资源？⑥ 跨线程对象<strong>生命周期</strong>（shared_ptr 续命）？⑦ <strong>假共享</strong>（atomic 数组对齐）？⑧ 是否真<strong>需要锁</strong>（vs thread_local / lock-free）？",
+      "senior": "<strong>每项详细</strong>：<br>① <strong>共享保护</strong>: 看每个非原子写入是否在 lock 内；atomic 用什么 memory order；<br>② <strong>锁顺序</strong>: 注释 / 编码规范明确层次；clang-thread-safety analysis；<br>③ <strong>cv 谓词</strong>: 必须 lambda predicate，防 spurious wakeup；<br>④ <strong>noexcept</strong>: 影响 vector 扩容 / move semantics；<br>⑤ <strong>异常 RAII</strong>: try / catch 内不应该手动 release，全 unique_ptr / lock_guard；<br>⑥ <strong>生命周期</strong>: lambda capture by reference 危险（异步路径）；shared_ptr 续命 + weak_ptr 反查；<br>⑦ <strong>假共享</strong>: 多线程频繁写的 atomic / counter 应 cache line align；<br>⑧ <strong>是否真要锁</strong>: thread_local / immutable / lock-free 数据结构 / functional style 优先。",
+      "staff": "深一层：并发 C++ review 是 senior 才能做好的，因为<strong>静态看不出 race，必须脑里跑多线程</strong>。<br><br><strong>个人 review style</strong>：<br>1) <strong>第一遍 scan</strong>：找 atomic / mutex / cv / thread / async / future 关键字 → 这是高风险区<br>2) <strong>逐个 critical section</strong>：写 happens-before 图 + 多个调用顺序模拟<br>3) <strong>异常路径</strong>：每个 catch 想\"持锁 / 持资源 状态\"<br>4) <strong>cancel / shutdown 路径</strong>：90% 并发 bug 在 shutdown 时暴露<br>5) <strong>跨线程对象</strong>：lambda capture / member function pointer 都要分析 lifetime<br><br><strong>真实案例 1</strong>：review 一段 producer-consumer queue 代码：<br><code>void push(T x) { {std::lock_guard lg(mu_); q_.push(x);} cv_.notify_one(); }</code><br>—— <strong>看似对</strong>，但仔细想：① push 不 noexcept (T 拷贝可能抛) → 加 noexcept 或 move；② <strong>notify after unlock</strong> 是 best practice，但 cv 实现可能要求 lock 内 notify（实测安全），代码本身 OK；③ <strong>full queue</strong>没处理。<br><br><strong>真实案例 2</strong>：lambda capture by reference 跨线程：<br><code>auto p = \"...\"; thread t([&amp;]() { use(p); });</code> —— 主线程 p 局部变量析构后 t 还在用 → UB。Fix：capture by value 或 std::move。<br><br><strong>工具辅助</strong>：① clang-thread-safety；② TSan 跑 CI；③ Helgrind 偶尔；④ 自己写 lock graph analyzer；<strong>但人脑仍是主力</strong>—— 工具 catch ~70%，30% 的 subtle 案例需要 review。<strong>建议</strong>：① 团队内培训 senior review 这类技能；② 关键并发代码<strong>两人 review</strong>；③ 写明确的 thread safety annotation（doc）；④ 做不动就重写而不是 patch。"
+    },
+    "failure_modes": [
+      "Review 只看语法不脑里跑多线程",
+      "不检查 cancel / shutdown 路径（最易出 bug）",
+      "Lambda capture by reference 跨线程不发现",
+      "cv.wait 不带 predicate 没识别",
+      "noexcept 错误（move 不 noexcept 退化 copy）"
+    ],
+    "follow_ups": [
+      {
+        "q": "怎么训练 review 多线程代码的能力？",
+        "hint": "① 多读经典并发 bug case study（Java Memory Model / C++ Memory Model）；② 自己写 + TSan 跑；③ Shadow senior review；④ pair review 关键模块"
+      },
+      {
+        "q": "怎么 annotate 并发代码？",
+        "hint": "① clang thread safety: <code>__attribute__((guarded_by(mu_)))</code>；② 注释 lock 顺序 + 调用约定；③ Doc：每 public method 标 \"thread-safe? guard? blocking?\""
+      },
+      {
+        "q": "Static analyzer 能 catch 多少？",
+        "hint": "① clang-thread-safety: 显式标注后高准确；② clang-analyzer: 简单 race；③ Coverity: 商业，相对全；④ 仍有 ~30% 需要 dynamic test (TSan) + human review"
+      }
+    ]
   },
   {
     "id": 174,
@@ -2859,7 +3345,34 @@ const CARDS = [
     "diff": "high",
     "q": "你怎么排查线上 C++ 服务的内存增长?",
     "ans": "① 监控 RSS 增长曲线 + GC 回收特征 (对比 jemalloc.stats); ② 看是慢增长 (泄漏) 还是大段增长 (突发负载); ③ heap profiler (jemalloc/tcmalloc); ④ 关键对象统计 (业务侧加 atomic counter); ⑤ /proc/PID/maps + smaps 看哪段; ⑥ 可疑代码加 LSan / ASan 测试期复现.",
-    "ref": "cpp_memory_leak_guide"
+    "ref": "cpp_memory_leak_guide",
+    "why_asked": "生产 troubleshoot 题。能讲完整 6 步流程的人是真处理过生产事故。",
+    "answers": {
+      "mid": "<strong>6 步排查</strong>：① 监控 <strong>RSS 增长曲线</strong> + GC 回收特征（对比 jemalloc.stats）；② 看是<strong>慢增长</strong>（泄漏）还是<strong>大段增长</strong>（突发负载）；③ <strong>heap profiler</strong>（jemalloc / tcmalloc）；④ <strong>关键对象统计</strong>（业务侧加 atomic counter）；⑤ <strong>/proc/PID/maps + smaps</strong> 看哪段；⑥ <strong>可疑代码加 LSan / ASan</strong> 测试期复现。",
+      "senior": "<strong>分类诊断</strong>：<br>· <strong>慢线性增长</strong>（几小时 / 几天）→ <strong>泄漏</strong>（new / new[] 不释放、shared_ptr 循环引用、容器 only grow）<br>· <strong>突然跳一段</strong>（几分钟）→ <strong>突发负载</strong>（流量增 / 大请求 / 文件上传等）<br>· <strong>不增但波动</strong> → <strong>正常 buffer / cache</strong><br>· <strong>peak 很高但不释放</strong> → glibc malloc 不归还 OS（jemalloc 改善）<br><br><strong>工具栈</strong>：<br>· <strong>jemalloc.prof</strong>：直接生成 .prof 文件 + pprof 分析<br>· <strong>tcmalloc HeapProfiler</strong>：类似<br>· <strong>heaptrack</strong>：开发环境 record + 重放<br>· <strong>massif</strong>（Valgrind）：snapshot allocation tree，慢<br>· <strong>BPF tools</strong>: bcc memleak / bpftrace 自定义 probe",
+      "staff": "深一层：内存增长在生产 C++ 服务里有 ~5 个主要来源，<strong>排查方法不同</strong>：<br><br>① <strong>纯 leak (new 不 delete)</strong>: LSan / Valgrind 一抓一个准；现代 C++ 用 unique_ptr 几乎绝迹<br>② <strong>shared_ptr 循环引用</strong>：用 weak_ptr 一方；Valgrind 看不到，业务侧 counter + 代码 review<br>③ <strong>容器 only grow</strong>（如 cache 不 evict、queue 只 push）：业务侧 counter + 监控<br>④ <strong>malloc 不归还 OS</strong>（fragmentation）：glibc 默认 ptmalloc 这样；换 jemalloc / tcmalloc 改善<br>⑤ <strong>突发 + 大对象</strong>（如解析大 XML 一次性 buffer 100MB）：profile 看 RSS 跳变时间点对应业务<br><br><strong>真实经验</strong>：NETCONF agent 生产 RSS 持续 3 天慢增长 ~50MB/天：<br>1) <strong>jemalloc.prof</strong> + pprof：看 hot allocation site → 发现是某 cache 持续 grow<br>2) <strong>业务 counter</strong>：cache.size() 持续涨 → 没 evict 逻辑（design bug）<br>3) <strong>修复</strong>：加 LRU eviction + 监控 cache hit rate<br>4) <strong>验证</strong>：RSS 稳定一周后无增长<br><br><strong>另一案例</strong>：peak 8GB 后稳定 4GB，glibc 不还 OS：<br>1) <strong>切 jemalloc</strong>：peak 8GB → 稳定 ~5GB（仍较高）<br>2) <strong>调 jemalloc 参数</strong>：<code>narenas:1, dirty_decay_ms:1000</code> → peak 后 30s 内回到 ~5GB<br>3) <strong>实质</strong>：fragmentation，arena 调整 + decay 加速归还<br><br><strong>陷阱</strong>：① 不区分 RSS / VSS / heap usage —— 三者不同含义；② 用 top 看 RSS 不准（含 shared library）—— smaps 更精确；③ jemalloc + ASan 偶尔冲突；④ <strong>真泄漏</strong>很少（90% 是 design issue）。"
+    },
+    "failure_modes": [
+      "不分 RSS / VSS / heap → 错误判断有无泄漏",
+      "top 看 RSS 当真实使用（含 shared lib）",
+      "期待 glibc 立即归还 OS → 实际 fragmentation 保留",
+      "Valgrind 跑生产负载（50× 慢）→ 跑不动",
+      "不加业务侧 counter → 看不到具体哪段 grow"
+    ],
+    "follow_ups": [
+      {
+        "q": "jemalloc / tcmalloc 怎么选？",
+        "hint": "① jemalloc：fragmentation 控制好，Facebook 主推；② tcmalloc：Google，per-thread cache，多线程 friendly；③ benchmark 自己 workload 选；④ glibc malloc 通常都比这两个差"
+      },
+      {
+        "q": "怎么用 jemalloc 做 heap profiling？",
+        "hint": "① <code>MALLOC_CONF=prof:true,lg_prof_sample:19</code> 启动；② 周期性 dump <code>jeprof --show_bytes ./prog jeprof.*.heap</code>；③ pprof 分析 hot allocation；④ delta profile (两个时刻对比)定位新增 leak"
+      },
+      {
+        "q": "BPF tools 怎么用？",
+        "hint": "① <code>memleak</code>（bcc）实时定位 leak；② <code>bpftrace</code> 自定义 probe malloc / free；③ 优势：不需要重编译应用，生产可用；④ 限制：需 BTF 或 debug symbols"
+      }
+    ]
   },
   {
     "id": 175,
@@ -3070,7 +3583,34 @@ const CARDS = [
     "diff": "high",
     "q": "C++ ABI 兼容性的常见陷阱?",
     "ans": "① 类成员变化 (sizeof / 成员偏移变) → 调用方未重编=崩; ② 虚函数表变化; ③ inline 函数版本不一致 (ODR violation); ④ STL 类型跨编译器不兼容 (libstdc++ vs libc++ 的 string 实现不同); ⑤ 异常类型跨 .so 边界. 解法: PIMPL + extern \"C\" 边界.",
-    "ref": "cpp_compilation_guide"
+    "ref": "cpp_compilation_guide",
+    "why_asked": "工程级题。能讲 5 类 ABI 陷阱 + 解法的人是真维护过 SDK / 大型 .so。",
+    "answers": {
+      "mid": "<strong>5 类陷阱</strong>：① <strong>类成员变化</strong>（sizeof / 成员偏移变）→ 调用方未重编 = 崩；② <strong>虚函数表变化</strong>；③ <strong>inline 函数版本不一致</strong>（ODR violation）；④ <strong>STL 类型跨编译器不兼容</strong>（libstdc++ vs libc++ 的 string 实现不同）；⑤ <strong>异常类型跨 .so 边界</strong>。<br><strong>解法</strong>：Pimpl + extern \"C\" 边界。",
+      "senior": "<strong>每类详解</strong>：<br>① <strong>类成员变化</strong>：加 public / private 成员都改 sizeof → 老 caller 用错位偏移；解：Pimpl（pImpl 是 8 字节稳定 ptr）<br>② <strong>vtable 变化</strong>：加 / 删 / 重排 virtual 函数 → vtable offset 全乱；解：vtable 一旦发布<strong>永不改</strong>，加新方法只能在末尾追加，不删<br>③ <strong>inline 版本不一致</strong>：A.so 编译时 caller header v1，B.so 用 v2 → 内联展开版本不同 → ODR violation → 运行时随机错<br>④ <strong>STL 类型跨边界</strong>：GCC libstdc++ string SSO 16 字节 vs Clang libc++ string SSO 24 字节 → ABI 不兼容；解：library boundary 不暴露 STL，用 C ABI + opaque<br>⑤ <strong>异常跨 .so</strong>：异常对象内含 typeid，跨编译器 typeid 不一致 → catch 不到 / 错位",
+      "staff": "深一层：ABI 兼容性是<strong>共享库设计最难的部分</strong>。<strong>语义化版本</strong>规则：① patch（z）：bug fix，ABI 不变；② minor（y）：API 新增，ABI 不变；③ major（x）：ABI 破坏，caller 必须重编。<br><br><strong>工程实践</strong>：<br>① <strong>Pimpl</strong>：public class 只持有 unique_ptr&lt;Impl&gt;，Impl 在 .cpp 里随意改；<br>② <strong>extern \"C\" 边界</strong>：跨 .so 接口纯 C ABI；<br>③ <strong>inline namespace</strong>：版本化命名空间 <code>namespace lib { inline namespace v1 { class Foo; } }</code>，升级时 v1 → v2 同时保留；<br>④ <strong>visibility 控制</strong>：<code>-fvisibility=hidden</code> + <code>__attribute__((visibility(\"default\")))</code> 标记 public 符号；<br>⑤ <strong>CI 自动 abi check</strong>：abidiff / abi-compliance-checker。<br><br><strong>真实经验</strong>：NETCONF agent SDK 维护 5 年期间通过这套实践 <strong>零 ABI 破坏事故</strong>：<br>1) 所有 public class 强制 Pimpl<br>2) CI 每 PR 跑 abidiff，break 必须 explicit bump major<br>3) inline namespace v1 / v2 / v3 渐进废弃<br>4) extern \"C\" 边界给 C / Python / Go bindings<br><br>过去某 patch 加私有成员被 abidiff 拦下 + 红色 warning\"this PR breaks ABI\"，开发同事意识到，改用 Pimpl 内部加成员。<strong>陷阱</strong>：① <strong>头文件改了 inline 函数</strong>—— ABI break 但 abidiff 检测不出（compiler 在 caller 端实例化）；解：visibility hidden + 不 inline boundary；② <strong>template instantiation 跨 .so</strong>—— 每边各自 inst，ODR 风险；③ <strong>std::string SSO size cross-versions</strong>—— Dual ABI libstdc++ 切换会破坏。"
+    },
+    "failure_modes": [
+      "加成员认为 \"我没改 public API\" → 实际 ABI 破坏",
+      "跨 .so 边界传 std::string / std::vector → ABI 不兼容",
+      "异常跨 .so → typeid 不一致 → catch fail",
+      "不用 abidiff → release 后客户报错",
+      "inline 函数实现改了不 bump 版本 → 客户混版本 ODR violation"
+    ],
+    "follow_ups": [
+      {
+        "q": "Pimpl 性能代价多少？",
+        "hint": "① 每方法 +1 indirect call ~ 1 ns；② 一次堆分配（构造时）；③ hot path 可能可察觉；④ ABI boundary 库必须用，性能敏感的 inline 库慎用"
+      },
+      {
+        "q": "Dual ABI (libstdc++ _GLIBCXX_USE_CXX11_ABI) 是什么？",
+        "hint": "GCC 5+ 引入两套 std::string / std::list 实现，编译标志切换；不同 ABI 编译的 .so 链接时符号不匹配；整条工具链必须统一"
+      },
+      {
+        "q": "怎么自动检测 ABI break？",
+        "hint": "① abi-compliance-checker（HTML 报告）；② libabigail abidiff（精确比较）；③ 集成 CI：baseline.abi 跟 pr.abi 比对，break 失败"
+      }
+    ]
   },
   {
     "id": 190,
@@ -3090,7 +3630,34 @@ const CARDS = [
     "diff": "high",
     "q": "怎么调试 release 版二进制 (-O2)?",
     "ans": "保留 debug info: <code>g++ -O2 -g</code>. -O2 仍可调, 但变量被优化掉显示 &lt;optimized out&gt;, 行号有时不准 (多语句合一). 严重场景重新编译加 -fno-omit-frame-pointer 改善 backtrace. 关键变量加 volatile 防优化掉.",
-    "ref": "cpp_crash_debugging_guide"
+    "ref": "cpp_crash_debugging_guide",
+    "why_asked": "生产 debug 必备。能讲 -O2 -g + 注意事项 + frame pointer 全套的人是真在 release 上 debug 过。",
+    "answers": {
+      "mid": "<strong>保留 debug info</strong>：<code>g++ -O2 -g</code>。<strong>-O2 仍可调</strong>，但变量被优化掉显示 <code>&lt;optimized out&gt;</code>，行号有时不准（多语句合一）。严重场景重新编译加 <strong>-fno-omit-frame-pointer</strong> 改善 backtrace。<strong>关键变量加 volatile</strong> 防优化掉。",
+      "senior": "<strong>典型问题 + 解法</strong>：<br>· <strong>变量 &lt;optimized out&gt;</strong>：变量被 register 优化或 dead code 消除；解法 ① -O1 或 -Og 替代 -O2；② 关键变量加 volatile（注意性能影响）；③ 用 gdb <code>print expression</code> 直接计算<br>· <strong>行号跳跃 / 重叠</strong>：编译器多语句合一；解法重读 disasm（<code>disas /s</code>）找当前 IP<br>· <strong>backtrace 不完整</strong>：-fomit-frame-pointer（-O2 默认）让 backtrace 难追；解法重编 -fno-omit-frame-pointer<br>· <strong>inline 函数失去</strong>：-O2 大量 inline；gdb <code>info inline</code> 查实际 inline 链",
+      "staff": "深一层：release debug 是<strong>真 senior C++ 必备技能</strong>。<br><br><strong>工具组合</strong>：<br>· <strong>core dump</strong> + <strong>gdb</strong>：生产事故首选<br>· <strong>perf record + perf report</strong>：性能 + flame graph<br>· <strong>strace / ltrace</strong>：syscall / library call trace<br>· <strong>rr (record-replay)</strong>：record 一次然后 deterministic replay debug（Mozilla 工具）<br>· <strong>eBPF tools</strong>: bpftrace / bcc / bpftrace<br><br><strong>真实经验</strong>：NETCONF agent 生产偶发段错：<br>1) <strong>core dump 配置</strong>：<code>ulimit -c unlimited</code> + <code>echo \"/var/cores/%e.%p\" &gt; /proc/sys/kernel/core_pattern</code><br>2) 事故发生时拿到 core file<br>3) <code>gdb binary core</code>，<code>bt</code> 显示 ?? ??（frame pointer 没保留）<br>4) <strong>重编</strong>：<code>g++ -O2 -g -fno-omit-frame-pointer ...</code><br>5) 模拟相同 input，再 crash → 这次 bt 完整：定位到某个 std::map::find 在被 concurrent 修改时的迭代器失效<br>6) <strong>修复</strong>：加 shared_mutex<br><br><strong>另一案例</strong>：性能问题（P99 周期性飙到 100ms）：<br>1) perf record + flame graph：发现 lock contention spike<br>2) <strong>rr</strong> record 一段 → replay 慢慢看为什么这段 lock contention<br>3) 发现：某 batch job 每分钟 sync 时 hold lock 长 → 改 async<br><br><strong>实践建议</strong>：<br>· Production 永远 <code>-g -O2</code>（debug info 不影响 runtime perf，磁盘多占 30%）<br>· 关键服务 <code>-fno-omit-frame-pointer</code>（无 backtrace 不能调）<br>· Core dump 必开 + 收集到中心化存储<br>· 关键服务带 <strong>continuous profiling</strong>（Pyroscope / Parca）— 始终有 flame graph 供调查<br>· 学会 <strong>用 disasm 调</strong>—— 关键 bug 时不可避免"
+    },
+    "failure_modes": [
+      "Production 不带 -g → core dump 不可读",
+      "-fomit-frame-pointer → backtrace 大量 ??",
+      "不收集 core dump → 事故无法事后分析",
+      "gdb 不会看 disasm → release 优化代码完全调不动",
+      "没 continuous profiling → 性能问题事后才查"
+    ],
+    "follow_ups": [
+      {
+        "q": "rr 怎么用？",
+        "hint": "① <code>rr record ./prog</code>：录制执行；② <code>rr replay</code>：deterministic 重放（可任意倒退）；③ 偶发 race / 不易重现的 bug 神器；④ 需 Intel CPU + 一些 kernel 配置"
+      },
+      {
+        "q": "怎么从 core dump 提取信息？",
+        "hint": "① <code>gdb binary core</code>；② <code>bt full</code> 看局部变量；③ <code>info threads + thread N + bt</code> 看每线程；④ <code>x /Nx 0x...</code> 读内存；⑤ separate debuginfo（debuginfod）让 production 二进制小但调试有信息"
+      },
+      {
+        "q": "Continuous profiling 怎么部署？",
+        "hint": "① Pyroscope / Parca / Grafana Phlare；② Agent in production 持续采集 perf data；③ 上传中心存储 + UI 查询；④ Overhead &lt; 1% CPU；⑤ 大型 SaaS 必备"
+      }
+    ]
   },
   {
     "id": 192,
@@ -3162,7 +3729,34 @@ const CARDS = [
     "diff": "high",
     "q": "什么是好的 C++ 接口设计?",
     "ans": "① <strong>难以错用</strong> (Scott Meyers): 类型告诉调用方该怎么用; ② RAII 管理资源生命周期; ③ 显式 explicit 防止意外转换; ④ const 正确; ⑤ noexcept 正确; ⑥ [[nodiscard]] 强制处理结果; ⑦ string_view / span 接口边界; ⑧ 文档化所有权 / 线程安全 / 异常保证.",
-    "ref": "cpp_value_categories_guide"
+    "ref": "cpp_value_categories_guide",
+    "why_asked": "综合性大题。能讲 8 个 principle 的人是真理解 modern C++ API design。",
+    "answers": {
+      "mid": "<strong>8 大原则</strong>：① <strong>难以错用</strong>（Scott Meyers）：类型告诉调用方该怎么用；② <strong>RAII</strong> 管理资源生命周期；③ <strong>explicit</strong> 防止意外转换；④ <strong>const</strong> 正确；⑤ <strong>noexcept</strong> 正确；⑥ <strong>[[nodiscard]]</strong> 强制处理结果；⑦ <strong>string_view / span</strong> 接口边界；⑧ 文档化<strong>所有权 / 线程安全 / 异常保证</strong>。",
+      "senior": "<strong>逐项展开</strong>：<br>① <strong>\"hard to use wrong\"</strong>: 用 strong typedef 替代 raw int / string（用 UserId 不 int）；返回 std::optional / std::expected 而非 nullable raw ptr；<br>② <strong>RAII</strong>: 资源在构造获取，析构释放；用 unique_ptr / lock_guard / scope_exit；<br>③ <strong>explicit</strong>: 单参 ctor 永远 explicit（除非真需要隐式）；<br>④ <strong>const</strong>: getter / 不修改成员的函数都 const；参数 const &amp; 当不拷贝；<br>⑤ <strong>noexcept</strong>: move / swap / destructor 永远 noexcept（启用容器优化）；<br>⑥ <strong>[[nodiscard]]</strong>: 返回 status / error code / required value 的函数加；<br>⑦ <strong>view 类型</strong>: 不需要 ownership 的参数用 string_view / span / function_ref；<br>⑧ <strong>文档</strong>: ownership transfer (move from)? 线程 safe? 异常 throws what?",
+      "staff": "深一层：好的 C++ API 设计跟 Rust 异曲同工——<strong>用类型系统强制正确使用</strong>。<br><br><strong>extended principle</strong>：<br>⑨ <strong>不要 expose 实现细节</strong>：用 Pimpl 隐藏成员；用 ABI namespace inline 版本化；<br>⑩ <strong>strong types over weak</strong>: UserId vs int；不能混用 UserId 和 OrderId；<br>⑪ <strong>builder pattern</strong> 复杂构造：<code>HttpRequest::Builder().url(\"...\").timeout(30s).build()</code><br>⑫ <strong>Composable</strong>: Function as first-class，function_ref / function 参数，让调用方组合；<br>⑬ <strong>Stream-like or single-call</strong>: 选其一别混（要么 builder 链式要么单次 settle）；<br>⑭ <strong>Sane defaults</strong>: 90% 用户不需要看 doc 也能用对<br><br><strong>真实例子</strong>：NETCONF agent SDK 设计：<br><code>auto session = nc::Session::connect({.host = \"router.example.com\", .port = 830, .auth = nc::SshAuth::with_key(key_file)})</code><br><code>    .timeout(std::chrono::seconds(30))</code><br><code>    .build();</code><br><br><strong>用了什么 principle</strong>：<br>· Designated initializer (C++20) 让 ConnectionOpts 字段清晰；<br>· Builder 模式可加可减 optional 参数；<br>· <strong>RAII session</strong>：session 析构自动 disconnect；<br>· 返回 <code>std::expected&lt;Session, ConnectError&gt;</code>—— 错误强制 handle；<br>· nc::SshAuth strong type—— 不能误传 password 到 with_key()；<br>· timeout 用 std::chrono 强类型—— 不能误传 \"30\" 当秒数 / 毫秒数<br><br><strong>对比反例</strong>：早期 NETCONF SDK API：<code>nc_session_t* nc_connect(const char* host, int port, const char* user, const char* pass);</code>—— ① raw ptr ownership 不明；② 4 个 raw 参数易顺序错；③ password 字符串明文（应该 zeroize）；④ 错误用全局 errno 不返回。<br><br><strong>学习资源</strong>：① Scott Meyers《Effective C++》/《Effective Modern C++》；② Herb Sutter《Exceptional C++》；③ C++ Core Guidelines（cppcoreguidelines.org）；④ Sean Parent 《Better Code》系列 talks；⑤ 反面教材：早期 STL / Boost / WinAPI（学怎么<u>不要</u>设计）。"
+    },
+    "failure_modes": [
+      "Raw pointer 接口 → ownership 不明 / lifetime 难管",
+      "单参 ctor 不 explicit → 意外转换",
+      "Move / swap / dtor 没 noexcept → vector 扩容退化拷贝",
+      "用 int / string 当 ID → 易混淆 / 误传",
+      "返回 nullable ptr 而非 optional → 用户漏 null check"
+    ],
+    "follow_ups": [
+      {
+        "q": "Strong typedef 怎么实现？",
+        "hint": "① C++20 没 native：要 boost::strong_typedef 或自己 template；② Rust 的 newtype pattern；③ 例：<code>struct UserId { uint64_t v; explicit UserId(uint64_t x) : v(x) {} };</code>"
+      },
+      {
+        "q": "[[nodiscard]] 滥用风险？",
+        "hint": "① 每个返回 bool / int 都加 → noise；② 只用在<strong>真有必要 handle</strong>（status / error / ID）的；③ Tag with reason (C++20)：<code>[[nodiscard(\"Check error code\")]]</code>"
+      },
+      {
+        "q": "怎么评估自己 API 设计好坏？",
+        "hint": "① \"If you don't read docs, can you use it correctly?\"；② New hire 试用看用错点；③ 对比 std / Boost 类似 API；④ Static analyzer 提示用错；⑤ ScottMeyers's \"Hard to use wrong\" Test"
+      }
+    ]
   },
   {
     "id": 199,
@@ -3338,7 +3932,34 @@ const CARDS = [
     "q": "哪些函数不能是虚函数? 5 种 + 原因",
     "ans": "① <b>构造函数</b>: 调用时 vptr 还未初始化, 没办法虚; ② <b>静态成员函数</b>: 无 this, 也就无 vptr; ③ <b>友元函数</b>: 不是类成员, 不能继承; ④ <b>普通非成员函数</b>: 同上; ⑤ <b>内联函数</b>: inline 是编译期决议, 虚函数是运行期 — 语义冲突 (虽然形式上可以写, 但虚调用时不会 inline).",
     "bonus": "析构函数<strong>可以</strong>是虚函数 — 而且基类析构常常需要是虚的 (否则 <code>delete base_ptr</code> 不调用派生类析构 → 资源泄漏).",
-    "ref": "cpp_object_model"
+    "ref": "cpp_object_model",
+    "why_asked": "对象模型的\"五个为什么\"。能讲清每种的<strong>底层原因</strong>而非\"标准规定\"的人是真理解 vtable。",
+    "answers": {
+      "mid": "5 种 + 原因：① <strong>构造函数</strong>：调用时 <strong>vptr 还未初始化</strong>，没办法虚；② <strong>静态成员函数</strong>：无 this，也就无 vptr；③ <strong>友元函数</strong>：不是类成员，不能继承；④ <strong>普通非成员函数</strong>：同上；⑤ <strong>内联函数</strong>：inline 是编译期决议，virtual 是运行期—— 语义冲突（形式上可写，但虚调用时不会 inline）。",
+      "senior": "<strong>构造函数不能虚的深层原因</strong>：① vptr 在构造体内才被设置；② 派生类构造的<strong>前期</strong>（基类构造时）vptr 指向<strong>基类 vtable</strong>，不指向最派生类 → 即使能调虚也只会调基类版本；③ \"构造一个虚类型\"需要工厂模式 + clone() 模拟。<br><strong>析构函数可以虚</strong>（与构造对比）：vptr 在派生类析构开始时被设回派生类 vtable → 派生析构 → 基类析构时 vptr 已设回基类。",
+      "staff": "深一层：理解这些限制能避免一类 C++ 经典 bug：<br>① <strong>\"在构造函数里调虚函数\"陷阱</strong>：调的是<strong>本类</strong>的版本，<strong>不是派生类</strong>的 override（vptr 还指向本类 vtable）。<strong>Effective C++</strong> 第 9 条经典反模式。<br>② <strong>解决方法</strong>：① \"<strong>two-phase initialization</strong>\"（构造完成后再 init）；② <strong>CRTP</strong>（Curiously Recurring Template Pattern）静态多态替代；③ 工厂函数 + 后置 init 调用。<br>③ <strong>析构函数应该 virtual</strong>（如果类作为基类用）—— delete derived * via base * 时无虚析构 → UB。<br><br><strong>真实案例</strong>：NETCONF agent 早期有 <code>class Service { Service() { initialize(); } virtual void initialize(); };</code> Derived override initialize 后<strong>不工作</strong>—— 调的是 Service::initialize。改用 <code>Service() { setup(); } void setup(); virtual void initialize();</code> + 用户必须显式 init() 后修复。<br><br><strong>其他限制</strong>：① 模板成员函数也不能 virtual（vtable 大小未知，无法实例化所有版本）；② 不能 virtual + constexpr（C++17 前；C++20 允许 virtual constexpr）。"
+    },
+    "failure_modes": [
+      "构造里调虚函数期待派生版本（实际调本类）",
+      "delete derived via base* 不写 virtual ~Base() → UB",
+      "静态成员加 virtual 修饰 → 编译错（语义冲突）",
+      "把构造函数设计成\"虚\"模式 → 不可能 → 需 factory pattern",
+      "把 inline + virtual 当编译期 + 运行期混用 → 不能 inline + virtual 调用"
+    ],
+    "follow_ups": [
+      {
+        "q": "析构函数应该 virtual 的标准？",
+        "hint": "① 类作为基类（被继承）→ 必须 virtual；② final class / 不打算被继承 → 不需要；③ 标准：有任何 virtual 函数就应该 virtual 析构（cppcoreguidelines）"
+      },
+      {
+        "q": "CRTP 怎么实现 \"constructor 多态\"？",
+        "hint": "<code>template&lt;class Derived&gt; class Base { Base() { static_cast&lt;Derived*&gt;(this)-&gt;init(); } };</code> + <code>class D : public Base&lt;D&gt; { public: void init(); };</code>——编译期分派，避免 vptr 初始化问题"
+      },
+      {
+        "q": "C++20 的 constexpr virtual 怎么用？",
+        "hint": "① 编译期多态：constexpr virtual 函数；② 但仍受限（constexpr context 内调用，对象需 constexpr 构造）；③ 适合编译期反射 + 元编程场景"
+      }
+    ]
   },
   {
     "id": 214,
@@ -3350,7 +3971,34 @@ const CARDS = [
     "q": "编译器何时合成默认构造函数? 4 种情况",
     "ans": "① 类的<strong>成员对象</strong>有默认构造函数; ② 类的<strong>基类</strong>有默认构造函数; ③ 类有<strong>虚函数</strong> (需要在构造里初始化 vptr); ④ 类有<strong>虚基类</strong> (需要初始化 vbtable). 仅在以上情况, 编译器才合成; 否则什么都不生成 (POD 风格).",
     "bonus": "合成的构造函数<strong>不会</strong>给非类类型成员 (int, float) 赋默认值 — 它们值未定义. 这与 = default 显式写出的区别在于触发条件不同.",
-    "ref": "cpp_value_categories_guide"
+    "ref": "cpp_value_categories_guide",
+    "why_asked": "对象模型基础。能列 4 种情况的人是真读过《Inside the C++ Object Model》。",
+    "answers": {
+      "mid": "4 种情况：① 类的<strong>成员对象</strong>有默认构造函数；② 类的<strong>基类</strong>有默认构造函数；③ 类有<strong>虚函数</strong>（需要在构造里初始化 vptr）；④ 类有<strong>虚基类</strong>（需要初始化 vbtable）。仅以上情况编译器才合成；否则什么都不生成（POD 风格，对象内存未初始化）。",
+      "senior": "<strong>合成的目的</strong>是<strong>编译器必须做的初始化工作</strong>（不是 user-defined logic）：<br>· 成员对象 / 基类有 ctor → 必须调它们的 ctor<br>· virtual 函数 → 必须初始化 vptr 指向本类 vtable<br>· 虚基类 → 必须初始化 vbptr 指向 vbtable<br><br><strong>不合成时</strong>：纯 POD（C++ 03 / aggregate C++ 17）—— 内存内容 indeterminate（不是 0，是栈 / heap 残留），用前必须显式初始化。<strong>C++11 改进</strong>：成员初始化列表内 default member initializer（<code>int x = 0;</code>），即使无 ctor 也能给默认值。",
+      "staff": "深一层：理解合成规则能<strong>避免性能陷阱</strong>。<strong>对比</strong>：<br>① <strong>不需要合成</strong>（pure POD）：栈上对象是 zero-cost（不调任何函数）；<br>② <strong>合成</strong>：编译器生成的 ctor body 调用所有需要的初始化，<strong>typically inline 优化掉</strong>。<br>③ <strong>用户自定义</strong>：自己写 <code>X() = default</code> 或 <code>X() {}</code> 也算合成（但<strong>= default 和 {} 的语义差异微妙</strong>—— = default 是 trivial 的话允许，{} 是 user-defined 不 trivial）。<br><br><strong>实战影响</strong>：<br>· <code>struct Foo { int x; };</code> Foo 是 trivial，<code>Foo f;</code> x 未初始化 → 用前 UB；<br>· <code>struct Foo { int x = 0; };</code> 仍 trivial（C++14 后），<code>Foo f;</code> x = 0；<br>· <code>struct Foo { int x; Foo() = default; };</code> 同上（trivial）；<br>· <code>struct Foo { int x; Foo() {} };</code> 不 trivial，但 x 仍未初始化（user-defined ctor 不做隐式初始化）；<br>· <code>struct Foo { int x; Foo() : x(0) {} };</code> x = 0。<br><br><strong>真实经验</strong>：在 NETCONF agent 优化某 hot struct 时发现 <code>struct Msg { int len; };</code> 的 <code>Msg m;</code> 是 zero-cost，<code>Msg m{};</code> 显式 zero-init 也 zero-cost（编译器优化），但 <code>struct Msg { int len; Msg() : len(0) {} };</code> 居然没被 inline 优化掉（GCC 13 -O2），改回 = default 后 inline。<strong>结论</strong>：① POD-like 类型用 default member initializer；② = default 通常 ≥ explicit empty body；③ 容器扩容时编译器倾向 memcpy（trivial）vs 调 copy ctor（user-defined）—— 巨大性能差。"
+    },
+    "failure_modes": [
+      "期待编译器给 POD 类型零初始化 → 实际 indeterminate → UB",
+      "用 <code>Foo() {}</code> 替代 = default → 失去 trivial 属性 → 容器优化失效",
+      "不知道 default member initializer 保留 trivial",
+      "成员有默认构造但用户写空 ctor → 没初始化用户 expected 字段",
+      "跨 .so 边界传 non-trivial 类型 → ABI 风险"
+    ],
+    "follow_ups": [
+      {
+        "q": "trivial / standard-layout / POD 区别？",
+        "hint": "① trivial：所有特殊成员函数都是 default + 没有 virtual / 虚基；② standard-layout：内存布局确定（兼容 C struct）；③ POD = trivial + standard-layout（C++20 起 POD 被废弃，分别使用）"
+      },
+      {
+        "q": "什么时候应该禁用 default ctor？",
+        "hint": "① 类必须有外部状态才能用（如 file handle 必须给路径）；② 防止误用 default 状态；用 <code>X() = delete;</code> 显式禁用"
+      },
+      {
+        "q": "合成的 ctor / dtor / copy / move 都什么时候被禁？",
+        "hint": "① 用户声明任一特殊成员函数 → 部分 disable（Rule of Zero / Rule of Five）；② 类含 const / reference 成员 → copy assignment disabled；③ 含 move-only 成员 → copy disabled"
+      }
+    ]
   },
   {
     "id": 215,
@@ -3372,7 +4020,34 @@ const CARDS = [
     "q": "构造函数被扩展的完整过程?",
     "ans": "编译器在构造函数体里<strong>隐式插入</strong>这些步骤 (按顺序): ① 调用虚基类构造 (按继承列表顺序); ② 调用直接基类构造; ③ 初始化 vptr (指向本类 vtable); ④ 按声明顺序初始化成员变量 (用初始化列表的值或默认); ⑤ 执行用户写的构造函数体.",
     "bonus": "即便你写在初始化列表中的顺序不同, 实际<strong>按成员声明顺序</strong>初始化. 这就是为什么 -Wreorder 会警告.",
-    "ref": "cpp_object_model"
+    "ref": "cpp_object_model",
+    "why_asked": "对象模型五大题之一。能讲完整 5 步顺序的人是真做过 C++ 底层开发。",
+    "answers": {
+      "mid": "编译器在构造函数体里<strong>隐式插入</strong>这些步骤（按顺序）：① 调用<strong>虚基类构造</strong>（按继承列表顺序）；② 调用<strong>直接基类构造</strong>；③ 初始化 <strong>vptr</strong>（指向本类 vtable）；④ 按声明顺序<strong>初始化成员变量</strong>（用初始化列表的值或默认）；⑤ 执行用户写的<strong>构造函数体</strong>。",
+      "senior": "<strong>关键顺序原则</strong>：<br>① <strong>虚基类先于普通基类</strong>—— 因为虚基类共享，必须最早初始化；<br>② <strong>基类先于派生类</strong>—— 派生类构造体可能依赖基类已初始化的状态；<br>③ <strong>成员按<u>声明顺序</u>初始化</strong>—— 不是按初始化列表顺序！这是经典面试坑：<code>X() : b(1), a(b) {}</code> 但 a 在 b 之前声明 → a 用未初始化的 b 算自己。<br>④ vptr 在<strong>所有基类构造完后</strong>设置 → 这就是构造内调虚函数不工作的根本原因。",
+      "staff": "深一层：构造顺序是 C++ 对象模型最复杂的部分之一。<br><br><strong>vptr 切换的\"奇妙时刻\"</strong>：<br>1. 进入 Derived 的构造函数；<br>2. 调用 Base 构造函数前，vptr 还未设置（或承袭上一阶段的）；<br>3. 进入 Base 构造体，<strong>vptr 被设为 Base::vtable</strong>（\"<strong>当前类型</strong>\"）；<br>4. Base 构造体内调虚函数 → 走 Base::vtable → 调 Base::override 而非 Derived::override；<br>5. Base 构造完，回到 Derived 构造前导阶段，<strong>vptr 切换到 Derived::vtable</strong>；<br>6. 现在调虚函数才走 Derived。<br><br><strong>实战陷阱</strong>：<br>① <strong>初始化列表顺序 ≠ 声明顺序</strong>—— 编译器以声明顺序为准，写错时部分编译器报 warning（-Wreorder）；<br>② <strong>构造体内调虚函数</strong>调本类 vtable 版本，不调派生版本；<br>③ <strong>异常</strong>：如果 step 4 抛异常，前面 step 已构造的成员 / 基类会按相反顺序析构 → \"<strong>部分构造</strong>\" 不存在，要么完整要么没构造。<br><br><strong>真实经验</strong>：曾踩过初始化顺序坑——<code>class A { int* p; size_t len; A() : len(100), p(new int[len]) {} };</code> p 在 len 之前声明 → p(new int[len]) 时 len 是 garbage → new 大小未定义。调换声明顺序后修复。<strong>对策</strong>：① 启用 <code>-Wreorder</code>；② 初始化列表按声明顺序写（即使代码风格略丑）；③ 避免成员之间初始化依赖（用 lazy / two-phase）。"
+    },
+    "failure_modes": [
+      "初始化列表写顺序当真实顺序（实际编译器按声明顺序）",
+      "构造体调虚函数期待派生版本",
+      "异常时假设部分初始化能恢复（实际 RAII 自动析构已构造部分）",
+      "成员之间互相依赖初始化（顺序敏感，bug 难找）",
+      "不启 -Wreorder warning → 错误顺序无 warn"
+    ],
+    "follow_ups": [
+      {
+        "q": "vptr 在哪里？",
+        "hint": "每个有 virtual 函数的对象的<strong>第一个 8 字节</strong>（Itanium ABI）；指向类的 vtable；通过 <code>&amp;obj</code> 取址后 dereferences 看到 vtable address"
+      },
+      {
+        "q": "多继承下 vptr 几个？",
+        "hint": "每个有 virtual 函数的基类各一个 vptr；典型 sizeof(Derived) = base1's vptr + base1 unique + base2's vptr + base2 unique + Derived unique"
+      },
+      {
+        "q": "析构顺序怎么样？",
+        "hint": "<strong>反向</strong>构造顺序：① 用户体；② 成员（反声明顺序）；③ 派生类 vptr 切回基类 vtable；④ 直接基类（反列表顺序）；⑤ 虚基类（反列表顺序）"
+      }
+    ]
   },
   {
     "id": 217,
@@ -3394,7 +4069,34 @@ const CARDS = [
     "diff": "high",
     "q": "拷贝构造函数为什么必须传引用 (T&amp;) 不能传值 (T)?",
     "ans": "传值 → 形参构造需要调用拷贝构造 → 拷贝构造又需要构造形参... → <strong>无限递归</strong> → 编译错 / 栈溢出. 必须传引用 (传地址值) 来打破这个循环. 通常签名: <code>T(const T&amp;)</code>.",
-    "ref": "cpp_value_categories_guide"
+    "ref": "cpp_value_categories_guide",
+    "why_asked": "对象模型基础题。能讲\"无限递归\"的人理解 by-value 与 reference 的本质。",
+    "answers": {
+      "mid": "<strong>传值 → 形参构造需要调用拷贝构造 → 拷贝构造又需要构造形参... → 无限递归 → 编译错 / 栈溢出</strong>。必须传<strong>引用</strong>（传地址值）来打破这个循环。通常签名：<code>T(const T&amp;)</code>。",
+      "senior": "<strong>详细解释</strong>：函数参数 by-value 时，调用方<strong>拷贝</strong>实参到形参。如果 <code>T(T t)</code> 是拷贝构造，那调用它需要先<strong>把实参拷贝</strong>到形参 t —— 而拷贝是用什么操作？正是 T(T t)！→ 调用 T(T t) → 要拷贝 → 又调用 T(T t) → ...无限递归。<strong>引用传递</strong>不需要拷贝（传 8 字节地址），打破递归。<strong>const 修饰</strong>让拷贝构造能接受临时对象（rvalue）。",
+      "staff": "深一层：拷贝构造的 <strong>5 种合法签名</strong>：<br>· <code>T(T&amp;)</code> —— 非 const，只能拷贝 non-const lvalue<br>· <code>T(const T&amp;)</code> —— 最常用，能拷贝所有<br>· <code>T(volatile T&amp;)</code> —— 罕见<br>· <code>T(const volatile T&amp;)</code> —— 罕见<br>· <code>T(T)</code> —— <strong>违法</strong>（无限递归）<br><br><strong>编译器检测</strong>：当编译器在合成拷贝构造时（无用户定义），它<strong>自动选 T(const T&amp;)</strong>。如果有成员是 <code>T(T&amp;)</code>（非 const），合成版本也是 <code>T(T&amp;)</code>。<br><br><strong>实战陷阱</strong>：<br>① <strong>std::auto_ptr</strong>（C++03，已 deprecate）的拷贝构造是 <code>auto_ptr(auto_ptr&amp;)</code>（非 const），<strong>剥夺源对象</strong>—— 后被 unique_ptr 替代（不可拷贝只可移动）；<br>② <strong>移动构造可以传值的 trick</strong>：<code>T(T)</code> 违法但 <code>T(T&amp;&amp;)</code> 合法（rvalue ref 类似 ptr，无拷贝循环）；<br>③ <strong>\"Copy and Swap\"</strong> idiom：<code>T&amp; operator=(T other) { swap(other); return *this; }</code> —— 这里 other 是<strong>形参拷贝</strong>，看似 by-value 但调用方先创建临时然后 move/copy 进 other，没递归。<br><br><strong>真实经验</strong>：曾见过 junior 写 <code>class Foo { public: Foo(Foo f) {...} };</code>，期待\"自然拷贝\"，编译器 200 行 error 看不懂。改成 <code>Foo(const Foo&amp; f)</code> 后通过。<strong>建议</strong>：① 90% 场景 <code>const T&amp;</code>；② 类型有<strong>SBO + 廉价 copy</strong>（如 string_view）才考虑 <code>T</code>（按值传递更快无 alias）；③ rule of five 全显式 default 让编译器帮你生成。"
+    },
+    "failure_modes": [
+      "写 T(T) → 编译失败（无限递归）→ 不知道错在哪",
+      "用 T(T&amp;) 替代 T(const T&amp;) → 不能拷贝临时 / const 对象",
+      "auto_ptr / unique_ptr 混用 → 复制时剥夺源 / 编译错",
+      "Copy and swap idiom 写成 T& op=(const T&) 后 swap → 看不出比直接赋值的优势",
+      "不知道 T(T&&) 合法（移动构造可以 by-value rvalue ref）"
+    ],
+    "follow_ups": [
+      {
+        "q": "Rule of 0/3/5 是什么？",
+        "hint": "① Rule of 0：依赖默认成员函数（用 STL / smart ptr）—— 最理想；② Rule of 3：写了 dtor / copy ctor / copy assign 之一就要写另外两个（C++03）；③ Rule of 5：加 move ctor / move assign（C++11）"
+      },
+      {
+        "q": "Copy and Swap idiom 的优势？",
+        "hint": "① 强异常安全（先构造再 swap，swap noexcept）；② 共享 copy ctor + move 逻辑；③ 处理 self-assignment 自动（other 是拷贝）；④ 代价：每次 op= 都有一次拷贝 + 一次 swap"
+      },
+      {
+        "q": "传值 vs 传 const T& 性能差异？",
+        "hint": "① 小类型（&lt; 16 bytes）：传值更快（寄存器传递，无 alias 优化好）；② 大类型 / non-trivial：const T& 更快（避免一次 copy）；③ T&& 接收 rvalue 启用 move"
+      }
+    ]
   },
   {
     "id": 219,
@@ -3438,7 +4140,34 @@ const CARDS = [
     "q": "C++ 函数调用栈帧 (stack frame) 大致流程?",
     "ans": "调用方: ① 参数<strong>从右向左</strong>压栈 (cdecl); ② call 指令把返回地址压栈, 跳到被调函数. 被调函数: ① 保存旧 ebp/rbp 到栈; ② mov ebp, esp (建立新栈帧); ③ sub esp, N 给局部变量留空间; ④ 执行函数体; ⑤ mov esp, ebp + pop ebp (恢复); ⑥ ret (弹返回地址跳回).",
     "bonus": "调用约定影响: <b>cdecl</b> (调用方清栈, 支持变长参数) / <b>stdcall</b> (被调方清栈, Win API) / <b>fastcall</b> (前几个参数用寄存器) / <b>thiscall</b> (this 在 ECX, MSVC).",
-    "ref": "cpp_performance_guide"
+    "ref": "cpp_performance_guide",
+    "why_asked": "底层基础题。能讲完整 6 步流程的人理解 ABI / calling convention。",
+    "answers": {
+      "mid": "<strong>调用方</strong>：① 参数<strong>从右向左</strong>压栈（cdecl）；② <strong>call 指令</strong>把返回地址压栈，跳到被调函数。<br><strong>被调函数</strong>：① 保存旧 ebp/rbp 到栈；② <strong>mov ebp, esp</strong>（建立新栈帧）；③ <strong>sub esp, N</strong> 给局部变量留空间；④ 执行函数体；⑤ <strong>mov esp, ebp + pop ebp</strong>（恢复）；⑥ <strong>ret</strong>（弹返回地址跳回）。",
+      "senior": "<strong>x86-64 ABI 差异</strong>（System V vs Win64）：<br>· <strong>System V AMD64</strong>（Linux / macOS）：前 6 个整型参数走 <strong>rdi / rsi / rdx / rcx / r8 / r9</strong>，前 8 个浮点走 <strong>xmm0-xmm7</strong>；其余压栈；<br>· <strong>Win64</strong>：前 4 个走 <strong>rcx / rdx / r8 / r9</strong>（整型 / 浮点共用槽）；其余压栈；<br>· <strong>返回值</strong>：整型 rax，浮点 xmm0；大返回（&gt; 16 bytes）由调用方分配栈空间，被调写入 + rax 返地址；<br>· <strong>caller-saved vs callee-saved 寄存器</strong>：各自责任不同。",
+      "staff": "深一层：理解栈帧能<strong>解释多个 C++ 底层现象</strong>：<br>① <strong>RVO/NRVO</strong>：caller 在自己栈帧预留返回值空间 + 传地址给 callee；callee 直接<strong>原地构造</strong>到 caller 空间 → 无 copy；<br>② <strong>移动语义</strong>性能：右值引用是 8 字节指针 → 几乎零成本传递；<br>③ <strong>异常 unwind</strong>：unwind table 记录每个函数的栈帧 layout，runtime 能反向 pop 帧 + 调析构；<br>④ <strong>tail call optimization</strong>：函数<strong>最后一步</strong>是调另一函数 → 复用当前栈帧（不嵌套）；<br>⑤ <strong>frame pointer 省略</strong>（-fomit-frame-pointer）：用 rsp 直接索引，少一次 push rbp，但 backtrace 困难。<br><br><strong>调试时</strong>用 GDB <code>info frame</code> 看栈帧细节；<code>disas /s</code> 看汇编 + 源码对照。<strong>真实经验</strong>：NETCONF agent 一次 release 段错 (-O2)，gdb backtrace 全是 ?? —— 因 -fomit-frame-pointer。重编加 <code>-fno-omit-frame-pointer</code> 后 backtrace 清晰，定位到一个 stack-use-after-return（局部数组 escape 给 worker thread）。"
+    },
+    "failure_modes": [
+      "不区分 System V 和 Win64 ABI → 跨平台代码混用错误",
+      "期待\"栈分配是免费\"忽略 stack overflow（深递归 / 大局部数组）",
+      "Release 不加 -fno-omit-frame-pointer → backtrace 无用",
+      "不理解 caller-saved vs callee-saved → 内联汇编破坏寄存器",
+      "不知道 RVO 通过 caller-allocated 空间实现"
+    ],
+    "follow_ups": [
+      {
+        "q": "caller-saved 和 callee-saved 寄存器分别是哪些？",
+        "hint": "System V AMD64：caller-saved（被调可任意改）: rax, rcx, rdx, rsi, rdi, r8-r11；callee-saved（被调必须恢复）: rbx, rbp, r12-r15"
+      },
+      {
+        "q": "Tail call optimization 怎么触发？",
+        "hint": "① 函数<strong>最后一步</strong>是调另一函数；② 返回值直接是被调返回；③ 编译器优化（GCC -O2 默认开）；④ 但有 destructor / cleanup 时不能 TCO"
+      },
+      {
+        "q": "栈溢出怎么调试？",
+        "hint": "① 检查无限递归 / 大局部数组；② -fstack-usage 编译看每函数栈使用；③ 增加栈大小（pthread_attr_setstacksize）；④ AddressSanitizer with stack overflow detection"
+      }
+    ]
   },
   {
     "id": 223,
@@ -3471,7 +4200,34 @@ const CARDS = [
     "q": "C++ 多态发生的 3 个必要条件?",
     "ans": "① 基类必须有<strong>virtual</strong> 函数; ② 派生类必须<strong>override</strong> 该函数 (相同签名); ③ 必须通过<strong>基类指针 / 引用</strong>调用 (不是对象本身).",
     "code": "<pre><span class=\"kw\">struct</span> <span class=\"type\">B</span> { <span class=\"kw\">virtual</span> <span class=\"kw\">void</span> <span class=\"fn\">f</span>(); };\n<span class=\"kw\">struct</span> <span class=\"type\">D</span> : <span class=\"type\">B</span> { <span class=\"kw\">void</span> <span class=\"fn\">f</span>() <span class=\"kw\">override</span>; };\n<span class=\"type\">D</span> d;\n<span class=\"type\">B</span>&amp; b = d; b.<span class=\"fn\">f</span>();         <span class=\"cm\">// ✅ 多态 → D::f()</span>\n<span class=\"type\">B</span> bv = d; bv.<span class=\"fn\">f</span>();        <span class=\"cm\">// ❌ 切片 → B::f()</span></pre>",
-    "ref": "cpp_object_model"
+    "ref": "cpp_object_model",
+    "why_asked": "基础题但能筛人。能讲清\"3 个必要条件缺一不可\"的人是真理解 vtable 分发机制。",
+    "answers": {
+      "mid": "<strong>3 个必要条件</strong>：① 基类必须有 <strong>virtual</strong> 函数；② 派生类必须 <strong>override</strong> 该函数（相同签名）；③ 必须通过<strong>基类指针 / 引用</strong>调用（不是对象本身）。",
+      "senior": "<strong>缺一不可的反例</strong>：<br>① <strong>没 virtual</strong>：编译期静态绑定，调基类版本（即使派生类有同名函数）；<br>② <strong>signature 不一致</strong>：派生类 <code>void foo() const</code> vs 基类 <code>void foo()</code> → 不是 override，是<strong>隐藏</strong>（hide）；<br>③ <strong>通过对象调用</strong>：<code>Base b = derived;</code> 后 b.foo()<strong>切片</strong>（slicing）—— 已经丢失派生类信息 → 只能调 Base::foo。<br><br><strong>实战工具</strong>：C++11 起强制写 <code>override</code> 关键字，编译器检查签名一致；<code>final</code> 标记不能进一步 override。",
+      "staff": "深一层：多态发生需要\"<strong>vtable 间接调用</strong>\"机制，三个条件缺一不可：<br>① virtual 让<strong>编译器为该函数生成 vtable 槽</strong>；<br>② override 让<strong>派生类 vtable 该槽指向派生版本</strong>；<br>③ 通过基类指针 / 引用调用时<strong>编译器生成 indirect call</strong>（lookup vtable + jump），而<strong>对象调用是 direct call</strong>。<br><br><strong>性能成本</strong>：<br>· 直接调（无 virtual）：1 个 call 指令，&lt; 1 ns；<br>· 虚调用：vtable lookup + indirect call，~ 1-3 ns（cache 命中）/ ~10 ns（miss）；<br>· <strong>devirtualization</strong>：编译器看到<strong>final class</strong> 或<strong>static type 已知</strong>时优化成直接调（-O2 通常做）。<br><br><strong>真实案例</strong>：在 NETCONF agent profile 一段 hot path，发现 90% 时间在 virtual function call。原因：调用方是 vector&lt;Base*&gt; loop，每个 dispatch 都 vtable lookup。<strong>优化</strong>：① 类型已知场景改 static dispatch（template + CRTP）；② 排序 vector by type 后用 branch prediction；③ profile-guided optimization 让编译器学到 hot indirect target。结果性能 +35%。<strong>对比</strong>：① CRTP（静态多态）零开销但模板膨胀；② <code>std::variant + std::visit</code>（C++17 sum type）：编译期分发但代码量大；③ <strong>tagged union + switch</strong>：手动版本，最 verbose 但 cache friendly。"
+    },
+    "failure_modes": [
+      "基类无 virtual 期待派生类 override → 编译过但调基类版本（hidden）",
+      "signature 写错（const / 参数）→ override 失败 → 没用 override 关键字时编译不报",
+      "对象切片：把派生赋给基类对象（不是 ptr / ref）→ 派生成员丢失 + 多态失效",
+      "hot path 大量虚调用 → cache miss → 性能崩",
+      "不用 override / final → 维护期改动易出错"
+    ],
+    "follow_ups": [
+      {
+        "q": "override 关键字必须写吗？",
+        "hint": "推荐永远写！① 编译器检查签名一致（防 hide）；② 代码可读性（显式 override 意图）；③ Refactor 时基类签名变了立刻报错；C++ Core Guidelines C.128 强制要求"
+      },
+      {
+        "q": "final 什么时候用？",
+        "hint": "① 类 final：禁止继承（编译器可 devirtualize 所有调用）；② 函数 final：派生类不能 override；③ 性能优化：让编译器 inline / devirtualize 虚调用"
+      },
+      {
+        "q": "静态多态（CRTP）vs 动态多态（virtual）怎么选？",
+        "hint": "① CRTP：编译期已知类型 + hot path / 模板库；② virtual：运行期类型未知 / 异构集合 / 插件系统；③ 设计判断：\"这个类型集合需要 runtime extensibility 吗?\""
+      }
+    ]
   },
   {
     "id": 226,
@@ -3492,7 +4248,34 @@ const CARDS = [
     "diff": "high",
     "q": "对象布局: 单一类 / 单继承 / 多继承 / 虚继承 sizeof?",
     "ans": "① <b>单一类</b>: 成员和 (含 vptr 8 字节 if 有 virtual) + 对齐. ② <b>单继承</b>: 基类布局 + 派生类成员. 共享一个 vptr. ③ <b>多继承</b>: 多个基类按声明顺序排, 各自的 vptr 都在. ④ <b>虚继承</b>: 多一个 vbptr 指向虚基类表 — 共享虚基类.",
-    "ref": "cpp_object_model"
+    "ref": "cpp_object_model",
+    "why_asked": "对象布局题，能给具体 sizeof 的人是真画过 vtable / 内存图。",
+    "answers": {
+      "mid": "① <strong>单一类</strong>：成员和 +（vptr 8 字节 if 有 virtual）+ 对齐。<br>② <strong>单继承</strong>：基类布局 + 派生类成员。<strong>共享一个 vptr</strong>。<br>③ <strong>多继承</strong>：多个基类按声明顺序排，<strong>各自的 vptr 都在</strong>。<br>④ <strong>虚继承</strong>：多一个 <strong>vbptr</strong> 指向虚基类表 —— 共享虚基类。",
+      "senior": "<strong>典型 sizeof 例子</strong>（64-bit 系统）：<br>· <code>struct A { int x; };</code> sizeof = 4<br>· <code>struct A { int x; virtual void f(); };</code> sizeof = 16（vptr 8 + int 4 + padding 4）<br>· <code>struct B : A { int y; };</code>（A 无 virtual）sizeof = 8（A 的 x 4 + B 的 y 4）<br>· <code>struct C : A { int y; };</code>（A 有 virtual）sizeof = 16（vptr + x + y + padding）<br>· <code>struct D : A, B { int z; };</code>（多继承）：A.vptr + A.x + B.vptr + B.x + D.z + padding<br>· <code>struct E : virtual A {};</code>：A 部分 + vbptr 8 字节<br>· <code>struct F : virtual A {}; struct G : virtual A {}; struct H : F, G {};</code>：A 一份（共享）+ F's vbptr + G's vbptr + H's part",
+      "staff": "深一层：理解对象布局能解释<strong>多个 C++ 性能 / ABI 现象</strong>：<br>① <strong>EBO</strong>（Empty Base Optimization）：空基类<strong>不占空间</strong>（编译器允许 sizeof base = 0），所以 <code>struct A {}; struct B : A { int x; };</code> sizeof(B) = 4 不是 5；<br>② <strong>vptr 位置</strong>：Itanium ABI 把 vptr 放对象<strong>第一个字段</strong>（reinterpret_cast 后能直接访问）；<br>③ <strong>多继承下 this 调整</strong>：<code>D d; B* b = &amp;d;</code> 时 b 不等于 &d，编译器自动加 offset；调用 B 的虚函数时 thunk 调整 this 回 D；<br>④ <strong>跨 .so</strong>：对象布局是 ABI 一部分 → 改类成员就破坏 ABI（Pimpl 解决）。<br><br><strong>工具</strong>：① <code>clang -Xclang -fdump-record-layouts</code> 看类布局；② godbolt 看汇编中 offset；③ <code>__builtin_offsetof</code> 查成员偏移。<br><br><strong>真实经验</strong>：NETCONF agent 的 hot struct <code>Message { uint64_t id; std::string body; int priority; };</code> sizeof = 56（id 8 + string 32 + priority 4 + padding 12）。<strong>调整顺序</strong> <code>Message { uint64_t id; int priority; std::string body; };</code> sizeof = 48（id 8 + priority 4 + padding 4 + string 32），<strong>每个 Message 省 8 字节</strong>。Hot path 100k QPS 累积省 800KB/s + cache friendly → 性能 +5%。<strong>原则</strong>：成员按 sizeof <strong>从大到小</strong>排列减少 padding。<strong>C++20 [[no_unique_address]]</strong>：让空类型成员不占空间（EBO 的现代替代）。"
+    },
+    "failure_modes": [
+      "不知道 vptr 占空间（认为 sizeof(A) = 4 但实际 16）",
+      "多继承时 this pointer 转换没意识 → 手动 reinterpret_cast 错位",
+      "成员声明顺序随意 → 多余 padding 导致 cache line 浪费",
+      "虚继承的 sizeof 算错（漏掉 vbptr）",
+      "没用 EBO / [[no_unique_address]] 优化空类型成员"
+    ],
+    "follow_ups": [
+      {
+        "q": "怎么查具体类的内存布局？",
+        "hint": "① clang -Xclang -fdump-record-layouts；② -Wpadded 提示 padding 字段；③ pahole（Linux 工具）；④ Visual Studio \"/d1 reportSingleClassLayout&lt;ClassName&gt;\""
+      },
+      {
+        "q": "什么是 [[no_unique_address]]？",
+        "hint": "C++20 attribute，允许编译器把空成员的地址 reuse 给其他成员，sizeof 不增加；EBO 的现代替代，更通用（不限于继承）"
+      },
+      {
+        "q": "成员排列优化的规则？",
+        "hint": "① 从大到小排列减 padding；② alignas 显式对齐 cache-critical 字段；③ 频繁访问字段放一起；④ 避免 false sharing 时反而拉大分布"
+      }
+    ]
   },
   {
     "id": 228,
@@ -3807,7 +4590,34 @@ const CARDS = [
     "q": "HTTPS 加密握手过程?",
     "ans": "TLS 1.2 简化版: ① 客户端 ClientHello (含支持的加密套件 + 随机数 client_random); ② 服务端 ServerHello (选定套件 + server_random + 证书); ③ 客户端验证证书 → 生成 pre_master, 用服务端公钥加密发回; ④ 双方用 client_random + server_random + pre_master 推出对称密钥; ⑤ Finished 互发. 之后用对称加密通信.",
     "bonus": "TLS 1.3 简化为 1 RTT, 加密套件大幅精简, 强制 PFS (前向保密).",
-    "ref": "cpp_networking_guide"
+    "ref": "cpp_networking_guide",
+    "why_asked": "网络安全基础。能讲完整 TLS 1.2 5 步 + 1.3 差异的人是真懂 TLS。",
+    "answers": {
+      "mid": "<strong>TLS 1.2 简化版</strong>：① 客户端 <strong>ClientHello</strong>（含支持的加密套件 + 随机数 client_random）；② 服务端 <strong>ServerHello</strong>（选定套件 + server_random + 证书）；③ 客户端验证证书 → 生成 <strong>pre_master</strong>，用服务端公钥加密发回；④ 双方用 client_random + server_random + pre_master 推出<strong>会话密钥</strong>；⑤ 用对称密钥（AES）加密后续应用数据。",
+      "senior": "<strong>5 步完整</strong>：<br>1) <strong>ClientHello</strong>: 客户端发支持的版本 / cipher suites / random / extensions（SNI 等）<br>2) <strong>ServerHello + Certificate + ServerHelloDone</strong>: 服务端选 cipher + random + 证书链<br>3) <strong>ClientKeyExchange</strong>: 客户端验证证书（链 / 时效 / hostname）+ 生成 pre_master + 用证书公钥加密发回<br>4) <strong>ChangeCipherSpec + Finished</strong>: 双方切换到对称加密 + 用 hash of 之前 messages 验证<br>5) <strong>Application Data</strong>: 用对称密钥（AES-GCM 等）加密后续<br><br><strong>密钥推导</strong>: <code>master_secret = PRF(pre_master, \"master secret\", client_random || server_random)</code>; <code>session_key = PRF(master_secret, \"key expansion\", server_random || client_random)</code>。",
+      "staff": "深一层：TLS 1.3（2018 RFC 8446）<strong>大幅简化 + 加速</strong>：<br>① <strong>0-RTT</strong>（先发后认证，可选）<br>② <strong>1-RTT handshake</strong>（vs TLS 1.2 的 2-RTT）<br>③ <strong>移除老不安全 cipher</strong>（RC4 / MD5 / DES / RSA key exchange）<br>④ <strong>强制 forward secrecy</strong>（必须用 DH / ECDH）<br>⑤ <strong>Encrypted SNI</strong>（ECH，更隐私）<br><br><strong>vs TLS 1.2 的步骤</strong>：1.3 把 ServerKeyExchange / ChangeCipherSpec 等合并；客户端 hello 时已带 key share，服务端立即推 finished。<br><br><strong>实战考虑</strong>：<br>① <strong>HTTPS 性能</strong>：TLS 1.3 比 1.2 快 ~30%（少一个 RTT）；<br>② <strong>HTTP/3 + QUIC</strong>：QUIC 直接集成 TLS 1.3 in transport layer，0-RTT 默认；<br>③ <strong>证书验证</strong>：① 链验证（intermediate → CA root）；② 时效检查（notBefore / notAfter）；③ hostname 验证（Subject CN / SAN）；④ revocation（OCSP / CRL）；<br>④ <strong>cipher suite</strong>：2026 年推荐 AES-128-GCM / ChaCha20-Poly1305（mobile）；<br>⑤ <strong>kTLS</strong>：kernel 处理对称加密，能继续 sendfile。<br><br><strong>真实经验</strong>：NETCONF over TLS 部署在生产，曾遇到客户老 RHEL 7 默认 TLS 1.0 + weak cipher → 我们 reject → 客户报错。妥协支持 TLS 1.2+ 同时禁用 RC4 / MD5 / DES。<strong>monitoring</strong>：① 监控 TLS version distribution；② 监控 cipher suite usage；③ 证书过期告警（前 30 / 7 / 1 天）；④ <strong>SNI</strong> 加密（ECH）逐步铺开。"
+    },
+    "failure_modes": [
+      "不验证证书 hostname / SAN → MitM 攻击风险",
+      "Pin certificate 但忘了 rotate → 证书过期后客户端拒服务",
+      "Old TLS 1.0 / 1.1 不 disable → 容易降级攻击",
+      "Weak cipher suite（RC4 / MD5 / DES）未 disable",
+      "不监控证书过期 → 突然失效"
+    ],
+    "follow_ups": [
+      {
+        "q": "OCSP vs CRL 区别？",
+        "hint": "① CRL: 大文件下载，更新慢，浏览器很少用；② OCSP: 实时查询单证书状态，更快但服务器开销大；③ OCSP stapling: 服务器代查 + 返客户端 → 减少客户端额外查询"
+      },
+      {
+        "q": "Perfect Forward Secrecy 是什么？",
+        "hint": "① 用 DH / ECDH key exchange，每次会话独立密钥；② 即使长期 RSA private key 泄漏，<strong>历史会话仍安全</strong>；③ TLS 1.3 强制；TLS 1.2 推荐"
+      },
+      {
+        "q": "mTLS（mutual TLS）怎么用？",
+        "hint": "① 双向证书验证（客户端也必须有证书）；② 配置 SSL_VERIFY_PEER + 要求 client cert；③ 适合 service-to-service（Istio / Consul Connect 等 service mesh）"
+      }
+    ]
   },
   {
     "id": 257,
