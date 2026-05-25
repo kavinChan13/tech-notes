@@ -64,14 +64,24 @@
     cursor: 0,
     answers: [],
     peeked: [],
+    ratings: [],             // 0 = 未评，1-5 = 自评星级（仅 Review 阶段填充）
     questionTimes: [],       // 单题用时 (ms)，按 pool 顺序填充；切题/提交/时间到时记录
     sessionStartedAt: 0,     // 整轮 mock 开始的 timestamp
+    sessionFinishedAt: 0,    // finish 调用时的 timestamp（用于 history）
     questionStartedAt: 0,    // 当前题开始的 timestamp
     questionPausedAt: 0,     // 暂停瞬时的 timestamp（0 = 未暂停）
     questionPausedMs: 0,     // 当前题累计暂停毫秒
     timerHandle: null,       // setInterval handle
     timerPaused: false,
+    slug: 'unknown',         // 由 URL 推断，用于 history key
   };
+
+  // 用 URL pathname 末尾文件名作 slug（cpp_interview_cards.html → cpp / architect_interview_cards.html → architect）
+  function detectSlug() {
+    const m = /([a-z]+)_interview_cards\.html/.exec(location.pathname);
+    return m ? m[1] : 'unknown';
+  }
+  mock.slug = detectSlug();
 
   // ---------- 工具 ----------
   function $(sel, root = document) { return root.querySelector(sel); }
@@ -227,6 +237,109 @@
     toast.classList.add('show');
     clearTimeout(toast._t);
     toast._t = setTimeout(() => toast.classList.remove('show'), durationMs);
+  }
+
+  // ---------- localStorage History ----------
+  const HISTORY_KEY = (slug) => `mi_history_${slug}`;
+  const HISTORY_MAX = 10;
+
+  function loadHistory() {
+    try {
+      const raw = localStorage.getItem(HISTORY_KEY(mock.slug));
+      if (!raw) return [];
+      const arr = JSON.parse(raw);
+      return Array.isArray(arr) ? arr : [];
+    } catch (e) {
+      console.warn('[mock-interview] history load failed:', e);
+      return [];
+    }
+  }
+
+  function saveHistoryEntry(entry) {
+    try {
+      const arr = loadHistory();
+      arr.unshift(entry);
+      if (arr.length > HISTORY_MAX) arr.length = HISTORY_MAX;
+      localStorage.setItem(HISTORY_KEY(mock.slug), JSON.stringify(arr));
+    } catch (e) {
+      console.warn('[mock-interview] history save failed:', e);
+    }
+  }
+
+  // 评分变化时调用：用最新 snapshot 替换 head entry（同一 session 内）。
+  function updateCurrentHistoryEntry() {
+    if (mock.state !== STATES.DONE) return;
+    try {
+      const arr = loadHistory();
+      if (arr.length > 0 && arr[0].ts === mock.sessionFinishedAt) {
+        arr[0] = buildHistoryEntry();
+        localStorage.setItem(HISTORY_KEY(mock.slug), JSON.stringify(arr));
+      }
+    } catch (e) {
+      console.warn('[mock-interview] history update failed:', e);
+    }
+  }
+
+  function clearHistory() {
+    try { localStorage.removeItem(HISTORY_KEY(mock.slug)); } catch {}
+  }
+
+  // ---------- 弱项分析 ----------
+  // 以 cats 维度统计：每个分类下"自评 ≤ 2"的题占比，挑 ratio 最高的 Top 3。
+  // 至少 1 道弱题 + 分类总题数 ≥ 1。未自评（rating=0）不算弱项。
+  function computeWeakCats() {
+    const totalByCat = new Map();
+    const weakByCat = new Map();
+    mock.pool.forEach((card, i) => {
+      const r = mock.ratings[i] || 0;
+      (card.cats || []).forEach(c => {
+        totalByCat.set(c, (totalByCat.get(c) || 0) + 1);
+        if (r >= 1 && r <= 2) {
+          weakByCat.set(c, (weakByCat.get(c) || 0) + 1);
+        }
+      });
+    });
+    const rows = [];
+    for (const [c, weak] of weakByCat.entries()) {
+      const total = totalByCat.get(c) || 1;
+      rows.push({ cat: c, weak, total, ratio: weak / total });
+    }
+    rows.sort((a, b) => b.ratio - a.ratio || b.weak - a.weak);
+    return rows.slice(0, 3);
+  }
+
+  // ---------- 星级自评（render helper） ----------
+  function buildStarRater(qIndex) {
+    const wrap = el('div', { class: 'mi-stars', dataset: { qi: String(qIndex) } });
+    const current = mock.ratings[qIndex] || 0;
+    for (let s = 1; s <= 5; s++) {
+      const star = el('button', {
+        type: 'button',
+        class: 'mi-star' + (s <= current ? ' on' : ''),
+        title: `自评 ${s} 星`,
+        dataset: { star: String(s) },
+        onclick: (e) => {
+          e.stopPropagation();
+          // 再点已选的最高星 → 清零
+          const newVal = (mock.ratings[qIndex] === s) ? 0 : s;
+          mock.ratings[qIndex] = newVal;
+          // 只更新本行 stars + label，不重建整个 body（保持滚动 / 焦点）
+          wrap.querySelectorAll('.mi-star').forEach(btn => {
+            const v = +btn.dataset.star;
+            btn.classList.toggle('on', v <= newVal);
+          });
+          const lbl = wrap.querySelector('.mi-star-label');
+          if (lbl) lbl.textContent = newVal === 0 ? '未评' : `${newVal} / 5`;
+          refreshStats();
+          refreshWeakSection();
+          updateCurrentHistoryEntry();
+        },
+      }, '★');
+      wrap.appendChild(star);
+    }
+    const label = el('span', { class: 'mi-star-label' }, current === 0 ? '未评' : `${current} / 5`);
+    wrap.appendChild(label);
+    return wrap;
   }
 
   // ---------- 入口按钮 ----------
@@ -498,9 +611,11 @@
     mock.pool = shuffle(matched).slice(0, mock.cfg.count);
     mock.answers = mock.pool.map(() => '');
     mock.peeked = mock.pool.map(() => false);
+    mock.ratings = mock.pool.map(() => 0);
     mock.questionTimes = mock.pool.map(() => 0);
     mock.cursor = 0;
     mock.sessionStartedAt = Date.now();
+    mock.sessionFinishedAt = 0;
     mock.state = STATES.ANSWERING;
     renderQuestion();
   }
@@ -618,64 +733,42 @@
     return parts.join('');
   }
 
-  // ---------- 完成（M2：增加用时汇总；M3 加 Review + 自评） ----------
+  // ---------- 完成（M3：Review + 自评 + 弱项 + history） ----------
   function finishSession() {
     stopQuestionTimer();
     mock.state = STATES.DONE;
-    const answered = mock.answers.filter(a => a && a.trim().length > 0).length;
-    const peeked = mock.peeked.filter(Boolean).length;
-    const totalMs = mock.sessionStartedAt ? Date.now() - mock.sessionStartedAt : 0;
-    const budgetMs = mock.cfg.timerEnabled
-      ? mock.pool.length * mock.cfg.perQuestionSec * 1000
-      : 0;
+    mock.sessionFinishedAt = Date.now();
+
+    // 保存历史（只保存关键统计，不存答题内容，节省 localStorage）
+    saveHistoryEntry(buildHistoryEntry());
 
     renderTopbar('🎯 模拟面试 · 完成', { progress: `${mock.pool.length} 题已结束`, progressPercent: 100 });
 
     const wrap = el('div', { class: 'mi-done' });
     wrap.append(
       el('h1', {}, '🎉 模拟结束'),
-      el('p', { class: 'mi-done-sub' },
-        '完整的 Review / 自评 / 弱项统计将在 M3 上线。本版本仅在内存里保存进度，关页面会丢弃。'),
+      el('p', { class: 'mi-done-sub' }, '给每道题打个自评，下方会自动汇总你的弱项分类。本次模拟的统计已保存到浏览器历史。'),
     );
 
-    // 三大统计行
-    const stats = el('div', { class: 'mi-done-stats' });
-    stats.append(
-      mkStatCard('答题', `${answered} / ${mock.pool.length}`, peeked > 0 ? `偷看答案 ${peeked} 次` : ''),
-      mkStatCard('总用时', fmtDuration(totalMs),
-        mock.cfg.timerEnabled
-          ? `预算 ${fmtDuration(budgetMs)}（${totalMs <= budgetMs ? '在预算内' : '超出 ' + fmtDuration(totalMs - budgetMs)}）`
-          : '学习模式（不计时）'),
-      mkStatCard('平均/题', fmtDuration(totalMs / Math.max(1, mock.pool.length)), ''),
-    );
-    wrap.appendChild(stats);
+    // 三统计卡（动态刷新区域）
+    const statsWrap = el('div', { id: 'mi-stats-wrap' });
+    statsWrap.appendChild(buildStatsCards());
+    wrap.appendChild(statsWrap);
 
-    // 单题用时表
-    const tbl = el('div', { class: 'mi-done-table' });
-    tbl.appendChild(el('h3', {}, '单题用时'));
-    const list = el('div', { class: 'mi-done-rows' });
-    mock.pool.forEach((card, i) => {
-      const t = mock.questionTimes[i] || 0;
-      const usedPct = mock.cfg.timerEnabled
-        ? Math.min(100, Math.round(t / (mock.cfg.perQuestionSec * 1000) * 100))
-        : 0;
-      const row = el('div', { class: 'mi-done-row' });
-      const diffPill = el('span', { class: `mi-q-pill ${card.diff || ''}` }, ({ basic: '🟢', mid: '🟡', high: '🔴' }[card.diff] || '·'));
-      const idTag = el('span', { class: 'mi-q-id' }, `#${String(card.id).padStart(3, '0')}`);
-      const qShort = el('span', { class: 'mi-done-q' }, stripHtml(card.q).slice(0, 60));
-      const timeTag = el('span', { class: 'mi-done-time' + (usedPct >= 100 ? ' over' : usedPct >= 80 ? ' warn' : '') }, fmtDuration(t));
-      const flags = el('span', { class: 'mi-done-flags' });
-      const hasAns = (mock.answers[i] || '').trim().length > 0;
-      flags.append(
-        hasAns ? '✓' : '·',
-        mock.peeked[i] ? ' 👀' : '',
-      );
-      row.append(diffPill, idTag, qShort, el('span', { class: 'mi-spacer' }), flags, timeTag);
-      list.appendChild(row);
-    });
-    tbl.appendChild(list);
-    wrap.appendChild(tbl);
+    // 弱项卡（动态刷新区域）
+    const weakWrap = el('div', { id: 'mi-weak-wrap' });
+    weakWrap.appendChild(buildWeakCard());
+    wrap.appendChild(weakWrap);
 
+    // Review 列表（每题可展开）
+    const reviewSection = el('div', { class: 'mi-done-table' });
+    reviewSection.appendChild(el('h3', {}, `📝 逐题 Review（${mock.pool.length} 题 · 点击展开）`));
+    const list = el('div', { class: 'mi-done-rows', id: 'mi-review-rows' });
+    mock.pool.forEach((card, i) => list.appendChild(buildReviewRow(card, i)));
+    reviewSection.appendChild(list);
+    wrap.appendChild(reviewSection);
+
+    // 操作按钮
     const actions = el('div', { class: 'mi-done-actions' });
     actions.append(
       el('button', { type: 'button', class: 'mi-btn-primary', onclick: openConfig }, '🔁 再来一轮'),
@@ -683,8 +776,246 @@
     );
     wrap.appendChild(actions);
 
+    // 历史折叠区
+    wrap.appendChild(buildHistorySection());
+
     setContent(wrap);
   }
+
+  function buildStatsCards() {
+    const answered = mock.answers.filter(a => a && a.trim().length > 0).length;
+    const peeked = mock.peeked.filter(Boolean).length;
+    const totalMs = mock.sessionStartedAt ? (mock.sessionFinishedAt || Date.now()) - mock.sessionStartedAt : 0;
+    const budgetMs = mock.cfg.timerEnabled ? mock.pool.length * mock.cfg.perQuestionSec * 1000 : 0;
+    const rated = mock.ratings.filter(r => r > 0);
+    const avgRating = rated.length ? rated.reduce((a, b) => a + b, 0) / rated.length : 0;
+
+    const stats = el('div', { class: 'mi-done-stats' });
+    stats.append(
+      mkStatCard('答题', `${answered} / ${mock.pool.length}`, peeked > 0 ? `偷看答案 ${peeked} 次` : ''),
+      mkStatCard('总用时', fmtDuration(totalMs),
+        mock.cfg.timerEnabled
+          ? `预算 ${fmtDuration(budgetMs)}（${totalMs <= budgetMs ? '在预算内' : '超出 ' + fmtDuration(totalMs - budgetMs)}）`
+          : '学习模式（不计时）'),
+      mkStatCard('平均自评',
+        rated.length ? `${avgRating.toFixed(1)} / 5` : '— / 5',
+        rated.length ? `已评 ${rated.length} / ${mock.pool.length} 题` : '点每题展开后打分'),
+    );
+    return stats;
+  }
+
+  function refreshStats() {
+    const wrap = document.getElementById('mi-stats-wrap');
+    if (!wrap) return;
+    wrap.innerHTML = '';
+    wrap.appendChild(buildStatsCards());
+  }
+
+  function buildWeakCard() {
+    const weak = computeWeakCats();
+    const card = el('div', { class: 'mi-weak-card' });
+    const rated = mock.ratings.filter(r => r > 0).length;
+    if (rated === 0) {
+      card.append(
+        el('div', { class: 'mi-weak-title' }, '🎯 弱项分类（待评估）'),
+        el('div', { class: 'mi-weak-empty' }, '展开下方每道题打 1-5 星，系统会自动汇总自评 ≤ 2 的题最多的分类。'),
+      );
+    } else if (weak.length === 0) {
+      card.append(
+        el('div', { class: 'mi-weak-title' }, '🎯 弱项分类'),
+        el('div', { class: 'mi-weak-empty' }, '✅ 没有自评 ≤ 2 的题，你这一轮表现稳定。'),
+      );
+    } else {
+      card.append(el('div', { class: 'mi-weak-title' }, `🎯 弱项分类 Top ${weak.length}（你最该补的方向）`));
+      const grid = el('div', { class: 'mi-weak-grid' });
+      weak.forEach(({ cat, weak: w, total, ratio }) => {
+        const item = el('div', { class: 'mi-weak-item' });
+        item.append(
+          el('div', { class: 'mi-weak-cat' }, cat),
+          el('div', { class: 'mi-weak-bar-wrap' },
+            el('div', { class: 'mi-weak-bar', style: `width:${Math.round(ratio * 100)}%` })
+          ),
+          el('div', { class: 'mi-weak-meta' }, `弱题 ${w} / ${total}（${Math.round(ratio * 100)}%）`),
+        );
+        grid.appendChild(item);
+      });
+      card.appendChild(grid);
+    }
+    return card;
+  }
+
+  function refreshWeakSection() {
+    const wrap = document.getElementById('mi-weak-wrap');
+    if (!wrap) return;
+    wrap.innerHTML = '';
+    wrap.appendChild(buildWeakCard());
+  }
+
+  function buildReviewRow(card, i) {
+    const t = mock.questionTimes[i] || 0;
+    const usedPct = mock.cfg.timerEnabled
+      ? Math.min(100, Math.round(t / (mock.cfg.perQuestionSec * 1000) * 100))
+      : 0;
+    const hasAns = (mock.answers[i] || '').trim().length > 0;
+    const wasPeeked = mock.peeked[i];
+
+    const row = el('div', { class: 'mi-review-row', dataset: { qi: String(i) } });
+
+    // 行头（可点击展开 / 折叠）
+    const head = el('div', { class: 'mi-review-head', onclick: () => toggleReviewRow(i) });
+    head.append(
+      el('span', { class: 'mi-review-toggle' }, '▶'),
+      el('span', { class: `mi-q-pill ${card.diff || ''}` }, ({ basic: '🟢', mid: '🟡', high: '🔴' }[card.diff] || '·')),
+      el('span', { class: 'mi-q-id' }, `#${String(card.id).padStart(3, '0')}`),
+      el('span', { class: 'mi-done-q' }, stripHtml(card.q).slice(0, 70)),
+      el('span', { class: 'mi-spacer' }),
+      el('span', { class: 'mi-done-flags' }, (hasAns ? '✓' : '·') + (wasPeeked ? ' 👀' : '')),
+      el('span', { class: 'mi-done-time' + (usedPct >= 100 ? ' over' : usedPct >= 80 ? ' warn' : '') }, fmtDuration(t)),
+    );
+    row.appendChild(head);
+
+    // 行体（默认隐藏）
+    const body = el('div', { class: 'mi-review-body', hidden: true });
+    body.appendChild(buildReviewBody(card, i));
+    row.appendChild(body);
+
+    return row;
+  }
+
+  function buildReviewBody(card, i) {
+    const body = el('div');
+
+    // 题干（完整 HTML）
+    const qFull = el('div', { class: 'mi-review-question' });
+    qFull.innerHTML = `<strong>题目</strong>: ${card.q || ''}`;
+    body.appendChild(qFull);
+
+    // 两栏：你的答案 vs 标准答案
+    const cols = el('div', { class: 'mi-review-cols' });
+    const yours = el('div', { class: 'mi-review-col mi-review-yours' });
+    yours.append(
+      el('h5', {}, '✍️ 你的答案'),
+      ((mock.answers[i] || '').trim().length > 0)
+        ? el('pre', {}, mock.answers[i])
+        : el('div', { class: 'mi-review-empty' }, mock.peeked[i] ? '— 未作答（偷看过答案）—' : '— 未作答 —'),
+    );
+    const standard = el('div', { class: 'mi-review-col mi-review-standard' });
+    const stdInner = el('div');
+    stdInner.innerHTML = renderAnswerHtml(card);
+    standard.append(el('h5', {}, '📖 标准答案'), stdInner);
+    cols.append(yours, standard);
+    body.appendChild(cols);
+
+    // 自评 + ref
+    const rateRow = el('div', { class: 'mi-review-rate' });
+    rateRow.append(
+      el('span', { class: 'mi-review-rate-label' }, '我的自评：'),
+      buildStarRater(i),
+    );
+    if (card.ref) {
+      const refLink = el('a', {
+        class: 'mi-review-ref',
+        href: `${card.ref}.html`,
+        target: '_blank',
+        rel: 'noopener',
+      }, `📚 深度阅读 ${card.ref.split('/').pop()}.html`);
+      rateRow.appendChild(el('span', { class: 'mi-spacer' }));
+      rateRow.appendChild(refLink);
+    }
+    body.appendChild(rateRow);
+
+    return body;
+  }
+
+  function toggleReviewRow(i) {
+    const row = document.querySelector(`.mi-review-row[data-qi="${i}"]`);
+    if (!row) return;
+    const body = row.querySelector('.mi-review-body');
+    const toggle = row.querySelector('.mi-review-toggle');
+    const open = !body.hidden;
+    if (open) {
+      body.hidden = true;
+      toggle.textContent = '▶';
+      row.classList.remove('open');
+    } else {
+      body.hidden = false;
+      toggle.textContent = '▼';
+      row.classList.add('open');
+    }
+  }
+
+  function buildHistorySection() {
+    const all = loadHistory();
+    const wrap = el('details', { class: 'mi-history' });
+    wrap.appendChild(el('summary', {}, `📜 历史（最近 ${Math.min(all.length, 5)} 次 / 共保留最近 ${HISTORY_MAX} 次）`));
+
+    if (all.length === 0) {
+      wrap.appendChild(el('div', { class: 'mi-history-empty' }, '本浏览器还没有 mock 历史记录。'));
+      return wrap;
+    }
+
+    const list = el('div', { class: 'mi-history-list' });
+    all.slice(0, 5).forEach((entry, idx) => {
+      const row = el('div', { class: 'mi-history-row' });
+      const when = new Date(entry.ts);
+      const dateStr = `${when.getFullYear()}-${pad2(when.getMonth() + 1)}-${pad2(when.getDate())} ${pad2(when.getHours())}:${pad2(when.getMinutes())}`;
+      const ratingStr = entry.rated > 0 ? `⭐ ${entry.avgRating.toFixed(1)}` : '⭐ —';
+      const weakStr = (entry.weakCats && entry.weakCats.length)
+        ? '弱项: ' + entry.weakCats.slice(0, 3).join(' / ')
+        : '弱项: 未评估';
+      row.append(
+        el('span', { class: 'mi-history-idx' }, `#${all.length - idx}`),
+        el('span', { class: 'mi-history-date' }, dateStr),
+        el('span', { class: 'mi-history-stat' }, `${entry.answered} / ${entry.count} 题`),
+        el('span', { class: 'mi-history-stat' }, fmtDuration(entry.totalMs)),
+        el('span', { class: 'mi-history-stat' }, ratingStr),
+        el('span', { class: 'mi-history-stat mi-history-weak' }, weakStr),
+      );
+      list.appendChild(row);
+    });
+    wrap.appendChild(list);
+
+    const actions = el('div', { class: 'mi-history-actions' });
+    actions.appendChild(el('button', {
+      type: 'button',
+      class: 'mi-btn-secondary',
+      onclick: () => {
+        if (!confirm(`清空 ${mock.slug} 题库的所有 mock 历史记录?`)) return;
+        clearHistory();
+        // 重渲染整个完成视图：简单做法是替换 history 区
+        const old = wrap.parentElement;
+        const fresh = buildHistorySection();
+        old.replaceChild(fresh, wrap);
+      },
+    }, '清空历史'));
+    wrap.appendChild(actions);
+
+    return wrap;
+  }
+
+  function buildHistoryEntry() {
+    const answered = mock.answers.filter(a => a && a.trim().length > 0).length;
+    const peeked = mock.peeked.filter(Boolean).length;
+    const totalMs = mock.sessionStartedAt ? mock.sessionFinishedAt - mock.sessionStartedAt : 0;
+    const rated = mock.ratings.filter(r => r > 0);
+    const avgRating = rated.length ? rated.reduce((a, b) => a + b, 0) / rated.length : 0;
+    const weak = computeWeakCats().map(w => w.cat);
+    return {
+      ts: mock.sessionFinishedAt,
+      slug: mock.slug,
+      count: mock.pool.length,
+      answered,
+      peeked,
+      totalMs,
+      timerEnabled: mock.cfg.timerEnabled,
+      perQuestionSec: mock.cfg.perQuestionSec,
+      rated: rated.length,
+      avgRating,
+      weakCats: weak,
+    };
+  }
+
+  function pad2(n) { return String(n).padStart(2, '0'); }
 
   function mkStatCard(label, value, sub) {
     const card = el('div', { class: 'mi-done-stat' });
