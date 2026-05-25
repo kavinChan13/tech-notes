@@ -1042,6 +1042,647 @@ const ENRICHMENT = {
       ],
     },
   },
+
+  em: {
+    // ============== 转型 ==============
+    1: {
+      why_asked: `面试 EM 的<strong>开场必问题</strong>，验证 motivation。能区分"推/拉/准备"三层结构的人通常想过自己为什么转型，而不是被动跟风。这道题答得好，整个面试基调就立住了。`,
+      answers: {
+        mid: `三层结构（推 / 拉 / 准备）：<strong>推</strong>——作为 IC 发现"个人产出"天花板，10 人团队的 leverage = 10× 单人；<strong>拉</strong>——在 Tech Lead 阶段发现自己更享受"团队 / 流程"问题，享受帮人成长；<strong>准备</strong>——过去半年带 mentee / 主导 onboarding / 读过 EM 经典书。`,
+        senior: `比"想转 EM"更有说服力的是<strong>"我在做 IC 时已经在做 EM 的工作"</strong>：mentor 2 个 junior 一年 / 主持团队的 sprint planning / 设计了 oncall rotation / 跨团队推动了某个共识。<strong>红旗答法</strong>："不想写代码了" / "想要 title" / "想管人"——EM 不是 IC 的"下一级"，是平行轨道，混淆这个信号说明候选人不理解角色。`,
+        staff: `更深一层：能讲<strong>"我考虑过放弃 EM 路"的情景</strong>——比如做了 6 个月 Tech Lead 后认真想过 IC track，最后选择 EM 是因为发现自己在解决"系统级问题"（沟通 / 流程 / 招聘）时更有杠杆和成就感。<strong>真实经验</strong>：我在 NETCONF 团队从 senior dev 转 lead 时，前 3 个月还在写代码（每周 50%+），后来意识到团队 5 人时我"代码贡献"+"被打断频次"开始负反馈——同样 1h 我做 review + 1on1 比写代码价值高 10×。这个量化体验让我确认 EM 是对的方向。<strong>对面试官</strong>：还要展现你<strong>清楚 EM 工作的非光鲜面</strong>——比如裁员谈话、低绩效辅导、跨部门扯皮——能讲出"我准备好面对这些"的人是真做过功课。`,
+      },
+      failure_modes: [
+        `"不想写代码了" / "想要 title" / "想管人"（典型红旗，所有 EM 面试官立刻警觉）`,
+        `只讲推力没讲拉力（"IC 没意思了"，但没说"为什么 EM 更适合我"）`,
+        `没准备阶段（"我觉得我能管理"，没有具体 mentor / TL / onboarding 等过渡经验）`,
+        `期待"管人 = 不写代码"（实际 EM 早期 30%-50% 时间还会写关键路径代码）`,
+        `没考虑过非光鲜面（裁员 / PIP / 内卷 / 当夹心饼干），暴露 expectation gap`,
+      ],
+      follow_ups: [
+        { q: `你做过的"EM-like" 工作能举 3 个具体例子吗？`, hint: `Mentor / 主导 onboarding / 做 hiring 面试 / 设计流程 / 跨团队推动 / oncall 设计——具体到"我做了 X，结果 Y"` },
+        { q: `想象一下 EM 6 个月后你会后悔什么？`, hint: `坦诚回答 trade-off：写代码变少 / 处理人事问题增加 / 个人产出感降低；但用"我接受这个 trade-off 因为..."收尾` },
+        { q: `如果做 EM 1 年发现不适合，你会怎么办？`, hint: `① 跟老板坦诚谈；② 回 IC track（很多公司 EM↔IC 是 reversible）；③ 总结学到的人事经验对 IC 也有用——展现成熟心态` },
+      ],
+    },
+
+    2: {
+      why_asked: `验证候选人是否真规划过 EM 入职。能给"Watch More Than Act"心态的人通常不会犯"新官三把火"反模式。`,
+      answers: {
+        mid: `<strong>Watch More Than Act</strong>（前 30 天看 80% 动 20%）：① 1on1 每个团队成员 + skip-level + 跨部门 stakeholders（目标 ≥ 15 个会议）；② 读 6 个月内的 PR / Postmortem / OKR / 1on1 历史；③ 列 Top 3 体感问题但<strong>暂不动</strong>；④ 第 30 天给老板 30-60-90 day plan。`,
+        senior: `Michael Watkins《The First 90 Days》经典框架：<strong>Diagnose → Strategy → Action → Network → Self-management</strong> 五个 imperatives。<strong>关键原则</strong>：① 第一个月<strong>不做任何流程改动</strong>（除非线上着火）；② 早期投资关系比早期"展示能力"重要 5×；③ 第 30 天 plan 要老板签字（确保对齐），第 60 天复盘，第 90 天产出第一个 visible win。`,
+        staff: `深一层：30-60-90 day plan 的<strong>真实价值</strong>不在 plan 本身，而在它创造"<strong>跟老板的对齐时刻</strong>"——很多新 EM 失败是因为半年后才发现自己理解的"重点"跟老板不一样，30 day check-in 强制对齐避免这个坑。<strong>真实经验</strong>：在两次空降 EM 的经历里，我都用了这套：第 1 周列出"我注意到的 5 件事"但只问不评论；第 2-3 周做 15+ 1on1；第 4 周写 30-60-90 plan 跟老板 walk-through + 改 3 轮才签字；之后每月对照 plan 复盘。<strong>结果</strong>：第二次空降时第 100 天产出了一个跨团队 oncall 改革（团队反馈 NPS +30），如果第一天就开干这种规模的改动会被当成"新 EM 自己来抢功"。<strong>陷阱</strong>：① 30 天什么都不动 → 团队怀疑你不作为；② 30 天动太多 → 团队怀疑你不了解情况就拍板；正解：<strong>quick win 找 1-2 个"明显共识"的小问题</strong>（如修补一个老 bug 流程），同时声明大改动等 90 天后。<strong>团队信号</strong>：第 30 天对你的 NPS 应该 +10 到 +20，如果 -10 是危险信号。`,
+      },
+      failure_modes: [
+        `"新官三把火"——上来就改流程 / 换工具 / 重组团队（团队失去信任）`,
+        `闭门 30 天读文档，1on1 做得敷衍（关系基础没打好）`,
+        `30 day plan 自己写完不跟老板对齐就开干（跑偏风险）`,
+        `30-60-90 都是 abstract 目标（"提升团队"），没量化 / 没 deliverables`,
+        `Skip-level meetings 跳过（老板的 boss 没建立印象，关键决策时没人帮你）`,
+      ],
+      follow_ups: [
+        { q: `30 天 1on1 你会问什么？`, hint: `① 你最喜欢 / 最不喜欢什么；② 我能怎么帮你；③ 你觉得团队最大问题是什么；④ 上一个 EM 做得好 / 不好的；⑤ 你的 6 个月目标` },
+        { q: `第一个 visible win 怎么选？`, hint: `① 团队普遍认同的痛点（不能 controversial）；② 30-60 天内能 deliver；③ 改善有可观察指标；④ 不抢功劳（让团队成员当 owner）` },
+        { q: `如果团队第 30 天对你失望怎么办？`, hint: `① 直接 retro：约一个 group 会议明确说"我希望听反馈"；② 调整后续 60-day plan；③ 跟老板 escalate 要支援；不要忍——signals 越早处理越好` },
+      ],
+    },
+
+    3: {
+      why_asked: `验证 EM 是否能在不同团队规模下做出正确的"自己写多少代码"判断。这道题的<strong>陷阱在于一刀切的回答</strong>（"完全不写"或"还是要写"都是错答）。`,
+      answers: {
+        mid: `<strong>看团队规模 + 阶段</strong>：<br>· ≤ 5 人 / 早期：<strong>还要写</strong>，关键路径 + 概念验证（占 30-50%）<br>· 5-15 人 / 稳定：<strong>少写</strong>，code review + 紧急修复 + 工具脚本（占 10-20%）<br>· ≥ 15 人 / 平台：<strong>基本不写</strong>，留时间给体系建设`,
+        senior: `<strong>陷阱：自己抢功能开发</strong>——团队失去成长机会，你也丢了 EM 视角。<strong>名言：管理者写代码是为了保持技术判断力，不是为了产出代码。</strong>你写的代码应该是 ① 团队没人有空 OR ② 概念验证（探索新技术）OR ③ 工具脚本（提升团队效率）。绝不抢核心 feature。`,
+        staff: `深一层：<strong>"还要不要写"的真问题是"我怎么保持技术权威 / 判断力"</strong>。3 种方式同等重要：① 写代码（最直接但 zero-sum）；② 深度 code review（一周 5+ 次，重点是 architecture 决策）；③ 跟踪关键设计 doc / ADR（参与不主导）。<strong>真实经验</strong>：我在团队从 5 人到 12 人的过程中，写代码占比从 50% 降到 10%，但<strong>technical judgement</strong> 没退化——因为我把"写代码时间"换成"和 senior dev 1on1 讨论架构 / paired code review / 读 PR"。一年后我对系统的细节理解比 50% 时还更深，因为<strong>整体视角</strong>多了。<strong>反模式</strong>：见过 EM 强行抢核心 feature 来"保持手感"，结果团队成员怨声载道（"为什么有意思的活都给老板"），自己也因为时间分裂导致 review 慢 + 1on1 被 reschedule + 团队 NPS 下滑。<strong>判断标准</strong>：每周一次自问，"如果我消失一周，谁能 cover？" 答得出名字才健康；答不出说明我抢了不该抢的活，必须让出去。`,
+      },
+      failure_modes: [
+        `给绝对答案（"完全不写"或"必须每周 50%"），不看团队规模 / 阶段`,
+        `自己抢核心 feature（"我比较快"），剥夺团队成员成长机会`,
+        `完全不碰代码，半年后 code review 流于形式 / 技术判断力退化`,
+        `把"写代码"当 individual contribution，不愿放下"工程师身份认同"`,
+        `没设计"保持技术敏感"的替代机制（review / ADR / paired design）→ 真的脱节`,
+      ],
+      follow_ups: [
+        { q: `团队对"老板还写代码"的反应是什么？`, hint: `双面：① 受尊重（"老板还接地气"）；② 但抢核心 feature 时反感；正解：写 supporting / tooling / spike，不写流量主线` },
+        { q: `EM 怎么持续保持技术敏感度？`, hint: `① Code review 一周 5+ 次（不只看 LGTM 而是讨论 architecture）；② 参加技术评审 / ADR 讨论；③ 自己读论文 / blog；④ pair programming 偶尔；⑤ side project / 周末开源` },
+        { q: `什么时候你应该完全停止写代码？`, hint: `团队 ≥ 15 人 / 多个 sub-team / 你管 manager 而非 IC——这时候写代码消耗你的 leverage，应该全力做"系统问题"（招聘 / 流程 / 跨部门）` },
+      ],
+    },
+
+    4: {
+      why_asked: `这道题区分"真转型 EM"和"挂着 EM 头衔的高级 IC"。能讲出"心智差异"而非"职责差异"的人才真在 EM 角色里挣扎过、转过来。`,
+      answers: {
+        mid: `<strong>三大心智差异</strong>：① <strong>成就来源</strong>：从"我做了什么"变成"团队做了什么"；② <strong>反馈周期</strong>：IC 每天能看到代码 merge，EM 可能 3-6 个月才看到一个团队改善的明显效果；③ <strong>问题类型</strong>：IC 解决技术问题（有标准答案），EM 解决人 / 流程 / 沟通问题（没标准答案）。`,
+        senior: `<strong>更深的差异</strong>：① <strong>时间尺度</strong>：IC 看 sprint，EM 看 quarter / year；② <strong>"完成"定义</strong>：IC 完成是 PR merge，EM 完成是 "团队能持续 deliver 没我也行"——你的成功是<strong>让自己变得"不必要"</strong>；③ <strong>"贡献"可见性</strong>：IC 贡献写在 commit log 里，EM 贡献在团队没你的时候才看得出来（这是<strong>滞后指标</strong>，对急于证明自己的人是 challenge）。`,
+        staff: `深一层：<strong>EM 是"延迟满足"的极端职业</strong>——你今天做的 1on1、辅导、招聘决定、流程设计，回报可能在 1-3 年后才显现，期间还有大量"做了感觉没用"的体验。这跟 IC 的"每天 dopamine hit"（代码工作了）完全相反。<strong>心智重塑</strong>：① 接受"我今天的产出 = 我创造的条件"而非"我交付的代码"；② 把对"个人贡献"的需求转移到"团队成长 / 个人成长曲线"的观察上（一年后下属能力 +X）；③ 学会从"间接信号"中获得反馈（团队 NPS、retention、晋升率、跨团队评价）。<strong>真实经验</strong>：我第一年 EM 经常焦虑"今天我做了什么？" —— 直到看到带的 mentee 自己解决了一个之前要找我问的问题，那一刻才意识到这是 EM 的胜利。<strong>典型陷阱</strong>：心智没转过来的 EM 表现：① 还是抢功能写代码刷成就感；② 1on1 时主要在自己说（"教"而非"听"）；③ 月度 review 重点列自己干的事而非团队成就；④ 不善于做"减法"（让团队成员做，让自己做 less）。能<strong>主动让自己变 less critical</strong>的 EM 是真转过型的。`,
+      },
+      failure_modes: [
+        `只讲"职责差异"（不写代码、要开会），讲不出"心智差异"`,
+        `心智没转 → 抢核心 feature 刷成就感 / 1on1 主要自己讲 / review 不放心`,
+        `等待立竿见影的反馈 → 3 个月没"明显成果"就焦虑 / 跳船`,
+        `把 EM 当"IC 的升级"（pay raise + title + 还做老活），不接受新角色定义`,
+        `不能容忍"产出延迟"，频繁微管理刷存在感`,
+      ],
+      follow_ups: [
+        { q: `你怎么处理"今天没产出"的焦虑？`, hint: `① 列每周"间接产出"清单（1on1 数 / review 数 / 决策数）；② 看长期指标（团队 NPS / retention）；③ 接受 EM 工作 70% 是"创造条件"，30% 是"具体产出"` },
+        { q: `怎么知道自己真的"心智转过来"了？`, hint: `① 不再抢功能；② 1on1 时听比说多；③ 月度 self-review 写"团队做了什么"而非"我做了什么"；④ 别人做得比自己好时高兴而非威胁` },
+        { q: `如果发现自己心智没转过来怎么办？`, hint: `① 跟 EM coach / mentor 谈；② 主动做"放下"练习（明知能自己做的事强迫给团队）；③ 考虑回 IC track（不是失败，是 self-awareness）` },
+      ],
+    },
+
+    6: {
+      why_asked: `验证候选人是否真观察过 EM 失败案例（自己的或同伴的）。能给 3 个具体模式的人通常踩过坑或带过新 EM。`,
+      answers: {
+        mid: `三大失败模式：① <strong>Player-Coach 陷阱</strong>——还在抢核心代码、当个 senior IC，没真当 EM；② <strong>微管理</strong>——不放心团队 → 事事插手 → 自己累瘫 + 团队不长；③ <strong>"老好人"</strong>——不敢给负面反馈 / 不敢解雇 low performer / 不敢说 no，被团队和老板两头不满意。`,
+        senior: `<strong>失败模式背后的共性</strong>：都是"<strong>没建立 EM 身份认同</strong>"——还在用 IC 心智解决 EM 问题。① Player-Coach 是 IC 心智在抢产出；② 微管理是 IC 心智的"质量焦虑"被错误放大；③ 老好人是 IC 心智的"对事不对人"在 EM 角色里变成"对人不对事"。识别这点能帮助新 EM 自我诊断。`,
+        staff: `深一层：还有 2 个隐性失败模式：<br>④ <strong>"上下不沟通"的孤岛</strong>——新 EM 跟老板沟通频次太低（不知道要 manage up），跟团队也不开放（怕暴露不懂），半年后两头都说"不知道他在干啥"。<br>⑤ <strong>"复刻自己"的招聘 bias</strong>——招人都按"自己当年的样子"招，团队 diversity（认知 / 背景 / 风格）单一，3-5 年后团队整体短板暴露。<br><br><strong>真实经验</strong>：我见过最痛的失败案例是我自己第一年——同时陷入 Player-Coach（还抢核心 feature 写）+ 老好人（迟迟不给一个 low performer 直接反馈）+ 上下沟通不足（每月 1on1 老板，被问到细节答不上来）三个模式叠加。半年绩效 review 时被老板明确说 "你的产出是 IC 优秀但 EM 不及格"。<strong>修正</strong>：① 砍掉所有自己的 coding 任务，强制写"如果今天我消失团队会怎样"；② 跟那个 low performer 做了一次 hard conversation（提前写脚本 + role play 跟老婆排练 3 次）；③ 跟老板改成双周 1on1 + 每周 written update。3 个月后情况翻转。<strong>对新 EM 建议</strong>：① 找一个 senior EM 当 mentor，每月 1 次 sanity check；② 主动让 team 给你 anonymous feedback（如 15Five）；③ 接受"前 6 个月做得不好是 normal"。`,
+      },
+      failure_modes: [
+        `Player-Coach（抢代码、当高级 IC，没真转 EM）`,
+        `微管理（事事插手 / review 卡 PR / 1on1 当任务汇报）`,
+        `老好人（不敢负面反馈 / 不敢解雇 / 不敢拒绝 = 三不敢）`,
+        `跟老板和团队都疏远（孤岛 EM）`,
+        `招"自己的复制品"（团队 diversity 单一，长期短板暴露）`,
+      ],
+      follow_ups: [
+        { q: `自己怎么自检是否在这些模式里？`, hint: `① 季度 retro：列出自己的"具体产出"和"团队产出"占比，IC 占比 > 30% 是 player-coach 信号；② 团队 NPS（用 15Five 等工具）；③ 老板的 30 / 60 / 90 day feedback` },
+        { q: `怎么帮一个陷入 Player-Coach 的 mentee 跳出来？`, hint: `① 量化损失（"你抢的 feature 让 Junior 少 1 次成长机会"）；② 强制限额（"下季度自己写 ≤ 10%"）；③ 帮 mentee 找替代的成就来源（团队晋升、招聘、流程改进）` },
+        { q: `公司层面怎么预防新 EM 失败？`, hint: `① EM onboarding 项目（manager-of-managers 系统辅导）；② Mentorship program（资深 EM 配新 EM）；③ EM cohort（同期 EM 互助）；④ Manager Effectiveness 指标定期评估` },
+      ],
+    },
+
+    8: {
+      why_asked: `验证候选人是否真规划过 EM 入职（不是只听过 30-60-90 概念）。能给具体 milestones 和 anti-patterns 的人通常做过 EM 转型培训。`,
+      answers: {
+        mid: `30-60-90 day plan 三阶段：<strong>30 天 = Diagnose</strong>（理解人 / 流程 / 业务）→ <strong>60 天 = Quick Wins + Strategy</strong>（识别 1-2 个低风险改进 + 起草中长期策略）→ <strong>90 天 = Execute + Visible Win</strong>（交付第一个 visible 改进 + 跟老板对齐下一阶段计划）。`,
+        senior: `<strong>每阶段标准</strong>：<br>· 30 day：15+ 1on1 完成 / 读完关键文档 / 列出 Top 3 体感问题 / 给老板第一份书面 plan<br>· 60 day：起草 H1 团队目标 + Quick wins shipped / 招聘流程开始介入 / Stakeholder map 完成<br>· 90 day：第一个 visible win delivered（团队认可的小改进）/ 6 month roadmap 跟老板对齐 / 团队 NPS &gt; baseline`,
+        staff: `深一层：30-60-90 真正价值不在 plan 本身，而在<strong>"创造与老板的对齐时刻"</strong>。很多新 EM 半年后才发现自己理解的"重点"跟老板不一样——30 day plan 强制把对齐时机提前到第 1 个月。<strong>真实经验</strong>：我两次空降 EM 都用了这个：① 第 1 周列出"我注意到的 X 件事" 但不评论；② 第 4 周写 plan 跟老板 walk-through，<strong>改了 3 轮才签字</strong>——这个"改 3 轮"过程暴露了 4 个我之前没意识到的老板优先级（如他更看重 attrition rate 而非 feature velocity）；③ 之后每月对照 plan 复盘。<strong>plan 模板</strong>（一页内）：<br>1) 我观察到的 Top 3 团队 strengths / Top 3 challenges<br>2) 30 / 60 / 90 day deliverables（具体且可验证）<br>3) 我需要老板支持的 3 件事（headcount / cross-team intro / decision authority）<br>4) 风险 + mitigation<br>5) check-in cadence（建议双周或每月）<br><br><strong>陷阱</strong>：① plan 写得过于 abstract（"提升团队效能"，没数字）；② 列了 10+ deliverables（精力分散，最后都没做完）；③ 没风险章节（被老板视为 naive）；④ 第 30 天 plan 终稿后就不更新 → 老板觉得你不务实。`,
+      },
+      failure_modes: [
+        `不写或只口头说（没书面对齐 → 误解风险）`,
+        `Plan 太抽象（"提升团队"），无量化 deliverables → 老板觉得不务实`,
+        `Plan 太激进（30 天就要重构流程 / 调整团队），暴露 over-confidence`,
+        `没"需要支持的事"章节（老板觉得 self-sufficient 但其实空降需要支援）`,
+        `30 day plan 写完不动了 → 60 / 90 没 retrospective → 老板感觉走偏`,
+      ],
+      follow_ups: [
+        { q: `30 day 应该跟谁建立关系？`, hint: `① 全部直接下属 1on1；② 老板（cadence 对齐）；③ skip-level（老板的老板，3-5 个月一次）；④ peer EMs（5-8 个）；⑤ 关键 stakeholders（PM lead / Design lead / Eng-adjacent leaders）` },
+        { q: `Quick Win 怎么选？`, hint: `三条件：① 团队普遍认同的痛点；② 30-60 天内能 delivered；③ 不抢功劳（让团队成员 own）；典型如：优化 onboarding doc / fix一个长期 oncall pain / 砍掉一个无意义会议` },
+        { q: `90 day 之后应该有什么？`, hint: `① 6-12 month roadmap（已跟老板签字）；② 团队对你的 trust baseline 建立；③ 你的 effectiveness 进入 "long-term mode"（不再 90 day milestone driven）；④ 第一份 manager effectiveness survey 结果（用作 baseline）` },
+      ],
+    },
+
+    // ============== 1on1 ==============
+    11: {
+      why_asked: `EM 面试最高频的一道。能讲清"为下属服务而非给老板汇报"区分懂 EM 和不懂 EM。`,
+      answers: {
+        mid: `1on1 的<strong>核心目的</strong>是<strong>给下属的时间</strong>（不是 status update / 汇报）。包括：① 倾听他们的 challenges / blockers；② 帮他们成长（career talk / feedback）；③ 建立信任（personal connection）；④ 给反馈（双向）。`,
+        senior: `<strong>关键原则</strong>：① <strong>下属议程优先</strong>——他们带话题，我跟着走，不是我准备 status check；② <strong>不取消</strong>（除非 critical 冲突，rare 才挪期）；③ <strong>1:1 不当 group meeting / 项目 review</strong>，那些另开会；④ <strong>笔记跨次连续</strong>（用 1on1 doc 累积，下次开头先看上次的 action items）。`,
+        staff: `深一层：<strong>1on1 是 EM 最高 ROI 的活动</strong>——每周 30 min × 6 下属 = 3h，但累积影响占你工作时间的 2-3×。<strong>1on1 doc 的真实价值</strong>：① <strong>retention 工具</strong>——半年后看趋势能识别 disengagement signals；② <strong>promotion 弹药</strong>——packet 里的具体例子全在 1on1 doc 里；③ <strong>事故复盘</strong>——员工突然离职时能 audit "我哪里没听到"。<strong>真实经验</strong>：在带 8 人团队时坚持每周 30 min 1on1，每次写 doc，3 年累积下来：① 帮 5 人晋升（包括 1 个跨 level 的）；② 提前 2-3 个月预警 2 次 attrition risk（成功挽留 1，失败 1 但 expected）；③ 一次劳动仲裁中 1on1 doc 成了关键证据。<strong>反模式</strong>：① 当 status update 开（一周 sync 已经够了）；② 自己讲为主（"教" 而非"听"）；③ 不写 doc → 记不住承诺 → 下属觉得"你不在乎"。<strong>新 EM 建议</strong>：① 第一次 1on1 用一份 "Manager Readme"（介绍你的工作风格、期待、reach-out 方式）；② 每月一次 career talk（不是每次 1on1 都做）；③ 季度一次 "How am I doing as your manager?"（主动要反馈）。`,
+      },
+      failure_modes: [
+        `当 status update 开（PR 进度 / project sync），浪费宝贵的私下对话时间`,
+        `自己主导议程 → 下属变成"被动回答"`,
+        `经常取消 / 改期 → 信号: 这个时间不重要`,
+        `不写 doc → 上次说的事忘了 → 下属觉得不被重视`,
+        `永远不给负面反馈 / 一切都是 happy talk → 下属在 review 时被 surprise`,
+      ],
+      follow_ups: [
+        { q: `第一次跟新下属 1on1 应该聊什么？`, hint: `① 让对方先讲他们的"我是谁 / 我的工作风格 / 我想要什么"；② 我介绍自己（用 manager readme）；③ 对齐 1on1 的 cadence 和 expectation；不聊具体项目` },
+        { q: `1on1 内向下属什么都不说怎么办？`, hint: `① 给"我准备的题目清单"让对方挑；② 用 "what / how / why" 开放问题；③ 接受 silence（不用填满）；④ 改 walking 1on1 / 咖啡店 1on1（环境变化触发开口）` },
+        { q: `怎么判断 1on1 做得有效？`, hint: `① 下属主动延长时间；② 抛出真问题（不是 happy talk）；③ Career talk 有具体行动；④ 季度让团队 anonymous 评 manager effectiveness` },
+      ],
+    },
+
+    13: {
+      why_asked: `验证候选人是否真主持过 1on1 而非只听过概念。能给"下属议程优先"的人通常做过 6+ 个月 EM。`,
+      answers: {
+        mid: `标准议程（顺序灵活，<strong>下属带话题在前</strong>）：① 你最近怎么样？（personal check-in）② 你这周想聊什么？（让下属带话题）③ 过去一周 highlights / blockers；④ Career / 成长话题（隔周或月度）；⑤ 我能怎么帮你？⑥ Action items 复盘 + 新 action items。`,
+        senior: `<strong>关键原则</strong>：① <strong>不是 status update</strong>——技术进度走 daily standup / weekly sync；② <strong>下属议程占 70%+ 时间</strong>，我的 update 是 5-10 min 简短；③ <strong>不是每次 1on1 都谈 career</strong>——典型 cadence：每周 1on1 / 月度 career talk / 季度 review。④ <strong>有 doc</strong> 累积跨次 action items 和趋势。`,
+        staff: `深一层：好 1on1 的<strong>"5 conversation"</strong> 框架（Lara Hogan）：① <strong>Career Aspirations</strong>（年度更新）；② <strong>Personal Values</strong>（半年更新）；③ <strong>Strengths/Triggers</strong>（季度更新）；④ <strong>Feedback / Bullet point status</strong>（每次）；⑤ <strong>Tactical updates</strong>（每次）。新 EM 倾向只做后两个，老 EM 把前三个排进 cadence。<strong>真实经验</strong>：我用一个 shared Google Doc 每个下属一份 1on1 doc，结构是：<br>top section：下属当前 priorities / blockers / asks（他们带）<br>middle：我的 updates（5 行内）<br>bottom：unresolved threads（持续）<br>跨次会议: 加日期 heading，旧内容不删（变成 history）<br><br>3 年下来一个下属的 1on1 doc 通常 40-80 页，是 promotion packet / performance review 的 gold mine。<strong>提示</strong>：① 第一次让下属选 doc 还是 verbal，多数人选 doc；② 离职时打个 take-home（让对方知道这是他们的资产）；③ skip-level 不用看（doc 是 1on1 的 private space）。`,
+      },
+      failure_modes: [
+        `当 status update 开（已经有 daily / weekly sync 了，重复浪费）`,
+        `自己议程优先，下属变被动`,
+        `每次都谈 career → 下属觉得形式化；从不谈 career → 下属觉得不被重视`,
+        `不写 doc → 上次承诺忘了 → 下属觉得不被尊重`,
+        `所有 1on1 都同一议程 → 没根据下属性格 / 成长阶段调整`,
+      ],
+      follow_ups: [
+        { q: `不同 seniority 的下属 1on1 应该怎么调整？`, hint: `Junior: 偏 tactical + skill building；Senior: 偏 career + strategy + 跨团队议题；Staff+: 几乎全是 strategy + organization 议题，我更多 listen` },
+        { q: `1on1 时下属在 vent / complain 应该怎么处理？`, hint: `① 先 acknowledge（不打断）；② 区分 venting（需要 listen） vs problem-solving（需要 action）；③ 问"你想要我 listen 还是帮你想 solution"；④ 必要时帮 reframe / refocus` },
+        { q: `Walking 1on1 / Coffee 1on1 适合什么场景？`, hint: `① 严肃话题（裁员 / 反馈）反而需要正式房间；② 偶尔换场景 break routine 有用；③ 远程团队可以做"video off + walking 散步聊"` },
+      ],
+    },
+
+    15: {
+      why_asked: `EM 最常被问到的"困难场景"题。能讲清 SBI / 直接但 kind / 隔离行为不否定人格 的人是真做过这件事。`,
+      answers: {
+        mid: `用 <strong>SBI（Situation-Behavior-Impact）</strong>框架：<br>① <strong>Situation</strong>：具体场景（"昨天 design review 时"）<br>② <strong>Behavior</strong>：可观察的行为（"你直接打断 Alice 三次"）<br>③ <strong>Impact</strong>：对你 / 团队的影响（"Alice 不再发言，我们少听了她的设计思路"）<br>然后给改进建议 + 邀请对方回应。`,
+        senior: `<strong>关键原则</strong>：① <strong>隔离行为，不否定人格</strong>——批评行为不批评人（不是"你太 aggressive"，是"你打断了 Alice"）；② <strong>越早越好</strong>——24-72h 内反馈，记忆鲜活；③ <strong>私下</strong>（不在 group meeting / Slack channel 给）；④ <strong>直接 + kind</strong>（Radical Candor：高 care + 高 challenge）；⑤ <strong>不夹带其他反馈</strong>（不要 sandwich：正面 + 负面 + 正面，会被记成只有正面）。`,
+        staff: `深一层：负面反馈成败的 90% 不在<strong>沟通技巧</strong>而在<strong>关系基础</strong>。<strong>没有信任就给负面反馈 = 摧毁关系</strong>。所以新 EM 头 3 个月不轻易给重的负面反馈（除非线上事故），先用前几个月建关系 + 给正面反馈（5:1 ratio，Gottman 婚姻研究但 EM 也适用）。<br><br><strong>真实经验</strong>：在带电信团队时有一位 senior engineer 经常在跨团队会议 push 自己的方案过强，导致 peer team 投诉。我准备了一次 1on1 用 SBI：<br>S: 上周跨 PM 团队 design sync<br>B: 你说了 80% 时间，peer team 的 input 都被你压下去<br>I: peer team lead 私下找我说"以后他不参加我们会更高效"，这影响你和团队的 reputation<br>建议: 下次跨团队会议 we agreed: 你先 listen 10 min，再发表观点；如有 strong disagreement 私下找我我们一起改 approach<br><br><strong>结果</strong>：对方初期防御，但 2 周后明显改善。3 个月后 peer team 主动找他咨询。<strong>关键</strong>：① 他知道我是为他好（trust）；② 我给了具体 action（不是模糊抱怨）；③ I followed up（不是"说了就完了"）。<strong>反模式</strong>：① "you should be less aggressive"（评论人格而非行为）；② "anyway, you've done great this year"（sandwich，淡化重点）；③ in front of others（公开羞辱）；④ once and forget（不 follow up，对方以为不重要）。`,
+      },
+      failure_modes: [
+        `沙威治式（正面 → 负面 → 正面），重点被稀释`,
+        `不具体（"you need to be better at communication"）→ 对方不知道改什么`,
+        `公开给负面反馈（group meeting / Slack channel）→ 羞辱 → 信任崩盘`,
+        `没建立 trust 就给重反馈 → 对方反弹 / 离职`,
+        `给完不 follow up → 信号"不重要" → 对方不改 → 你又抱怨`,
+      ],
+      follow_ups: [
+        { q: `下属拒绝接受反馈怎么办？`, hint: `① 不强行 push（"think about it, let's revisit"）；② 准备具体 evidence；③ 找 peer / mentor 给同样反馈（多源证据）；④ 严重的话写到 written review` },
+        { q: `给反馈后下属变得 distant 怎么办？`, hint: `① 24-48h 后 check in（"how are you feeling about our conversation?"）；② 表达持续支持（"my goal is your growth"）；③ 接受短期 awkward 是 normal；④ 不要 walk back 反馈本身` },
+        { q: `怎么平衡频次（不过度反馈也不失声）？`, hint: `① 5:1 正负 ratio（Gottman）；② 重大问题 24-72h 给；③ 微观行为问题攒到月度；④ 季度 review 时 zoom out 看 pattern` },
+      ],
+    },
+
+    19: {
+      why_asked: `验证候选人是否真处理过 office politics（不只听 1on1）。能讲"既听又不站队"的人有过实际经验。`,
+      answers: {
+        mid: `三段处理：① <strong>先 listen + validate</strong>（不打断，让对方说完情绪）；② <strong>不站队 + 不传话</strong>（"我听到了，我理解你为什么 frustrated"，但不评论第三方）；③ <strong>引导自我解决</strong>（"你想怎么处理？" "你跟他直接谈过吗？"）。`,
+        senior: `<strong>核心原则</strong>：① <strong>EM 不是树洞，不收集 gossip</strong>；② <strong>不传话</strong>（除非对方明确授权 + 严重事件）；③ <strong>推 ownership 回到他自己</strong>（"我可以帮你 role play 怎么谈" 而非"我去帮你说"）；④ 严重事件 escalate（如骚扰 / 不公平对待，转 HR / 老板）。`,
+        staff: `深一层：<strong>这个场景测试 EM 的"心理边界"和"政治敏感度"</strong>——① 太硬：拒绝听 → 下属觉得不被支持；② 太软：陪着吐槽 → 你成了 gossip 中心 → 信任崩塌 + 政治牌打不出去。<strong>真实经验</strong>：带电信团队时有一位 senior 经常来 1on1 抱怨 peer team A 的 EM "不配合 / 决策慢"。我用过的应对：<br><strong>第 1 次</strong>：listen + 不评论 + 问 "你直接跟他谈过吗？" 对方说没有，我说"先谈，谈完告诉我结果"。<br><strong>第 2-3 次</strong>（对方仍来抱怨）：建立 boundary "我可以听，但不能替你处理这事——你和他是 peer，我介入反而把你的 ownership 弱化"。我帮他 role play 了一次怎么开 difficult conversation。<br><strong>第 4 次</strong>：对方真去谈了 + 改善 30%，剩下 70% 是 peer EM 真的 underperform，需要他老板介入——这时我 escalate 了一次 peer EM 的老板（不是替我下属 advocate，是反馈"两个团队协作出问题需要 align"）。<br><br><strong>陷阱</strong>：① 陪 vent 太长 → 强化 victim mindset；② 替他出头 → 他失去 conflict resolution 能力；③ 把听到的传给 peer EM → 信任全无；④ 完全冷处理 → 下属转向 skip-level 抱怨（更糟）。<strong>原则</strong>：<strong>"我帮你成长，不替你解决"</strong>。`,
+      },
+      failure_modes: [
+        `陪着 vent / 一起吐槽 → EM 变 gossip 中心 → 团队信任崩`,
+        `替下属出头去找 peer EM 谈 → 剥夺下属 conflict resolution 成长`,
+        `传话给 peer → 信任全无 + 隔壁 EM 警觉 + 政治灾难`,
+        `Full cold（"我不管这种事"）→ 下属转向 skip-level / 直接离职`,
+        `没识别真的严重事件（如骚扰 / 不公），陪 vent 浪费了 escalate 时机`,
+      ],
+      follow_ups: [
+        { q: `什么时候应该主动介入 escalate？`, hint: `① 涉及 protected category（性别 / 种族 / 性骚扰）→ 立即 HR；② legal / compliance 风险；③ 多人受影响的系统性问题；④ 下属明确受伤 / health 受影响` },
+        { q: `怎么 role play 帮下属准备 difficult conversation？`, hint: `① 你扮演 peer / peer EM，让下属 practice 开场白；② 给具体 reframe（"你被否定" → "他有不同 priorities"）；③ 5 min 准备 + 5 min role play + 5 min debrief 通常足够` },
+        { q: `Peer EM 把锅甩给你团队怎么办？`, hint: `① 私下找 peer EM 谈（不是 group meeting 公开）；② 用 data 不用 emotion；③ 找共同老板 facilitate（如果谈不拢）；④ 必要时启动 RACI 重新明确 ownership` },
+      ],
+    },
+
+    // ============== 招聘 ==============
+    21: {
+      why_asked: `验证候选人是否真主持过 hiring（不只面试）。能给"hire OR no-hire 不模糊"标准的人是 hiring manager 经验丰富。`,
+      answers: {
+        mid: `Hiring Bar = <strong>"这个候选人加入后，他在团队是 top half 还是 bottom half"</strong> 的判断标准。Top half → hire；bottom half → no hire。<strong>不要 maybe</strong>（hiring committee 看到 "maybe" 通常默认 no hire）。`,
+        senior: `<strong>三层 bar</strong>：① <strong>Technical bar</strong>（这个 level 应该会的硬技能）；② <strong>Behavioral bar</strong>（collaboration / ownership / learning agility）；③ <strong>Cultural fit bar</strong>（团队 norms / values，注意是 culture <strong>add</strong> 不是 culture clone）。<strong>关键</strong>：① bar 不能只你定，要跟 manager-of-managers / hiring committee 校准；② 不同 level 不同 bar（Junior ≠ Staff）；③ 不为填 headcount 降 bar——"hire to fill" 是 90% mishire 的根源。`,
+        staff: `深一层：<strong>Hiring Bar 的真实约束是 calibration</strong>——不同 interviewer 给同一候选人评价能差 2 levels（典型）。所以 bar 不能只写在文档里，要靠 ① <strong>定期 calibration session</strong>（hiring committee 看历史 hires 的 1-year 表现，校准评判）；② <strong>shadow interviews</strong>（新 interviewer 跟资深 shadow 3-5 场再独立面）；③ <strong>standardized rubrics</strong>（具体的 level expectation grid）。<strong>真实经验</strong>：在带 8 人团队期间面了 60+ 个候选人，hire 了 5 个。最早期我跟 senior peer 评价对齐度只有 40%（同一候选人，我说 hire 他说 no hire），半年后通过 ① debrief 多花时间，② 写下"为什么我说 hire / no hire"的具体 evidence，③ 看已 hire 1 年表现回溯——对齐度提升到 85%。<strong>关键洞察</strong>：① bar 是 calibrated bar，不是 individual bar；② 第一年要 over-index 在 calibration 上（即使速度慢）；③ debrief 时<strong>用 evidence 不用 gut feel</strong>（"他没回答 vector 扩容的细节" 而非 "我觉得他不行"）。<strong>反模式</strong>：① "team 缺人很急" → 降 bar → 6 个月后 PIP → 团队 morale 崩；② "他面试时讲得好" → 没看 work product → 入职后产出差；③ "他来自 FAANG" → halo effect → 没真测 → mismatch。`,
+      },
+      failure_modes: [
+        `没明确 bar 文档 → 每个 interviewer 自己定标准 → 不一致`,
+        `为填坑降 bar（"team 缺人")→ 短期解决长期灾难`,
+        `Cultural fit 当成 culture clone（找跟自己/团队一样的人）→ 长期 diversity 弱`,
+        `不做 calibration → 不同面试官评价飘 1-2 levels`,
+        `Debrief 时用 gut feel 而非 evidence → 决策不可复盘 / 不可申诉`,
+      ],
+      follow_ups: [
+        { q: `怎么避免 hiring bias（unconscious bias）？`, hint: `① 标准化 rubric；② Debrief 时先各自打分再讨论（避免锚定）；③ Diverse interview panel；④ 训练 interviewer 识别 bias；⑤ 跟踪 hire 后表现按 source 拆分（看是否某类源 systematic 偏低）` },
+        { q: `什么时候应该 lower bar？`, hint: `通常 never。如果真要：① 战略 pivot 需要新技能（buy 而非 build）；② 接受 1-year accept lower productivity + 投入额外 onboarding；③ 写下 ADR 记录理由；④ 主动告知 hire 自己被 stretched，预期清晰` },
+        { q: `Hire 后 6 个月发现 mishire 怎么办？`, hint: `① 早识别（PIP / 直接 difficult conversation）；② 不羞耻 admit—— mishire 是 system 失败不是 individual；③ Retro: 是 bar 错 / interviewer 错 / debrief 错；④ 修流程 not blame` },
+      ],
+    },
+
+    23: {
+      why_asked: `验证候选人是否能设计有效的 interview loop（不是凑面试官）。能讲"每轮独立信号"的人是真主持过 panel debrief。`,
+      answers: {
+        mid: `<strong>4-5 轮覆盖</strong>不重复信号：① <strong>Coding</strong>（数据结构 + 算法 + 代码质量）；② <strong>System Design</strong>（架构 + tradeoff + 沟通）；③ <strong>Behavioral / Past experience</strong>（用 STAR 挖具体例子）；④ <strong>Cultural fit / Manager round</strong>（motivation + collaboration + values）；⑤ <strong>Hiring Manager wrap up</strong>（最后确认 + 双方 Q&A）。`,
+        senior: `<strong>关键设计原则</strong>：① <strong>每轮独立信号</strong>——避免 4 轮都问数据结构；② <strong>明确 signal-to-test 映射</strong>（每轮写 1 句话"这轮主要 test 什么"）；③ <strong>Diverse interviewer panel</strong>（gender / seniority / functional）；④ <strong>预留时间给候选人提问</strong>（10-15 min / 轮）——候选人的问题质量比答题质量更能区分 senior vs junior。`,
+        staff: `深一层：<strong>Loop 设计的真问题是"我们要 hire for what？"</strong>。Hiring Manager 必须事先写一份 <strong>Job Scorecard</strong>（不是 JD），包含：① 6-month / 1-year 期待 outcome；② 关键 competencies（5-7 个）；③ Anti-attributes（什么样的人 not hire）。<strong>然后</strong>把 competency 映射到 interview rounds（如 "ownership" 测在 behavioral / "system design depth" 测在 SD round）。<strong>真实经验</strong>：在做 senior C++ engineer 招聘时，Job Scorecard 列了 7 个 competencies：技术深度（C++/系统）/ 系统设计 / 调试能力 / 跨团队协作 / mentorship / 业务感 / learning agility。Loop 设计：① Coding（C++ + 算法）→ 技术深度 + 代码质量；② System design（设计 NETCONF 服务）→ 系统设计 + 业务感；③ Debug round（给一段问题代码让候选人找 bug）→ 调试能力；④ Behavioral（mentor / cross-team）→ 协作 + mentorship；⑤ HM round → learning agility + 总体 cultural fit。<strong>结果</strong>：6 个月 hire 4 人，全部 1-year retention，都达 / 超 expectation。<strong>陷阱</strong>：① Loop 太长（&gt; 6 轮）→ 候选人 fatigue / 退出 ratio 飙；② 同一个 competency 多轮重复测（浪费 round）；③ 没 calibration 直接面试（不同 interviewer 评分飘）；④ 用 brainteaser puzzle（Google 早期反思过，没预测效果）。`,
+      },
+      failure_modes: [
+        `多轮都问同样信号（4 轮都是 coding，cultural / collab 没测到）`,
+        `Loop &gt; 6 轮 → 候选人 fatigue / 撤回率高`,
+        `没 Job Scorecard → 每轮 interviewer 自己定标准 → 不一致 debrief`,
+        `Behavioral round 问 hypothetical（"如果你..."）而非 past experience（"上次..."）`,
+        `候选人没机会问问题 → 损失候选人 ROI signal + 雇主品牌`,
+      ],
+      follow_ups: [
+        { q: `怎么做 hiring manager round？`, hint: `① Wrap-up 之前面试已收集到的 missing signal；② 候选人最后机会问问题（高质量提问 = strong signal）；③ Sell the role（给 motivated 候选人）；④ 明确 next step / timeline` },
+        { q: `Coding round 怎么避免 LeetCode 应试？`, hint: `① 用真实业务场景（"我们要做一个 cache layer"）；② 看 code quality + 沟通 + tradeoff 思考，不只 algorithmic correctness；③ 题目可以 follow up 多轮 depth；④ 接受 candidate take-home 替代` },
+        { q: `Take-home assignment 有什么 trade-off？`, hint: `好：候选人自己时间发挥 + 工作场景仿真 + reduces 偏 interview anxiety；差：占用候选人大量时间 / 难标准化评分 / 顶级候选人不参加 take-home。Hybrid: short take-home (2h) + debrief discussion` },
+      ],
+    },
+
+    25: {
+      why_asked: `验证候选人是否真主持过 hiring committee debrief（这是 senior EM 的核心技能之一）。能讲"先 evidence 后 verdict"的人是真做过。`,
+      answers: {
+        mid: `Hiring Committee debrief 流程：① 每位 interviewer 提前提交 written feedback（避免会场被声大的人主导）；② 会场每位 5 min 讲 evidence + verdict（hire / no hire / strong yes / strong no）；③ 讨论 disagreement；④ Hiring Manager 总结 + 决策（不是投票）；⑤ 写最终 decision rationale。`,
+        senior: `<strong>关键原则</strong>：① <strong>Evidence first, verdict last</strong>——避免 anchoring（一个人说"strong yes"其他人附和）；② <strong>Diverse panel</strong>（gender / seniority / function），避免同温层 echo chamber；③ <strong>Hiring Manager 不是投票的多数</strong>，是决策者（但需要解释为什么 override committee）；④ <strong>Bar Raiser</strong>（如 Amazon）独立于 hiring manager，确保不为填坑降 bar。`,
+        staff: `深一层：debrief 是<strong>整个 loop 中最容易出 bias 的环节</strong>——决策从"个体评价"转成"集体决策"，受声大者 / senior / hiring manager 偏好严重影响。<strong>反 bias 实践</strong>：① <strong>Written first</strong>（每人面完 24h 内独立写 + submit，他人看不到）；② <strong>Round-robin 发言顺序</strong>（最 junior interviewer 先讲，避免被 senior 锚定）；③ <strong>明确 Strong / No / Strong-No 的 evidence 要求</strong>（"strong yes" 必须有 specific 例子，不能 gut feel）。<br><br><strong>真实经验</strong>：在 NETCONF 团队招 senior 时一次 debrief 出现 2:2 split（2 强 yes / 2 弱 no）。我做 HM：<br>① 先让 2 个 no 讲 evidence —— 一个是"他不熟 Boost.Asio"（不是 dealbreaker，可以学），另一个是"他在 system design 没 push back 我的假设"（confirmation bias risk）；<br>② 让 2 个 yes 讲 —— 都有具体例子说明候选人 ownership + learning agility 强；<br>③ 我决定 hire，但写了 ADR 解释为什么 override the no（"Boost.Asio gap 在 onboarding 6 周内可补，候选人 fundamentals 强 + cultural fit 好"）；<br>④ 6 个月后 retro：候选人确实补上了 gap + 进入 high performer，证明决策正确。<br><br><strong>陷阱</strong>：① 没 written feedback → 会场记忆主导，details lost；② "consensus or no hire" 死板规则 → 永远 hire 不到 boundary 候选人（其实 boundary 才是 most learning）；③ HM bias：自己面过的轮重过其他人；④ 不写 decision rationale → 半年后 mishire 复盘没线索。`,
+      },
+      failure_modes: [
+        `没 written feedback → 会场记忆主导 / details lost`,
+        `Verdict before evidence → anchoring → echo chamber`,
+        `HM 强行 push hire（"team 急需人"）→ committee 失去意义`,
+        `投票决策（majority wins）→ HM 失去 ownership / 不可 escalate`,
+        `Debrief 不写 rationale → 6 个月 mishire 时无法复盘 / 改进`,
+      ],
+      follow_ups: [
+        { q: `Bar Raiser 跟 HM 冲突怎么办？`, hint: `Amazon 模式：Bar Raiser 有 veto 权（即使 HM 想 hire）；目的是防止 HM 为填坑降 bar；冲突时 escalate 上一级 manager 仲裁，但 Bar Raiser 默认获胜` },
+        { q: `面试官给 strong no 但 HM 想 hire，怎么处理？`, hint: `① 先听 evidence；② 看 disagreement 是 fundamental（如 integrity issue）还是 partial（如 specific skill gap）；③ Fundamental → 不 hire；Partial → HM 可 override + 写 ADR + 接受风险` },
+        { q: `怎么训练新 interviewer 给好 debrief？`, hint: `① Shadow 资深 interviewer 3-5 场；② 写 rubric template（具体的 evidence checklist）；③ 第一次 written feedback 让 senior peer review；④ Debrief 后 1on1 retro 给反馈` },
+      ],
+    },
+
+    // ============== 绩效 ==============
+    36: {
+      why_asked: `验证候选人是否真主持过 calibration（这是从 Line EM 转 Senior EM 的关键技能）。能讲"防 inflation / 跨 team consistency / no surprise" 的人通常做过 promo committee。`,
+      answers: {
+        mid: `Calibration session 是<strong>多个 EM 一起评审下属绩效</strong>的会议，目的：① 防止<strong>评分 inflation</strong>（每个 EM 都给自己人高分）；② 跨 team <strong>consistency</strong>（同 level 同标准）；③ <strong>识别 outliers</strong>（高潜需要 promo / low performer 需要 PIP）；④ <strong>no surprise</strong>（员工 review 时不应该 surprise）。`,
+        senior: `<strong>标准流程</strong>：① 每个 EM 提前提交 ratings + evidence；② 会议先看 distribution（按 level 分桶画 histogram）；③ 讨论 outliers（top / bottom 10%）；④ 跨 team 校准（同 level 同 rating 应该有类似 evidence weight）；⑤ HM-of-EMs 总结 + 决策。<strong>关键</strong>：① ratings 跟 promotion / comp 直接挂钩，分量大；② 写下 calibration notes 给员工 manager（用于 review delivery）。`,
+        staff: `深一层：calibration 的<strong>真实价值不在调分</strong>，而在 ① 跨 team <strong>建立共同语言</strong>（"L5 Senior 应该是什么样"）；② <strong>暴露 bias</strong>（某 EM 长期给某类员工高 / 低分）；③ <strong>为 promotion case 蓄势</strong>（高潜员工被 senior leaders 看见，下个周期 promo 阻力小）。<br><br><strong>真实经验</strong>：在 telecom 团队第一次 calibration（4 个 EM 共 30 人）时：<br>① 我准备了我 8 人团队的 ratings + 2-paragraph 每人 evidence；<br>② 会上发现我给的 ratings histogram 比其他 EM 高 0.5（typical new EM bias）→ 校准下来 2 人 rating 调低；<br>③ 另一 EM 给一个 senior eng 评 "needs improvement"，我和另一 EM 提出 evidence 不足 → 调成 "meets expectation" + 标 promo block；<br>④ 整个过程 3 小时，所有 EM 学到怎么写 evidence；<br>⑤ 后续 review delivery 时，员工被 calibrate 后的 rating 不 surprise（因为我们提前 ongoing feedback）。<br><br><strong>陷阱</strong>：① 没 evidence 就调分 → 不公平 / 不可申诉；② 调分后 EM 不会 deliver（"我本来给你 5，calibration 调成 4"）→ 暴露 internal process / 损害 trust；③ 用 forced ranking（强制 1-2-7 distribution）→ 团队恶性竞争 / sandbag；④ 不让 ICs 看 calibration process → 觉得"黑箱"。<br><br><strong>实践建议</strong>：① calibration 之前一个月做 dry run（self-calibration）；② 高潜要让 senior leaders 知道（在 calibration 上下文）；③ 调分必有 evidence 修订（不只是"committee 决定"）；④ Calibration session 的结论是 sticky（不要会后又个别 EM 私下改）。`,
+      },
+      failure_modes: [
+        `没 evidence 就调分 → 不公平 / 不可申诉`,
+        `EM 跟员工 deliver 时说 "本来是 X，被 calibrate 成 Y" → 暴露过程 / 削弱 trust`,
+        `Forced ranking（强制 distribution）→ 团队恶性竞争 / sandbag`,
+        `Calibration 完没写 rationale → 半年后 promo / PIP decision 没依据`,
+        `让 calibration 变成"EM 互相 trade votes"（你帮我 push X，我帮你 push Y）→ Process 失败`,
+      ],
+      follow_ups: [
+        { q: `Calibration 调低了一个员工的 rating 怎么 deliver？`, hint: `① 不暴露 calibration 过程；② 用 ongoing feedback 包装（"这个季度的 X / Y / Z 让我 reassess"）；③ 给 specific action items（怎么回升）；④ 给员工 disagree 的空间但表明决策是 final` },
+        { q: `跨 team calibration 跟 promo committee 关系？`, hint: `两者通常分开：calibration 评年度 rating（影响 comp / bonus）；promo committee 评晋升候选（独立流程）。但高潜 calibration 时被识别后，下个 promo 周期 sponsor 更强` },
+        { q: `Calibration 怎么避免 EM bias？`, hint: `① Evidence-based discussion（不是"我觉得"）；② Diverse panel（gender / function / seniority）；③ Track manager-level data over time（某 EM 是否长期给某类员工高/低分）；④ 训练 EM 识别 unconscious bias` },
+      ],
+    },
+
+    37: {
+      why_asked: `验证候选人是否真做过 promotion 评审。能讲"evidence pack / sponsor / no surprise"的人通常 promo 过下属。`,
+      answers: {
+        mid: `Promotion Packet 包含：① <strong>Self-assessment</strong>（员工自评，按下个 level expectations）；② <strong>Manager assessment</strong>（你的评估 + 推荐）；③ <strong>Evidence</strong>（具体 deliverable / impact / cross-team feedback，3-5 个 STAR 故事）；④ <strong>Peer testimonials</strong>（3-5 个）；⑤ <strong>Sponsor 推荐</strong>（更 senior 的 leader 支持，关键）。`,
+        senior: `<strong>EM 在 promotion 中的角色</strong>：① <strong>提前 6 个月开始铺路</strong>——别人看见员工的"已经在做下个 level 的活"；② <strong>整理 evidence pack</strong>，不依赖员工自己写；③ <strong>找 sponsor</strong>（如 skip-level / cross-team senior）；④ <strong>预 review</strong>（找 peer EM 模拟 committee 攻击）；⑤ <strong>本人 review 不 surprise</strong>（员工提前 3-6 个月知道在被 considered）。`,
+        staff: `深一层：promo 成败的 60% 在 packet 之前——是<strong>"过去 6-12 个月这个员工是否被 senior leaders 看见在做 next-level work"</strong>。Packet 是<strong>把已发生的事 narrate 成 promo case</strong>，不是 last-minute 制造 evidence。<br><br><strong>真实经验</strong>：我曾 sponsor 一个 senior → staff 的晋升，提前 9 个月开始铺：<br>① 给他分配跨团队 lead 项目（visible to senior leaders）；<br>② 每月 push 他在 senior leadership review 做 5 min 汇报；<br>③ 找 2 个 sponsor（VP 和 peer team senior staff）；<br>④ 帮他写 packet（他写第一稿，我改 3 轮）；<br>⑤ 预演 promo committee 可能问的 attack questions。<br><br><strong>结果</strong>：committee 90% no questions（packet 已经回答了所有可能的疑问），过了。<strong>对比反例</strong>：另一同事 senior 想晋升 staff，没提前铺路 / 没 sponsor / packet last-minute → committee 一堆质疑 → reject + "再观察 1 年"。<br><br><strong>陷阱</strong>：① Last-minute promo case（packet 看起来在编故事）；② 没 sponsor（committee 没人为你 fight）；③ Self-assessment 比 manager assessment 还激进（red flag）；④ Evidence 全是 individual 不带 cross-team（无 leadership signal）；⑤ Manager 当年才发现要 promo，员工 already disengaged。<strong>建议</strong>：① 一进 calibration / promo cycle 前 2 个 quarter 跟员工对齐"是否 work towards promo"；② 不到 promotion bar 也要诚实告知（管理 expectation）；③ Promo 被拒后 24h 内 1on1，明确 reason + next steps，避免员工冲动离职。`,
+      },
+      failure_modes: [
+        `Last-minute 才开始铺 promo（packet 看起来编故事）`,
+        `没 sponsor → committee 没人 fight → reject`,
+        `Self-assessment 比 manager assessment 激进 → red flag`,
+        `Evidence 只有 individual contribution，没 leadership / cross-team / mentorship 信号`,
+        `员工不知道在被 considered → 被拒时 surprise / 冲动离职`,
+      ],
+      follow_ups: [
+        { q: `下属 Promotion 被拒怎么办？`, hint: `① 24h 内 1on1 不延迟；② 明确具体 gap（不是模糊 "你需要更多 impact"）；③ Action plan：next 6 months 做什么；④ 让员工知道你仍然 sponsor 他；⑤ 如果 retention risk，考虑 visible role assignment / comp adjustment` },
+        { q: `下属 promotion 一直 block 在某 level 怎么办？`, hint: `① 诚实 conversation：是否他的 strengths 不匹配 next level expectations；② 横向 move（不同团队 / 不同 specialization）；③ Coaching/mentoring 补 gap；④ 接受现实（不是所有人都 want / can promote）` },
+        { q: `Sponsor 怎么找？`, hint: `① Skip-level / VP（自然 sponsor）；② 跨团队 senior（员工帮助过的）；③ 不能找太"远"（committee 不熟没 weight）；④ Sponsor 要 active（在 committee 上发声，不只挂名）` },
+      ],
+    },
+
+    39: {
+      why_asked: `EM 必考的"困难场景"题。能区分"low performer"和"差表现 phase"的人通常实际处理过这类事件。`,
+      answers: {
+        mid: `<strong>4 步</strong>：① <strong>诊断</strong>——是 skill / will / context / personal life 哪类？（4 种应对完全不同）；② <strong>直接对话</strong>——SBI 给具体 feedback + 30 天目标；③ <strong>每周 check-in</strong> 30 天看是否改善；④ <strong>没改善 → PIP</strong>，改善了 → 持续监控。`,
+        senior: `<strong>关键诊断</strong>：① <strong>Skill gap</strong>（不会做）→ 训练 / mentor / pair / 调整任务；② <strong>Will gap</strong>（不想做）→ 1on1 挖根因（burnout / 错位 / personal）；③ <strong>Context gap</strong>（不懂业务）→ onboarding / docs；④ <strong>Personal</strong>（家事 / 健康）→ HR / 弹性政策 / 短期休假。<strong>关键</strong>：① 越早识别越好（3 个月内）；② 不要忽视（"再观察一下"是新 EM 最常犯的错）；③ 不要先 PIP（先 informal feedback + 30 day plan）。`,
+        staff: `深一层：<strong>low performer 是 EM 工作里 emotional cost 最高的</strong>——员工 deny / 情绪反应 / 自己同情心受挫。所以新 EM 倾向"再观察一下"拖延，结果是<strong>团队其他人开始不满</strong>（"为什么我们多做他不做"），低绩效 contagion 蔓延。<br><br><strong>真实经验</strong>：在带 8 人团队第 5 个月发现一个 senior dev 连续 2 个 sprint 没 deliver，最初我想"是不是分配不合理"，做了：<br>① 1on1 直接谈："过去 2 个月我看到的 deliverable 是 X，预期是 Y，gap 在 Z。你怎么看？" 对方一开始 deny → 我给具体 evidence → 对方承认有挑战。<br>② 挖根因：是 burnout（家庭压力）+ 学习曲线（新技术栈不熟）双重原因。<br>③ 30 day plan：减少负载 + pair 1 周补技术 + 弹性 schedule 顾家。<br>④ 每周 check-in：30 天后明显改善（80% return），3 个月完全恢复。<br><br><strong>反例</strong>：另一员工同样状况但根因是 will gap（不想做，因为对方向不认同）—— 30 day plan 后没改善 → PIP → 3 个月后离职。这种情况<strong>没 will 真的没办法</strong>，PIP 是 transitional process（让员工自主决定走还是改），不是惩罚。<br><br><strong>陷阱</strong>：① 拖延（"再观察"）→ 6 个月后被迫 PIP 时员工已 surprise；② 不诊断就 PIP（skill gap 应该是 coaching，不是 PIP）；③ 公开议论（"X 表现不行"）→ 法律 / HR 风险；④ Personal life 当 will gap（家人病了不是不努力）。<strong>原则</strong>：<strong>"快速诊断、早期介入、明确 path forward（成功或离开），决不暧昧拖延"</strong>。`,
+      },
+      failure_modes: [
+        `拖延（"再观察一下"），3 个月变 9 个月，团队 morale 受损`,
+        `不诊断 skill vs will → 直接 PIP skill gap 员工（应该 coaching）`,
+        `Personal life 当 will gap 处理 → 缺乏同理心 / 法律风险`,
+        `跟同事议论该员工 → 隐私 / 法律红线`,
+        `Feedback 太软（"加油加油"）→ 员工不知道严重性 → 没改 → review 时 surprise`,
+      ],
+      follow_ups: [
+        { q: `怎么诊断 skill vs will？`, hint: `① Skill：尝试过没成功 / 主动求助 / 焦虑——这类需要 coaching；② Will：能做但不投入 / 主动 disengage / 找借口——这类需要 motivation conversation 或 PIP；③ Context：刚加入 / 新业务——need onboarding` },
+        { q: `Low performer 拒绝承认怎么办？`, hint: `① 准备 specific evidence（不能"我觉得"）；② 用 360 feedback（peers 的观察）；③ 给对方时间消化（不在一次 1on1 强迫认）；④ 最终 written warning 让对方无法 deny` },
+        { q: `团队成员发现你处理 low performer 太软怎么办？`, hint: `① 重新评估自己是不是过度同情；② 跟 HR / mentor 校准；③ 明确 timeline 给团队信号（不暴露 specific case but 显示流程在进行）；④ 不公开 specific 处理但暗示 process underway` },
+      ],
+    },
+
+    40: {
+      why_asked: `验证候选人是否真做过 PIP（不是只听过流程）。能讲"PIP 是 transitional 不是惩罚"的人是真在做这件事时挣扎过。`,
+      answers: {
+        mid: `<strong>PIP（Performance Improvement Plan）</strong>设计：① <strong>明确 expectations</strong>（具体 deliverable + measurable）；② <strong>30-60-90 day milestone</strong>；③ <strong>每周 check-in</strong>；④ <strong>HR 全程介入</strong>（compliance）；⑤ <strong>明确 outcome</strong>：成功 → 持续 employment + 监控；失败 → severance + exit。`,
+        senior: `<strong>关键原则</strong>：① PIP 是 <strong>transitional process</strong>，不是惩罚——给员工"决定改或离开"的明确空间；② <strong>HR + 法务 review</strong>（防 wrongful termination 诉讼）；③ <strong>明确 measurable</strong>（不是"提升 communication"，是"per week 1 个 cross-team sync + meeting notes shared"）；④ <strong>员工签字</strong> acknowledge 收到 + 理解条件；⑤ <strong>EM 时间投入</strong>大（typical 30% 自己时间 in 60-90 days）。`,
+        staff: `深一层：PIP 的<strong>真实 ROI 通常很低</strong>——业内统计 ~20-30% PIP 真的 "improve back"，70-80% exit。所以 PIP 的<strong>主要价值是 legal cover + 公平流程</strong>，而不是"真的指望改善"。<strong>很多公司</strong>（如 Netflix）干脆不做 PIP，用 generous severance 直接 part ways——效率高但需要文化支撑。<br><br><strong>真实经验</strong>：做过 2 次 PIP，1 成功 1 失败。<br><strong>成功案例</strong>：senior dev skill gap（新技术栈），60-day PIP：① 每周 pair programming 4h；② 减少 stretch 任务；③ Mentor 1-on-1 weekly；④ HR 全程见证。结果：60 天后 80% 任务能独立 → 90 day 监控期 → 持续 employment + 12 个月后晋升到 senior+。<br><strong>失败案例</strong>：mid eng will gap，60-day PIP：① 设定 clear deliverable；② 每周 check-in；③ HR 全程。结果：员工感觉被 punish + 90 day 末仍未达 → severance + exit（双方都接受 outcome）。<br><br><strong>关键 learnings</strong>：① PIP 不应该 surprise（前 3-6 个月已有 ongoing feedback）；② 失败也不是 manager 失败，是 system 给员工最后机会；③ 不要试图"让员工自己 quit" 而不写 PIP（构成 constructive dismissal，法律风险）；④ PIP 期间团队不应该 know specifics（隐私），但可能感觉到（"X 最近 quieter"），透明度 vs 隐私需要 balance。<strong>陷阱</strong>：① PIP 写得过软（员工通过 PIP 但实际没真改）→ 60 天后又一轮 PIP（团队失望）；② PIP 写得过 specific 不可达 → 法律风险（"setting up for failure"）；③ 不让 HR 参与 → 流程不合规；④ PIP 期间还 promote / give visible projects → 自我打脸。`,
+      },
+      failure_modes: [
+        `PIP 内容不可达 → 法律风险（被诉 "setting up for failure"）`,
+        `PIP 过软 → 通过但实际没改 → 60 天后又一轮 PIP`,
+        `不让 HR 参与 → 流程不合规 / wrongful termination 风险`,
+        `PIP 期间公开议论该员工 → 隐私 / 法律红线`,
+        `期待"让员工自己 quit"绕过 PIP → constructive dismissal 风险`,
+      ],
+      follow_ups: [
+        { q: `PIP 过程中员工情绪崩溃怎么办？`, hint: `① 暂停技术讨论，先 emotional support；② 推荐 EAP（员工心理咨询）；③ 跟 HR 同步；④ 如果是 medical（depression / anxiety），考虑 medical leave；⑤ PIP timeline 暂停（不是终止）` },
+        { q: `PIP 成功后怎么 reintegrate？`, hint: `① 90-day 监控期（不是马上恢复 stretch 任务）；② 季度 calibration 看 sustainability；③ 心理上 acknowledge 不容易（一句 "I appreciate your effort during this time"）；④ 不在 team 公开讨论` },
+        { q: `Netflix 不做 PIP 直接 severance 适用什么场景？`, hint: `① 文化强支撑（"keeper test"）；② High talent density 团队；③ Generous severance（typical 6-12 months）；④ Top-of-market comp；不适合大多数公司，PIP 仍是默认` },
+      ],
+    },
+
+    // ============== 离职 / 解雇 ==============
+    45: {
+      why_asked: `EM 最 emotional 的工作之一。能讲"准备 + 简洁 + 尊重"的人是真做过 termination conversation。`,
+      answers: {
+        mid: `<strong>解雇对话</strong>的 4 步：① <strong>充分准备</strong>（HR / legal / package details / written script）；② <strong>对话本身 ≤ 5 分钟</strong>——直接告知 decision + reason，不 negotiate；③ <strong>HR 在场</strong>见证 + 处理 admin details；④ <strong>员工尊严</strong>——同一天结束 access，但给 transition support（severance / 推荐信 / outplacement）。`,
+        senior: `<strong>关键原则</strong>：① <strong>Decision 已定再开口</strong>，不是 "discussion"；② <strong>简短 + clear</strong>（员工记忆 fog，越长越糟）；③ <strong>不 explain 太多</strong>（每解释一个 reason 就给员工 fight 一个）；④ <strong>第一次告知后立即离开 work setup</strong>（同一天关 access，避免 retaliation 风险）；⑤ <strong>团队沟通</strong>：当天 / 次日告知团队（不是几天后才发现位子空了）。`,
+        staff: `深一层：<strong>解雇对话的真实挑战是 emotional regulation</strong>——你和员工都在 stress + 你前夜可能没睡好。<strong>所以脚本化是必要的</strong>，不是冷漠是负责。<br><br><strong>真实经验</strong>：我做过 2 次解雇（一次 performance-based，一次 layoff）。第一次 performance-based 我紧张到前夜失眠，准备了 written script + role play 跟 HR 演练 2 次。当天 5 min 对话：<br>1) 开门见山："I have difficult news. Effective today, we're terminating your employment."（不寒暄）<br>2) Reason 一句："Despite the PIP process, your performance hasn't met the expectations required."（不展开 evidence，已在 PIP 文档中）<br>3) Transition："HR will walk you through severance and benefits. Your access will end today; you can collect personal items with HR support."<br>4) Listen 但不 negotiate：员工反问 "but I thought..."—— "I understand this is difficult, but the decision is final."<br>5) 5 min 结束 + HR 接管。<br><br><strong>结果</strong>：员工 surprise 程度低（PIP 已经在进行），有不满但接受。我之后向团队发了一条 1-paragraph message（不写 specific reason，"X has left the company, we wish them well"）。<br><br><strong>陷阱</strong>：① 拖延对话超过 10 min → 员工进 negotiate mode → manager softer → 不好结束；② 详细 explain reasons → 给 fight ammo；③ 让员工继续 access 几天 → IP / data 风险；④ 周五下午做（员工周末没 transition support） → 推荐周一 / 周二上午；⑤ 后续不给 transition support（severance / outplacement / 推荐）→ 业内口碑差。<strong>原则</strong>：<strong>"解雇是 decision moment 不是 conversation moment，但 decision 之前的 conversations（feedback / PIP）让 decision 不 surprise"</strong>。`,
+      },
+      failure_modes: [
+        `对话拖延 / 软 → 员工 negotiate / EM 妥协 → 不可收场`,
+        `详细 explain reasons → 给员工 fight ammo / 法律 vulnerability`,
+        `周五下午做 → 员工周末没 emotional support`,
+        `不让 HR 在场 → wrongful termination / 不公平对待诉讼风险`,
+        `团队几天后才发现 → rumor mill / morale 受损`,
+      ],
+      follow_ups: [
+        { q: `解雇当天员工情绪崩溃怎么办？`, hint: `① HR 接管 emotional support；② Offer 私人空间收拾；③ 推荐 EAP；④ Severance package 包含 transitional benefits；⑤ 不让员工驾车回家如果情绪太激动` },
+        { q: `怎么告知团队？`, hint: `① 当天 / 次日团队 group meeting；② 1-2 句 official statement（"X has left, we wish them well"）；③ 不讲 reason（隐私）；④ Q&A 时 redirect ("if you have specific concerns about your role, we can 1on1")；⑤ 接下来一周 team morale check` },
+        { q: `Layoff 跟 performance termination 区别？`, hint: `Layoff：position 被 eliminated（不是个人 performance issue），通常 broader severance + 推荐信 + outplacement；Performance：individual issue，severance 较少；员工感受和 storytelling 给下家完全不同` },
+      ],
+    },
+
+    47: {
+      why_asked: `2023-2025 年 layoff 频发，所有 EM 都可能遇到。能讲"clear criteria + double-check bias + dignity" 的人通常真主持过 RIF。`,
+      answers: {
+        mid: `Layoff 处理 5 步：① <strong>跟 HR / leadership 对齐</strong>（数量 / 时间 / 标准 / severance）；② <strong>制定 selection criteria</strong>（performance / skill alignment / role redundancy；明确 not 个人特征如 age / gender / race）；③ <strong>提交 list + bias check</strong>（HR / legal review）；④ <strong>D-day 同时通知</strong>（所有人同一天）；⑤ <strong>Survivor support</strong>（留下的人需要 reassurance + transparency）。`,
+        senior: `<strong>关键原则</strong>：① <strong>EM 自己也可能不知道是不是 cut 自己</strong>（直到决定 final），需要管理好 own emotion；② <strong>不能 hint / leak</strong>给团队（公平 + legal）；③ <strong>Selection criteria 必须 documented</strong>（防 discrimination 诉讼）；④ <strong>D-day 1:1 通知每个被 cut 的人</strong>（不是 group call）；⑤ <strong>同一天</strong>所有被 cut 的人都告知（防"为什么我先"的不公平感）。`,
+        staff: `深一层：layoff 是 EM 最痛的经历之一——你不仅在<strong>失去同事 / 朋友</strong>，还在做<strong>选择"谁走"的决定</strong>。<strong>Self-care 关键</strong>：① 找 mentor / coach 同步 emotion；② D-day 后 EM 自己也需要 down time（typical 1-2 周 emotional recovery）。<br><br><strong>真实经验</strong>：2024 年经历过一次行业 layoff round（我团队 8 人 cut 1）。整个过程 2 周：<br>① Week 1：跟 VP align criteria（role redundancy + skill mismatch with future roadmap），不是 performance based；<br>② Week 1：HR 给我 framework，我提名 + 写 rationale；HR + legal review；<br>③ Week 2 周一：D-day。同一上午 9-10 AM 我做了 1:1 通知 + HR 接管 details；同时间公司 group meeting communicate 整个 layoff scope；<br>④ Week 2 下午：跟剩余 7 人 group meeting："Today X left as part of company-wide restructuring. This is not a comment on their performance—it's role-based decision. Here's what's next for our team..."<br>⑤ Following weeks：每周 team check-in，1on1 给每个人空间 process emotion，明确"你不是 next round"（如果 indeed 你不是）。<br><br><strong>关键 learnings</strong>：① 被 cut 的人需要尊严 + 实质支持（generous severance / outplacement / 推荐信 / health insurance bridge）；② Survivor 需要透明 + 重新对齐目标（不是"装作没发生"）；③ EM 自己也 grieve，不要假装 OK。<strong>陷阱</strong>：① Selection 没 documented bias check → 法律风险；② D-day 通知不在同一时间 → 第一个被通知的传话给其他人 → 混乱；③ Survivor 不沟通 → rumor mill + morale 崩 + 顶级 talent 主动离职；④ EM 自己 burnout 但继续工作 → decision quality 退化。`,
+      },
+      failure_modes: [
+        `Selection criteria 不 documented → discrimination 诉讼风险`,
+        `D-day 通知不同时 → 信息泄露 / 不公平感`,
+        `Survivor 沟通失败 → rumor / morale 崩 / top talent 主动离职`,
+        `Layoff conversation 时 explain too much → 员工 fight + emotion 失控`,
+        `EM 自己不 process emotion → 后续 1-2 个月 decision quality 下降`,
+      ],
+      follow_ups: [
+        { q: `Survivor 谁可能离职？怎么挽留？`, hint: `① High performer 通常 first 离职（market option 多）；② Retention conversation 提前；③ 透明分享 roadmap + 强化 vision；④ 必要时 retention bonus / promo；⑤ 高度 1:1 attention 头 1-2 个月` },
+        { q: `Layoff 之后怎么对外讲？`, hint: `① 不在 public LinkedIn / Twitter 发表评论；② 给被 cut 的人写 strong recommendation；③ 在自己后续面试中 framing："restructuring meant some difficult decisions, here's what I learned"；④ 不 throw company under bus` },
+        { q: `Layoff 后怎么重建团队 trust？`, hint: `① Action over words（持续 deliver + retain rest of team）；② 至少 3-6 个月 stability（不再小动作）；③ 透明 communication cadence（weekly team meeting + 月度 town hall）；④ 给 survivor 成长机会（visible projects / promotion paths）` },
+      ],
+    },
+
+    48: {
+      why_asked: `Layoff 之后最容易被忽视但最关键的工作。能讲"transparent + reaffirm + future-focused"的人通常做过 post-RIF 团队。`,
+      answers: {
+        mid: `Survivor 稳定 4 步：① <strong>当天 group meeting</strong>解释 layoff 是什么 / 不是什么（明确 not performance based）；② <strong>1on1 周内</strong>给每个人空间 process + 确认他们 not next；③ <strong>重新对齐目标</strong>（团队规模变了，priorities 调整）；④ <strong>持续 3-6 个月稳定</strong>（不要再小动作 / 改 reporting line / 新 initiative）。`,
+        senior: `<strong>关键心理学</strong>：survivor 经历"<strong>survivor's guilt</strong>"（"为什么是他不是我"）+ "<strong>uncertainty anxiety</strong>"（"下一波是不是我"）+ "<strong>workload anxiety</strong>"（"被 cut 的人的活归谁"）。三者都要回应：① 不是个人 performance issue（重申）；② 当前没有 next round 计划（如果 true）；③ 工作量重新评估 + reset priorities（不是简单加 80% workload）。`,
+        staff: `深一层：survivor 看 EM 的<strong>言行不一</strong>非常敏锐。EM 说"团队会稳定"但接下来 1 个月 chasing same OKRs as before（没承认人少了）→ survivor 觉得你不诚实 → trust 崩。<br><br><strong>真实经验</strong>：layoff 之后我做了：<br>① Week 1: Group meeting reframe layoff（"This is not performance-based, this is role-based. Going forward, our team has 7 instead of 8."）；<br>② Week 1-2: 1on1 with each remaining 7 人，给空间 process emotion，明确"<strong>I don't know everything but I commit to be transparent</strong>"；<br>③ Week 2-3: 重新跟 product / VP align：人少 1 个意味着 cut Y / 慢 Z / drop A 一项；<br>④ Week 3 团队 group: 公布调整后的 priorities，明确"我们不会试图 cover all 之前的 scope，这是现实接受"；<br>⑤ 接下来 3 个月每周 team meeting 留 10 min "anything top of mind / questions"；<br>⑥ 半年后 team retro，回看怎么过来的。<br><br><strong>结果</strong>：6 个月后只 lost 1 个 senior（去更高 comp），其他全部 retained + delivery 恢复到 layoff 前 85%（接受 15% reduction）。<br><br><strong>陷阱</strong>：① "回到正常" 心态（实际不会回到 prior 同人配置同 scope）；② Survivor 工作量 silent 加 30% 没承认 → burnout 在 3 个月后爆发；③ EM 自己也焦虑但 hide → survivor 感觉到不安；④ 主动 reorg / new strategy 在 layoff 后 1 个月 → over-loading change → 团队崩溃；⑤ 给 survivor "高潜要扛起来" pep talk → 感觉被 manipulate / pressure。<strong>原则</strong>：<strong>"诚实大于乐观，行动大于话术，时间是 healer"</strong>。`,
+      },
+      failure_modes: [
+        `"回到正常"心态 → 没承认人减少了 / scope 没调 → workload 80% 加给 survivors`,
+        `Silent 加任务 → 3 个月后 burnout 爆发`,
+        `EM 自己 hide own emotion → survivor 觉得不诚实 / 不安全`,
+        `Layoff 后 1 个月又搞 reorg / new initiative → over-loading change → 崩溃`,
+        `给"高潜扛起来"pep talk → 感觉被 manipulate → cynicism`,
+      ],
+      follow_ups: [
+        { q: `怎么识别 survivor burnout 早期信号？`, hint: `① 1on1 quieter / 不抱怨（不是 healthy 而是 disengage）；② PR / commits decline；③ 请病假 / PTO 增加；④ Direct quit signals (LinkedIn 突然 update / 询问 reference)；⑤ 跟 mentor 同步早期识别` },
+        { q: `Layoff 后该不该 push promotion / raise？`, hint: `① Layoff 后 3-6 个月 try not to introduce big change；② 但 high performer retention 需要 visible reward → 选 limited but meaningful retention bonus / promo（不是 mass change）` },
+        { q: `如果再来一轮 layoff EM 怎么处理？`, hint: `① 提前 push leadership transparent（"如果再来，告诉我们")；② 自己 emotion 准备好；③ 第二轮通常更 brutal（剩余团队已 fragile）；④ 严肃考虑 own next move（如果连续 layoff 是 sign of org instability）` },
+      ],
+    },
+
+    // ============== 危机 / 事故 ==============
+    61: {
+      why_asked: `事故是 EM 角色最 visible 时刻之一。能讲"协调而非 hands-on debug"的人是真做过 incident commander 角色。`,
+      answers: {
+        mid: `P0 事故时 EM 的 4 个角色：① <strong>Communicator</strong>——向 VP / 客户 / stakeholder 汇报状态（不是 hands-on debug）；② <strong>Coordinator</strong>——确保对的人在 incident room（PagerDuty / Slack channel）+ 移除 blocker；③ <strong>Decision-maker</strong>——rollback vs forward fix / 升级到更高 leadership / 公开 status page；④ <strong>Buffer</strong>——挡住 leadership 的"how soon" 噪音让团队专注 debug。`,
+        senior: `<strong>关键原则</strong>：① <strong>EM 不是 incident commander</strong>（除非临时；通常 senior IC / SRE 做）；② <strong>不抢键盘 debug</strong>——你的角色是 enable，不是 do；③ <strong>每 30 min update</strong>（stakeholder 不在 channel 不知道进度 → 焦虑加倍）；④ <strong>记录 timeline</strong>（事后 postmortem 用）；⑤ <strong>oncall engineer 的 mental wellbeing</strong>——3h 后强制轮换 / 食物 / 休息。`,
+        staff: `深一层：<strong>EM 在事故中的 leverage 远大于一个 IC</strong>——你扛住 leadership noise = 让 5 个 engineer 多 50% productivity。但<strong>很多新 EM 不知道这点</strong>，倾向跳进去帮 debug（"我还会写"），结果团队没人协调 → 事故拖长 + leadership 失控。<br><br><strong>真实经验</strong>：电信项目曾遇过 P0 事故（核心 NETCONF agent crash loop 影响 2000+ 设备）：<br>① <strong>0-5 min</strong>：oncall declared P0，我作为 EM 加入 Slack channel；<br>② <strong>5-15 min</strong>：拉 senior SRE 进来当 incident commander，我转作 communicator 给 VP 发了首条 status；<br>③ <strong>15-90 min</strong>：每 20 min update VP / 客户 / product；挡住一个高管 "how soon" 噪音（让 incident commander 专注）；coordinate 拉 senior engineer 从其他时区起床加入；<br>④ <strong>90-180 min</strong>：team identified rollback safe + 2 senior 准备 forward fix。<strong>我做了 rollback decision</strong>（balance forward fix 风险 vs rollback 时长）—— rollback；<br>⑤ <strong>180-240 min</strong>：service recover，monitor 30 min 确认 stable；<br>⑥ <strong>240+</strong>：postmortem 周一组织，期间 oncall engineer 周末休息（我把 routine task 给其他人 cover）。<br><br><strong>结果</strong>：4h MTTR，VP 满意 communication 透明，oncall engineer 没 burnout。<br><br><strong>陷阱</strong>：① EM 抢 debug → 没人 communicate → leadership 进 panic mode → call EM 老板 → wider escalation；② Update 间隔太长（&gt; 1h）→ stakeholder 焦虑乘以；③ rollback / forward 决策犹豫 30 min+ → 系统继续坏；④ 事故后不强制 oncall recovery → burnout / quit。<strong>原则</strong>：<strong>"在你的 leverage 处发力，不要 zero-sum compete 团队的 expertise"</strong>。`,
+      },
+      failure_modes: [
+        `EM 抢键盘 debug，导致没人 communicate / coordinate`,
+        `Update 间隔 &gt; 1h → leadership 焦虑 → 自己 escalate`,
+        `决策（rollback / forward）犹豫 30 min+ → 系统继续坏`,
+        `事故后不强制 oncall recovery → burnout / 离职`,
+        `事故中跟 VP 报喜不报忧 → 信任丧失 → 后续 less autonomy`,
+      ],
+      follow_ups: [
+        { q: `什么时候应该 escalate 到更高 leadership？`, hint: `① 事故影响 &gt; SLO 阈值 + 持续 30 min；② 跨团队 dependency 不响应；③ 需要 customer communication 决策；④ Legal / compliance 涉及；早 escalate 不丢人，晚 escalate 才丢人` },
+        { q: `事故中 leadership 反复问"how soon"怎么办？`, hint: `① 不给假 ETA（"半小时" 然后 4h，trust 崩）；② 给"next milestone"（"team 在 X，我们 30 min 后会知道是 root cause 还是 symptom"）；③ Push back leadership "I'll update at next checkpoint, please let team focus"` },
+        { q: `Customer-facing 事故怎么沟通？`, hint: `① 越早 status page 越好（不要 wait until you 100% know）；② Be honest about scope but conservative about ETA；③ Update q 15-30 min；④ Post-incident customer communication（手写 apology + 详细 postmortem extract）` },
+      ],
+    },
+
+    62: {
+      why_asked: `Postmortem 是 EM 培养 learning culture 的核心工具。能讲"blameless + actionable + visible"的人通常推行过。`,
+      answers: {
+        mid: `Postmortem 标准结构：① <strong>Timeline</strong>（事故 timeline，detection → mitigation → resolution）；② <strong>Impact</strong>（多少用户 / 多长时间 / SLO budget 消耗）；③ <strong>Root cause</strong>（technical + process + organizational）；④ <strong>Action items</strong>（具体 + 有 owner + 有 deadline）；⑤ <strong>Lessons learned</strong>（防范类似事故）。`,
+        senior: `<strong>关键原则</strong>：① <strong>Blameless</strong>——"是什么 process / system 让人犯错"，不是"谁错了"；② <strong>Action items 跟踪到 closure</strong>（不是写完就完，要进 backlog + monitor）；③ <strong>Visible</strong>——团队 / 跨团队 review，不只是 team internal；④ <strong>48-72h 内完成</strong>（记忆鲜活）；⑤ <strong>区分 contributing factors vs root cause</strong>（5 Whys 挖到 systemic 原因）。`,
+        staff: `深一层：postmortem 失败模式经常是<strong>"看起来 blameless 其实暗暗 blame"</strong>—— action items 是 "X 培训" / "X 加 code review"，实际暗示 "X 不够小心"。<strong>真正 blameless</strong> = system 改进 / process 改进，不是 individual 改变。<br><br><strong>真实经验</strong>：电信项目一次 P0 事故 postmortem 写了 18 个 action items，<strong>分类</strong>：① Technical（4 个：alert 调优 / 增加 chaos test / 改 rollback script / 加 monitoring）；② Process（3 个：rollback decision matrix / oncall runbook 更新 / cross-team escalation）；③ Organizational（2 个：staffing oncall shift, knowledge silos）。<br><br><strong>关键</strong>：每个 action item 都有 owner + due date + 周度跟踪。3 个月后 review：90% closed，2 个仍 open（其中 1 个是 systemic 改造 6 个月 timeline，1 个 dropped 因为 不再 relevant）。<strong>这种 "track to closure" 是文化建立的关键</strong>—— 团队看到 postmortem 真的 lead to change，下次更愿意 honest 写。<br><br><strong>反例</strong>：见过其他团队的 postmortem 写得漂亮但 action items 6 个月后 70% 仍 open → 下次事故同样问题再发 → 团队 cynicism →"postmortem 就是表演" → quality 下降 → 学习闭环失败。<br><br><strong>陷阱</strong>：① 表面 blameless 实际 blame（细节出卖你）；② Action items 太多（&gt; 20）→ 都做不完 → 失信用；③ 不区分 contributing vs root cause → 改了 symptom 没改 root；④ Postmortem 只 team internal review → 跨团队没 learning；⑤ 不 track action items closure → "写完就忘"。`,
+      },
+      failure_modes: [
+        `表面 blameless 但 action items 暗藏 blame（"X 要更小心"）`,
+        `Action items 太多 → 都做不完 → 失信用`,
+        `不 track closure → 6 个月后 60-70% 仍 open → 学习闭环失败`,
+        `只 team internal review → 跨团队没 cross learning`,
+        `Root cause 停在 technical（不挖到 process / organizational systemic 原因）`,
+      ],
+      follow_ups: [
+        { q: `怎么真正做到 blameless？`, hint: `① 用 "the system did X" 不用 "X person did Y"；② Train facilitator 识别 blame language；③ Make it safe to share mistakes（leader 自己 first 分享自己的 mistake）；④ Reward people who report problems early` },
+        { q: `Action items 怎么不变成"backlog 黑洞"？`, hint: `① 每月跟踪 status；② 季度 review 公开；③ 与 OKR / sprint planning 整合（action items 是 backlog 一部分）；④ 90 day stale 自动 escalate or close-with-rationale` },
+        { q: `跨团队事故 postmortem 怎么开？`, hint: `① 中立 facilitator（不属于任何一方）；② Group blame 风险高 → 强 emphasize blameless；③ Action items 跨团队 ownership 明确；④ Manager-of-Managers 见证 + sponsor follow-up` },
+      ],
+    },
+
+    66: {
+      why_asked: `验证候选人是否处理过 customer-facing crisis。能讲"transparency + early + don't speculate"的人是真做过这件事。`,
+      answers: {
+        mid: `<strong>给 VP/客户的 4 原则</strong>：① <strong>早</strong>（10-15 min 内首次沟通，不 wait until 100% known）；② <strong>简短</strong>（status + impact + ETA bracket，不展开 technical detail）；③ <strong>诚实</strong>（不知道说不知道，不 speculate）；④ <strong>cadence 明确</strong>（"next update in 30 min"）。`,
+        senior: `<strong>关键模板</strong>：<br>"<strong>What</strong>: [一句话 impact]<br><strong>Scope</strong>: [多少用户 / region / service affected]<br><strong>Status</strong>: investigating / mitigating / resolved<br><strong>ETA</strong>: [bracket - "30-60 min" not exact]<br><strong>Next update</strong>: [明确时间]"<br>不在初始 update 给 root cause / blame / detailed technical（这些在 postmortem 里）。`,
+        staff: `深一层：crisis communication 的<strong>胜负在初始 1 条 message</strong>——这条决定 leadership 对你的信任。<strong>反模式</strong>：① "We're looking into it"（vacuous）；② "should be fixed soon"（speculation，最 dangerous）；③ Too technical（VP 不理解）。<br><br><strong>真实经验</strong>：电信 P0 事故 4h 期间我给 VP 的 timeline：<br><strong>+5 min</strong>: "P0 declared. NETCONF agent crash affecting 2000+ devices in EMEA region. Team mobilized. Next update in 30 min."<br><strong>+35 min</strong>: "Identified suspected root cause in YANG schema validation. Considering rollback. Customer impact: device config updates blocked since 10:23 UTC. Mitigation ETA: 30-60 min. Next update in 30 min."<br><strong>+95 min</strong>: "Rollback initiated to commit X. ETA to recovery: 15-30 min. Customer impact unchanged. Next update in 15 min."<br><strong>+120 min</strong>: "Recovery confirmed. Monitoring stable for 30 min. Will send formal incident report by EOD."<br><br><strong>关键</strong>：① 每条都有 What / Scope / Status / ETA bracket / Next update；② 不解释 technical detail（VP 不需要）；③ 不归咎个人（不写 "X engineer made mistake"）；④ 不 promise 不能 deliver（不写 "fixed in 15 min" 然后 4h）。<br><br><strong>结果</strong>：VP 信任 communication 流，没 escalate 到 CEO；客户对透明 communication 反馈 positive（"at least we knew what's happening"），客户 retention 没受损。<br><br><strong>陷阱</strong>：① 第一条 update 太迟（&gt; 30 min）→ leadership panic + 自行 escalate；② Speculation（"should be 15 min"）→ 50 min 后没解决 → trust 崩；③ Detail 太多（VP 看不懂 NETCONF / YANG）→ noise；④ 找借口 / blame other team → 立刻 unprofessional；⑤ 解决后不写 formal report → leadership 不知道 closed。`,
+      },
+      failure_modes: [
+        `第一条 update 太迟（&gt; 30 min）→ leadership 自行 escalate`,
+        `Speculation ETA（"fixed in 15 min" 实际 4h）→ trust 崩`,
+        `Technical detail 太多 / Jargon → VP 看不懂 → noise`,
+        `找借口 / blame other team → 立刻 unprofessional`,
+        `解决后不写 incident report → leadership 不知 closed / 未来无 learning`,
+      ],
+      follow_ups: [
+        { q: `给客户的 communication 跟内部有什么不同？`, hint: `① 客户：focus on impact / next step / apology；内部：focus on action / decision needed；② 客户 status page + email；内部 Slack + meeting；③ 时区 / 语言 customer success / account exec 参与` },
+        { q: `事故升级到 C-level 怎么办？`, hint: `① 不要 panic 改 communication style；② 同样 template，maybe 更 concise；③ 把"decision needed from you"明确（比如"do we 公布 customer-facing message?"）；④ CSAT / NPS impact 量化` },
+        { q: `Post-incident customer communication 怎么写？`, hint: `① 手写 apology email from leadership；② Detailed incident report（不暴露 internal 隐私）；③ Action items 客户能 see；④ Offer credits / make whole；⑤ 1on1 call with key customers` },
+      ],
+    },
+
+    67: {
+      why_asked: `Burnout 是 EM 最难处理的"慢性病"。能讲"早识别 + 双向 + 不只 vacation"的人是真处理过 team burnout。`,
+      answers: {
+        mid: `Burnout 处理 4 步：① <strong>早识别</strong>（cynicism / 出错频次升 / PTO 锐减 / 1on1 quieter）；② <strong>双向对话</strong>—— EM 不是单方面 decree，要先听员工自己怎么看；③ <strong>结构性 + 个人</strong>双 lever（团队 oncall 频次 / individual rest / 工作量调整）；④ <strong>持续</tracking</strong> 3-6 个月跟踪 recovery。`,
+        senior: `<strong>关键洞察</strong>：burnout 不是 "rest more" 能解决—— root cause 通常是<strong>没 autonomy / 没 progress / 没 meaning</strong>（Dan Pink 三要素），加上 chronic overwork。<strong>所以 vacation 是 symptom relief 不是 root fix</strong>。结构性 fix：① 减少 oncall burden（轮换 / 优化 alert / fewer false positive）；② Cut scope（不是所有 project 都要 deliver）；③ Reaffirm meaning（员工知道 their work matters）；④ Give autonomy（不微管理）。`,
+        staff: `深一层：team burnout 通常是 systemic 不是 individual—— "one person needs rest" 通常意味着<strong>"team's load is unsustainable"</strong>。<strong>EM 的失败是没在 burnout 之前就识别 unsustainable signals</strong>（持续超时 / 高 PR cycle time / PTO 没人 take）。<br><br><strong>真实经验</strong>：电信团队某 quarter 连续 3 个 P0 事故（每个 4-6h），oncall 轮换的 senior dev 第 8 周开始有 burnout 征兆：① 1on1 quieter；② PR comment 多 cynical；③ 主动 take 周末 PTO（之前从不）。<strong>我的处理</strong>：<br>① 1on1 直接谈："我注意到你最近 X / Y / Z，我担心 burnout。你怎么看？"——对方初期 deny ("just busy"), 我 listen 给空间；<br>② 第 2 次 1on1 对方承认 "感觉 endless firefighting，看不到 light"；<br>③ <strong>结构性 fix</strong>：oncall 加 backup secondary（之前只有 primary，secondary 在压力时拒接）；postmortem action items 优先 alert 调优（减 false positive）；告知 product "下个 quarter cut 30% scope until oncall stabilize"；<br>④ <strong>个人 fix</strong>：他 take 2 周连续 PTO（mandatory disconnect，不查 Slack），oncall transfer to 我 backup；<br>⑤ <strong>Meaning reaffirm</strong>：跟他 talk through "你帮稳定了 telecom 客户的核心服务"，并给他参与 oncall 改革的 ownership；<br>⑥ <strong>3 个月 track</strong>：oncall freq 从 3/quarter 降到 0.5/quarter；个人 NPS 回升；keep 在团队。<br><br><strong>陷阱</strong>：① "Take a vacation" 单 fix → 回来 same conditions → burnout 复发；② Public discussion 该 individual 的 burnout → 隐私 / shame；③ EM 不调整团队 workload 期望 → 个人 fix 无效；④ Burnout 等 individual 主动说 → 通常太迟（已 disengage）；⑤ EM 自己也 burnout 但 hide → 不能 model healthy behavior。`,
+      },
+      failure_modes: [
+        `"Take a vacation" 单 fix → 回来 same condition → 复发`,
+        `等 individual 主动说 → 通常 already disengage / late`,
+        `Public discussion → 隐私 / shame`,
+        `不调团队 workload 期望 → individual fix 无效`,
+        `EM 自己 burnout hide → 不能 model healthy behavior`,
+      ],
+      follow_ups: [
+        { q: `怎么早识别 team burnout signals？`, hint: `① PTO usage（团队 vs 公司平均）；② PR cycle time 上升；③ 1on1 cynicism；④ Anonymous survey（15Five / Officevibe）NPS 下滑；⑤ Senior departure（first signal）；⑥ Sick day frequency` },
+        { q: `EM 自己 burnout 怎么办？`, hint: `① 跟 own manager 坦诚 → escalate 需要的支持；② Take PTO 自己 model healthy；③ Find peer EM / coach；④ Cut low-value work；⑤ 严重的 medical leave 不丢人` },
+        { q: `Burnout 后 promote 给该员工合适吗？`, hint: `① 通常不（burnout 期间 evaluation 不准）；② 等 6 个月稳定再 promo；③ 但是给 visible role / autonomy / interesting project 是好的（不同于 promo 但 motivating）` },
+      ],
+    },
+
+    // ============== 向上沟通 ==============
+    80: {
+      why_asked: `Senior EM 最高频的"困难场景"。能讲"早 + 数据 + option + ask" 4 要素的人是真做过 difficult upward communication。`,
+      answers: {
+        mid: `<strong>SCQA 框架</strong>：① <strong>Situation</strong>（背景：项目 X 在 Q3 计划上线）；② <strong>Complication</strong>（坏消息：我们 will miss 2 周）；③ <strong>Question</strong>（implicit：你想知道什么 / 怎么办）；④ <strong>Answer</strong>（我的 recommendation + asks）。<strong>不绕弯</strong>，前 30 秒讲完坏消息。`,
+        senior: `<strong>4 要素</strong>：① <strong>早</strong>（24-48h 内，不是 last minute）；② <strong>数据</strong>（不是"感觉"，是"X queries running 2x slow since deploy Y"）；③ <strong>Option</strong>（不是只甩问题，给 2-3 options + trade-off）；④ <strong>Ask</strong>（明确你需要 decision / approval / resource）。<strong>反模式</strong>：① 蹭着 happy update 报坏消息（"by the way..."）；② No data；③ No options；④ No ask（"just wanted to flag"）。`,
+        staff: `深一层：<strong>EM 怎么传递坏消息是被老板 evaluate effectiveness 的主要时刻</strong>——任何人都能传递好消息，handle 坏消息看出 leadership maturity。<strong>常见 anti-patterns</strong>：① 拖延（不愿面对）→ 老板从 grapevine 听到 → 信任崩；② 包装太重（"some challenges, but we're confident"）→ 老板 doesn't trust 后续；③ Pessimism / venting → 老板 doubt EM judgment；④ 没 owned the problem → 老板觉得你不可靠。<br><br><strong>真实经验</strong>：在带 NETCONF 团队时一次 critical project 发现要 miss 6 周 deadline（之前预期 miss 2 周）。我做了：<br>① 周一发现 → 周二中午约 VP 1on1（不 wait 周报 cycle）；<br>② 准备：① 数据（具体 blocker / dependencies / why slip from 2 to 6 weeks）；② 3 options（A: 接受 6 week slip 维持 scope；B: cut 30% scope 保 deadline；C: bring in contractor 1.5x cost 加速）；③ 我的 recommendation（A，因为 cutting scope kills critical feature）；④ Asks（VP 跟 customer success 同步预期 + 同意 contractor 是 backup）；<br>③ 对话本身 15 min：我 5 min 讲完 SCQA，VP 5 min 问 questions，VP 同意 A + back up plan；<br>④ Follow-up：next day 我给 VP 发了 written summary（meeting confirm 用）。<br><br><strong>VP 反馈</strong>："I appreciate you flagging early with options. Many EMs would have hidden this until the last week."<strong>结果</strong>：项目 6 week slip 顺利沟通，customer 没 lose；同时 VP 对我"reliable communicator" trust 增加，下季度给了更大的 scope。<br><br><strong>陷阱</strong>：① 等 weekly report 才说 → 老板 grapevine 先听 → 信任崩；② 没 options，只有 problem → 老板 frustration（"so what do you want me to do?"）；③ Recommendation 不明确 → 老板要花时间 figure out → annoyance；④ No followup written summary → 后续 dispute 没依据。`,
+      },
+      failure_modes: [
+        `拖延 / 等 weekly cycle → 老板 grapevine 先听 → 信任崩`,
+        `Vague（"some challenges, but confident"）→ 老板 doesn't trust 后续`,
+        `没 options（只甩问题）→ 老板 frustration`,
+        `Recommendation 不明确 → 老板花时间 figure out → annoyance`,
+        `No followup written summary → 后续 dispute 没依据`,
+      ],
+      follow_ups: [
+        { q: `老板对坏消息 emotional react 怎么办？`, hint: `① 不 push back 立即；② 给空间 process（"I understand this is frustrating, let me know how I can help next steps"）；③ 接受 emotion 但坚守 facts；④ 24h follow up + written` },
+        { q: `怎么决定"坏消息"的"分量"？`, hint: `三个维度：① Business impact（钱 / 客户 / SLO）；② 时间紧迫性；③ 跨团队影响。任一 high → escalate immediately；都 low → 周报 + flag` },
+        { q: `EM 如何 build trust 让 future bad news 更容易传递？`, hint: `① Consistent good news 也给（不是只 surface problem）；② 准时准确 deliver promised；③ 接受自己 mistake admit；④ 主动 escalate before it becomes crisis；⑤ Be the EM who "doesn't surprise"` },
+      ],
+    },
+
+    // ============== Senior EM ==============
+    95: {
+      why_asked: `Senior EM / Director 面试必问。能区分"管 IC" 和 "管 EM" 心智差异的人是真做过 manager-of-managers。`,
+      answers: {
+        mid: `<strong>5 大差异</strong>：① <strong>影响半径</strong>（10 人 → 50+ 人，跨团队）；② <strong>反馈周期</strong>（quarter → 1-2 年）；③ <strong>具体度</strong>（具体技术决策 → 抽象 org / strategy 决策）；④ <strong>下属类型</strong>（IC vs EM，需要不同 coaching style）；⑤ <strong>自己 visibility</strong>（VP / C-level interaction 增加）。`,
+        senior: `<strong>核心心智差异</strong>：从 "execute through team" 变成 "<strong>build managers who build teams</strong>"。Line EM 关心 individual deliverable + team morale；Senior EM 关心 manager effectiveness + sub-team alignment + cross-team systemic 问题。<strong>很多新 Senior EM 失败因为</strong>还在 micromanage IC 决策（应该信任 manager）→ 自己 burnout + 团队 manager 失去 ownership。`,
+        staff: `深一层：Senior EM 的<strong>3 个心智重塑</strong>：<br>① <strong>"Coach managers, not ICs"</strong>—— 你的杠杆通过下面的 managers，不再 directly 通过 ICs。但你必须 resist 直接和 IC 聊技术（绕过 manager 是 destroys their authority）。<br>② <strong>"Optimize the org, not the team"</strong>—— 团队边界 / reporting structure / process consistency 跨 sub-teams 是 Senior EM 的 lever。<br>③ <strong>"Strategic over tactical"</strong>—— 你 80% 时间应该花在 next quarter+ 的 problem，不是 this sprint 的 issue。<br><br><strong>真实经验</strong>：我从 Line EM（8 人）升到 Senior EM（25 人 + 3 managers）时，<strong>头 6 个月犯了几个典型错误</strong>：<br>① 还在直接 review 关键 PR（不信任新晋 manager 的 judgment）→ 一个 manager 私下抱怨 "你为什么要 second-guess"；<br>② 跟 IC 1on1（觉得"我还在乎细节"）→ manager 失去 IC pulse；<br>③ Sprint planning 还插嘴细节决策。<br><br><strong>修正</strong>：① 砍 own meeting load 50% + 把 IC 1on1 全 redirect 给 manager；② 我跟 manager 的 1on1 改 weekly 60 min + 议程明确（不是 status report，是 coaching + strategy）；③ 引入 "<strong>manager effectiveness scorecard</strong>"（quarterly 1on1 反馈每个 manager 的 strength / area to grow）；④ 自己时间花在 cross-team architecture / hiring strategy / culture 上。<br><br><strong>6 个月后效果</strong>：3 个 manager 各自 own 自己团队，我 quarterly 看 outcome 不看 sprint，own time 80% on strategic + cross-team。Team NPS 涨 +15。<strong>关键学习</strong>：<strong>"Senior EM 的成功是让 manager 比你做得好（在他们的 domain），你的价值在 systemic / strategic / cross-team enable"</strong>。`,
+      },
+      failure_modes: [
+        `还在 directly 跟 IC 沟通技术 / 决策 → 绕过 manager → manager 失 authority`,
+        `Quarterly+ 还跟 sprint 节奏 micromanage → manager 失 ownership + 自己 burnout`,
+        `Manager 1on1 当 status meeting（不当 coaching） → manager 不成长`,
+        `不投资 cross-team / 跨 sub-team consistency → org silos 形成`,
+        `没 manager effectiveness 评估机制 → bad manager 长期占位`,
+      ],
+      follow_ups: [
+        { q: `怎么辅导一个新 EM？`, hint: `① 给 30-60-90 framework；② Weekly 1on1 + 议程模板（不是 status，是 coaching）；③ Pair on tough conversations (give live feedback)；④ Manager peer cohort；⑤ Yearly 360 review` },
+        { q: `Manager 表现差怎么办？`, hint: `① 跟 IC PIP 类似 process；② 但 manager 失败 impacts 更多人；③ 通常更早识别（团队 NPS / attrition）；④ 必要时 demote back to IC（不丢脸）` },
+        { q: `Senior EM 的 1on1 用什么 cadence？`, hint: `① Manager: weekly 60 min（高 frequency / 高质量 coaching）；② Skip-level IC: quarterly 30 min（pulse + bypass risk）；③ Peer Director: monthly；④ 自己 VP: bi-weekly或 weekly` },
+      ],
+    },
+
+    97: {
+      why_asked: `Senior EM 从 "技术 leader" 转 "business leader" 的关键。能讲 unit economics / runway / ARR 的人是真做过 business case。`,
+      answers: {
+        mid: `EM 必懂的财务概念：① <strong>Burn rate / Runway</strong>（公司每月烧多少 / 还能撑多久）；② <strong>ARR / MRR</strong>（年 / 月经常性收入）；③ <strong>CAC / LTV</strong>（获客成本 / 客户终身价值，ratio &gt; 3 健康）；④ <strong>Headcount cost</strong>（per engineer fully-loaded $250-400k/year）；⑤ <strong>OpEx vs CapEx</strong>（运营 vs 投资）。`,
+        senior: `<strong>EM 视角具体应用</strong>：① <strong>Headcount request</strong> 写 ROI 用 "X engineer cost $300k, will deliver $Y product impact"；② <strong>Build vs Buy</strong> 决策算 fully-loaded cost + 3-5 年 TCO；③ <strong>Infrastructure spending</strong> 跟 product growth align（不是无限扩）；④ <strong>Vendor negotiation</strong> 懂 enterprise contract（multi-year discount / unit price economics）。`,
+        staff: `深一层：<strong>EM 不懂 business 是 senior EM ceiling 的最大原因</strong>—— VP / Director 决策时讲 business case，不会照顾你的 technical fluency。<strong>真实经验</strong>：我从 line EM 升 senior 时，第一次跟 CFO present headcount request 完全没准备 business framing—— 我讲了 8 min "team capacity" / "technical debt"，CFO 打断："so what's the ARR impact?" 我哑了。<br><br>之后我做了：<br>① 读完 "Financial Intelligence for Entrepreneurs"（4 周）；<br>② 跟我们 CFO 自愿 mentor 每月 1on1（45 min，谈 business / finance）；<br>③ 把每个 hiring / project request 都翻译成 business impact（"this 5 engineer team will deliver $X ARR / save $Y OpEx / reduce CAC by Z%"）。<br><br>6 个月后：① 第二次 headcount request 100% approved；② 被 VP 提名加入 leadership offsite（previously只 director+）；③ 跟 sales / customer success 协作大大顺畅（之前他们觉得我"只是 tech"）。<br><br><strong>建议给所有 senior EM</strong>：① 至少懂自己公司的 unit economics（cogs / margins / runway）；② 季度看 financial report；③ 跟 CFO / finance partner 建立 working relationship；④ Headcount / project request 永远从 business impact framing 开始；⑤ 学 SaaS / B2B / B2C metrics 基础（Gartner / Bessemer benchmarks）。<strong>不需要</strong>变成 CFO，但要能 conversation。`,
+      },
+      failure_modes: [
+        `Headcount request 用"team capacity"不用"ARR impact" framing → 老板没 leverage 帮你`,
+        `Build vs Buy 只算 development cost 不算 5-year TCO`,
+        `不懂 unit economics → infrastructure spending 不能 challenge`,
+        `Vendor 谈判 only on technical features 不在 commercial terms`,
+        `公司财务紧张时 EM 还在 hire / new project → 暴露不懂 business cycle`,
+      ],
+      follow_ups: [
+        { q: `怎么从零学公司财务？`, hint: `① Yahoo Finance 看自己公司 10-K（public）或问 CFO 给 quarterly business review (private)；② 听 a16z / All-In podcast 学 SaaS / VC 基础；③ 找 finance peer mentor；④ Sales / CS 部门 1on1 学 customer economics` },
+        { q: `EM 怎么参与 budget planning？`, hint: `① Q-2 quarter 开始 prepare next year plan；② Forecast headcount / contractor / tools / infra；③ 把 ask 翻译成 ROI；④ 跟 finance partner 一起 align；⑤ 跟 product / sales 同步 priorities` },
+        { q: `Tech debt 怎么用 business 语言 framing？`, hint: `① "current code 每次 change 5 人天，refactor 后 1 人天 → 5x velocity"；② "Bug 每月 1 次，重构后归零 → reduce on-call / customer escalation"；③ "技术债 block 30% new features → blocking $Y ARR"` },
+      ],
+    },
+
+    103: {
+      why_asked: `Netflix 提出，2020+ 业内 high-performing engineering team 都在追求。能讲"hire bar + 不留 mediocrity + selective layoff"的人是真践行过。`,
+      answers: {
+        mid: `<strong>Talent Density</strong> = 团队中 high performer 的比例。Netflix 提出 keeper test：<strong>"如果他明天告诉你要离职去其他公司，你会 fight to keep him 吗？"</strong> Yes = high performer；No = generous severance, let them go。`,
+        senior: `<strong>提升 talent density 的方法</strong>：① <strong>极高 hiring bar</strong>（不为填坑 hire mediocre）；② <strong>不容忍 mediocrity</strong>（low performer 快速 exit，不拖延 PIP）；③ <strong>顶级 comp</strong>（top-of-market，吸引 top talent）；④ <strong>Selective layoff</strong>（不 cut 一般地 across the board，而是 cut weakest）；⑤ <strong>无 PIP 政策</strong>（Netflix 模式 - 直接 generous severance）。`,
+        staff: `深一层：talent density 哲学的<strong>核心是接受"keeping mediocre staff 比 firing them 更昂贵"</strong>—— mediocre staff 拖团队节奏 + drive top talent 走 + 占 headcount slot。Netflix 做到这一步靠 ① 顶级 comp（top of market 90 percentile）；② 文化（"family vs team" — team 必须 high performance）；③ Generous severance（4 month base 等）让 exit non-traumatic。<br><br><strong>真实经验</strong>：在电信团队我跟着 Netflix 模式（部分 adapt）：① <strong>提升 hiring bar</strong>—— 头一年 reject 75% 候选人，团队 hire rate 从 6 人/年降到 3 人/年，但 retention 从 65% 升到 95%；② <strong>不容忍 chronic underperformer</strong>—— 之前 EM 留过 2 个 chronic average 1.5 年，我接手后 6 个月给两人都做了 PIP + exit（generous severance + 推荐信）；③ <strong>Top talent 反馈</strong>："终于 EM 在 fix 这个问题，我感觉值得 invest 长期"；④ <strong>团队 outcome</strong>：18 个月后 team velocity +40%，oncall incident -60%，team NPS +25。<br><br><strong>但</strong> Netflix 模式不 universal applicable：<br>① 需要 top-of-market comp（很多公司不能）；<br>② 需要文化支撑（"team not family"，国内文化可能 less natural）；<br>③ 需要 generous severance budget；<br>④ Risk: 过度 emphasis 制造 high-stress culture（如果不平衡）。<br><br><strong>给 EM 的建议</strong>：① 不一定 fully copy Netflix，但 <strong>"我会 fight to keep him"</strong> 是简洁有效的 hiring / retention 指南；② Quarterly 自问每个团队成员的 keeper test 状态；③ "No" 时及时行动（PIP / coaching / exit）不拖延；④ 同时投资在让 top talent 想留下来（autonomy / growth / interesting work）。`,
+      },
+      failure_modes: [
+        `留 chronic average performer（"他没大错"）→ drag team velocity + drive away top talent`,
+        `Hiring 为填坑降 bar → 长期 talent density 拉低`,
+        `Top talent 走只给 retention bonus 不解决 root cause（mediocre coworker / unclear growth path）`,
+        `公开 talent density discourse → "L3 hierarchy" 文化 → 团队 toxicity`,
+        `Comp 不在 top tier 还用 Netflix 模式 → top talent 不来 / 不留 → 不可持续`,
+      ],
+      follow_ups: [
+        { q: `Keeper test 应该多久做一次？`, hint: `① Quarterly self-check（私下）；② Annual review 时 part of EM thinking；③ 偶发: 当员工 manifest disengagement 时；④ 不需要每月 over-stress` },
+        { q: `Keeper test 的"否"如何 actionable？`, hint: `① 先 1on1 explore（是 skill / will / fit gap）；② 给 30 day coaching 改善；③ 没改 → PIP or generous severance；④ 关键: timely action，不拖延半年` },
+        { q: `怎么向员工 frame "high performance culture"？`, hint: `① 招聘时讲清 expectations；② 不 hype（"we're best in industry"）；③ Concrete actions（comp / autonomy / training budget / promo speed）；④ Be honest about tradeoffs（high challenge / high reward）` },
+      ],
+    },
+
+    // ============== AI-Native EM ==============
+    105: {
+      why_asked: `2024-2026 EM 面试新热点。能讲 6 大影响而不是只说"AI 提升效率"的人是真思考过。`,
+      answers: {
+        mid: `<strong>6 大影响</strong>：① <strong>流程重塑</strong>（PR review / debug / doc 自动化）；② <strong>效能度量</strong>（用什么指标度量 AI-augmented 团队）；③ <strong>招聘标准</strong>（Junior 还要不要 / AI literacy 入职要求）；④ <strong>团队系统</strong>（AI tool 引入 + 治理 + safety net）；⑤ <strong>风险合规</strong>（IP 泄漏 / 幻觉 / 安全）；⑥ <strong>角色演化</strong>（EM 自己怎么用 AI / 5 年后角色是什么）。`,
+        senior: `<strong>关键洞察</strong>：① AI 不是简单的"工具升级"，而是<strong>重塑 software engineering 工作流</strong>—— 比 IDE / git / Stack Overflow 更深的变革；② EM 责任：① 安全引入；② 量化效能改善；③ 避免 over-rely（quality / security 风险）；④ Reskill team 而不是 simply replace。`,
+        staff: `深一层：<strong>2026 年 AI-Native EM 的 5 个 priority</strong>：<br>① <strong>Tool standardization</strong>—— Cursor / Copilot / Claude Code 选哪个，怎么 enterprise governance（不让员工乱用 personal account 把 IP 上传）；<br>② <strong>Effectiveness measurement</strong>—— 不能只看"PR / month" 指标（量增但质降）。新指标：feature time-to-merge / bug regression rate / PR review depth / 工程师 satisfaction；<br>③ <strong>Skill evolution</strong>—— Junior 还招不招？我的判断：仍然招但<strong>头 6 个月 onboarding 完全不同</strong>—— 不能 over-rely on AI（learning ceiling 低），要 force fundamentals + AI augmentation balance；<br>④ <strong>Quality safeguard</strong>—— AI-generated code 的 review 不能 rubber stamp，需要更 senior review；CI 安全检查（SAST / dependency / license）必须加强；<br>⑤ <strong>Cultural shift</strong>—— 把 "AI 用得好" 当成 promotion criteria 一部分（不是单独 dimension，而是 part of "productivity / impact"）。<br><br><strong>真实案例</strong>：在电信团队 2024 年开始引入 Copilot + Claude Code（mostly for tests / docs / boilerplate），<strong>6 个月观察</strong>：① 团队 PR / week +30%；② Bug regression rate +15%（quality 下降！）；③ Code review 平均 cycle time -25%（reviewer 用 AI 帮看）；④ Junior PR 质量分化大（用 AI 好的 +50% productivity，用得糟的反而质量崩）。<strong>调整</strong>：① 加 mandatory AI-generated code 标记（PR description）+ 更深的 review；② Junior 入职 first 3 months no-AI period（建 fundamentals）；③ 季度 retro AI usage best practices share。<strong>结果</strong>：12 个月后 quality 恢复 + productivity 净 +20%。<br><br><strong>EM 自己怎么用 AI</strong>：① 1on1 notes summary；② 政策 / OKR draft；③ Code review 辅助；④ Email / Doc 写作；但<strong>不让 AI 处理 sensitive HR / personal info</strong>（隐私 + IP 红线）。`,
+      },
+      failure_modes: [
+        `把 AI 当 "效率工具"，没意识到 process / culture / risk 系统性影响`,
+        `不 standardize tool → 员工乱用 personal accounts → IP 风险`,
+        `Effectiveness 只看 "PR / month" → 量增质降 trap`,
+        `Junior 入职 over-rely AI → 长期 fundamental gap`,
+        `Code review rubber stamp AI-generated code → bug regression 飙升`,
+      ],
+      follow_ups: [
+        { q: `怎么 measure AI augmented 团队的 effectiveness？`, hint: `① 不只 PR count，要 PR quality (review depth / bug regression rate / customer escalation)；② Engineer satisfaction NPS；③ Feature time-to-merge；④ Tech debt accumulation rate；不要 single metric` },
+        { q: `Junior engineer 在 AI 时代还招不招？`, hint: `① 仍然招，但 onboarding 完全不同；② First 3-6 months emphasize fundamentals (no-AI period 或 limited use)；③ Pair with senior more (mentorship intensive)；④ Track learning ceiling 信号` },
+        { q: `EM 自己用 AI 工具的 ROI 怎么看？`, hint: `① 写文档 / 1on1 notes / OKR draft (-50% time)；② Code review 辅助 (-30% review time)；③ 不用于 sensitive HR / personnel info；④ Train new EM 用 AI 写 management 文档（不替代 thinking）` },
+      ],
+    },
+
+    106: {
+      why_asked: `AI 时代 EM 第二难问题。能讲"传统指标失效 + 新组合"的人才真思考过。`,
+      answers: {
+        mid: `<strong>新组合指标</strong>：① <strong>Outcome 指标</strong>（feature delivery 速度 + customer impact + bug regression rate）+ ② <strong>Quality 指标</strong>（PR review depth / code coverage / security scan）+ ③ <strong>Human 指标</strong>（engineer NPS / retention / learning growth）。<strong>避免</strong> "PR / engineer / month" 这种 vanity metric。`,
+        senior: `<strong>关键认识</strong>：AI 时代 <strong>"velocity / output"指标</strong>大幅失真—— AI 可以让 PR 数量翻倍但 quality 不变 / 下降。<strong>真正度量 effectiveness 看 outcome</strong>（customer impact / business value）+ <strong>sustainability</strong>（quality / human cost）。`,
+        staff: `深一层：<strong>2026 年 EM effectiveness metric framework</strong> 我建议四象限：<br>① <strong>Speed</strong>（feature delivery time / cycle time）—— 别只看代码量；<br>② <strong>Quality</strong>（regression rate / customer incident / tech debt growth）—— AI generated 易掩盖 quality 退化；<br>③ <strong>Sustainability</strong>（engineer NPS / oncall burden / 1on1 sentiment）—— burn out 不在 AI 时代消失；<br>④ <strong>Strategic</strong>（major initiative shipped / cross-team impact / talent development）—— 长期价值，AI 替代不了。<br><br><strong>真实经验</strong>：在引入 AI 工具的电信团队，第 3 个月开始我换了一套 metric：<br><strong>Before (传统)</strong>: PR / week / engineer = 4.5<br><strong>After (新组合)</strong>: <br>① Feature time-to-merge: median 8 days → 5 days (-37%)<br>② Customer-reported regression bugs: 2/month → 1/month (-50%)<br>③ Engineer NPS: +35 → +45<br>④ Code coverage: 78% → 82%<br>⑤ Junior senior knowledge gap: standardized assessment +25% improvement<br><br>这些指标 tell 一个 holistic story："AI 帮我们更快更稳更高 morale，但 junior growth path 需要 monitor"。<br><br><strong>反例</strong>：见过其他 team 只 track "lines of code / week"（甚至 GenAI 时代还这样）—— 数据 +200% 但 customer escalation +40%，6 个月后 leadership 醒悟 metric 失真。<br><br><strong>EM 实用建议</strong>：① 季度 review metric framework，不要 set-and-forget；② 跟 Director / VP align 指标（确保管理层认同）；③ Engineer NPS 是 sustainable 关键 signal；④ Customer-facing impact 是 ultimate truth；⑤ 不 over-optimize 单一指标（goodhart's law）。`,
+      },
+      failure_modes: [
+        `只 track "PR / engineer / month" → 量增质降 trap`,
+        `Lines of code / commits as proxy → AI 时代完全失真`,
+        `Set-and-forget 指标 → 不随 AI tool evolution 调整`,
+        `单一 metric over-optimize → Goodhart's law（"the measure becomes the target"）`,
+        `不 track human metric → 6 个月 burnout / quality crisis`,
+      ],
+      follow_ups: [
+        { q: `怎么向 leadership 解释 metric 改变？`, hint: `① 准备 before/after 数据；② Translate to business impact ("customer regression -50% = X saved revenue")；③ Acknowledge tradeoffs ("we 'lost' velocity perception but gained quality")；④ 渐进 over-quarter 不一夜替换` },
+        { q: `Engineer NPS 怎么 actionable？`, hint: `① 月度 anonymous survey (15Five / Officevibe)；② Top 3 specific question (manageability / workload / autonomy)；③ Action on feedback within month (visible response)；④ Track trend not absolute score` },
+        { q: `Junior 在 AI 时代怎么评估 effectiveness？`, hint: `① 不只看 output（容易 AI-augment）；② Track fundamental understanding（独立 debug 能力 / system design grasp）；③ Periodic no-AI exercise；④ Learning velocity (skill grow rate)` },
+      ],
+    },
+  },
 };
 
 // ============================================================================
