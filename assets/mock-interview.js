@@ -730,6 +730,9 @@
     if (card.code) parts.push(`<h5 class="code">💻 示例</h5>${card.code}`);
     if (card.bonus) parts.push(`<h5 class="bonus">⭐ 加分点 / 进阶</h5><div>${card.bonus}</div>`);
     if (card.trap) parts.push(`<h5 class="trap">⚠️ 常见陷阱</h5><div>${card.trap}</div>`);
+    if (typeof MICardExtras !== 'undefined' && MICardExtras.hasExtras && MICardExtras.hasExtras(card)) {
+      parts.push(MICardExtras.render(card));
+    }
     return parts.join('');
   }
 
