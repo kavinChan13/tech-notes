@@ -366,6 +366,12 @@
         // 空格暂停 / 继续（仅当焦点不在 textarea 时）
         e.preventDefault();
         togglePause();
+      } else if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && mock.state === STATES.ANSWERING) {
+        // Ctrl+Enter / Cmd+Enter 提交本题 → 下一题（焦点在 textarea 也响应）
+        e.preventDefault();
+        flushCurrentQuestion();
+        mock.cursor++;
+        renderQuestion();
       }
     });
     return ov;
@@ -669,24 +675,28 @@
     ta.addEventListener('input', () => { mock.answers[mock.cursor] = ta.value; });
     qCard.appendChild(ta);
 
-    // Peek
+    // Peek — 就地切换 peek-content 显隐，避免重渲染整页（重渲染会
+    // 重启 startQuestionTimer() 把倒计时重置回满预算）。
     const peekRow = el('div', { class: 'mi-peek-row' });
+    const peekContent = el('div', { class: 'mi-peek-content', id: 'mi-peek-content', hidden: !mock.peeked[mock.cursor] });
+    peekContent.innerHTML = mock.peeked[mock.cursor] ? renderAnswerHtml(card) : '';
     const peekBtn = el('button', {
       type: 'button',
       class: 'mi-peek-toggle' + (mock.peeked[mock.cursor] ? ' on' : ''),
       onclick: () => {
-        mock.peeked[mock.cursor] = !mock.peeked[mock.cursor];
-        renderQuestion(); // 重渲染以更新折叠状态（保留 textarea 内容）
+        const now = !mock.peeked[mock.cursor];
+        mock.peeked[mock.cursor] = now;
+        peekBtn.classList.toggle('on', now);
+        peekBtn.textContent = now ? '👀 已展开（点击隐藏）' : '👀 我不会，看答案';
+        if (now && !peekContent.innerHTML) {
+          peekContent.innerHTML = renderAnswerHtml(card);
+        }
+        peekContent.hidden = !now;
       },
     }, mock.peeked[mock.cursor] ? '👀 已展开（点击隐藏）' : '👀 我不会，看答案');
     peekRow.appendChild(peekBtn);
     qCard.appendChild(peekRow);
-
-    if (mock.peeked[mock.cursor]) {
-      const ans = el('div', { class: 'mi-peek-content' });
-      ans.innerHTML = renderAnswerHtml(card);
-      qCard.appendChild(ans);
-    }
+    qCard.appendChild(peekContent);
 
     wrap.appendChild(qCard);
 
@@ -712,6 +722,21 @@
       }, mock.cursor === total - 1 ? '✓ 完成' : '提交本题 →'),
     );
     wrap.appendChild(nav);
+
+    // 快捷键提示（小字、屏幕大时可见，移动端自动隐藏）
+    const hints = el('div', { class: 'mi-kbd-hints' });
+    hints.append(
+      el('span', {}, '快捷键: '),
+      el('kbd', {}, 'Ctrl'),
+      ' + ',
+      el('kbd', {}, 'Enter'),
+      el('span', {}, ' 提交 · '),
+      el('kbd', {}, 'Space'),
+      el('span', {}, ' 暂停 / 继续 · '),
+      el('kbd', {}, 'Esc'),
+      el('span', {}, ' 退出'),
+    );
+    wrap.appendChild(hints);
 
     setContent(wrap);
     // 自动聚焦到 textarea，让用户立即可输入
