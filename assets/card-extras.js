@@ -105,3 +105,132 @@
 
   window.MICardExtras = { render, hasExtras };
 })();
+
+/* =====================================================================
+ * URL Param Filter — 让外部链接能"一键过滤"卡片
+ * ---------------------------------------------------------------------
+ * 支持的 query param:
+ *   ?ids=51,53,54     — 只显示指定 id 的卡（精确卡集）
+ *   ?cats=值类别,模板  — 累加到 activeCats（OR 关系）
+ *   ?diffs=high,mid   — 累加到 activeDiffs
+ *   ?q=move           — 填入搜索框
+ *
+ * 在 inline renderCards() 之后通过 DOMContentLoaded 钩入；不破坏现有
+ * 过滤逻辑（cats / diffs / search 沿用 inline filter()，ids 通过
+ * monkey-patch filter() 追加限制 + 顶部 banner 提示）。
+ * ===================================================================== */
+(function () {
+  'use strict';
+  if (typeof window === 'undefined' || typeof document === 'undefined') return;
+
+  function ready(fn) {
+    if (document.readyState !== 'loading') fn();
+    else document.addEventListener('DOMContentLoaded', fn);
+  }
+
+  ready(function () {
+    const params = new URLSearchParams(location.search);
+    if (!params.toString()) return;
+
+    const idsParam   = params.get('ids');
+    const catsParam  = params.get('cats');
+    const diffsParam = params.get('diffs');
+    const qParam     = params.get('q');
+
+    let touched = false;
+
+    // ---- ids: 精确卡集限制 ----
+    if (idsParam) {
+      const wanted = new Set(
+        idsParam.split(',').map(s => parseInt(s.trim(), 10)).filter(Number.isFinite)
+      );
+      if (wanted.size > 0) {
+        window.__urlRestrictIds = wanted;
+        touched = true;
+
+        // 顶部 banner 提示已被外链筛选
+        const banner = document.createElement('div');
+        banner.className = 'url-filter-banner';
+        banner.style.cssText = [
+          'background:linear-gradient(90deg,#1e3a5f,#2a4a7f)',
+          'color:#cfe9ff',
+          'padding:.7rem 1rem',
+          'text-align:center',
+          'border-bottom:1px solid rgba(255,255,255,.1)',
+          'font-size:.9rem',
+          'position:sticky',
+          'top:0',
+          'z-index:100',
+        ].join(';');
+        const clearHref = location.pathname;
+        banner.innerHTML =
+          '🔗 已通过外部链接精确筛选 <strong>' + wanted.size +
+          '</strong> 张卡片 · <a href="' + clearHref +
+          '" style="color:#fff;text-decoration:underline;font-weight:600;">清除筛选看全部</a>';
+        document.body.insertBefore(banner, document.body.firstChild);
+
+        // monkey-patch filter() 追加 id 白名单
+        if (typeof window.filter === 'function') {
+          const origFilter = window.filter;
+          window.filter = function () {
+            origFilter.apply(this, arguments);
+            const ids = window.__urlRestrictIds;
+            if (ids && ids.size) {
+              document.querySelectorAll('.card').forEach(function (card) {
+                const cid = parseInt(card.dataset.id, 10);
+                if (!ids.has(cid)) card.classList.add('hidden');
+              });
+              if (typeof window.updateStats === 'function') window.updateStats();
+            }
+          };
+        }
+      }
+    }
+
+    // ---- cats: 加入 activeCats 集合 ----
+    // activeCats / activeDiffs / filter 都是 inline <script> 用 `let` 声明的
+    // 顶层绑定，不会出现在 window 上，必须用裸名访问全局词法环境。
+    if (catsParam) {
+      try {
+        if (typeof activeCats !== 'undefined' && activeCats && typeof activeCats.add === 'function') {
+          const wantedCats = catsParam.split(',').map(s => s.trim()).filter(Boolean);
+          wantedCats.forEach(c => activeCats.add(c));
+          document.querySelectorAll('[onclick^="toggleCat("]').forEach(function (el) {
+            const m = /toggleCat\(\s*['"]([^'"]+)['"]/.exec(el.getAttribute('onclick') || '');
+            if (m && activeCats.has(m[1])) el.classList.add('active');
+          });
+          touched = true;
+        }
+      } catch (_) { /* TDZ / undeclared — silently skip */ }
+    }
+
+    // ---- diffs: 加入 activeDiffs 集合 ----
+    if (diffsParam) {
+      try {
+        if (typeof activeDiffs !== 'undefined' && activeDiffs && typeof activeDiffs.add === 'function') {
+          const wantedDiffs = diffsParam.split(',').map(s => s.trim()).filter(Boolean);
+          wantedDiffs.forEach(d => activeDiffs.add(d));
+          document.querySelectorAll('[onclick^="toggleDiff("]').forEach(function (el) {
+            const m = /toggleDiff\(\s*['"]([^'"]+)['"]/.exec(el.getAttribute('onclick') || '');
+            if (m && activeDiffs.has(m[1])) el.classList.add('active');
+          });
+          touched = true;
+        }
+      } catch (_) { /* skip */ }
+    }
+
+    // ---- q: 填入搜索框 ----
+    if (qParam) {
+      const inp = document.getElementById('searchInput');
+      if (inp) inp.value = qParam;
+      touched = true;
+    }
+
+    // 触发一次 filter() 让上面的状态生效
+    if (touched) {
+      try {
+        if (typeof filter === 'function') filter();
+      } catch (_) { /* skip */ }
+    }
+  });
+})();
