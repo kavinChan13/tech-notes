@@ -2961,6 +2961,434 @@ const ENRICHMENT = {
       ],
     },
   },
+
+  pm: {
+    // ============== 框架 ==============
+    1: {
+      why_asked: `PM / EM 面试必问。能讲"Action 50% + 用我不用我们 + 量化结果 + 留钩子"4 要点的人通常做过 mock 面试或读过 Gayle McDowell。`,
+      answers: {
+        mid: `<strong>STAR</strong>：Situation（背景）→ Task（任务）→ Action（行动）→ Result（结果）。所有"讲一次你..."的<strong>行为题</strong>都用这个公式。`,
+        senior: `<strong>时间分配 + 4 大要点</strong>：<br>· <strong>S</strong>: 10-15s（背景 + 我的角色 + 时间）<br>· <strong>T</strong>: 10s（目标 + 关键挑战）<br>· <strong>A</strong>: <strong>45-50s（最重要！）</strong>—— 具体做了什么，<strong>用"我"不用"我们"</strong><br>· <strong>R</strong>: 15s（结果 + 衡量，<strong>必须有数字</strong>）<br>· R+: 可选 10s（学到什么）<br><br><strong>高分要点</strong>：① Action 占 50% 时间；② 用"我"不用"我们"；③ 结果<strong>量化</strong>（百分比/节省时间/提升指标）；④ 留 1-2 个<strong>钩子</strong>让对方主动追问。`,
+        staff: `深一层：STAR 不是"答题套路"而是<strong>面试官 evaluate 信号的框架</strong>—— 通过看你 STAR 各段比例可以判断：① 偏 process（侧重 S/T）vs 偏 execution（侧重 A）；② 个体贡献（"我"清晰）vs 团队 follower（满口"我们"）；③ 真做过（细节具体）vs 听说过（泛泛而谈）。<br><br><strong>真实经验</strong>：我跟 mentor mock 面试发现自己常犯：<br>① <strong>S 段太长</strong>（30s+，面试官失去耐心）→ 砍到 15s<br>② <strong>用"我们"</strong>（暴露不知自己具体贡献）→ 强迫自己 4 个"我"开头<br>③ <strong>R 没数字</strong>（"提升了用户体验"）→ 改 "DAU +12% / P99 -40%"<br>④ <strong>无钩子</strong>（讲完案例无下文）→ 故意留"细节我可以展开"信号<br><br><strong>典型 anti-pattern</strong>：① 把 S 当主菜（讲了 1 分钟项目背景才到 A）；② Action 写成"我们大家一起..."；③ Result 只说"很成功"无数字；④ 故事一气讲完 5 分钟没让面试官追问—— 失去 calibration 机会。<strong>实战训练</strong>：① 准备 6-8 个 STAR 故事（覆盖领导力 / 失败 / 冲突 / 创新等高频维度）；② 录音听自己（关键看用我 vs 我们比例）；③ 4 分钟极限版 + 90s 精简版各练熟。`,
+      },
+      failure_modes: [
+        `S 段太长（&gt; 30s）→ 面试官失耐心`,
+        `用"我们"不用"我" → 看不出个人贡献`,
+        `R 无量化数字 → "成功"是 vacuous`,
+        `Action 写成"团队大家一起" → 个体贡献模糊`,
+        `一气讲完不留钩子 → 失去面试官 follow-up 机会`,
+      ],
+      follow_ups: [
+        { q: `Action 段具体讲什么？`, hint: `① 具体决策（我决定 X 而非 Y）；② 关键沟通（我跟 Z 说了 X）；③ 量化技术细节（用了 X tool / X 框架）；④ 反映 leadership / influence` },
+        { q: `失败题的 R 怎么讲？`, hint: `① 量化失败程度（"项目延期 3 个月 / 用户流失 X%"）；② 自我反思（"复盘发现我 X 决策错"）；③ 学习 + 后续改进（"现在用 Y 框架避免重蹈"）` },
+        { q: `怎么准备 STAR 故事库？`, hint: `① 列 6-8 个项目；② 每项目按维度（领导力 / 影响力 / 失败 / 冲突 / 创新 / 跨部门）打标签；③ 一个故事可服务多维度；④ 90s + 4min 两版本各练熟` },
+      ],
+    },
+
+    // ============== 行为题 ==============
+    2: {
+      why_asked: `领导力高频题。能讲"识别贵货币 + Pyramid + Bridge"的人是真用过 Cohen-Bradford 影响力理论。`,
+      answers: {
+        mid: `用 STAR 讲。重点在 <strong>Action</strong>：用 <strong>Cohen-Bradford 6 类货币</strong>（地位 / 关系 / 灵感 / 任务 / 个人 / 影响力）找到对方"<strong>贵货币</strong>"；用 <strong>Pyramid Principle</strong> 写一页纸打动决策者；用 <strong>Bridge</strong> 找信任第三方背书。`,
+        senior: `<strong>"没人想做"的<u>根因诊断</u></strong>：① 看不见 ROI（数据不足）；② 看见 ROI 但<strong>影响其他优先级</strong>；③ 历史失败过；④ 文化抵触（"以前没这么干过"）。每个根因 action 不同。<br><strong>典型 Action</strong>：<br>· 用 customer interview / data 让 ROI 可见<br>· Pyramid 一页纸：结论 → 3 论据 → 数据支撑<br>· 找 1-2 个 sponsor（高级别）背书<br>· 小范围 pilot validate → 数据说话 → 全推`,
+        staff: `深一层：这道题考的是 PM <strong>"无权但有影响力"</strong>核心能力。<strong>Cohen-Bradford 货币模型</strong>详解：<br>① <strong>Task</strong>: 直接帮助对方完成本职（"我帮你 X，你帮我 Y"）<br>② <strong>Inspiration</strong>: 大愿景 / 使命感<br>③ <strong>Status</strong>: 地位 / 影响力扩展<br>④ <strong>Relationship</strong>: 友谊 / 信任<br>⑤ <strong>Personal</strong>: 个人偏好 / 兴趣<br>⑥ <strong>Position</strong>: 职权 / 资源<br>关键：<strong>不同 stakeholder 贵货币不同</strong>。Tech lead 通常贵 task + inspiration；EM 贵 status + relationship；C-level 贵 inspiration + position；财务贵 task。<br><br><strong>真实案例</strong>：我推过一个 "API 监控统一" 项目，5 个团队都没动力。<br><strong>诊断</strong>：① 团队 A 觉得他们的监控已足够；② 团队 B 担心额外工作量；③ 团队 C 怕 visibility 后 SLO 暴露问题。<br><strong>Action</strong>：<br>· 跟 A 强调"事故时跨团队协作快 30%"（task currency）<br>· 跟 B 提供我们 team 帮 setup（task currency）<br>· 跟 C 强调"反正大家都做，谁不做谁突出"（status currency 反向）<br>· 找 VP sponsor 在 leadership meeting 1 分钟提一句（position currency）<br><strong>R</strong>：4 个月推 4 个团队上线，第 5 个团队主动来 onboard（peer pressure），事故 MTTR 从 45min 降到 18min。<strong>陷阱</strong>：① 一种货币打所有人（如 C-level 不在意 task）；② 不诊断根因直接 push；③ 不给对方"赢"的空间（强势压人）；④ 没 sponsor 单兵作战。`,
+      },
+      failure_modes: [
+        `单一货币打所有 stakeholder（每个人 sweet spot 不同）`,
+        `不诊断"为什么没人想做"直接 push → 反弹更强`,
+        `用 position（"我老板让你做"）压人 → 短期有效长期失信`,
+        `没找 sponsor / Bridge 第三方背书 → 单兵作战累`,
+        `Pilot 不验证就全推 → 失败影响 credibility`,
+      ],
+      follow_ups: [
+        { q: `Pyramid Principle 怎么用？`, hint: `① 顶层：1 句话结论；② 中层：3-5 个支撑论点；③ 底层：每个论点的具体数据 / 例子；④ "金字塔倒过来给"——先讲结论再 drill down` },
+        { q: `没有 sponsor 怎么办？`, hint: `① 找 peer 中受尊重的（不一定 senior）做"first follower"；② Bridge 信任第三方背书；③ 用 data + case study 替代权威；④ 渐进式建立 own credibility` },
+        { q: `Cohen-Bradford 跟其他影响力理论关系？`, hint: `① Cialdini 影响力 6 原则（互惠 / 一致 / 社会认同 / 喜好 / 权威 / 稀缺）—— 心理学层面；② Cohen-Bradford 实务层面；③ 组合用更强；④ 推荐读两本原书` },
+      ],
+    },
+
+    3: {
+      why_asked: `"无权而有影响力"经典考察。能讲"没职权 + 数据 + 备选 + 1on1"的人是真做过 senior PM 工作。`,
+      answers: {
+        mid: `"<strong>Influence Without Authority</strong>" 案例。STAR 重点：① 我<strong>没有职权</strong>用<strong>数据</strong>；② 备选方案<strong>不带情绪</strong>；③ 通过 <strong>1on1 而非公开会议</strong>让对方"自己得出结论"。`,
+        senior: `<strong>关键技巧</strong>：<br>① <strong>找贵货币</strong>（见 #2）：对 senior 通常 inspiration / position currency<br>② <strong>preparation</strong>：准备好数据 + 至少 3 个备选方案 + 自己倾向但不暴露<br>③ <strong>提问 &gt; 主张</strong>：用 Socratic 方法让对方"自己发现"<br>④ <strong>1on1 不是公开会</strong>：避免对方"挂面子" → 私下更愿听<br>⑤ <strong>明确 ask</strong>：你要的是什么具体决策 / 资源 / 时间`,
+        staff: `深一层：影响 senior 的<strong>核心心态转变</strong>是 "<strong>我不是来让他同意我，是来一起做出更好决策</strong>"。Senior 时间 expensive，准备<strong>不充分 = 浪费他的时间 = 失去 next opportunity</strong>。<br><br><strong>真实案例</strong>：我作为 EM 想推一个 "<strong>10% 工程时间投技术债</strong>" 制度，但 VP 不感兴趣（"我们 deadline 紧"）。<br><strong>Action</strong>：<br>1) <strong>1on1 准备</strong>：① 跟 VP 1on1 列了 sprint 数据（最近 6 sprint 有 4 个 missed deadline，平均因为 unexpected bug fix）；② 提了 3 个 option（A: 0% 不变 / B: 10% 投入 / C: 20% 投入）；③ 量化预期：B 选项预计 3 个月后 sprint completion rate +15%。<br>2) <strong>提问引导</strong>：不主张"我们应该 B"，而问 "你看这 4 个 missed deadline，root cause 都是 tech debt，咱们 60% 时间在救火，长期可持续吗？"<br>3) <strong>1on1 不公开</strong>：VP 公开会面子 weight 大，私下他可以说 "I was thinking about this too"。<br>4) <strong>明确 ask</strong>："想试 3 个月 pilot，30 day check-in 决定 continue"。<br><strong>R</strong>：VP 同意 pilot；3 个月后 sprint completion rate +18%（超预期），推到所有团队。<br><br><strong>陷阱</strong>：① <strong>没数据靠 passion</strong>（senior 不吃这套）；② 唯一方案推（"必须 B"）显得 inflexible；③ 公开 push（让 senior 面子下不来）；④ 没明确 ask（senior 不知道你要他做什么决策）；⑤ <strong>太软</strong>—— "我只是建议"等于不主张。<strong>关键</strong>：① pre-meet 1on1 比 group meet 高效 10×；② Senior 看你的 thought process 不只是结论；③ 接受被否决—— 准备 backup plan 或 next iteration。`,
+      },
+      failure_modes: [
+        `没数据靠 passion → senior 不 buy`,
+        `单一方案推（"必须做 X"）→ 显得 inflexible`,
+        `公开 group meeting push → senior 面子下不来 → 抵触`,
+        `没明确 ask → senior 不知道要他干什么`,
+        `太软（"只是建议"）→ 等于没主张`,
+      ],
+      follow_ups: [
+        { q: `Senior 不直接拒绝但 stall 怎么办？`, hint: `① 跟进 cadence（每 2 周 1on1）；② 提供更多 data / case study；③ 找 peer 帮你 advocate；④ 接受可能需要 6-12 个月 build credibility；⑤ 同时推进 small win 建立 track record` },
+        { q: `怎么避免 senior 觉得你"越级"？`, hint: `① 提前跟自己 manager align（"我打算跟 X VP 谈，你怎么看"）；② 谈完 brief manager；③ 始终代表 manager / team interest，不是 personal agenda；④ Manager support 是关键` },
+        { q: `Senior 当场推翻你的 proposal 怎么应对？`, hint: `① 不 defend，先 acknowledge（"good point on X"）；② 问"what would make you supportive"挖根因；③ 跟进发 written summary + revised proposal；④ 不挂面子，反映成熟度` },
+      ],
+    },
+
+    4: {
+      why_asked: `跨部门考察 PM 综合能力。能讲"4 件套（map + RACI + EVM + 风险）+ SPI/CPI 量化"的人是真做过项目管理。`,
+      answers: {
+        mid: `体现 <strong>4 件套</strong>：① <strong>stakeholder map</strong>（power-interest grid）；② <strong>RACI</strong>（每交付物明确 R/A/C/I）；③ <strong>EVM 监控</strong>（每周 SPI / CPI）；④ <strong>风险登记</strong>（top 10 risk + mitigation）。结果一定要用 <strong>SPI / CPI</strong> 或<strong>具体节省 X 周</strong>的数字。`,
+        senior: `<strong>STAR 完整结构</strong>：<br>· <strong>S</strong>: 项目规模（涉及多少团队 / 多少人 / 时长）<br>· <strong>T</strong>: 我作为 PM 的角色 + 主要挑战<br>· <strong>A</strong>: 4 件套的具体应用 + 2-3 个关键决策（如 trade-off / escalation）<br>· <strong>R</strong>: 量化结果（按时上线 / 超 deliver / 跨团队满意度）<br><br><strong>关键</strong>：跨部门 complexity 不是讲<strong>故事多 dramatic</strong>，是讲<strong>process discipline</strong>—— 怎么<strong>系统化</strong>管理多变量。`,
+        staff: `深一层：跨部门项目<strong>失败的 90% 在 setup 阶段</strong>：① stakeholder 没识别全；② RACI 没明确 → 后期扯皮 ownership；③ 风险没 surface → 中后期 surprises。<strong>4 件套的真实价值</strong>不是文档本身，而是<strong>"setup 时强迫思考"</strong>。<br><br><strong>真实案例</strong>：电信 "<strong>跨 5 个团队的 NETCONF agent 替换项目</strong>"（替老 Java agent）：<br><strong>S</strong>: 5 team (Engineering / Ops / QA / Product / Customer Success) / 18 人月预算 / 6 个月 timeline / 8 个客户 customer-facing<br><strong>T</strong>: 我作为 PM lead，挑战：① 5 团队 priorities 不同；② 客户 transition 风险高；③ 老 agent 已在生产 8 年（dependencies 复杂）<br><strong>A</strong>:<br>1) <strong>Stakeholder map</strong>：8 个客户 + 5 team leads + VP Engineering + VP Sales，按 power/interest 排<br>2) <strong>RACI</strong>：12 个交付物（代码 / 文档 / migration tool / customer training 等），每个明确 R/A/C/I<br>3) <strong>EVM</strong>：每周 weekly report 给 VP + customer success，SPI / CPI trend<br>4) <strong>风险登记</strong>：top 12 risk，每月 review；用 P × I 矩阵<br>5) <strong>关键决策</strong>：① month 3 发现 QA team underallocate → 升级到 VP 加资源；② month 5 一个客户拒绝迁移 → 决定 keep dual agent for them 6 months（trade-off）<br><strong>R</strong>: 6 个月按时完成，SPI = 0.98 / CPI = 1.05（small under-budget），8 个客户 7 个按时迁移，第 8 个延 3 个月（accepted risk），<strong>跨团队 NPS +30 vs 平均跨部门项目</strong>。<br><br><strong>陷阱</strong>：① 4 件套写完不<strong>持续 review</strong>（变成 setup artifact）；② RACI 写多个 A（每个 deliverable 只能 1 个 accountable）；③ 风险不分级 → 都当 high priority → 实际 nothing 优先；④ 量化结果不显著（"项目成功" vs "SPI = 0.98"）。`,
+      },
+      failure_modes: [
+        `Setup 阶段 4 件套不全 → 后期扯皮`,
+        `RACI 多个 A（每行必须 1 个）`,
+        `风险不分级 → 都 high → 实际 nothing 优先`,
+        `EVM / 进度不 weekly review → setup 文档变成历史档案`,
+        `R 段不量化（"项目成功"）→ 信号弱`,
+      ],
+      follow_ups: [
+        { q: `Stakeholder Map 怎么画？`, hint: `① Power × Interest 2x2 grid；② High P + High I = Manage Closely；High P + Low I = Keep Satisfied；Low P + High I = Keep Informed；Low + Low = Monitor；③ 每个 stakeholder 标 quarterly cadence` },
+        { q: `RACI 跟 DACI / RAPID 区别？`, hint: `① RACI 适合 deliverable-driven 项目；② DACI（Driver / Approver / Contributor / Informed）适合 decision-driven；③ RAPID（Recommend / Agree / Perform / Input / Decide）Bain 风格，复杂决策用；scenario 选` },
+        { q: `EVM 数据怎么收集 + 报？`, hint: `① Jira / Asana / 自定义 dashboard；② Weekly status report 自动生成 SPI / CPI / 趋势 chart；③ 月度 stakeholder review；④ tools: MS Project / Smartsheet / Jira Advanced Roadmaps` },
+      ],
+    },
+
+    14: {
+      why_asked: `失败题考<strong>self-awareness</strong>。能讲"承担责任 + 具体根因 + 学习 + 防再犯"的人通过；甩锅 / 假谦虚都 fail。`,
+      answers: {
+        mid: `<strong>4 步</strong>：① 承担责任（不甩锅）；② 具体说错在哪（<strong>数据 / 假设 / 沟通</strong> 哪类）；③ 讲学到了什么；④ 讲后来怎么避免。`,
+        senior: `<strong>关键原则</strong>：① <strong>选真的错决策</strong>不是"伪谦虚"（如"我太投入了"）；② <strong>不甩锅</strong>（不归咎团队 / 老板 / 客户）；③ <strong>根因到 process / system 层</strong>（不止"我没注意"）；④ <strong>后续具体改进</strong>（"现在每次决策前 X 检查"）。`,
+        staff: `深一层：面试官通过这题<strong>验证三个信号</strong>：① <strong>真有反思能力</strong>（不是 PR-style 答案）；② <strong>能识别 system / process 层 root cause</strong>（不只 individual blame）；③ <strong>真改进了</strong>（不是嘴上学习）。<br><br><strong>真实案例</strong>：作为 EM 决策"<strong>暂停一个 in-flight 项目以追快 deadline 项目</strong>"。<br><strong>具体错</strong>：<br>· <strong>假设错</strong>：我假定 in-flight 项目"小 pause 再 restart 容易"。实际上：① 工程师 context switch 成本巨大；② in-flight 团队成员 morale 受打击（"我的工作不重要"）；③ in-flight 项目 dependency 也卡<br>· <strong>沟通错</strong>：决策时没充分跟 in-flight 团队解释 trade-off rationale，他们感觉被 ignore<br>· <strong>process 错</strong>：没正式 evaluation framework，凭"deadline 优先"直觉决策<br><strong>结果</strong>：deadline 项目按时上线，但 in-flight 项目 1 个 senior dev 3 个月后离职（部分原因），项目 restart 后效率 -40%，<strong>整体净损失 &gt; 收益</strong>。<br><strong>学到</strong>：<br>① <strong>system thinking</strong>：决策影响远超个体决策点（second order effect）<br>② <strong>沟通成本 underestimated</strong>：trade-off 决策必须包含 explanation 给受影响 team<br>③ <strong>正式 framework</strong>：现在用 <strong>Decision Matrix</strong>（impact / urgency / reversibility / team morale）打分而非直觉<br>④ <strong>1on1 first</strong>：影响重大决策前跟受影响 team lead 1on1，给他们影响决策的机会<br><br><strong>后续改进</strong>：① <strong>Decision Log</strong>（quarterly review）；② <strong>跨项目 prioritization framework</strong> 在团队全员对齐；③ 6 个月没再做类似 "switch project" 决策但<strong>有过 1 次"诱惑场景"</strong>—— 这次按 framework 评估，决定 NOT switch，事后 validated。<br><br><strong>陷阱</strong>：① <strong>选小 stake 决策</strong>（暴露不愿真 share）；② <strong>把 individual blame 当 root cause</strong>（system / process 层更深）；③ <strong>讲完后续没改</strong>（"我会更小心"是 vacuous）；④ <strong>"我们决策错"</strong>—— 这是 STAR 大忌（"我"不是"我们"）。`,
+      },
+      failure_modes: [
+        `选小 stake 决策（"我曾选了错 typeface"）→ 不诚信`,
+        `甩锅给团队 / 老板 / 客户 / 时间不够`,
+        `Root cause 停在 individual blame（"我没注意"）→ 不深入`,
+        `没具体后续改进（"我会更小心"）→ vacuous`,
+        `用"我们"主语 → 看不出个人 ownership`,
+      ],
+      follow_ups: [
+        { q: `怎么选合适的"错决策"故事？`, hint: `① 真的有 impact（不是 trivial）；② 你确实有 ownership（不是别人决定）；③ 已经 resolved / 有 learning；④ 能讲到 root cause 层；⑤ 后续真改进了` },
+        { q: `面试官说 "你这个不算 mistake" 怎么办？`, hint: `① 不 defend"为啥算"；② 直接 give another example（"你说得对，那我说另一个"）；③ 准备 2-3 个 mistake 故事 backup` },
+        { q: `怎么讲"还没 fully recover" 的失败？`, hint: `① 客观陈述 status；② 讲已经做的 mitigation；③ 讲 still-learning（"6 个月后再 review，我会带新 data"）；④ 显示成熟（不是所有失败都立即 turn-around）` },
+      ],
+    },
+
+    22: {
+      why_asked: `<strong>真失败题</strong>。能讲"非伪谦虚 + 责任 + 根因 + 长期改变"的人是真有 PM 经历。`,
+      answers: {
+        mid: `<strong>真失败</strong>（不是"伪谦虚"），讲清<strong>责任 / 根因 / 补救 / 长期改变</strong>。表现出"<strong>我能从失败中学到东西</strong>"的能力。`,
+        senior: `<strong>结构</strong>：<br>1) <strong>S/T</strong>: 项目背景 + 我作为 PM 角色 + 失败的具体定义（哪个目标没达成）<br>2) <strong>A</strong>: 我做了什么决策 / 行动，特别是<strong>哪些是事后看错的</strong><br>3) <strong>R</strong>: 失败结果（量化：用户流失 / 收入损失 / 团队 morale）+ 我作为 PM 承担的部分<br>4) <strong>+R</strong>: 复盘 root cause + 学到的 + 后续 X 个 quarter 应用了 learning 的 evidence`,
+        staff: `深一层：真失败题<strong>三个 trap</strong>：① <strong>伪失败</strong>（"项目 ship 晚了 1 周但成功了"）；② <strong>外部归因</strong>（"market 变了"）；③ <strong>没 learning evidence</strong>（"我学到要 communicate 更多"，没具体）。<br><br><strong>真实案例</strong>：作为 PM 负责 "<strong>NETCONF agent v3 自定义 plugin 框架</strong>"—— 让客户能写自定义 plugin 扩展 agent 行为。<br><br><strong>S/T</strong>: 6 个月 + 4 工程师 / 跟 5 个 strategic 客户调研后启动 / 目标：3 客户 adopt + 验证产品方向。<br><strong>A (我的关键决策)</strong>:<br>1) <strong>过早 commit framework API</strong>：调研只看了 5 客户，假定他们的 use case 代表全部<br>2) <strong>开发期跟 strategic 客户 weekly sync 不够 deep</strong>（产品 demo 一致点头，但没要求实际 prototype trial）<br>3) <strong>没识别 alternative</strong>（客户其实更需要 better default config，不是 plugin 灵活性）<br>4) <strong>launch 时 plugin API 复杂度过高</strong>（需要 client engineer 学 ~ 100 个 callbacks）<br><br><strong>R</strong>: 6 个月按时 ship + 客户 demo 都说"很赞" → 实际 3 个月内 0 客户真用上；6 个月内只 1 客户 prototype（被代码量震惊）；产品方向调整 - kill 这个 framework + 转回 better config UX。<strong>损失</strong>：~4 工程师 × 6 个月 = 2 person-year 投入，加上信誉 cost。<br><br><strong>root cause（复盘）</strong>：<br>1) <strong>Discovery 不充分</strong>：调研 stop at "yes I like" 没深入到"<strong>你愿意花多少时间学</strong>"<br>2) <strong>缺 prototype validation</strong>：直接做 production code，没 wireframe / mock 验证<br>3) <strong>vanity metric</strong>：把 demo 反应当成功信号（实际 demo 是社交礼貌）<br>4) <strong>没 alternative 探索</strong>：先入为主"我们要做 plugin"，没考虑 simpler solutions<br><br><strong>学习 + 后续 evidence</strong>：<br>1) <strong>Discovery Framework</strong>：现在 discovery 必有 "<strong>willingness to pay</strong>" 量化（时间 / 钱 / 复杂度容忍）<br>2) <strong>Prototype-first</strong>：production 投入前必有 prototype 给 3-5 客户 hands-on test<br>3) <strong>Anti-vanity metric</strong>：discovery 阶段不看"喜欢吗"看"会用吗 + 多少 effort"<br>4) <strong>后续 6 quarter</strong>：3 个新功能都按 framework 做，1 个 kill 在 prototype 阶段（avoided 6 month investment），2 个 ship 后 success<br><br><strong>陷阱</strong>：① 选不真 painful 的失败 → 显得不严肃；② 不量化 cost → 不真实；③ Learning 不 specific（"要 listen 用户"）；④ 没 evidence 真 apply learning。`,
+      },
+      failure_modes: [
+        `选伪失败（"晚 1 周但成功"）→ 不严肃 / 不诚信`,
+        `外部归因（"market 变 / 团队不给力"）→ 没 ownership`,
+        `量化 cost 缺失 → 不真实`,
+        `Learning vague（"要更注意 X"）→ 没 actionable`,
+        `没后续 evidence apply learning → 不可信改了`,
+      ],
+      follow_ups: [
+        { q: `如果项目失败但你不负责怎么办？`, hint: `① 仍找出"我可以做更多"的部分（advocate / escalate / influence）；② 不全甩锅 EM / VP；③ 体现 expanding ownership 心态` },
+        { q: `失败后跟团队怎么 communicate？`, hint: `① 第一时间 honest 承担；② Blameless retro（重点 system not individual）；③ 给团队明确 path forward；④ 庆祝 learning + 表扬 contributors` },
+        { q: `面试官质疑你的 learning 不够具体？`, hint: `① 给 specific case study（"X 项目我用了 Y framework"）；② 显示前后对比的 evidence；③ 接受批评（"good point, here's another angle"）` },
+      ],
+    },
+
+    23: {
+      why_asked: `经典 self-awareness 题。能讲"真弱点 + 具体改进 evidence"的人通过；假谦虚（"我太完美主义"）立即 fail。`,
+      answers: {
+        mid: `<strong>真弱点 + 具体改进 evidence</strong>。例："我以前会<strong>过度做计划</strong>反而拖延决策，去年读了《Decisive》后练习 <strong>2-way door 决策思维</strong>，现在会主动用 70/30 法则。"`,
+        senior: `<strong>3 部分</strong>：<br>1) <strong>真弱点</strong>（不是"太完美主义" / "工作太投入"）：选一个<strong>真的影响过 work output</strong>的<br>2) <strong>具体改进 evidence</strong>：读了什么 / 做了什么 / 谁帮助你 / 用了什么 framework<br>3) <strong>仍在路上 / 可观察 progress</strong>：不假装"已完美解决"`,
+        staff: `深一层：这道题考<strong>self-awareness + growth mindset</strong>。面试官 looking for：① <strong>真知道自己 weakness</strong>（不是 deflect）；② <strong>主动 work on it</strong>（不是认命）；③ <strong>能看到 progress</strong>（measurable）。<br><br><strong>真实例子</strong>：我的真弱点是 "<strong>对 conflict 不够直接，倾向于私下解决而非现场 push back</strong>"。<br><br><strong>具体 manifest</strong>：① 跨团队会议有 disagreement 时倾向 "I'll follow up after" 而非现场 challenge；② 1on1 给负面 feedback 容易过 soft（员工感觉"还好"实际 serious）。<br><strong>影响</strong>：① 错过 group setting 的 alignment 机会（事后 1-on-1 effort × 5）；② 员工 review 时 surprise（"我以为没那么 serious"）。<br><br><strong>改进 actions</strong>：<br>1) <strong>读书</strong>：《Crucial Conversations》《Radical Candor》（Kim Scott）<br>2) <strong>训练</strong>：跟 mentor coach 每月 mock 一次 difficult conversation<br>3) <strong>practice in low-stakes</strong>：每周至少在 1 个非关键会议 push back 一次（练习 muscle）<br>4) <strong>结构化负面 feedback</strong>：每次给 feedback 用 SBI framework（Situation-Behavior-Impact）+ 录音听自己<br><br><strong>Progress evidence</strong>：<br>1) <strong>过去 6 个月</strong>：跨团队会议 push back 增加 ~3×（peer feedback 360 数据）<br>2) <strong>员工 review</strong>：去年 review 0 surprise（前年 2 个）<br>3) <strong>仍要 improve</strong>：跟 VP 1on1 给 feedback 仍然偏 soft（power dynamics + cultural 因素）<br><br><strong>陷阱</strong>：① "我太 perfectionism"（红旗答案，90% 候选人答这个）；② "工作太投入"（伪谦虚）；③ 没改进 evidence（只承认）；④ 选 work-irrelevant weakness（如"我不擅长 sport"）；⑤ 假装已完美 fix（不真实）。`,
+      },
+      failure_modes: [
+        `"完美主义" / "太投入" → 伪谦虚红旗`,
+        `选 work-irrelevant weakness → 显得 dodge`,
+        `只承认没改进 → 没 growth mindset`,
+        `假装已完美 fix → 不真实`,
+        `Weakness vague（"沟通"）→ 没具体场景`,
+      ],
+      follow_ups: [
+        { q: `面试官说 "this isn't really a weakness" 怎么办？`, hint: `① 同意 + 升级 stake（"对，更严重的是 X"）；② 给具体 painful example；③ 准备 2-3 个不同 weakness backup` },
+        { q: `怎么找自己真 weakness？`, hint: `① 360 feedback（同事 / 下属 / 上级 anonymous）；② 自己 1on1 with mentor / coach；③ Performance review 上 manager 的 "areas to grow"；④ 自我反思失败案例 root cause` },
+        { q: `Weakness 跟 area-to-grow 区别？`, hint: `① Weakness: 已经影响 work output；② Area to grow: skill 没到下个 level；③ 面试通常问 weakness（更严重），但你可以 reframe 成 growth area + 加 progress evidence` },
+      ],
+    },
+
+    26: {
+      why_asked: `转 PM 必问。能讲 3 层（推 / 拉 / 准备）的人通常想清楚了，不是冲动转。`,
+      answers: {
+        mid: `<strong>3 层结构</strong>：① <strong>推力</strong>（EM 让我意识到产品决策影响 &gt; 技术深度）；② <strong>拉力</strong>（具体场景 / 角色让我兴奋）；③ <strong>准备</strong>（过去 3 个月学了什么 / 做了什么）。`,
+        senior: `<strong>展开例子</strong>：<br>1) <strong>推</strong>: "作为 senior EM 我发现 80% 影响力发生在产品决策时刻（这个 feature 要不要做、怎么定义 success），而我对'用户场景'理解还不够深；技术决策反而是 derived"<br>2) <strong>拉</strong>: "我喜欢做用户研究 + 数据分析定义问题，比写代码 / 管理团队更让我 energized；过去带产品讨论时我 take 太多 leadership role 即使非 PM"<br>3) <strong>准备</strong>: "过去 6 个月：① 读 Inspired / Lean Product Playbook / Continuous Discovery；② 跟 5 个 senior PM 1on1；③ 主动 take 2 个 cross-functional initiative 当 PM role；④ 做了一个 side project 完整 product cycle"`,
+        staff: `深一层：转 PM 的<strong>真 risk</strong>是: ① "<strong>不爱写代码所以转 PM</strong>"（红旗，PM 不是 IC 升级）；② "<strong>看 PM 工作光鲜</strong>"（实际 PM 多数时间是 negotiation / 写 PRD / 跟数据）；③ "<strong>转完后悔回不去</strong>" → 候选人没 calibration。<br><br><strong>面试官 looking for</strong>：① <strong>清晰 motivation</strong>（不是 default option）；② <strong>清楚 trade-off</strong>（接受 PM 的不光鲜面）；③ <strong>已经在做 PM-like 工作</strong>（不是凭空想象）。<br><br><strong>真实经验</strong>：我从 senior EM 想转 PdM 时，跟 5 个 senior PM 1on1 学到：<br>1) <strong>PM 是 hardest job 之一</strong>—— 没直接权力但要 align 所有人；<br>2) <strong>没 immediate feedback</strong>—— ship 后数个月才知道做对没；<br>3) <strong>很多人讨厌 PM</strong>—— 工程师觉得 PM "添乱"，sales 觉得 PM "拒绝客户需求"；<br>4) <strong>需要 thick skin</strong>—— Decision 经常被质疑 / 改。<br><br>了解这些 reality 后我选择"<strong>先做 PM-like work 6 个月再决定</strong>"：take 一个 strategic project 当 de facto PM（continued EM role 但 work allocation 70% PM-flavor）；6 个月后：<br>① <strong>energy 持续高</strong>（喜欢 problem ambiguity）<br>② <strong>但</strong>意识到我对 quantitative analysis 不够（弱在 SQL / experiments）<br>③ 决定"<strong>side career pivot</strong>" 而非完全转<br><br><strong>说给面试官的版本</strong>: 推 + 拉 + 准备 + <strong>"我做了 6 个月 dry run，看到自己 strengths 和 gaps"</strong> → 这种 calibrated 答案比纯热血 strong 10×。<br><br><strong>陷阱</strong>：① "不喜欢写代码"（红旗）；② "我觉得 PM 工作有趣"（vague）；③ 没准备 evidence；④ 不知道 PM dark side；⑤ "<strong>我管理过 team 所以我适合 PM</strong>"—— PM 跟 EM 完全不同技能集，不能混淆。`,
+      },
+      failure_modes: [
+        `"不喜欢写代码 / 不想做 EM 了" → 红旗 motivation`,
+        `vague description（"PM 工作有趣"）`,
+        `没准备 evidence（没读书 / 没 dry run / 没 PM mentor）`,
+        `不知道 PM dark side（被以为 idealized PM）`,
+        `用 EM / IC 经验直接 map 到 PM（误以为是 same skill set）`,
+      ],
+      follow_ups: [
+        { q: `如果做了 PM 6 个月发现不适合怎么办？`, hint: `① 跟 manager 坦诚谈；② 看是否能回 EM/IC track（很多公司可逆）；③ 总结学到的 PM skills 对 IC/EM 也有用；④ 显示成熟 self-awareness` },
+        { q: `从 EM 转 PM vs 从 IC 转 PM 区别？`, hint: `① EM → PM：strength 在 execution / leadership / cross-functional；gap 在 product depth / data；② IC → PM：strength 在 technical depth；gap 在 leadership / ambiguity；不同 path 准备不同` },
+        { q: `转 PM 后 senior level 怎么算？`, hint: `① 通常 PM 公司从 mid level 起算（不是 fresh）；② Your past EM/IC seniority 部分认可；③ 第一年薪资可能持平或略降；④ 长期 ROI 看个人 trajectory` },
+      ],
+    },
+
+    // ============== PgM EVM ==============
+    32: {
+      why_asked: `EVM 基础题。能讲清 PV/EV/AC 概念 + 公式应用的人是真做过项目控制。`,
+      answers: {
+        mid: `<strong>PV / EV / AC</strong>：<br>· <strong>PV (Planned Value)</strong>: 计划价值（按 baseline schedule 应完成的工作量 × 预算单价）<br>· <strong>EV (Earned Value)</strong>: 挣值（实际完成的工作量 × 预算单价）<br>· <strong>AC (Actual Cost)</strong>: 实际成本<br><strong>EV vs PV 看进度</strong>，<strong>EV vs AC 看成本</strong>。`,
+        senior: `<strong>核心公式</strong>：<br>· <strong>SV (Schedule Variance)</strong> = EV - PV（正值 = 超前，负值 = 落后）<br>· <strong>CV (Cost Variance)</strong> = EV - AC（正值 = 省钱，负值 = 超支）<br>· <strong>SPI (Schedule Performance Index)</strong> = EV / PV（> 1 = 超前）<br>· <strong>CPI (Cost Performance Index)</strong> = EV / AC（> 1 = 省钱）<br>· <strong>EAC (Estimate at Completion)</strong> = BAC / CPI（按当前 CPI 推总成本）<br>· <strong>ETC (Estimate to Completion)</strong> = EAC - AC（还要花多少钱）`,
+        staff: `深一层：EVM 的<strong>真实价值</strong>不是公式而是<strong>"用客观数据替代主观判断"</strong>。没 EVM 时 PM 跟老板汇报"项目挺好"，主观；有 EVM 时报 "SPI = 0.85 / CPI = 0.92，按当前 trend EAC 比 BAC 高 18%"，客观。<br><br><strong>实战 + 真实经验</strong>：电信项目用 EVM tracking：<br>· Baseline: 6 个月 / 18 人月预算<br>· Week 12 (50%) 时：PV = $90k / EV = $63k / AC = $84k → SPI = 0.7 / CPI = 0.75 → 红灯<br>· EAC = BAC / CPI = $180k / 0.75 = $240k → 超 $60k<br>· <strong>给 VP report</strong>："项目红区，按当前 trend 超 33% 预算 + 落后 30%。Root cause: scope creep + 1 个 senior dev离职。建议：① cut 20% scope；② 加 1 个 contractor 6 周"<br>· <strong>决策</strong>：选 ②，3 周后 SPI 回到 0.85，CPI 0.85（仍超但 manageable）<br><br><strong>陷阱</strong>：① <strong>EVM 不衡量 quality</strong>（按 schedule 但代码烂也是 EV 完成）—— 加 quality metric 配合；② <strong>baseline 不更新</strong>—— scope 改了不重新 baseline 导致 SV 失真；③ <strong>50% rule</strong> 滥用（task 开始算 50% EV，完成才 100%）—— 适合短任务，长任务用 milestone EV；④ <strong>weekly tracking overhead</strong>—— 小项目 EVM 太重，用简化版（task% complete）。<strong>工具</strong>：MS Project / Smartsheet / Jira Advanced Roadmaps / 自建 Excel。`,
+      },
+      failure_modes: [
+        `混淆 PV / EV / AC（典型新人）`,
+        `Baseline 不更新（scope 变了仍按老 PV）`,
+        `EVM 当唯一信号（忽略 quality / team morale）`,
+        `小项目用复杂 EVM（overhead &gt; value）`,
+        `不知道 EAC / ETC 怎么预测（停在 SPI / CPI）`,
+      ],
+      follow_ups: [
+        { q: `SPI 跟 schedule 实际进度差什么？`, hint: `① SPI 是 value-based（EV / PV），不是 duration-based；② 项目最后阶段 SPI 会自然 → 1（EV catches up），<strong>不代表真按时</strong>；③ 用 SPI + critical path duration 组合判断` },
+        { q: `EAC 几种算法？`, hint: `① EAC₁ = AC + (BAC - EV)（假设剩余按 baseline 速度）；② EAC₂ = BAC / CPI（假设按当前 CPI）；③ EAC₃ = AC + (BAC - EV) / (CPI × SPI)（综合）；通常 ② 最常用` },
+        { q: `什么场景不适合 EVM？`, hint: `① 极小项目（&lt; 2 人月）；② Agile / Scrum 持续 backlog（用 velocity）；③ 探索性 R&D（无 fixed scope）；④ EVM 适合 plan-driven + 大型项目` },
+      ],
+    },
+
+    33: {
+      why_asked: `EVM 应用题。能用<strong>BLUF + 量化 + 选项 + ask</strong>的人是真做过 escalation。`,
+      answers: {
+        mid: `<strong>BLUF（Bottom Line Up Front）</strong>：项目<strong>红区</strong>，进度低 30%、超 25%。<strong>EAC₂</strong> 预测 +25%。建议<strong>追预算或减范围二选一</strong>。`,
+        senior: `<strong>详细 talk track</strong>（90s 版）：<br>1) <strong>BLUF</strong>："项目当前 SPI = 0.7 / CPI = 0.8 → red zone"<br>2) <strong>EAC</strong>："按当前 trend 总成本超 25% / 完成时间 + 4 周"<br>3) <strong>Root cause</strong>："① X scope creep / ② Y 团队 turnover / ③ Z 外部依赖延"<br>4) <strong>3 个 options</strong>（不只 1 个）：<br>· A: 加预算 +25% 维持 scope<br>· B: cut scope 30% 保 timeline<br>· C: 延期 4 周 维持 scope + 预算<br>5) <strong>My recommendation + rationale</strong>：B 因为<br>6) <strong>Ask</strong>："需要 you 同意 X 决策 by EOW"`,
+        staff: `深一层：这道题考<strong>EM/PM 向上汇报的核心能力</strong>—— 把<strong>坏消息变成 actionable 决策</strong>。<br><br><strong>对比 anti-pattern</strong>：<br>· <strong>差答</strong>："项目有点问题，进度落后，可能要延期"（vague + no ask + 不显示思考）<br>· <strong>好答</strong>: 上面 6 步 BLUF 结构<br><br><strong>真实经验</strong>：项目 month 4 EVM SPI = 0.65 / CPI = 0.8。我跟 VP 1on1：<br>1) <strong>BLUF</strong>: "项目 red，需要你决策 by EOW"<br>2) <strong>data</strong>: SPI / CPI / EAC + trend chart (4 weeks)<br>3) <strong>root cause</strong>: 2 个 dependency 延迟（vendor X 没按时 deliver SDK / regulatory approval 慢 3 周）+ 1 个 senior 离职<br>4) <strong>3 options</strong>: <br>· A: +$200k 加 contractor + 维持 scope + on time<br>· B: cut feature Y（30% scope）+ 保 timeline + 不加 budget<br>· C: 延 4 周 + 不加 budget + 维持 scope<br>5) <strong>Recommend B</strong>: feature Y 已经 deprioritized in product roadmap，cutting 影响小<br>6) <strong>Ask</strong>: VP approval by Friday<br><strong>VP 反应</strong>: "appreciate the clarity, let's do B"<br><strong>关键</strong>：① <strong>不绕弯</strong>—— 90s 内 VP 知道 status + 要决策；② <strong>option 不止 1 个</strong>—— 显示我考虑了 trade-off；③ <strong>recommend + rationale</strong>—— 显示我有判断不是甩问题；④ <strong>明确 ask + timeline</strong>—— 不让 VP 自己想要 do 什么。<br><br><strong>陷阱</strong>：① 没量化（"SPI 不太好"）；② 没 3 个 options；③ 没 recommendation；④ Ask 不明确（"看看怎么办"）；⑤ 拖延报 → grapevine 先到 → trust 崩。<strong>对 VP 心理</strong>：他们 prefer <strong>"early bad news with options"</strong> &gt; "late surprise"。`,
+      },
+      failure_modes: [
+        `BLUF 不上来直接讲 → 拖时间`,
+        `没量化（"挺糟"）→ vague`,
+        `没 3 options 单一 push → 不显思考`,
+        `Recommendation 不明确 → VP 不知你想啥`,
+        `Ask 不明确（"看你怎么定"）→ 没 next step`,
+      ],
+      follow_ups: [
+        { q: `VP 当场否决你的 recommendation 怎么办？`, hint: `① 不 defend，先 acknowledge；② 问"what would make A workable"；③ 24h 内 follow-up written summary + revised proposal；④ 不挂面子` },
+        { q: `怎么避免 SPI/CPI 短期 fluctuation 误报红灯？`, hint: `① 用 trend (4-week moving avg)；② 配 critical path（spi 不重要任务波动 OK）；③ 早期项目数据少 → 慎判断；④ 跟 EM / tech lead 双向 validate` },
+        { q: `VP 跟 sponsor 不一样的 update 怎么办？`, hint: `① 一致 message + audience-adjusted depth；② sponsor (operational) 知 detail；③ VP (strategic) 知 BLUF + ask；④ 两者 align 后再 publish` },
+      ],
+    },
+
+    45: {
+      why_asked: `项目管理基础题。能讲"R 干活 / A 拍板 / C / I"4 件套 + "每行 1 个 A"的人是真做过 PM。`,
+      answers: {
+        mid: `<strong>R</strong> 干活（多个）/ <strong>A</strong> 拍板（每行 <strong>1 个</strong>）/ <strong>C</strong> 咨询 / <strong>I</strong> 通知。每个交付物 1 行。`,
+        senior: `<strong>详细</strong>：<br>· <strong>R (Responsible)</strong>: 实际执行的人，<strong>可多个</strong><br>· <strong>A (Accountable)</strong>: 对结果 accountable，<strong>每行只能 1 个</strong>（"<strong>One throat to choke</strong>"）<br>· <strong>C (Consulted)</strong>: 决策前要咨询的（双向沟通）<br>· <strong>I (Informed)</strong>: 决策后告知的（单向沟通）<br><br><strong>关键规则</strong>：① 每个 deliverable 1 行；② A 必须 1 个；③ R 可以是 A 同一人（小项目）；④ Stakeholder 多时拆 RACI 矩阵 by phase。`,
+        staff: `深一层：RACI 的<strong>真实价值</strong>是<strong>"setup 阶段强迫 align ownership"</strong>—— 90% 跨部门项目失败因为<strong>不清楚 ownership</strong>。RACI 写完 review 时<strong>暴露的问题</strong>比 RACI 本身更有价值。<br><br><strong>RACI 常见 anti-pattern</strong>：<br>① <strong>多个 A</strong>（"我们三个一起 own"）→ 实际没人 own → 失败<br>② <strong>所有 cell 都是 R</strong>（everyone is responsible）→ 等于 nobody is<br>③ <strong>A 没 authority</strong>（accountable 但没决策权）<br>④ <strong>太多 C</strong>（一切要 consult）→ 决策慢死<br>⑤ <strong>RACI 写完不维护</strong>—— stakeholder 变了不更新<br><br><strong>真实案例</strong>：电信项目跨 5 团队 RACI 表，12 个 deliverable：<br>· "v3 agent code" → R: eng team A / A: eng lead A / C: architect + product / I: customer success<br>· "client migration tool" → R: eng team B / A: eng lead B / C: support / I: VP<br>· "customer training" → R: customer success / A: CS lead / C: eng lead A / I: sales<br>...<br>RACI 第一稿被 lead 们 challenge 3 轮：① "client migration tool" 谁 A？最初写两个 team lead 都 A → 改成 1 个 sub-team lead A；② "training" customer success 不知道 own 吗？→ explicit assign。<br>RACI 完后 ownership 清晰，<strong>项目执行期间 0 ownership 扯皮</strong>。<br><br><strong>陷阱</strong>：① <strong>RACI 当 documentation 不当 alignment tool</strong>；② Big project 不分 phase（一张 RACI 太大）；③ R/A 不在 group meeting 跟 stakeholder confirm；④ <strong>A 跟 manager hierarchy 不 align</strong>（A 是 lower level 但 senior 老在 push opinion）。<strong>变体</strong>：① DACI（Driver / Approver / Contributor / Informed）—— Atlassian 用，适合 decision-driven 项目；② RAPID（Recommend / Agree / Perform / Input / Decide）—— Bain，复杂决策；scenario 选。`,
+      },
+      failure_modes: [
+        `多个 A（"我们一起 own"）→ 没人真 own`,
+        `所有 cell R（"everyone responsible"）→ vacuous`,
+        `A 没 authority（accountable 但没决策权）`,
+        `太多 C（一切咨询）→ 决策瘫痪`,
+        `Setup 后不维护 → stakeholder 变化 RACI 过期`,
+      ],
+      follow_ups: [
+        { q: `RACI 跟 DACI 怎么选？`, hint: `① RACI: deliverable-driven 项目（每个 artifact 1 行）；② DACI: decision-driven（每个 decision 1 行）；③ 实战常组合：项目用 RACI，关键决策用 DACI` },
+        { q: `Big project RACI 怎么 manage？`, hint: `① 按 phase 拆（discovery / build / launch 各一张）；② Top-level summary + 子 RACI；③ Tool: Smartsheet / Confluence / 专门 RACI tool` },
+        { q: `Stakeholder 不同意 RACI 怎么办？`, hint: `① 不要 PM 单独决定—— 跟 stakeholders 一起 draft；② 第一版 review 时 disagreement 是 normal；③ Escalate 给 sponsor 仲裁；④ 写完 RACI 所有 R/A 必须签名 confirm` },
+      ],
+    },
+
+    // ============== PdM ==============
+    52: {
+      why_asked: `PdM 基础题。能讲"反映价值 + 可拆解 + 跟留存正相关"3 条 + 具体公司例子的人是真做过 PdM。`,
+      answers: {
+        mid: `反映产品对用户<strong>核心价值</strong>的<strong>唯一指标</strong>。3 条：<strong>反映价值 / 可拆解 / 与长期留存正相关</strong>。例：Spotify <strong>周播放分钟数</strong>。`,
+        senior: `<strong>3 条详解</strong>：<br>① <strong>反映价值</strong>：用户花钱 / 时间 / 关注的核心理由<br>② <strong>可拆解</strong>：能 break down 成 sub-metrics（北极星 = activation × frequency × magnitude）<br>③ <strong>跟长期留存正相关</strong>：今天指标涨 → 6 个月后留存涨<br><br><strong>典型例子</strong>：<br>· Facebook: 月活跃用户（MAU）<br>· Spotify: 周播放分钟数（不是 DAU，因为 active = listen）<br>· Airbnb: 入住夜数（不是订单数，因为 longer stay = more value）<br>· Slack: 每日发送消息数（活跃使用证据）<br>· DoorDash: 完成订单数<br>· Notion: 周文档创建数（创造行为）`,
+        staff: `深一层：北极星指标的<strong>真实价值</strong>是<strong>"跨部门对齐目标"</strong>—— Engineering / Product / Marketing / Sales 都看同一个指标 → 决策时同 frame of reference。<br><br><strong>怎么定义自己产品的北极星</strong>：<br>1) <strong>识别核心价值</strong>：用户为什么使用？（不是"用户怎么用"）<br>2) <strong>对比候选指标</strong>：① MAU（虚荣指标 risk）vs ② 周活跃使用次数 vs ③ 周价值创造行为<br>3) <strong>测试与留存相关性</strong>：选 30-180 天后 retention 高的用户 → 看他们当时哪个指标最显著<br>4) <strong>避免 vanity</strong>：注册数 / 下载数 / pageview 通常是 vanity（看似涨但不带 retention）<br><br><strong>真实经验</strong>：我作为 NETCONF agent PdM 时定北极星：<br>· 候选 1: MAU (active customer accounts) → 但客户已签合同必须用 → vanity<br>· 候选 2: RPC throughput per customer → 体现"客户实际工作量" → 跟 customer satisfaction 正相关<br>· 候选 3: # of device migrated to new agent / month → ship velocity<br>· <strong>选 2</strong>: 季度跟 customer satisfaction 数据相关性最高（r = 0.78）<br><strong>使用</strong>：每月 leadership review，所有 functional team OKR derived from 北极星。<br><br><strong>陷阱</strong>：① <strong>vanity metric</strong>（MAU / pageview / downloads）；② 选过于 lagging 指标（如年收入）—— 短期改动看不到；③ <strong>over-optimize 单一指标</strong>—— Goodhart's law（指标变 target，被 game）；④ 不 paired with guardrail metric（如 churn / customer satisfaction）。<br><br><strong>对比 OKR / KPI</strong>：① 北极星指标是<strong>顶层愿景</strong>（slow-moving）；② OKR 是 quarterly drivers of 北极星；③ KPI 是 operational metrics 防退化；三层都要。`,
+      },
+      failure_modes: [
+        `选 vanity metric（MAU / pageview / downloads）`,
+        `选 lagging 太长（年收入）→ 短期改不见效`,
+        `Over-optimize 单一 → Goodhart's law`,
+        `没 guardrail metric paired → 单一指标改了别处坏`,
+        `不 review 不更新（产品阶段变了北极星可能要换）`,
+      ],
+      follow_ups: [
+        { q: `怎么验证候选北极星跟留存正相关？`, hint: `① 取一群 6 个月前的新用户；② 按 30 天 cohort 数据；③ 看哪个早期指标跟 6 个月 retention 相关 highest；④ 多变量回归隔离其他因素` },
+        { q: `不同生命周期阶段北极星会变吗？`, hint: `① 早期：activation（用户成功用一次）；② 成长期：retention + frequency；③ 成熟期：value per user (LTV / revenue)；阶段变 metric 重置` },
+        { q: `怎么 align 团队都看北极星？`, hint: `① All-hands 强化；② OKR derive from 北极星；③ Dashboard 中央展示；④ 每 deliverable 标"如何影响北极星"；⑤ Bonus / promotion 部分 tied to 北极星` },
+      ],
+    },
+
+    53: {
+      why_asked: `PdM 框架基础题。能讲 AARRR 5 阶段 + RARRA 重排理由的人是真用过漏斗分析。`,
+      answers: {
+        mid: `<strong>AARRR</strong>: <strong>Acquisition</strong>（获取）/ <strong>Activation</strong>（激活）/ <strong>Retention</strong>（留存）/ <strong>Revenue</strong>（收入）/ <strong>Referral</strong>（推荐）—— "<strong>海盗指标</strong>"。<strong>RARRA</strong> 是重排（留存优先）。`,
+        senior: `<strong>原 AARRR（Dave McClure 2007）</strong>：以增长流程为序——先获取再激活再留存等。<br><strong>RARRA（Thomas Petit / Gabor Papp 2017）</strong>：<strong>留存先</strong>的反思 —— "如果没留存，所有 acquisition 都漏；先保留存再 grow"。<br><strong>每阶段典型指标</strong>：<br>· A1: CAC / 渠道流量 / 注册转化率<br>· A2: 激活定义（如 "首次完成核心动作"）/ activation rate<br>· R: D1 / D7 / D30 留存率 / 月活跃 / cohort retention curve<br>· R: ARPU / LTV / churn<br>· R: NPS / 推荐率 / virality coefficient`,
+        staff: `深一层：AARRR 是<strong>"用户生命周期"分析框架</strong>，不是 metric 也不是产品策略——只是<strong>"看用户从认识到推荐的过程"</strong>的视角。<br><br><strong>实战 + 真实经验</strong>：作为 NETCONF agent PdM 我们用 AARRR 分析<strong>customer 的"产品生命周期"</strong>：<br>1) <strong>A1 Acquisition</strong>: 销售 / Bid winning → 30+ enterprise 客户 funnel<br>2) <strong>A2 Activation</strong>: 客户完成首次 production deployment → ~70% conversion（30% 因 integration 复杂卡住）<br>3) <strong>R Retention</strong>: 12 个月 churn rate（客户停用 / 转 vendor）→ ~5%（行业平均 10%）<br>4) <strong>R Revenue</strong>: ARR per customer + expansion（add features / devices）<br>5) <strong>R Referral</strong>: 客户 case study 引荐其他客户（typical &lt; 5%）<br><br><strong>洞察</strong>：A2 (activation) 是最大瓶颈（30% 客户被复杂 integration 卡死）。<strong>Action</strong>：① 投资 onboarding tooling；② 出 customer success 团队；③ 简化 default config。<br>结果：activation rate 从 70% → 85%（6 个月后）。<br><br><strong>陷阱</strong>：① <strong>只看 acquisition</strong>（最 visible 但 leaky bucket）；② AARRR 5 个都 weighed 同等（实际看哪段是 bottleneck）；③ Activation 定义 vague（必须具体可测）；④ 不分 segment（B2B / B2C / 不同 plan 各自 funnel 不同）。<strong>RARRA 适用</strong>：① 早期产品 retention 差 → 先 fix retention；② SaaS / subscription 业务（留存 = 收入）；③ Marketplace（双边都要 retain）。<strong>2026 思考</strong>：AARRR 框架已 20 年了，仍是 PdM 入门必修，但 modern PdM 加 ① cohort analysis；② product-led growth metrics；③ usage analytics（哪些 feature 真用）。`,
+      },
+      failure_modes: [
+        `只关注 Acquisition（最易测但 leaky bucket）`,
+        `Activation 没具体定义（vague "用户开始用"）`,
+        `5 个都同等 weight（实际看 bottleneck）`,
+        `不分 segment （B2B / B2C / 不同 plan）`,
+        `不 paired with cohort analysis → 看不到时间维度`,
+      ],
+      follow_ups: [
+        { q: `Activation 怎么定义？`, hint: `① 找"<strong>aha moment</strong>"（用户第一次感受到价值的动作）；② Quantify: "X 天内做 Y 次 Z 动作"；③ 跟 retention 相关性验证；例：Facebook "7 friends in 10 days"，Twitter "follow 30+ accounts"` },
+        { q: `什么时候用 RARRA？`, hint: `① 早期产品（M年内）；② SaaS / subscription 业务；③ Retention 数据明显差（D30 retention &lt; 20%）；④ Stop pouring acquisition before fixing leaky bucket` },
+        { q: `AARRR 跟 OKR 关系？`, hint: `① AARRR 是分析框架；② OKR 是季度目标设定；③ OKR 可 derived from AARRR diagnosis（"哪段最 weak，本季 focus" → Objective）；④ 两者 complement` },
+      ],
+    },
+
+    55: {
+      why_asked: `PdM 高频题。能讲 "<strong>看行为 &gt; 听 stated &gt; Mom Test 三规则</strong>" 的人是真做过 user research。`,
+      answers: {
+        mid: `<strong>用户行为</strong>（workaround）&gt; 用户意愿；<strong>量化规模和深度</strong>；<strong>Mom Test 三规则</strong>：问"上次怎么做的"，<strong>不问"未来会不会用"</strong>。`,
+        senior: `<strong>Mom Test（Rob Fitzpatrick 2013）3 大规则</strong>：<br>1) <strong>谈对方的生活而不是你的想法</strong>（"上次遇到 X 你怎么解决"，而不是"如果有 Y 你会用吗"）<br>2) <strong>问具体的过去而不是 hypothetical 未来</strong>（"上周做 X 几次"，而不是"会不会做 X"）<br>3) <strong>少说多听</strong>（80/20 rule）<br><br><strong>判断真假需求 3 招</strong>：<br>① <strong>看是否有 workaround</strong>（已经在花时间解决 = real）<br>② <strong>量化 willing to pay</strong>（钱 / 时间 / 复杂度容忍）<br>③ <strong>5 客户深访</strong>（不是 1 客户 deep + 100 客户 superficial）`,
+        staff: `深一层：90% PM 错误来自<strong>"客户嘴上想要的 vs 真用的"差距</strong>。Henry Ford 名言："<strong>If I asked customers what they wanted, they'd say faster horses</strong>"—— 客户能描述<strong>现状的不满</strong>但不能 design 解决方案。PM 的工作是 listen 不满 + design 解决。<br><br><strong>真实案例</strong>：作为 NETCONF agent PdM 做 customer interview。<br><strong>客户 stated</strong>："我们需要更多的 metrics 暴露"<br><strong>实际场景挖</strong>："上次 metrics 不够你怎么办的？"<br>· 客户：" 我们写脚本 polling 设备状态"（workaround 存在）<br>· "写了几个脚本，用了多久"<br>· "12 个脚本，团队 2 工程师 6 个月"（量化 → 真痛 + ROI 高）<br>· "如果你们 agent 暴露这些 metrics，你们会停用脚本吗"<br>· "如果可靠 + 我们能 alert，立刻停"<br><strong>洞察</strong>：客户不是缺 "more metrics" 而是缺 "<strong>structured queryable metrics + alerting infrastructure</strong>"。Build the latter 比 expose all metrics 更 high ROI。<br><br>另一案例（真假需求 stark contrast）：<br>· 客户 A: "我们需要 web UI 来配置 agent"（嘴上）→ 挖：上次 config 用 CLI，团队都 happy → vanity request → 不做<br>· 客户 B: "agent crash 时 debug 很难"（嘴上）→ 挖：上周一次 P0 事故 6 工程师 spent 4 hours debug + 客户 lost $50k revenue → real + willing to invest → 优先做 better diagnostics<br><br><strong>陷阱</strong>：① 问 leading question（"你想要 X 吗"）；② 一个客户 deep dive 当全部代表；③ 不量化 → 真假难分；④ 客户 PM-mode（"应该这样设计"）—— ignore，关注他们的 problem；⑤ "if I built X, would you use" 这种 hypothetical—— 99% 假阳性。`,
+      },
+      failure_modes: [
+        `问 hypothetical（"如果有 X 你会用吗"）→ 99% false yes`,
+        `一个客户 deep dive 当全部代表 → bias`,
+        `不量化（"很痛苦"）→ 真假不分`,
+        `Leading question（"你需要 X 对吗"）→ 客户 say yes 来 polite`,
+        `客户 PM-mode → 接受 stated solution 而非 underlying problem`,
+      ],
+      follow_ups: [
+        { q: `客户 interview 几个够？`, hint: `① B2B SaaS: 5-8 个 deep dive (60-90 min each)；② B2C: 10-15 个 (45 min)；③ 直到 saturation（新 insight 不来）；④ 不是数量，是 sample 代表性` },
+        { q: `怎么避免 confirmation bias？`, hint: `① 跟 mentor 一起 interview（cross check）；② 录音 + transcribe + 多人 review；③ 故意找 disconfirming evidence；④ 6 个月后 revisit interview notes 看是否 still hold` },
+        { q: `Quantitative vs qualitative 怎么 balance？`, hint: `① Qualitative (interview): 找 problem space + 假设；② Quantitative (survey / analytics): validate 假设的 scale；③ 通常 qual first 找 direction，quant 验证 magnitude` },
+      ],
+    },
+
+    56: {
+      why_asked: `PdM 框架题。能讲"<strong>情境 + 动机 + 结果</strong>"三段 + 3 层（功能 / 情感 / 社交）的人是真用过 JTBD framework。`,
+      answers: {
+        mid: `<strong>JTBD (Jobs-To-Be-Done) 模板</strong>：<strong>当 [情境]，我想 [动机]，以便 [结果]</strong>。三层：<strong>Functional</strong>（功能）/ <strong>Emotional</strong>（情感）/ <strong>Social</strong>（社交）。`,
+        senior: `<strong>典型例子</strong>：<br>· <strong>Functional</strong>: "当我赶时间通勤（情境），我想要快速买杯咖啡（动机），以便不迟到工作（结果）"<br>· <strong>Emotional</strong>: "当我下班疲惫（情境），我想要 30 min 独处（动机），以便从工作 mode 切回家庭 mode（结果）"<br>· <strong>Social</strong>: "当我跟朋友聚会（情境），我想要点 fancy 咖啡（动机），以便显得有品味（结果）"<br><br><strong>对比传统 user story</strong>："As a [user], I want [feature], so that [benefit]"——JTBD 更 outcome-focused，user-agnostic（不关注用户身份，关注情境）。`,
+        staff: `深一层：JTBD 的<strong>"圣经般 case</strong>"是 Clayton Christensen 的奶昔故事——快餐店想 sell 更多奶昔，做了大量传统 segmentation（年龄 / 性别 / 收入）都没 actionable insight。改用 JTBD：早晨买奶昔的客户 hire 奶昔 to do the job "<strong>消化无聊通勤 + 不弄脏车 + 不饿到中午</strong>"。这个洞察 actionable: 加厚奶昔（更耐喝）/ 加 chewy 元素（更 entertaining）→ 销量 +7%。<br><br><strong>JTBD vs Persona vs User Story</strong>：<br>· <strong>Persona</strong>: "27 岁女性，城市，月入 1 万"—— demographic-driven，对 design 帮助小<br>· <strong>User Story</strong>: "As 27 岁女性 I want X"—— feature-driven，假设 user 类型决定行为<br>· <strong>JTBD</strong>: "When I'm in situation X, I want to achieve Y"—— situation-driven，不假设 user 谁<br><br><strong>JTBD 适合用</strong>：① Product positioning（找 competing products = 同样 hire 的）；② Feature prioritization（按 jobs 不按 users）；③ New product discovery（unmet jobs = market opportunity）。<br><br><strong>真实经验</strong>：NETCONF agent 用 JTBD 重新定位：<br>· <strong>原 Persona</strong>: "电信工程师，男，5+ 年经验"<br>· <strong>JTBD insight</strong>: "<strong>当我有 100k devices 需要批量配置（情境），我想要 1 个 click apply（动机），以便 deadline 前完成 + 不出错（结果）</strong>"<br>· <strong>洞察</strong>: 客户不是 hire 我们 "as NETCONF agent" 是 hire 我们 "as bulk config automation"<br>· <strong>Action</strong>: 简化 UI / build template library / 集成 ITSM workflow<br>· <strong>结果</strong>: 6 个月内新 enterprise 客户 +40%<br><br><strong>陷阱</strong>：① JTBD 写成 feature description（"想要 button X"）→ 应该 outcome description（"想要 quickly do Y"）；② 三层只关注 functional（emotional / social 同样重要）；③ JTBD 太宽（"想要让 work easier"）—— 必须具体 situation；④ 不验证（基于 PM 猜测 JTBD）—— 必须 customer interview validate。`,
+      },
+      failure_modes: [
+        `写成 feature description（"想 button X"）→ 不是 outcome`,
+        `只关注 functional 三层（忽略 emotional / social）`,
+        `JTBD 太宽 → 不可 actionable`,
+        `PM 自己猜 JTBD 不 validate → 假 insight`,
+        `JTBD = persona 替换品 → 两者互补不替代`,
+      ],
+      follow_ups: [
+        { q: `怎么发现 JTBD？`, hint: `① 客户 interview "上次遇到 X 你 hire 什么 product 解决"；② Diary study（客户记一周 task）；③ 观察 workaround（用户用其他工具补缺）；④ Switch interview（client 从竞品转过来时挖原因）` },
+        { q: `JTBD 跟 OKR 关系？`, hint: `① JTBD = 客户 outcome；② OKR Objective derived from "improve customer's ability to achieve job Y"；③ KR 量化 "how well we serve that job"；④ 三层 link 起来` },
+        { q: `JTBD 在 B2B 跟 B2C 差异？`, hint: `① B2C: 1 个 user = 1 个 JTBD subject；② B2B: 多 role（user / buyer / champion），各自不同 JTBD；③ 通常先服务 user 的 functional JTBD，再考虑 buyer 的 strategic JTBD` },
+      ],
+    },
+
+    64: {
+      why_asked: `PdM 优先级框架基础。能讲"<strong>RICE 公式 + Confidence 易滥用</strong>"的人是真用过。`,
+      answers: {
+        mid: `<strong>RICE = (Reach × Impact × Confidence) / Effort</strong>。比纯主观靠谱，但 <strong>Confidence 易被滥用</strong>。`,
+        senior: `<strong>4 个因子</strong>：<br>· <strong>Reach</strong>: 影响多少用户 / 时段（如 # of users / quarter）<br>· <strong>Impact</strong>: 对每个用户的影响（典型 1-3 scale: 3 = massive, 1 = minor）<br>· <strong>Confidence</strong>: 你对 Reach × Impact 预估的<strong>把握</strong>（0-100%）<br>· <strong>Effort</strong>: 人月（含 product / design / engineering / QA）<br><br><strong>计算</strong>：<code>Score = (Reach × Impact × Confidence) / Effort</code> → 数字大 = 优先做。<strong>实际用法</strong>：填 spreadsheet，所有 feature 排序，head-to-head 比 score。`,
+        staff: `深一层：RICE 的<strong>真实价值</strong>是<strong>"<u>强迫团队具体讨论 4 个 dimension</u>"</strong>—— 没 RICE 时大家拍脑袋说"这个重要"；有 RICE 时讨论"reach 是多少？impact 等级？confidence 凭什么？effort 估多少？"<strong>讨论过程 &gt; 最终 score</strong>。<br><br><strong>陷阱 + 反模式</strong>：<br>① <strong>Confidence 被滥用</strong>：开发想做某 feature 给 90% confidence，不想做的给 30%。<strong>对策</strong>：要求 evidence（数据 / 用户访谈数 / prototype 验证）才能 80%+。<br>② <strong>Reach 过 broad</strong>："影响所有用户 100M" → 但 actually 只是 banner，没 impact。<strong>对策</strong>：Reach 必须配 actively engaged use 数据。<br>③ <strong>Impact 1-3 不够细</strong>：实际差异大，可能用 1-10 或 dollar value。<br>④ <strong>Effort estimate 过乐观</strong>：典型 underestimate 2-3×。<br>⑤ <strong>RICE 当唯一框架</strong>：忽略 strategic value / dependency / risk。<br><br><strong>真实经验</strong>：作为 NETCONF agent PdM 季度 prioritization，10 个 candidate features，RICE score：<br>· Feature A "Bulk config UI": R=200 customers × I=3 × C=80% / E=6 mo = score 80<br>· Feature B "Custom plugin framework": R=20 customers × I=3 × C=30% / E=6 mo = score 3<br>· Feature C "Better diagnostics": R=200 customers × I=2 × C=90% / E=2 mo = score 180<br>→ <strong>选 C 做先（highest score）</strong>，A 第二，B 拒（低 confidence + high effort）。<br><strong>事后 validate</strong>: C 上线后 customer satisfaction +30%（match RICE prediction）。<br><br><strong>对比其他框架</strong>：<br>· <strong>MoSCoW</strong>: Must / Should / Could / Won't —— qualitative, faster but less rigorous<br>· <strong>Kano</strong>: Basic / Performance / Excitement —— customer satisfaction dimension<br>· <strong>Value vs Effort 2x2</strong>: 简单 quick wins 识别<br>· <strong>Weighted Shortest Job First (WSJF)</strong>: SAFe 框架，类似 RICE 但加 Cost of Delay<br><br><strong>2026 实践</strong>: RICE 仍主流，但 modern PdM 加 ① cohort impact（不只 total reach）；② strategic alignment score；③ technical debt impact；④ risk dimension。`,
+      },
+      failure_modes: [
+        `Confidence 主观滥用 → 影响整 score`,
+        `Reach 过 broad（不 actively engaged 用户也算）`,
+        `Effort 严重 underestimate → 实际超 2-3×`,
+        `RICE 当唯一框架 → 忽略 strategic / risk`,
+        `不 retro RICE prediction vs reality → 不 calibrate`,
+      ],
+      follow_ups: [
+        { q: `Confidence 怎么避免滥用？`, hint: `① 设 confidence rubric：80%+ 需 data / 用户访谈；50-80% 需 prototype 验证；&lt; 50% 还在 hypothesis；② Public 在 spreadsheet 显示 evidence；③ 季度 retro 看哪些 high confidence 错了` },
+        { q: `RICE 跟 OKR 关系？`, hint: `① OKR 设方向（"提升 retention"）；② RICE 排具体 feature 优先级 to achieve OKR；③ RICE high score 但 not align OKR → 不做；④ 两层都要` },
+        { q: `B2B SaaS 跟 B2C 用 RICE 差异？`, hint: `① B2C: Reach = MAU，标准化；② B2B: Reach = "# accounts" 但要 weight by ARR（一个 enterprise &gt; 100 SMB）；③ B2B impact 可量化 dollar value 不只 1-3` },
+      ],
+    },
+
+    // ============== Case / Estimation ==============
+    77: {
+      why_asked: `Case 题万能公式。能讲"<strong>结构化思维 &gt; 答案对错 + 30s 画框架</strong>"的人是 case-prepared。`,
+      answers: {
+        mid: `<strong>Case 题考的是结构化思维过程，不是答案对错</strong>。开口前先用 <strong>30 秒画框架</strong>。<strong>CIRCLES</strong>: <strong>Comprehend</strong>（理解）/ <strong>Identify customer</strong>（识别用户）/ <strong>Report needs</strong>（陈述需求）/ <strong>Cut by priority</strong>（按优先级砍）/ <strong>List solutions</strong>（列解决方案）/ <strong>Evaluate trade-offs</strong>（评估权衡）/ <strong>Summarize</strong>（总结）。`,
+        senior: `<strong>详细 7 步</strong>（典型 25-30 min case）：<br>1) <strong>C (Comprehend)</strong>: 3 min，clarifying questions（产品 stage / 目标 user / 时间 horizon / 度量指标 / 资源约束）<br>2) <strong>I (Identify users)</strong>: 2 min，列 3-5 个 user segments，简短 persona<br>3) <strong>R (Report needs)</strong>: 5 min，每个 segment 的 jobs / pain points（用 JTBD）<br>4) <strong>C (Cut by priority)</strong>: 2 min，按 RICE / impact 选最 high priority 1-2 segment<br>5) <strong>L (List solutions)</strong>: 8 min，brainstorm 3-5 个 solution（包括 MVP / nice-to-have）<br>6) <strong>E (Evaluate trade-offs)</strong>: 5 min，每个 solution 的 pros / cons / risk<br>7) <strong>S (Summarize)</strong>: 2 min，recommend 1 个 + rationale + measure success / next step`,
+        staff: `深一层：CIRCLES 是<strong>"用 framework 给面试官 structured signal"</strong>。面试官看你<strong>怎么思考</strong>不是<strong>结论</strong>。<br><br><strong>关键 mindset</strong>：<br>1) <strong>开口前 30 秒画框架</strong>：silent 30s 看似 awkward 但比"哦"开始好太多<br>2) <strong>Talk through 你的 thinking</strong>：每步 verbalize "I'm now thinking about user segments because..."<br>3) <strong>邀请 facilitator interaction</strong>：用 "does that make sense" / "want me to dive deeper into X" 跟面试官 calibrate<br>4) <strong>Trade-off 明确 + recommendation 锁定</strong>：不要 fence-sit（"好像都不错"）<br><br><strong>真实经验</strong>：面 senior PM role 时 case "<strong>Design a feature to help Spotify users discover new music</strong>"。<br>· 30s 画 CIRCLES 在 notebook<br>· C: clarifying questions (3 min) - "free / premium? geo? time horizon? success metric?"<br>· I: 4 segments (casual listener / superfan / new platform user / mood listener)<br>· R: each segment's discovery pain<br>· C: prioritize "casual listener" (largest, lowest activation)<br>· L: 5 solutions (mood-based playlist / friend-curated / podcast-style / weekly digest / similar-artist auto-add)<br>· E: trade-off matrix (effort / impact / risk)<br>· S: recommend "mood-based smart playlist" + propose A/B test design + measure with "monthly new tracks discovered per user"<br><strong>面试官反馈</strong>: "Strong structure, would hire"。<br><br><strong>陷阱</strong>：① 不画框架直接 dive into solution → unstructured；② skip "clarifying"（assume 自己 right）；③ 给 10 个 solution 但每个 superficial（depth &gt; breadth）；④ 不 recommend single solution（fence-sit）；⑤ ignore facilitator's signal（不 invite interaction）。<strong>其他 case framework</strong>: ① CIRCLES（产品设计题）；② SAS（Strategy / Analysis / Solution，市场分析）；③ HEART（discovery / definition / execution）；scenario-specific 选。`,
+      },
+      failure_modes: [
+        `不画框架直接 dive into 答 → unstructured`,
+        `Skip clarifying questions → assume 自己 right`,
+        `给 10 solution 但 superficial → depth missing`,
+        `不 recommend single → fence-sit`,
+        `不 invite facilitator interaction → monologue`,
+      ],
+      follow_ups: [
+        { q: `Case 题 30 min 不够怎么办？`, hint: `① 优先 depth on 1-2 solutions；② skip C if facilitator gave context；③ verbalize "I'm skipping X to focus on Y"；④ 节奏感跟面试官 sync` },
+        { q: `怎么准备 case 题？`, hint: `① 读 Decode and Conquer（Lewis Lin）/ Cracking the PM Interview；② Mock with PM friends（5-10 times）；③ 公开 case 库（Exponent / IGotAnOffer）；④ 录音听自己 (talk pace / structure)` },
+        { q: `Case 题面试官不响应怎么办？`, hint: `① 主动 ping "want me to continue or do you have questions"；② Continue with confidence；③ 不 awkward silence（让自己 verbalize 替代）；④ 最后总结 invite feedback` },
+      ],
+    },
+
+    87: {
+      why_asked: `Case 题最难类。能讲"<strong>归因 + Discovery + OST + A/B</strong>"4 步的人是 senior PM。`,
+      answers: {
+        mid: `先<strong>归因</strong>（漏斗 + Cohort 看哪个 segment 流失最多），再 <strong>Discovery</strong>（访谈 5-10 个流失用户），再 <strong>OST 排序机会</strong>，最后 <strong>A/B 验证</strong>。`,
+        senior: `<strong>完整 4 步</strong>：<br>1) <strong>归因 (Diagnostic)</strong>: <br>· 漏斗分析：D1 / D7 / D30 retention 各段流失 %<br>· Cohort: 不同时间注册的用户 retention 曲线对比<br>· Segment: 按 user type / source / 行为分群<br>· 找最大流失 segment / 最大流失 step<br>2) <strong>Discovery</strong>: <br>· 访谈 5-10 个流失用户（"上次用 X 是什么时候，为什么停"）<br>· Survey 补充 quantitative<br>· Analytics: 流失前用户的行为 pattern<br>3) <strong>OST (Opportunity Solution Tree)</strong> by Teresa Torres:<br>· Top: Outcome ("retention +10%")<br>· Mid: Opportunities (从 discovery 来的 themes)<br>· Bottom: Solutions for each opportunity<br>· 排序选 best opportunity + best solution<br>4) <strong>A/B Validation</strong>: <br>· Hypothesis: "If we ship X, retention +5%"<br>· A/B test design（traffic split / duration / success metric / guardrail）<br>· Run + analyze + ship if positive`,
+        staff: `深一层：retention 题考<strong>PdM 完整 cycle</strong>—— diagnosis / discovery / prioritization / validation / shipping。<strong>常见 mistake</strong> 是 skip 1 / 2 直接 jump to solution（"加 push notification 应该能提 retention"）。<strong>没诊断 + 没 discovery 的 solution 是 guess</strong>。<br><br><strong>真实案例</strong>：作为 PdM 处理 NETCONF agent 客户 churn 问题，3 month churn rate 从 5% → 12%。<br><br><strong>1) 归因</strong>: 漏斗分析发现 churn 集中在<strong>小客户（&lt; 1000 devices）</strong>，大客户 churn 不变。Cohort 看新签的小客户 D90 churn 25%（前 5%）。<br><strong>2) Discovery</strong>: 访谈 8 个 churned 小客户：<br>· 6/8 提到 "<strong>setup 太复杂</strong>"<br>· 5/8 提到 "<strong>monthly cost 高于备选 vendor</strong>"<br>· 3/8 提到 "<strong>support 响应慢</strong>"<br>· 2/8 提到 "feature gap"<br><strong>3) OST</strong>:<br>· Outcome: 小客户 churn 从 25% → 10%<br>· Opp 1: simplify setup → solutions: wizard UI / one-click templates / customer success onboarding<br>· Opp 2: pricing for small customers → solutions: SMB tier / annual prepay discount<br>· Opp 3: faster support → solutions: chat support / community forum / better docs<br>· 排序：Opp 1 highest（最多 customer 提 + manageable effort）<br><strong>4) A/B</strong>:<br>· Hypothesis: 给新签小客户提供 "guided onboarding wizard"，D90 churn 下降<br>· A/B (50/50, 3 months, n = 200 customers each)<br>· Result: Treatment D90 churn 15% vs Control 25%（statistically significant，p &lt; 0.01）<br>· <strong>Ship</strong>: 全量 rollout + 监控 trend<br>· <strong>6 months later</strong>: 全 small customer churn 12% → 14%（中间反弹但仍 better baseline），证明 worked。<br><br><strong>陷阱</strong>：① <strong>skip diagnostic</strong> 直接 jump to "add feature X" guess；② Discovery 访谈太少（&lt; 5）→ bias；③ OST 不画或不 prioritize；④ A/B 没 guardrail metrics → 提了 retention 但其他坏；⑤ ship 后不 monitor → 假阳性。`,
+      },
+      failure_modes: [
+        `Skip diagnostic 直接 jump to solution`,
+        `Discovery 访谈太少 → bias`,
+        `OST 不 prioritize → 同时做多 things → 都做不好`,
+        `A/B 没 guardrail metrics → 单一指标涨别处坏`,
+        `Ship 后不 monitor → 假阳性`,
+      ],
+      follow_ups: [
+        { q: `Retention curve 4 种形状是什么？`, hint: `① Flat-bottom（healthy，长期 retention）；② Smile（low after grace period 但能 win back）；③ Hockey stick（极少）；④ Cliff（drop to 0，dead）；不同形状策略不同` },
+        { q: `怎么判断 A/B 真有效？`, hint: `① Statistical significance (p &lt; 0.05)；② Practical significance (lift 大小 vs noise)；③ Guardrail metrics 没坏；④ Multiple segments 都 positive；⑤ Sustained over time (3-6 month look-back)` },
+        { q: `如果 retention 提升但 revenue 下降怎么办？`, hint: `① Investigate (高 retention low value users? cannibalization?)；② Check segment effects；③ 可能需要不同 monetization strategy；④ Trade-off 决定 worth it？` },
+      ],
+    },
+
+    88: {
+      why_asked: `Estimation 题考<strong>结构化推理 + 数字感</strong>。能讲"<strong>top-down + bottom-up + 验证</strong>"的人 case ready。`,
+      answers: {
+        mid: `<strong>思路</strong>：① 14 亿人口 → 吉他爱好者比例 ≈ 1%（1400 万）；② 平均每 5 年换 1 把（→ 200 万 / 年）；③ 新增学习者 ≈ 200 万 / 年（每人 1 把）；④ <strong>总和 ≈ 400 万把</strong>。`,
+        senior: `<strong>结构化展开</strong>：<br>1) <strong>假设 + clarify</strong>: "新吉他 + replacement，不含二手；中国大陆"<br>2) <strong>分 segments</strong>:<br>· 新学吉他人群（青少年 / 成人）<br>· 现有吉他爱好者（replacement）<br>· 专业 / 半专业（高换购）<br>3) <strong>Top-down 估算</strong>:<br>· 中国人口 14 亿<br>· 吉他爱好者 ≈ 1%（基于直觉 / 数据点）= 1400 万<br>· 80% 业余（5 年换 1）+ 15% 进阶（2 年换 1）+ 5% 专业（年换 2）<br>· 现有 replacement: 1120万 × 1/5 + 210万 × 1/2 + 70万 × 2 = 224 + 105 + 140 = 469 万<br>· 新增学习者: 14 亿 × 0.5% / 10年 = 70 万 / 年<br>· 总: 469 万 + 70 万 = <strong>~540 万 / 年</strong><br>4) <strong>Validation</strong>: 真实数据（如果有）/ 相似国家对比`,
+        staff: `深一层：Estimation 题的<strong>真实目的</strong>不是数字准确（面试官不知道 ground truth），是<strong>看你的 reasoning</strong>：① 是否 structured；② 是否 verbalize 假设；③ 是否 sanity check；④ 是否处理 uncertainty。<br><br><strong>4 个关键 skill</strong>：<br>1) <strong>Top-down vs bottom-up</strong>: 同问题用两种方法估算，对比验证。"<strong>top-down 估出 500 万，bottom-up 估 400 万 → 一致量级 → confidence 增加</strong>"<br>2) <strong>Verbalize assumptions</strong>: "I'm assuming 1% adoption rate based on X" - explicit 让面试官 challenge<br>3) <strong>Sanity check</strong>: 数字算完反过来想"这意味着每天 1 万把？10000 商店？感觉合理吗"<br>4) <strong>Sensitivity analysis</strong>: "如果 adoption 是 0.5% 而不是 1%，结果会减半 → 250 万 / 年"<br><br><strong>真实经验</strong>: 准备 PM interview 时 mock estimation 10+ 次。pattern 是：<br>· <strong>Top-down</strong>: 大数字（人口 / GDP / market size）层层 divide<br>· <strong>Bottom-up</strong>: 单价 × 频率 × 用户数<br>· <strong>对比</strong>: 两个估算 should be in same order of magnitude (10× ok, 100× 红灯)<br>· <strong>明确不确定</strong>: "实际可能 200 万 - 1000 万范围，中位估 500 万"<br><br><strong>常见 anti-pattern</strong>：① 不 verbalize 假设直接 multiply numbers；② 1 个 method (top OR bottom only)；③ 数字算完不 sanity check；④ 不展示 sensitivity；⑤ over-precise（"387.5 万"）- estimation 应该是 round number。<strong>其他 estimation 题套路</strong>：① Market size (TAM / SAM / SOM)；② Customer count；③ Server / database capacity；④ Time to complete project；framework 类似都是 segment + per-unit × scale + validate。`,
+      },
+      failure_modes: [
+        `不 verbalize 假设 → 面试官看不到 reasoning`,
+        `单一 method（only top-down / bottom-up）`,
+        `不 sanity check → 数字荒谬不知`,
+        `Over-precise（"387.5万"）→ estimation 应该 round`,
+        `不展示 sensitivity → uncertainty 没承认`,
+      ],
+      follow_ups: [
+        { q: `没有 ground truth 怎么判断答案合理？`, hint: `① 跟"已知 data points" 对比（X 国数据 / 类似产品）；② Order of magnitude 对就好（精确度不重要）；③ Sensitivity test → if 关键假设变化，结论是否 still hold` },
+        { q: `Estimation 跟 forecasting 区别？`, hint: `① Estimation: snapshot 估当前 size；② Forecasting: 预测未来 trajectory；后者需 growth rate / driver analysis；前者结构化推理够` },
+        { q: `怎么准备 estimation interview？`, hint: `① Mock 10+ 次（市场 size / customer count / server capacity 各类）；② 背"useful base rates"（人口 / GDP / 主流 device usage rate）；③ 用 paper / 白板练 visual reasoning；④ 录音听自己 verbalize` },
+      ],
+    },
+
+    // ============== 红旗 ==============
+    93: {
+      why_asked: `面试技巧题。能讲"<strong>'我们' vs '我'</strong>"差异的人是真懂 PM 面试 storytelling。`,
+      answers: {
+        mid: `面试官无法<strong>判断你的贡献</strong>。修：刻意用"<strong>我</strong>"，团队的事用"<strong>我推动了 / 我决定了</strong>"。`,
+        senior: `<strong>"我们" vs "我"的细微差别</strong>：<br>· "<strong>我们做了 X</strong>" → 团队成果，你的贡献不明<br>· "<strong>我决定 / 推动 / 设计 / 主导 X</strong>" → 你的<strong>具体 actions</strong> 明确<br>· 对比："我们成功上线了 feature" vs "<strong>我设计 PRD + push 跨 3 team align + 主持 launch checklist</strong>，最终 feature 上线"<br>· 后者展示 individual contribution + leadership signal`,
+        staff: `深一层：用 "我" vs "我们"<strong>反映候选人的 self-awareness 和 ownership</strong>。<br><br><strong>面试官心理</strong>：<br>· "我们" heavy → "<strong>这人可能只是 follower / 不知道自己的具体贡献</strong>"<br>· "我" balanced → "<strong>个体贡献清晰 + 仍 acknowledge team</strong>"<br>· "我" 过 dominant → "<strong>太 ego / 不团队 player</strong>"（red flag too，但远不如"我们"普遍）<br><br><strong>实战 rule of thumb</strong>:<br>1) <strong>主语 80% 用"我"</strong>：S/T/A 阶段全用 I<br>2) <strong>"我们" 用于 acknowledge team contribution</strong>：R 阶段 "我做了 X，<strong>我们团队</strong>最终 ship 了 Y"<br>3) <strong>具体动词替代"我们"</strong>：不写"我们 discussed"，写"<strong>我 facilitated discussion + 我 documented decisions</strong>"<br><br><strong>真实经验</strong>: Mock interview 时朋友录音指出我"我们" usage 60%。Practice 后降到 20%：<br>· 之前："我们决定用 React 不用 Vue"<br>· 之后："<strong>我 advocate React</strong> 因为 X + Y 理由，<strong>团队同意</strong> + 我们 ship"<br>· <strong>差别</strong>: 你是 decision-driver 还是 decision-follower？<br><br><strong>陷阱</strong>：① 一些文化（亚洲 / 学术）下 "我们" 是 modesty 信号；面试场景要 explicit 调整；② "我" overuse → ego red flag；③ 不 acknowledge team → 显得不 collaborative。<strong>建议</strong>：① 录音 mock 自己 count "我们" 使用频率；② 改写关键 STAR 故事 4-5 个；③ Practice 直到 conscious effort 不需要。`,
+      },
+      failure_modes: [
+        `"我们"主语 60%+ → individual contribution 不明`,
+        `用"我们"包装 "我没决策权"`,
+        `不在 R 阶段 acknowledge team → 显得 ego`,
+        `Vague verbs（"参与 / 帮助"）→ contribution 看不出`,
+        `文化默认 modest → 面试场景没 explicitly 调整`,
+      ],
+      follow_ups: [
+        { q: `怎么平衡 "我" vs "team player"？`, hint: `① S/T/A 80% "我"；② R "我们 achieved" 但具体 attribute "我贡献是 X"；③ 主动 credit team for specific things；④ 不暗示 "我自己做完所有"` },
+        { q: `面试官问 "what did your team do" vs "what did you do" 区别？`, hint: `① "team did X": zoom out 讲 team accomplishment；② "you did X": 必须 specific your action；③ 听 question 谁是 subject` },
+        { q: `怎么 practice 这点？`, hint: `① 录音 self-introduction + 6 个 STAR；② 数 "我" vs "我们" frequency；③ 朋友 mock 让他 flag "我们" usage；④ 重写 STAR scripts 直到 conscious style 形成` },
+      ],
+    },
+  },
 };
 
 // ============================================================================
