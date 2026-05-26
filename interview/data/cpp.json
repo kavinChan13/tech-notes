@@ -166,7 +166,34 @@
       "q": "4 种 cast 各做什么? 哪个有运行时检查?",
       "ans": "① <b>static_cast</b>: 编译期, 兼容类型转换 (数值/上行 down-cast/enum/触发转换运算符); ② <b>dynamic_cast</b>: <strong>运行时 RTTI 检查</strong>, 多态层次下行/横向, 失败返 nullptr/抛 bad_cast; ③ <b>const_cast</b>: 加/去 cv 限定; ④ <b>reinterpret_cast</b>: 不相关类型按位重解释 (违反严格别名通常 UB).",
       "bonus": "C++20 起优先 <code>std::bit_cast</code> 替代 reinterpret_cast 做类型穿越 (类型安全 + constexpr).",
-      "ref": "cpp_type_conversions_guide"
+      "ref": "cpp_type_conversions_guide",
+      "why_asked": "4 种 cast 是 C++ 基础题但筛人很 effective。能讲清\"static / dynamic / const / reinterpret + 运行时检查只 dynamic\"的人没踩过 UB 坑。",
+      "answers": {
+        "mid": "<strong>4 种 cast</strong>:① <strong>static_cast</strong>—— 编译期已知关系的转换（int↔float / Derived↔Base 上下）；② <strong>dynamic_cast</strong>—— <strong>运行时检查</strong>多态指针 / 引用（唯一有运行时检查）；③ <strong>const_cast</strong>—— 加 / 去 const（罕用，多数是 design smell）；④ <strong>reinterpret_cast</strong>—— bit-level 重解释（最危险，UB 高风险）。",
+        "senior": "<strong>详细用法 + 例</strong>:<br>· <strong>static_cast</strong>: 安全的编译期转换<br>· <code>static_cast&lt;int&gt;(3.14)</code> → 3<br>· <code>static_cast&lt;Derived*&gt;(base_ptr)</code> → no runtime check，wrong type = UB<br>· <strong>dynamic_cast</strong>: 多态类型必有 virtual function（vtable）<br>· <code>auto* d = dynamic_cast&lt;Derived*&gt;(base_ptr)</code> → null if wrong type<br>· 失败时 reference 抛 <code>std::bad_cast</code><br>· <strong>const_cast</strong>: 通常 wrong design<br>· 合法 use: 老 C API 不 const-correct 但确实只读<br>· <strong>reinterpret_cast</strong>: bit pattern 不变, 类型重新解释<br>· 主要场景: hardware register / serialize / type erasure<br>· 99% 用法是 UB temptation",
+        "staff": "深一层：选 cast 类型本身是<strong>code review 信号</strong>:<br>· <strong>大量 static_cast</strong>: 正常 (most usage)<br>· <strong>dynamic_cast</strong>: 偶尔 OK (visitor pattern alternative)，但<strong>常见</strong>意味 OOP design smell —— consider std::variant + std::visit<br>· <strong>const_cast</strong>: 通常 design smell —— 你不该需要去 const<br>· <strong>reinterpret_cast</strong>: red flag —— 99% 是 UB 风险<br><br><strong>真实 case</strong>:<br><br>1. <strong>static_cast 错误典型</strong>: <br><code>Base* b = new Derived;<br>Other* o = static_cast&lt;Other*&gt;(b);  // wrong type, UB</code><br>编译期 pass 但 runtime undefined。改用 dynamic_cast 至少有 null check。<br><br>2. <strong>dynamic_cast 性能</strong>: ~10-100ns per call (vtable walk + RTTI lookup). Hot path 避免。<br><br>3. <strong>reinterpret_cast UB</strong>: <code>float f = 1.0; int* i = reinterpret_cast&lt;int*&gt;(&amp;f); *i;</code> → strict aliasing UB. 正确: <code>std::bit_cast</code> (C++20) or <code>std::memcpy</code>.<br><br><strong>建议</strong>:<br>① Default static_cast<br>② OOP downcast: 重新设计避免 / std::variant / 必须用时 dynamic_cast<br>③ const_cast: 极少 + 留 comment 解释<br>④ reinterpret_cast: replace with std::bit_cast / memcpy<br>⑤ <strong>C-style cast 永远不用</strong>—— hide 4 种之一，不易 grep<br><br><strong>跟 C-style cast 区别</strong>: <code>(int)x</code> 实际是<strong>4 种之一 + const_cast 组合</strong>，编译器自动选 \"最 permissive\"——危险且不显式。新代码应该<strong>禁 C-style cast</strong> (lint warning)。"
+      },
+      "failure_modes": [
+        "用 C-style cast 隐藏真意图",
+        "static_cast 错型 → UB",
+        "const_cast 频繁用 → design smell",
+        "reinterpret_cast 跨类型 read → strict aliasing UB",
+        "Hot path 大量 dynamic_cast → 性能问题"
+      ],
+      "follow_ups": [
+        {
+          "q": "std::bit_cast 是什么 (C++20)？",
+          "hint": "① 安全的 bit-level cast (跟 reinterpret_cast 区别)；② constexpr (编译期 evaluate)；③ Requires trivially copyable + same size；④ 替代 memcpy + reinterpret_cast pattern"
+        },
+        {
+          "q": "dynamic_cast 性能怎么优化？",
+          "hint": "① Hot path 改 static_cast (确定类型时)；② 用 std::variant + std::visit 替代；③ Type tag (enum) + switch；④ CRTP 静态多态 (no runtime cost)"
+        },
+        {
+          "q": "什么时候 const_cast 合法？",
+          "hint": "① 调老 C API 不 const-correct (确实只读)；② Mutable 成员的 const method 内修改；③ <strong>原对象不能是 const-declared</strong>（否则 UB）；④ 99% case 有更好 design"
+        }
+      ]
     },
     {
       "id": 8,
@@ -517,7 +544,34 @@
       "diff": "mid",
       "q": "vector 扩容为什么是摊销 O(1)?",
       "ans": "几何级数增长 (2x or 1.5x): N 次 push_back 总共触发约 log(N) 次扩容, 每次拷贝 1+2+4+...+N = 2N 个元素. 平均到每次 push 是 O(1) — 摊销复杂度.",
-      "ref": "cpp_stl_containers_ppt"
+      "ref": "cpp_stl_containers_ppt",
+      "why_asked": "vector 是最常用容器。能讲\"摊销分析 + 2× growth + capacity vs size\"的人理解 amortized complexity。",
+      "answers": {
+        "mid": "<strong>2 倍扩容</strong>（GCC libstdc++）/ <strong>1.5 倍</strong>（MSVC）。<strong>摊销分析</strong>：N 次 push_back 总 cost ≤ 2N（每个元素平均被 copy/move &lt; 2 次）→ 摊销 O(1)。",
+        "senior": "<strong>摊销分析详解</strong>:<br>· N 次 push_back 触发 log(N) 次扩容<br>· 第 k 次扩容: copy 2^k elements<br>· Total copies: 2^0 + 2^1 + ... + 2^log(N) ≈ 2N<br>· Average per insert: 2N/N = 2 = O(1)<br><br><strong>1.5x vs 2x growth tradeoff</strong>:<br>· 2x: faster amortized, 但 wastes more memory (after grow, half is wasted)<br>· 1.5x: more memory efficient, marginally slower<br>· GCC: 2x; MSVC: 1.5x；都有道理<br><br><strong>size vs capacity</strong>:<br>· size(): 实际元素数<br>· capacity(): 已分配可容纳<br>· reserve(N): 预分配避免扩容<br>· shrink_to_fit(): 实际收回未用 (non-binding hint)",
+        "staff": "深一层：vector 扩容的<strong>性能实战</strong>:<br><br>1. <strong>预知 size 用 reserve</strong>: 100k push_back without reserve → 17 次 reallocation (each copy all). With reserve(100k) → 0 reallocation. 性能 +20-50%.<br><br>2. <strong>noexcept move 影响扩容</strong>: 扩容时若 element move ctor noexcept → 用 move; 否则 fallback to copy (保 strong exception safety)。<br>· 真实案例: NETCONF agent <code>std::vector&lt;Message&gt;</code>，Message 含 <code>std::function</code> (不 noexcept move)，扩容退化为 copy，慢 20×. Fix: 自定义 noexcept move ctor.<br><br>3. <strong>vector vs other containers 性能</strong>:<br>· Insert at end: vector amortized O(1); deque O(1); list O(1)<br>· Insert at middle: vector O(n); deque O(n); list O(1) but list 整体慢<br>· Random access: vector O(1); deque O(1); list O(n)<br>· Cache friendly: vector ≫ deque &gt; list<br>· Default choice: vector<br><br>4. <strong>growth factor &gt; 1 必要</strong>: 1.5 / 2 都 OK；如果是 +constant（如 +10）→ N push back is O(N²) 不 amortized<br><br><strong>面试 follow up</strong>: vector resize() 跟 reserve() 区别？<br>· reserve(N): 改 capacity, size 不变 (元素不构造)<br>· resize(N): 改 size, 多出 default-construct, 少了 destruct<br><br><strong>陷阱</strong>:<br>① 没 reserve 大量 push_back<br>② Element move ctor 没 noexcept → 扩容退化 copy<br>③ growth factor &lt; 1.5 (linear growth → O(N²))<br>④ 大 vector shrink_to_fit 期望立即回收 → impl 可能 ignore<br>⑤ Capacity 跟 size 混 → 读 element 用 size, not capacity"
+      },
+      "failure_modes": [
+        "没 reserve 大量 push_back → reallocation 频繁",
+        "Element move ctor 没 noexcept → 扩容退化 copy",
+        "Growth factor 算成 +constant → O(N²)",
+        "Capacity / size 混",
+        "shrink_to_fit 期望立即收回 → impl 可能 ignore"
+      ],
+      "follow_ups": [
+        {
+          "q": "2x vs 1.5x growth tradeoff？",
+          "hint": "① 2x: faster amortized + more memory waste；② 1.5x: less memory waste + slightly slower；③ Galloping (Folly): adaptive；④ 都 acceptable，差别 marginal"
+        },
+        {
+          "q": "vector::reserve 跟 std::vector(size, value) 区别？",
+          "hint": "① reserve(N): 只 alloc capacity, size 不变, 元素不构造；② vector(N): 分配 + size = N + default-construct N elements；③ 不同用法"
+        },
+        {
+          "q": "怎么避免 capacity 浪费？",
+          "hint": "① 用 reserve 准确预分配；② shrink_to_fit (non-binding)；③ Move-construct from temp: <code>vec = std::vector(std::move(vec))</code> swap idiom；④ 接受 50% capacity waste 是 2x growth 的代价"
+        }
+      ]
     },
     {
       "id": 33,
@@ -528,7 +582,34 @@
       "q": "vector 迭代器何时失效?",
       "ans": "① <b>容量变化</b> (扩容/reserve/shrink_to_fit) → <strong>全部失效</strong>; ② <b>插入/删除</b> (insert/erase) → 改动点及之后失效; ③ swap → 不失效 (指向被换前的元素); ④ clear → 全部失效但 end() 仍可用.",
       "trap": "<code>for (auto it = v.begin(); it != v.end(); ++it) if (cond) v.erase(it);</code> = UB. 修复: 用 erase 返回值 <code>it = v.erase(it);</code> 或 std::erase_if (C++20).",
-      "ref": "cpp_stl_containers_ppt"
+      "ref": "cpp_stl_containers_ppt",
+      "why_asked": "vector iterator 失效是 C++ 经典 UB 来源。能讲\"insert/erase/扩容三种失效场景\"的人调过相关 bug。",
+      "answers": {
+        "mid": "<strong>3 类失效</strong>:① <strong>扩容</strong>（push_back / reserve / resize > capacity）→ <strong>所有 iterator 失效</strong>；② <strong>insert</strong>（插入位置后所有 iterator 失效，前面的仍 valid）；③ <strong>erase</strong>（删除位置后所有 iterator 失效，前面仍 valid）。",
+        "senior": "<strong>具体规则</strong>:<br>1. <strong>push_back / emplace_back</strong>: <br>· If new size &lt;= capacity: <strong>只 end() iterator 失效</strong>，其他 valid<br>· If new size &gt; capacity (扩容): <strong>所有 iterator 失效</strong><br>2. <strong>insert(it, val)</strong>:<br>· If 扩容: 所有失效<br>· If 不扩容: it 及之后失效<br>3. <strong>erase(it)</strong>: it 及之后失效（前面 valid）<br>4. <strong>clear()</strong>: 所有失效<br>5. <strong>swap</strong>: <strong>不失效</strong>（two vectors 互换 internal pointer）<br><br><strong>典型 bug</strong>:<br><code>for (auto it = v.begin(); it != v.end(); ++it) {<br>  if (need_insert) v.insert(it, x);  // 失效 it</code> → UB",
+        "staff": "深一层：iterator 失效是 C++ <strong>UB 三大来源</strong>之一 (其他: use-after-free / 数据竞争). 编译期 0 warning, runtime random crash. <strong>预防 &gt; 检测</strong>.<br><br><strong>实战常见错误</strong>:<br><br>1. <strong>循环里 insert / erase 不更新 iterator</strong>:<br><code>for (auto it = v.begin(); it != v.end(); ++it) {<br>  if (pred(*it)) v.erase(it);  // UB after erase<br>}</code><br>正确:<br><code>for (auto it = v.begin(); it != v.end(); ) {<br>  if (pred(*it)) it = v.erase(it);  // erase returns next valid iterator<br>  else ++it;<br>}</code><br>或者 C++20: <code>std::erase_if(v, pred);</code><br><br>2. <strong>缓存 iterator 后扩容</strong>:<br><code>auto it = v.begin();<br>v.push_back(x);  // may invalidate<br>*it;  // potential UB</code><br><br>3. <strong>range-for 内部修改 vector</strong>:<br><code>for (auto&amp; x : v) {<br>  v.push_back(y);  // UB if reallocate<br>}</code><br>(range-for 隐式持有 begin/end iterator)<br><br><strong>预防 best practices</strong>:<br>① 不在 loop 内修改 container size (use copy / index based)<br>② erase-remove idiom: <code>v.erase(std::remove_if(...), v.end())</code>；C++20 简化为 <code>std::erase_if</code><br>③ 大量 insert 用 reserve 预分配避免 mid-loop 扩容<br>④ Index-based loop 对 random access container 更安全 (但 size 变化时 still careful)<br>⑤ ASan / iterator debugging mode (MSVC iterator debug level) catch 大部分<br><br><strong>不同容器失效规则</strong>:<br>· vector: 扩容失效 all, insert/erase 失效 from point<br>· deque: insert/erase 失效 all (different impl)<br>· list/forward_list: 插入不失效, erase 只失效被删的<br>· map/set: insert 不失效, erase 只失效被删的<br>· unordered_map/set: rehash 失效 all<br><br><strong>真实经验</strong>: NETCONF agent 早期一个 P0 crash—— message queue 处理时 push_back 新 message，导致 outer loop iterator 失效. ASan catch 后改为 two-phase（处理 + queue 新 message in batch）。Lesson: 任何 container loop 内修改 size 永远 suspect。"
+      },
+      "failure_modes": [
+        "Loop 内 insert/erase 不更新 iterator",
+        "缓存 iterator 后扩容 → UB",
+        "Range-for 内改 vector",
+        "不知道不同容器失效规则差异",
+        "不用 erase-remove idiom 自己写 loop"
+      ],
+      "follow_ups": [
+        {
+          "q": "erase-remove idiom 是什么？",
+          "hint": "<code>v.erase(std::remove_if(v.begin(), v.end(), pred), v.end())</code>—— remove_if 不真删，把保留元素 move 到前面，返回 logical end；erase 缩 size；C++20 <code>std::erase_if</code> 一行完成"
+        },
+        {
+          "q": "vector::end() iterator 永远失效吗？",
+          "hint": "① 任何 size 变化（push/insert/erase/resize）都失效 end()；② begin() 通常 stable（除非扩容）；③ 不要缓存 end()"
+        },
+        {
+          "q": "迭代器失效跟 reference 失效一样吗？",
+          "hint": "① 大致相同—— 引用本质也是 pointer to internal storage；② 但 list 等 node-based container, reference 跟 iterator 失效规则可能微妙不同；③ 实战: 同样 careful 处理 reference / iterator / pointer 到容器元素"
+        }
+      ]
     },
     {
       "id": 34,
@@ -540,7 +621,34 @@
       "ans": "push_back 接收已构造对象 (可能拷贝/移动). emplace_back 接收<strong>构造参数</strong>, 在 vector 内存原地 placement new — 省一次\"临时对象 + 移动\".",
       "code": "<pre>v.<span class=\"fn\">push_back</span>(<span class=\"type\">Conn</span>{fd, ip});       <span class=\"cm\">// ① 临时 ② 移动 ③ 析构临时</span>\nv.<span class=\"fn\">emplace_back</span>(fd, ip);            <span class=\"cm\">// 直接构造</span></pre>",
       "bonus": "已有现成对象时, push_back(std::move(obj)) 与 emplace_back(std::move(obj)) 性能<strong>无差别</strong>. emplace 真正受益是从参数原地构造时.",
-      "ref": "cpp_stl_containers_ppt"
+      "ref": "cpp_stl_containers_ppt",
+      "why_asked": "emplace 是 C++11 high-impact 优化。能讲\"in-place construction + perfect forwarding + 收益场景\"的人是真用过。",
+      "answers": {
+        "mid": "<strong>emplace_back</strong> 直接在容器内存上<strong>原地构造</strong>元素，<strong>不需要先构造再 copy/move</strong>。<strong>push_back</strong> 需要先构造一个临时再 move/copy 进 vector。",
+        "senior": "<strong>差异举例</strong>:<br><code>vec.push_back(MyClass(a, b));   // 1. 临时 MyClass; 2. move/copy 进 vec<br>vec.emplace_back(a, b);          // 直接在 vec 内存上构造</code><br><br><strong>性能差</strong>: <br>· Trivially copyable type: emplace ≈ push (compiler 优化 same)<br>· Non-trivial type (e.g., std::string): emplace 省 1 move/copy<br>· Heavy class (e.g., 含 std::vector / std::map 成员): emplace 显著快<br><br><strong>API</strong>:<br>· <code>emplace_back(args...)</code>: perfect forward args 到 element ctor<br>· <code>emplace(pos, args...)</code>: 在 pos 构造<br>· map/set 有 <code>emplace_hint</code> + <code>try_emplace</code> (C++17)",
+        "staff": "深一层：emplace 本质是<strong>perfect forwarding 应用</strong>—— 转发 args 到 ctor 而不是构造好的 object。<br><br><strong>实战场景何时差异大</strong>:<br>1. <strong>std::string element</strong>: <br><code>vec.emplace_back(\"hello\");        // 1 次 ctor<br>vec.push_back(\"hello\");           // 1 次 ctor + 1 次 move</code><br>(后者编译器优化后也只 1 次 ctor，差异 minimal)<br><br>2. <strong>复杂 object (大 string + vector member)</strong>: emplace 显著省 move cost<br><br>3. <strong>aggregate initialization</strong>:<br><code>vec.push_back({a, b, c});         // 隐式 ctor<br>vec.emplace_back(a, b, c);        // 显式</code><br><br><strong>陷阱 + 反直觉</strong>:<br>1. <strong>emplace 不总是更快</strong>: <br>· Trivially copyable: same<br>· 已有 already-constructed object: <code>vec.push_back(std::move(obj))</code> 也只 1 move<br>· emplace 优势主要在 \"<strong>避免临时 object</strong>\" 场景<br>2. <strong>explicit ctor 不能 push_back</strong> braced-init: <br><code>struct S { explicit S(int); };<br>vec.push_back({1});  // error if explicit<br>vec.emplace_back(1); // OK</code><br>3. <strong>emplace 跟 initializer_list</strong>: <br><code>vec.emplace_back({1,2,3});   // error: braced-init not a type<br>vec.emplace_back(std::initializer_list&lt;int&gt;{1,2,3}); // OK</code><br><br><strong>真实经验</strong>: NETCONF agent profile hot path，把 100+ push_back 改 emplace_back：性能<strong>不变</strong>（gcc -O2 优化 push_back 临时元素到 in-place ctor）。结论: <strong>emplace_back 是 \"free\" upgrade 但不是 magic boost</strong>—— 写新代码用 emplace，重构旧代码 push_back ROI 低。<br><br><strong>建议</strong>:<br>① 新代码默认 emplace_back<br>② 不为优化大量 refactor old push_back<br>③ map::try_emplace (C++17) 比 insert 更高效 (avoid construct on key collision)<br>④ 不滥用—— emplace_back(MyClass{a,b}) 没好处，不如 emplace_back(a,b)"
+      },
+      "failure_modes": [
+        "滥用 emplace 期待 magic speedup",
+        "emplace 跟 initializer_list 混淆",
+        "Explicit ctor 用 push_back braced-init 编译错",
+        "不用 try_emplace 在 map / unordered_map",
+        "重构旧 push_back 投入 vs ROI 不值"
+      ],
+      "follow_ups": [
+        {
+          "q": "try_emplace 跟 emplace 区别？",
+          "hint": "① try_emplace (C++17): 仅 key 不存在时 construct value (避免 wasted ctor on collision)；② emplace: 总 construct value 再尝试 insert，collision 时 wasted；③ Map / unordered_map 用 try_emplace"
+        },
+        {
+          "q": "emplace_back 怎么 perfect forward 多 arg？",
+          "hint": "① Variadic template + std::forward；<code>template&lt;class... Args&gt; void emplace_back(Args&&... args) { ... new(...) T(std::forward&lt;Args&gt;(args)...); }</code>"
+        },
+        {
+          "q": "什么时候 push_back 更合适？",
+          "hint": "① 已有 lvalue object: <code>push_back(obj)</code> 跟 <code>emplace_back(obj)</code> 完全一样；② Code clarity (已 constructed object 用 push 更清晰)；③ emplace 不带 magic 时差异 marginal"
+        }
+      ]
     },
     {
       "id": 35,
@@ -551,7 +659,34 @@
       "q": "std::string 的 SSO 是什么? 为什么 g++ 放弃了 COW?",
       "ans": "SSO = Small String Optimization, 短字符串 (libstdc++ ≤15, libc++ ≤22) 直接存对象内部 buffer, 不堆分配. g++ 5 之前 string 是 COW (写时复用), C++11 起改为 SSO 因: ① C++11 要求 const 操作多线程安全, COW 的 ref-count 复杂; ② 多核场景原子计数开销可能超过节省的内存.",
       "trap": "SSO 字符串<strong>移动 = 拷贝</strong> (数据在对象内, 没法只 swap 指针) — std::move 短 string 不省事.",
-      "ref": "cpp_stl_containers_ppt"
+      "ref": "cpp_stl_containers_ppt",
+      "why_asked": "std::string SSO 是 C++ 实现 detail 但常被问。能讲\"SSO + COW 历史 + ABI\"的人深入过 libstdc++。",
+      "answers": {
+        "mid": "<strong>SSO (Small String Optimization)</strong>: 短字符串（typical &lt; 16-24 bytes）直接存在 string object 内部（栈），<strong>不分配堆</strong>。长字符串 fall back 到 heap allocation。",
+        "senior": "<strong>SSO 实现细节</strong> (libstdc++ default):<br>· string object 自身 ~32 bytes (包括 size / capacity / data ptr)<br>· SSO buffer: ~15 bytes 内嵌（last byte sentinel）<br>· capacity &gt; SSO size → heap alloc<br>· libc++ SSO size 不同 (~22 bytes)<br><br><strong>历史: COW (Copy-On-Write) 时代</strong>:<br>· C++03 时代 libstdc++ 用 COW: 多个 string copy 共享同一 buffer + 引用计数<br>· C++11 引入 move semantics 后 COW 性能优势消失（move 更快）<br>· COW 多线程不安全（atomic ref count 开销 + 内存模型复杂）<br>· libstdc++ 5+ 抛弃 COW 改 SSO（Dual ABI 来源）<br><br><strong>性能</strong>:<br>· 短 string (95% real world): no alloc, fast<br>· 长 string: heap alloc 同 raw new",
+        "staff": "深一层：SSO 跟 COW 历史是 libstdc++ <strong>Dual ABI 来源</strong>，是 C++ ABI 兼容性最 painful 的问题之一。<br><br><strong>Dual ABI 详解</strong>:<br>· GCC 5+ 引入 <code>_GLIBCXX_USE_CXX11_ABI</code><br>· 0 = 老 COW string (ABI 跟 GCC 4.x 兼容)<br>· 1 = 新 SSO string (默认, C++11 spec 合规)<br>· 不同 ABI 编译的 .so 链接时 std::string 符号不匹配 → link error<br>· 整条工具链必须统一<br><br><strong>真实坑</strong>: 跟老 vendor library (用 GCC 4.x COW string 编译) 一起 link 时:<br>· Option 1: 整 build chain 用 _GLIBCXX_USE_CXX11_ABI=0 (sacrifice C++17 / 20 部分功能)<br>· Option 2: vendor 提供 GCC 5+ 编译版本<br>· Option 3: ABI shim layer (wrapped extern \"C\")<br>之前 NETCONF agent 跟客户老 vendor SDK 集成时遇过 → 选 Option 3 + 大量 extra work。<br><br><strong>性能差异 (SSO vs COW)</strong>:<br>· 短 string copy:<br>· SSO: 直接 byte copy (cache-friendly, no atomic)<br>· COW: atomic increment ref count (cache miss + barrier)<br>· SSO 通常 faster<br>· 多线程并发:<br>· SSO: no contention<br>· COW: ref count atomic contention<br>· SSO ≫ COW<br>· 长 string copy:<br>· SSO: full heap copy<br>· COW: just bump ref<br>· COW faster for big strings if rarely modified<br>· 现代 use case: move semantics + string_view 让 COW 优势消失<br><br><strong>验证 SSO size</strong>:<br><code>std::string s = \"abc\";<br>std::cout &lt;&lt; sizeof(s) &lt;&lt; ' ' &lt;&lt; (void*)s.data();</code><br>看 data() 是否在 s 内部地址范围 (是 = SSO, 不是 = heap)<br><br><strong>陷阱</strong>:<br>① 假设所有 string copy 都 alloc (短 string 不 alloc)<br>② 跨 GCC 4.x / 5+ 不知 Dual ABI<br>③ 期望 COW (老 mental model) 但默认 SSO<br>④ 性能 microbenchmark 用短 string → 不反映长 string 性能<br>⑤ libstdc++ vs libc++ SSO size 不同 → 测试结果不可移植"
+      },
+      "failure_modes": [
+        "假设所有 string copy 都 alloc",
+        "不知 Dual ABI 在 GCC 5+",
+        "Mental model 仍是 COW",
+        "Microbenchmark 全用短 string",
+        "跨 stdlib 假设 SSO size 一致"
+      ],
+      "follow_ups": [
+        {
+          "q": "怎么 disable SSO 强制 heap alloc？",
+          "hint": "① 不能 portable disable—— 是 impl detail；② 测试时 reserve(N) 大 N 强制 heap；③ Alternative: 用 std::vector&lt;char&gt; 替代 string"
+        },
+        {
+          "q": "string_view 跟 SSO 关系？",
+          "hint": "① string_view 完全不拥有数据—— no allocation；② 比 SSO 还轻 (just ptr + size)；③ Hot path 接口用 string_view 替代 string&；④ 注意 lifetime"
+        },
+        {
+          "q": "小字符串高频 copy 怎么优化？",
+          "hint": "① SSO 已经免 alloc；② Move 优于 copy；③ 用 string_view 传递；④ 大量重复字符串考虑 string interning (e.g., absl::string_view + 共享 storage)"
+        }
+      ]
     },
     {
       "id": 36,
@@ -584,7 +719,34 @@
       "q": "unordered_map rehash 让什么失效?",
       "ans": "<strong>迭代器全部失效</strong>, 但<strong>指针/引用仍有效</strong> (拉链法 — 节点内存没动, bucket 索引变了).",
       "bonus": "STL 标准要求拉链法 + 节点稳定地址, 这恰好是性能瓶颈 (无法用 open addressing).",
-      "ref": "cpp_stl_containers_ppt"
+      "ref": "cpp_stl_containers_ppt",
+      "why_asked": "unordered_map rehash 是 hash table 经典话题。能讲\"rehash trigger + iterator/reference 失效 + reserve\"的人是真做过性能调优。",
+      "answers": {
+        "mid": "<strong>rehash trigger</strong>: load factor (size / bucket_count) 超过 max_load_factor (default 1.0) → 翻倍 bucket + rehash all elements。<br><strong>失效</strong>: <strong>所有 iterator 失效</strong>；<strong>reference / pointer 不失效</strong>（element 仍在原位置，只是 bucket pointer 重建）。",
+        "senior": "<strong>详细</strong>:<br>· <strong>rehash 不只 insert 触发</strong>: 显式 <code>rehash(N)</code> / <code>reserve(N)</code> 也 trigger<br>· <strong>load factor</strong> 默认 1.0；调小（<code>max_load_factor(0.5)</code>）= 更多 memory + 更少 collision<br>· <strong>iterator 失效</strong>: 所有 begin/end/find 返回的 iterator 失效<br>· <strong>reference 不失效</strong>（unlike vector）：因为 element 在 heap-allocated node, rehash 只改 bucket pointer，node address 不变<br>· <strong>insert/erase 元素</strong> 也不失效 reference (除被 erase 的)<br><br><strong>性能</strong>:<br>· Amortized insert: O(1)<br>· Worst case (rehash): O(N)<br>· Reserve N before insert: avoid mid-way rehash",
+        "staff": "深一层：unordered_map 实现是<strong>chained hash table</strong>（每个 bucket 是 linked list of nodes）。<br><br><strong>性能 reality check</strong>:<br>1. <strong>unordered_map 比 std::map 快？</strong> 不一定:<br>· 小 N (&lt; 100): map 可能更快 (cache locality)<br>· 大 N: unordered_map 更快 (O(1) vs O(log N))<br>· 但 unordered_map 有 hash + collision overhead + node 分散在 heap (cache miss)<br>2. <strong>更快替代</strong>: <br>· <strong>Abseil flat_hash_map</strong>: open-addressing + cache friendly, 2-3× faster than std::unordered_map<br>· <strong>F14 (Folly)</strong>: 类似 fast hash map<br>· <strong>boost::container::flat_map</strong>: sorted vector + binary search (适合小 N)<br><br><strong>rehash 性能 trap</strong>:<br>1. <strong>渐进 grow 没 reserve</strong>: 100k insert 触发多次 rehash, each rehash O(current size)<br>· Without reserve: ~10× slower<br>· With reserve(100k): one-time alloc<br>2. <strong>load factor 设太小</strong>: <code>max_load_factor(0.25)</code> → 4× memory，但 lookup 几乎不快<br>3. <strong>iterator invalidation 后用</strong>: 隐 bug。Reference 不失效是 unordered_map 特性<br><br><strong>真实经验</strong>: NETCONF agent device state cache (100k device, ~1M lookup/s):<br>· baseline std::unordered_map: P99 lookup 800ns<br>· change to absl::flat_hash_map: P99 200ns (4×)<br>· cache miss 数从 25% → 6% (perf c2c)<br><br><strong>陷阱</strong>:<br>① 渐增 insert 没 reserve<br>② Iterator 失效不知，crash random<br>③ 假设 unordered_map 永远比 map 快<br>④ Hash function 烂（用 sequential ID 当 key, all collide in bucket 0）<br>⑤ 不知 reference 不失效（误以为跟 vector 一样）<br><br><strong>选型决策</strong>:<br>· N &lt; 50, 多读少写: <strong>flat_map / sorted vector</strong> (cache locality)<br>· 50-10k, 通用: <strong>absl::flat_hash_map</strong> (best)<br>· 10k+ 或需要 ordering: <strong>std::map / std::unordered_map</strong><br>· concurrent: <strong>tbb::concurrent_hash_map / folly::ConcurrentHashMap</strong>"
+      },
+      "failure_modes": [
+        "渐增 insert 不 reserve → 多次 rehash",
+        "Iterator 失效不知 → crash",
+        "Hash function 烂 → all collide",
+        "Load factor 设太小 → 浪费 memory",
+        "假设 unordered_map &gt; map for all N"
+      ],
+      "follow_ups": [
+        {
+          "q": "好的 hash function 长啥样？",
+          "hint": "① Uniform distribution；② Low collision rate；③ Cheap to compute；④ std::hash 通常够用；⑤ Custom key 要专门 hash (e.g., struct of int + string → combine)"
+        },
+        {
+          "q": "absl::flat_hash_map 比 std::unordered_map 快在哪？",
+          "hint": "① Open addressing not chaining—— cache friendly；② SIMD lookup for empty/deleted slots；③ Robin hood hashing；④ Comprehensive analysis: Abseil documentation"
+        },
+        {
+          "q": "concurrent hash map 怎么选？",
+          "hint": "① Read-heavy: folly::ConcurrentHashMap (lock-free reads)；② Mixed: tbb::concurrent_hash_map (fine-grained lock)；③ Simple: std::shared_mutex + std::unordered_map；④ 高 contention: 用 striped lock / lock-free 数据结构"
+        }
+      ]
     },
     {
       "id": 39,
@@ -680,7 +842,34 @@
       "diff": "high",
       "q": "找 Top-K 元素几种方法?",
       "ans": "① <b>partial_sort</b> O(n log k) — 前 k 个有序; ② <b>nth_element</b> O(n 平均) + 局部 sort — 最快; ③ <b>大小为 k 的小顶堆遍历输入</b> O(n log k) — 流式场景唯一选择; ④ sort 全部 O(n log n) — 无脑做法.",
-      "ref": "cpp_stl_algorithms_ppt"
+      "ref": "cpp_stl_algorithms_ppt",
+      "why_asked": "Top-K 是 STL 经典综合题。能讲\"std::nth_element + 部分 sort + heap\"3 方法的人懂复杂度。",
+      "answers": {
+        "mid": "<strong>3 种方法</strong>:① <strong>std::nth_element</strong>（O(n) average，找第 k 大但 unordered）；② <strong>std::partial_sort</strong>（O(n log k)，前 k 个 sorted）；③ <strong>std::priority_queue (heap)</strong>（O(n log k)，适合 streaming）。",
+        "senior": "<strong>详细对比</strong>:<br>1. <strong>std::nth_element(first, nth, last)</strong>: <br>· O(n) average (quickselect)<br>· O(n²) worst case<br>· 之后 [first, nth) 都 ≤ *nth, (nth, last) 都 ≥<br>· 但 [first, nth) 不 sorted<br>2. <strong>std::partial_sort(first, middle, last)</strong>:<br>· O(n log k) where k = middle - first<br>· [first, middle) is sorted top k<br>3. <strong>std::priority_queue + 维护 size k</strong>:<br>· Streaming (data 一次性看不完)<br>· O(n log k) per processing<br>· Memory O(k)<br><br><strong>选择</strong>:<br>· k 远小于 n + 只要 unordered: <strong>nth_element</strong> (fastest)<br>· k 远小于 n + 要 sorted: <strong>partial_sort</strong><br>· Streaming 数据: <strong>priority_queue</strong>",
+        "staff": "深一层：Top-K 看似简单实际有<strong>不少 senior 区分点</strong>:<br><br>1. <strong>k 跟 n 比例 matter</strong>:<br>· k = n/2: nth_element no advantage over sort<br>· k &lt;&lt; n: nth_element 显著快<br>· k = 1 (find max): std::max_element O(n), best<br>2. <strong>是否需要 sorted</strong>:<br>· 不需要 sorted (e.g., 求 top-100 students 的集合，不在乎顺序): nth_element<br>· 需要 sorted (e.g., leaderboard): partial_sort<br>3. <strong>是否 streaming</strong>:<br>· Batch (data 全在 memory): nth_element / partial_sort<br>· Streaming (one pass / data 太大): priority_queue 维护 size k<br>4. <strong>是否 stable</strong>:<br>· nth_element / partial_sort: <strong>not stable</strong><br>· 需要 stable: std::stable_sort + slice (O(n log n))<br><br><strong>真实案例</strong>: NETCONF agent telemetry，每秒 100k events 找 top-100 异常 device:<br>· Batch (1 sec buffer): nth_element 50ms<br>· Streaming: priority_queue maintain top-100 (each insert O(log 100)) → 总 O(n log k), real-time<br>· 选 streaming (low latency requirement)<br><br><strong>性能 数字</strong>:<br>· n = 1M, k = 100<br>· std::sort: ~100ms (cache-friendly)<br>· partial_sort: ~10ms<br>· nth_element: ~3ms (10× faster)<br>· priority_queue streaming: comparable to nth_element (each insertion overhead but distributed)<br><br><strong>陷阱</strong>:<br>① 用 std::sort 当 top-K 工具—— 浪费 O(n log n)<br>② 不知道 nth_element 是 partial QuickSort<br>③ 期望 nth_element 后 [first, nth) 是 sorted<br>④ k 大时 priority_queue 比 partial_sort 慢（k log k vs k log k 但 const factor 大）<br>⑤ Worst case O(n²) of nth_element 不知（malicious input 可触发）<br><br><strong>替代方案</strong>:<br>· Randomized selection (Quickselect + random pivot)<br>· 介绍 select algorithm (BFPRT, O(n) worst case 但 const factor 大, 实战很少用)<br>· 数据可并行: 分块 + merge top-K"
+      },
+      "failure_modes": [
+        "用 std::sort 当 top-K 工具",
+        "期望 nth_element 后 sorted",
+        "k 大时仍用 priority_queue",
+        "Worst case O(n²) 不知",
+        "Stable 跟 unstable 混"
+      ],
+      "follow_ups": [
+        {
+          "q": "怎么 parallel top-K？",
+          "hint": "① 数据分块，每块 partial_sort top-K；② Merge top-K of all blocks；③ Total O(n/p × log k + p × k log k)；④ TBB / std::execution::par_unseq"
+        },
+        {
+          "q": "Streaming top-K 算法？",
+          "hint": "① priority_queue (min-heap of size k)；② 新元素 &gt; heap.top() 则 pop + push；③ Time O(n log k)；④ Memory O(k)；⑤ 适合 data 一次性 stream"
+        },
+        {
+          "q": "Top-K of sorted streams (k-way merge)？",
+          "hint": "① priority_queue of stream iterators；② Pop smallest, advance that stream；③ Time O(n log k) where k = stream count；④ 经典 external sort building block"
+        }
+      ]
     },
     {
       "id": 48,
@@ -888,7 +1077,34 @@
       "q": "什么是 Rule of 0 / 3 / 5?",
       "ans": "<b>Rule of 0</b> (首选): 不写任何特殊成员, 让编译器全生成 — 前提所有成员 RAII 友好. <b>Rule of 3</b> (C++03): 写析构/拷贝构造/拷贝赋值任一就要写全 3 个 (有独占资源的标志). <b>Rule of 5</b> (C++11+): 加上移动构造/移动赋值.",
       "bonus": "真实策略: 把\"独占资源\"封装进 RAII 类 (unique_ptr 自定义 deleter), 外层类回归 Rule of 0.",
-      "ref": "cpp_value_categories_guide"
+      "ref": "cpp_value_categories_guide",
+      "why_asked": "Rule of 0/3/5 是现代 C++ 设计原则。能讲\"3 → 5 演进 + Rule of 0 哲学\"的人懂 RAII。",
+      "answers": {
+        "mid": "<strong>Rule of 3 (C++03)</strong>: 自定义任一 (dtor / copy ctor / copy assign) → 必须自定义另外 2 个。<br><strong>Rule of 5 (C++11)</strong>: 加 move ctor / move assign 共 5 个。<br><strong>Rule of 0 (modern)</strong>: <strong>尽量不自定义任何</strong>—— 让 compiler 生成默认; 资源管理交给 RAII type (unique_ptr / vector / lock_guard)。",
+        "senior": "<strong>具体规则</strong>:<br>· 自定义 dtor → 通常意味管 resource → copy/move 需要正确处理 (deep copy / transfer ownership)<br>· 编译器默认 copy/move = member-wise → 资源 type member-wise 可能 wrong<br><br><strong>Rule of 0 实战</strong>:<br>· 用 std::unique_ptr 管 ownership → 不用写 dtor / move (default ok)<br>· 用 std::vector / std::string → 同上<br>· 类自然 move-only / copyable based on members<br><br><strong>例</strong>:<br><code>class Foo {<br>  std::unique_ptr&lt;Bar&gt; ptr_;     // owns Bar<br>  std::vector&lt;int&gt; data_;        // owns vector<br>  // No need to define dtor / copy / move<br>  // Default-generated: move-only (because unique_ptr)<br>};</code>",
+        "staff": "深一层：Rule of 0 是<strong>现代 C++ 最重要原则之一</strong>—— \"<strong>resource management should be a separate concern from business logic</strong>\"。如果你写 dtor，你应该 question why（是不是该 wrap to RAII type）。<br><br><strong>Rule of 5 详细行为</strong>:<br>1. <strong>用户自定义 dtor</strong> → compiler 不生成 move (但仍生成 deprecated copy)<br>2. <strong>用户自定义 move ctor/assign</strong> → compiler 不生成 copy<br>3. <strong>= default 显式</strong> 让 compiler 生成 (区别于 not declared)<br>4. <strong>= delete</strong> 显式禁止<br><br><strong>真实陷阱</strong>:<br>1. <strong>写了 dtor 但忘写 move</strong>:<br><code>class Foo {<br>  std::unique_ptr&lt;Bar&gt; ptr_;<br>  ~Foo() { log(\"destroying\"); }  // user-declared dtor<br>};<br>// Compiler 不生成 move → Foo 不是 movable<br>// std::vector&lt;Foo&gt; 退化 to copy → unique_ptr copy = error</code><br>修正: 显式 <code>Foo(Foo&amp;&amp;) = default;</code><br><br>2. <strong>= default move noexcept</strong>:<br>· Compiler 生成 move 时根据 member move 推导 noexcept<br>· 一个 member 不 noexcept → Foo move 也不 noexcept<br>· 影响 std::vector&lt;Foo&gt; 扩容 (退化 copy)<br>· Fix: ensure members noexcept; static_assert<br><br>3. <strong>Rule of 5 应用过度</strong>:<br>· 简单 type 不应该写 5 个 (Rule of 0 优先)<br>· 写 5 个意味着 manual resource management → consider RAII<br><br><strong>真实经验</strong>: NETCONF agent 代码 review 中常见 anti-pattern:<br>· 100+ line class with manual <code>new/delete</code> in dtor → refactor to std::unique_ptr<br>· Member 包含 raw pointer + manual copy/move → wrap to RAII type<br><br>Rule of 0 是 modern code review checklist 必查项。<br><br><strong>关键</strong>: ① Rule of 0 优先；② Rule of 5 当真需要 manual resource；③ Rule of 3 已 obsolete (但仍要懂 legacy code)；④ 显式 = default / = delete 表达意图；⑤ Code review flag 大量自定义 special member functions。"
+      },
+      "failure_modes": [
+        "写 dtor 忘写 move → compiler 不生成 move → 退化 copy",
+        "Manual new/delete 在 dtor 不用 unique_ptr",
+        "Member move 不 noexcept → vector 扩容退化 copy",
+        "Rule of 5 写到简单 type（应该 Rule of 0）",
+        "= delete vs not declared 混 → 隐式生成 unexpected"
+      ],
+      "follow_ups": [
+        {
+          "q": "什么时候真的需要 Rule of 5？",
+          "hint": "① 类实现 RAII wrapper (e.g., 自己 wrap pthread mutex / file handle)；② 类直接管 raw resource not in std lib；③ 99% case 用 unique_ptr / vector / wrap-existing-RAII"
+        },
+        {
+          "q": "Move-only vs copyable 怎么决定？",
+          "hint": "① 包含 unique_ptr / thread → move-only；② 包含 shared_ptr / value type → copyable；③ 显式 = delete copy 让 move-only；④ Default 通常正确"
+        },
+        {
+          "q": "Empty base class optimization 跟 Rule of 0 关系？",
+          "hint": "① EBO (Empty Base Optimization) 让 empty type 不占空间；② C++20 [[no_unique_address]] 现代替代；③ Rule of 0 + EBO 让 wrapper class 真的 zero-overhead"
+        }
+      ]
     },
     {
       "id": 57,
@@ -899,7 +1115,34 @@
       "q": "声明析构函数对其他特殊成员的影响?",
       "ans": "<strong>声明析构 → 移动构造 + 移动赋值不再自动生成</strong>! 拷贝仍生成 (但可能性能差). 这是 Rule of 3 升 Rule of 5 时新人最常踩的坑. 修复: 显式 = default 移动操作.",
       "code": "<pre><span class=\"kw\">struct</span> <span class=\"type\">A</span> { ~<span class=\"fn\">A</span>(); std::vector&lt;<span class=\"kw\">int</span>&gt; v; };\n<span class=\"type\">A</span> a, b; b = std::<span class=\"fn\">move</span>(a);   <span class=\"cm\">// ⚠️ 走拷贝赋值 — vector 被深复制</span></pre>",
-      "ref": "cpp_value_categories_guide"
+      "ref": "cpp_value_categories_guide",
+      "why_asked": "析构函数声明影响其他成员是 C++ 规则坑。能讲\"5 个 special member functions 互相影响\"的人懂 standard。",
+      "answers": {
+        "mid": "<strong>用户声明 dtor</strong> → compiler <strong>不生成 move ctor / move assign</strong>（但仍生成 copy ctor / copy assign，C++ 11 后这两个 deprecated）。<br>结果：类<strong>退化为 copy-only</strong>，失去 move 优化。",
+        "senior": "<strong>完整规则 (C++ Standard)</strong>:<br>1. 用户声明 <strong>copy ctor / copy assign / dtor</strong> 任一 → <strong>不生成 move ctor/assign</strong><br>2. 用户声明 <strong>move ctor / move assign</strong> 任一 → <strong>不生成 copy ctor/assign (= delete)</strong><br>3. 用户声明 dtor → 生成的 copy ctor/assign <strong>deprecated</strong>（C++11+）<br><br><strong>典型踩坑</strong>:<br><code>class Foo {<br>  std::vector&lt;int&gt; data_;<br>  ~Foo() { /* log destruction */ }<br>};<br>// Compiler 不生成 move → Foo 不 movable<br>// std::vector&lt;Foo&gt; 扩容时退化为 copy<br>// 性能 -50% or worse</code><br><br><strong>修正</strong>: 显式声明<br><code>Foo(Foo&amp;&amp;) noexcept = default;<br>Foo&amp; operator=(Foo&amp;&amp;) noexcept = default;</code>",
+        "staff": "深一层：这条规则是<strong>C++ 历史包袱</strong>——为兼容 C++03 code（没 move 概念）保留默认 copy 行为。Modern C++ guidelines 强烈建议<strong>显式控制全部 5 个</strong>或<strong>都不声明 (Rule of 0)</strong>。<br><br><strong>真实事故 case</strong>:<br>1. <strong>NETCONF agent 性能事故</strong>: Message class 含 std::function。某天 dev 加了 <code>~Message() { metrics_.dec(); }</code>。<br>· Compiler 不生成 move ctor → Message 不 movable<br>· std::vector&lt;Message&gt; queue 扩容时 copy 整个 Message (含 std::function copy ~ 100ns)<br>· 高 QPS 下 P99 latency +50%<br>· Profile + look at codegen 才发现<br>· 修正: 显式 <code>Message(Message&amp;&amp;) noexcept = default;</code> → 性能恢复<br><br>2. <strong>Subtle bug: 隐式 copy still works</strong>:<br><code>class Resource {<br>  int* data_;<br>  ~Resource() { delete data_; }  // 用户声明 dtor<br>  // No copy ctor declared → compiler 生成 default copy (deprecated but still works)<br>};<br>Resource a, b = a;  // shallow copy! 两个对象同 data_ → double delete</code><br>修正: <code>Resource(const Resource&amp;) = delete;</code> 或 deep copy<br><br><strong>规则记忆 trick</strong>: \"<strong>当你声明 5 中任一，重新思考另外 4 个</strong>\"<br><br><strong>建议</strong>:<br>① Rule of 0 优先（不写任何 special member）<br>② 如果必须写，<strong>全部 5 个显式</strong> (= default / = delete / 自定义)<br>③ Move ctor / move assign <strong>显式 noexcept</strong><br>④ Static_assert 验证: <code>static_assert(std::is_nothrow_move_constructible_v&lt;Foo&gt;);</code><br>⑤ Code review tools (clang-tidy) check<br><br><strong>关键</strong>: 析构声明 ≠ 单纯加 logging—— 一定<strong>影响 4 个其他 special member functions</strong>，可能 silent perf 退化或 silent 错误 copy。"
+      },
+      "failure_modes": [
+        "自定义 dtor 没补 move → 退化 copy",
+        "Subtle shallow copy（compiler 默认 generate）→ double delete",
+        "Move 没显式 noexcept → vector 扩容退化",
+        "不知道 dtor 影响其他 4 个",
+        "不用 static_assert 验证 noexcept move"
+      ],
+      "follow_ups": [
+        {
+          "q": "什么时候用 = default？",
+          "hint": "① 你想要 compiler 生成（明确意图）；② 防止 deprecated copy generation；③ 跟 = delete 配合精确控制；④ 默认 inline / trivial-preserving"
+        },
+        {
+          "q": "Trivially copyable 是什么？",
+          "hint": "① 所有 special members 都是 trivial（compiler 生成）；② 可以 memcpy；③ std::is_trivially_copyable_v；④ POD-like type 主流；⑤ 容器 algorithm 优化（vector reserve 用 memcpy not copy ctor）"
+        },
+        {
+          "q": "Compiler-generated 跟自定义性能差？",
+          "hint": "① Compiler-generated 通常 inline + 优化更激进；② 自定义即使一样代码可能不 inline；③ benchmark 测；④ 大多 case 无差异"
+        }
+      ]
     },
     {
       "id": 58,
@@ -1019,7 +1262,34 @@
       "q": "异常安全 3 级保证?",
       "ans": "① <b>basic 基本</b>: 不泄漏资源, 对象处于\"合法但未指定\"状态. ② <b>strong 强</b>: 操作要么成功, 要么状态完全不变 (事务性). ③ <b>nothrow 不抛</b>: noexcept, 承诺不抛.",
       "bonus": "实战: 公开接口至少 basic; 关键事务用 strong (copy-and-swap); 析构 + swap + 移动构造应当 nothrow.",
-      "ref": "cpp_exceptions_guide"
+      "ref": "cpp_exceptions_guide",
+      "why_asked": "异常安全 3 级是 C++ 经典理论 (Stroustrup / Sutter)。能讲清\"basic / strong / nothrow\"+ 实战的人写过 library。",
+      "answers": {
+        "mid": "<strong>3 级 (Sutter)</strong>:① <strong>Basic</strong>—— 异常后 object 仍 valid (但 state may change), no resource leak；② <strong>Strong</strong>—— 异常后<strong>commit or rollback</strong>，state 不变；③ <strong>Nothrow / No-throw</strong>—— 永不抛 (noexcept)。",
+        "senior": "<strong>每级 example</strong>:<br>1. <strong>Basic guarantee</strong>:<br>· std::vector::push_back: 失败时 vector 仍 valid, 但元素可能部分构造<br>· 大多数 STL 操作至少 basic<br>2. <strong>Strong guarantee</strong>:<br>· std::vector::push_back if element copy ctor 不抛 OR move noexcept: strong<br>· 关键技术: copy-and-swap idiom<br>· Performance cost: 通常需要 extra copy<br>3. <strong>Nothrow</strong>:<br>· 关键操作（dtor / swap / move）必须<br>· compiler check: noexcept specifier<br><br><strong>实战 priority</strong>:<br>· dtor: 永远 nothrow (隐式 noexcept; 抛异常 = std::terminate)<br>· swap: 永远 nothrow<br>· move: 努力 nothrow (vector 扩容 move_if_noexcept)<br>· 其他操作: at least basic",
+        "staff": "深一层：异常安全是<strong>library / API 设计核心</strong>。Sutter \"<strong>Exceptional C++</strong>\" 是经典。<br><br><strong>设计原则</strong>:<br>1. <strong>构造函数</strong>: strong (要么完整构造要么不 commit)<br>· 失败抛异常 → 已构造 members 自动析构 (RAII)<br>· 不要 \"partial constructed\" state<br>2. <strong>析构函数</strong>: nothrow (always)<br>· dtor 抛 + 另一异常 stack unwind = std::terminate<br>· C++11 起 dtor 隐式 noexcept (除非显式 noexcept(false))<br>3. <strong>赋值 (copy/move assign)</strong>: 至少 basic, 理想 strong<br>· copy assign: copy-and-swap idiom 实现 strong<br>4. <strong>swap</strong>: nothrow (member-wise swap of nothrow types)<br><br><strong>copy-and-swap idiom</strong>:<br><code>Foo&amp; operator=(Foo other) {  // 注意是 value param (copy in)<br>  swap(other);  // nothrow swap<br>  return *this;<br>}  // other dtor</code><br>· 异常发生在 copy （early），this 不变 → strong guarantee<br>· Code 简洁 (handle copy/move via param convention)<br><br><strong>真实案例</strong>: NETCONF agent SafeConfig class:<br>· apply(new_config) operation 需要 strong guarantee (atomic apply or rollback)<br>· 用 copy-and-swap: <code>auto temp = current; temp.merge(new_config); swap(current, temp);</code><br>· 中途失败 (merge 抛) → current 不变, rollback automatic<br><br><strong>性能 tradeoff</strong>:<br>· Strong guarantee 通常需要 copy (memory + CPU cost)<br>· Hot path 可能选 basic + 业务层 retry<br>· 关键 financial / atomic op 选 strong<br><br><strong>陷阱</strong>:<br>① dtor 抛异常 (C++11+ 直接 terminate)<br>② swap 抛异常 (assignment 失败状态)<br>③ Strong guarantee 不 verify (测试: 注入异常看 state)<br>④ noexcept 标记错（声明 noexcept 但实际抛 = terminate）<br>⑤ Move 不 noexcept → vector reservation 退化 copy<br><br><strong>验证</strong>:<br>① static_assert noexcept<br>② Code review: 关注 dtor / swap / move<br>③ Sanitizer 测试: 注入异常看 invariant"
+      },
+      "failure_modes": [
+        "dtor 抛异常 → terminate",
+        "swap 抛异常 → assignment 半状态",
+        "Strong guarantee 不 verify",
+        "noexcept 标记错 → 抛即 terminate",
+        "Hot path 强求 strong → 性能浪费"
+      ],
+      "follow_ups": [
+        {
+          "q": "Copy-and-swap idiom 完整 implementation？",
+          "hint": "① Member swap (nothrow)；② Free swap function (ADL)；③ copy ctor / move ctor (= default OK)；④ operator= takes value param + swap；⑤ Rule of 5 兼容"
+        },
+        {
+          "q": "noexcept(noexcept(...)) 是什么？",
+          "hint": "① 条件性 noexcept—— 基于其他表达式是否 noexcept；② 例: <code>void swap(T&amp; a, T&amp; b) noexcept(noexcept(a.swap(b)))</code>；③ 模板代码常用"
+        },
+        {
+          "q": "异常安全跟 thread safety 关系？",
+          "hint": "① 独立维度；② 但 strong exception safety 通常需要 atomic / lock 配合 thread safety；③ 写 thread-safe library 必须同时考虑两者"
+        }
+      ]
     },
     {
       "id": 64,
@@ -1068,7 +1338,34 @@
       "q": "栈展开 (stack unwinding) 是什么?",
       "ans": "抛出异常后, 运行时<strong>沿调用栈向上回退</strong>, 直到找到匹配 catch. 回退过程中: ① 每帧的所有局部对象按构造逆序析构 (这是 RAII 的基础); ② 跨函数继续向上.",
       "bonus": "机制: 每个函数有 .eh_frame (DWARF CFI) + .gcc_except_table (LSDA), 描述\"PC 范围 → 析构哪些对象 + 哪些 catch\". libgcc/libunwind 用这些表实际驱动展开.",
-      "ref": "cpp_exceptions_guide"
+      "ref": "cpp_exceptions_guide",
+      "why_asked": "栈展开是 C++ 异常实现 detail。能讲\"unwind table + RAII + 性能\"的人懂 zero-overhead exception。",
+      "answers": {
+        "mid": "<strong>Stack Unwinding</strong>: 抛异常时，runtime <strong>反向遍历调用栈</strong>，对每个栈帧调用<strong>所有局部对象的析构</strong>（RAII），直到匹配的 catch。",
+        "senior": "<strong>详细过程</strong>:<br>1. throw 表达式 → runtime 构造 exception object (typically heap-allocated)<br>2. 查 <strong>EH frame table</strong> (.eh_frame section) 找当前 PC 的 cleanup info<br>3. <strong>Phase 1 (search)</strong>: 反向遍历栈帧找匹配 catch<br>4. <strong>Phase 2 (cleanup)</strong>: 对每个栈帧调用 <strong>local destructors</strong>（按构造逆序）<br>5. 到匹配 catch block → transfer control<br>6. 没匹配 catch → std::terminate<br><br><strong>关键</strong>:<br>· 局部对象 dtor 自动调用 = <strong>RAII</strong> 安全基础<br>· dtor 不能 throw（C++11+ 强制 noexcept）<br>· 性能: throw 1 次 ~1-100 µs，no-throw path 0 overhead",
+        "staff": "深一层：栈展开机制是<strong>\"zero-cost exception\"</strong> 的实现基础。<br><br><strong>关键概念</strong>:<br>1. <strong>Itanium ABI exception handling</strong> (GCC / Clang Linux): <br>· <strong>.eh_frame + .gcc_except_table</strong> sections 存 unwind info (DWARF format)<br>· no-throw path: 完全不读这些 (zero cost on hot path)<br>· throw path: libgcc_eh.a / libunwind 执行 unwind<br>2. <strong>Two-phase</strong>: phase 1 (search) + phase 2 (cleanup)<br>· Phase 1 找 catch 但不 destroy<br>· 找到才 phase 2 destroy + transfer<br>· 没找到 (uncaught) → terminate 前不 destroy (UB-ish but standard)<br>3. <strong>性能</strong>:<br>· No throw: 0 ns overhead<br>· Throw: 1-100 µs (proportional to stack depth + dtor count)<br>· 不适合 hot path 控制流<br><br><strong>RAII safety</strong>:<br>· 局部 unique_ptr → dtor 自动 release<br>· 局部 lock_guard → dtor 自动 unlock<br>· 局部 vector → dtor 自动 free<br>· 这就是 \"<strong>构造函数 strong guarantee + RAII</strong>\" 的基础<br><br><strong>真实案例 1</strong>: NETCONF agent 早期一段代码:<br><code>void f() {<br>  auto lock = mtx.lock();  // RAII<br>  do_work();               // throw inside<br>}  // unwinding: lock dtor auto release</code><br>异常没 catch → terminate 但 lock 仍 release。<br><br><strong>真实案例 2</strong>: dtor 抛异常事故:<br><code>struct R {<br>  ~R() { throw std::runtime_error(\"...\"); }  // BAD<br>};<br>void f() {<br>  R r;<br>  throw std::runtime_error(\"other\");  // already unwinding<br>  // r dtor throws → std::terminate</code><br>修正: dtor 永不抛 (C++11+ implicit noexcept)<br><br><strong>陷阱</strong>:<br>① <strong>dtor throw</strong>—— terminate 直接<br>② <strong>跨 .so 异常</strong>—— typeid 跨边界可能不匹配<br>③ <strong>跨 C ABI</strong>—— C 不能 catch C++ 异常, UB<br>④ <strong>异常做控制流</strong>—— hot path 性能崩 (1000× 慢于 if/else)<br>⑤ <strong>不 catch by const reference</strong>—— catch by value slicing 派生信息丢<br><br><strong>跨编译器 / 平台</strong>:<br>· GCC / Clang: Itanium ABI<br>· MSVC: 自己的 SEH-based ABI（不兼容 Itanium）<br>· 跨编译器 .so 不能 throw 异常"
+      },
+      "failure_modes": [
+        "dtor 抛异常 → terminate",
+        "异常做控制流 → 性能崩",
+        "跨 C ABI 抛异常",
+        "catch by value slicing",
+        "dtor 内 catch all 掩盖错误"
+      ],
+      "follow_ups": [
+        {
+          "q": "Zero-cost exception 真的 zero cost 吗？",
+          "hint": "① No-throw path: yes (only metadata in eh_frame section)；② Binary size +5-15%；③ Throw cost 1-100 µs；④ \"Zero cost\" 指 normal execution path"
+        },
+        {
+          "q": "noexcept 函数抛异常会怎样？",
+          "hint": "① 直接 std::terminate（不 unwind 进一步）；② 用 noexcept 是 contract / 编译器优化提示；③ 错标 noexcept = 隐藏 bug"
+        },
+        {
+          "q": "跟其他语言异常 (Java / Python) 比？",
+          "hint": "① Java/Python: 异常 cost 较低 (throw ~ µs)；② C++: throw 较慢但 no-throw zero cost；③ Java/Python: 常用异常做控制流 (OK); C++: 不该"
+        }
+      ]
     },
     {
       "id": 66,
@@ -1111,7 +1408,34 @@
       "q": "std::expected (C++23) vs 异常 — 怎么选?",
       "ans": "用<b>异常</b>: 真正的异常情况 (内存不足/网络致命错), 构造失败, 跨多层传递, 主路径希望干净. 用<b>expected</b>: 可预期失败 (cache miss/parse fail), 性能敏感的热路径, 嵌入式 / 关闭异常环境, 调用方必然要处理.",
       "bonus": "C++23 之前可用 tl::expected (header-only) / boost::outcome / 自实现 std::variant&lt;T, E&gt;.",
-      "ref": "cpp_exceptions_guide"
+      "ref": "cpp_exceptions_guide",
+      "why_asked": "std::expected 是 C++23 关键新特性，2026 hot 题。能讲\"vs 异常 + monadic ops + 适用场景\"的人跟上 C++ 发展。",
+      "answers": {
+        "mid": "<strong>std::expected&lt;T, E&gt;</strong>: 包含 value (T) 或 error (E)，类似 Rust Result。<strong>vs 异常</strong>:<br>· 性能 zero overhead (stack-only)<br>· 显式 error handling（caller 强制看）<br>· 适合频繁错误 / hot path<br>· 异常适合罕见 / catastrophic",
+        "senior": "<strong>用法</strong>:<br><code>std::expected&lt;int, std::string&gt; divide(int a, int b) {<br>  if (b == 0) return std::unexpected(\"div by zero\");<br>  return a / b;<br>}<br>auto r = divide(10, 0);<br>if (r) use(*r);<br>else log(r.error());</code><br><br><strong>monadic operations</strong>:<br>· <code>.and_then(f)</code>: if value, apply f; else propagate error<br>· <code>.transform(f)</code>: map value through f<br>· <code>.or_else(f)</code>: if error, apply f<br>· 链式 error handling 无 nested if<br><br><strong>选择指南</strong>:<br>· <strong>异常</strong>: catastrophic / programmer error / 无 valid return value<br>· <strong>expected</strong>: 业务可预期错误 / 频繁触发 / hot path<br>· 项目内可混用: API boundary expected, 内部 catastrophic 异常",
+        "staff": "深一层：expected 是 <strong>C++23 标准化 Rust-style error handling</strong>—— 2024-2026 主流。Boost.Outcome / leaf 是 pre-C++23 替代。<br><br><strong>性能对比 (typical hot path)</strong>:<br>· Exception throw + catch: 1-100 µs<br>· expected return + check: &lt; 1 ns<br>· Difference: <strong>1000-100000×</strong><br><br><strong>真实迁移案例</strong>: NETCONF agent v3 把 parse error 从异常改 expected:<br>· Before: <code>Message parse(string)</code> throws on parse error<br>· After: <code>std::expected&lt;Message, ParseError&gt; parse(string)</code><br>· Hot path benchmark: throughput +12%<br>· Code 改动: callers 必须显式 handle error (一开始 verbose)<br>· 后期发现: 实际 error rate 10% 不算\"<strong>罕见</strong>\", expected 更 fit<br><br><strong>monadic chaining 优雅</strong>:<br><code>auto result = parse(input)<br>  .and_then([](auto m) { return validate(m); })<br>  .and_then([](auto m) { return process(m); })<br>  .transform([](auto r) { return r.summary(); });</code><br>vs nested if-else + manual error propagation:<br><code>auto m = parse(input);<br>if (!m) return std::unexpected(m.error());<br>auto v = validate(*m);<br>if (!v) return std::unexpected(v.error());<br>...</code><br><br><strong>陷阱</strong>:<br>① <strong>所有错误都用 expected</strong>—— programmer error / OOM 用异常更合理<br>② <strong>不用 monadic ops</strong>—— code 仍 verbose<br>③ <strong>Error type 太宽</strong>—— <code>std::expected&lt;T, std::string&gt;</code> 失去类型信息，改用 enum / variant<br>④ <strong>跨 ABI 用 expected</strong>—— 标准 type ABI 仍可能不稳<br>⑤ <strong>Heavy error type</strong>—— expected size = sizeof(T) + sizeof(E) + 1, error type 大时浪费<br><br><strong>跟 Result&lt;T, E&gt; (Rust) / Result (Haskell)</strong>: 完全同概念，C++23 标准化版。<br><br><strong>建议</strong>:<br>① C++23 项目优先 expected for predictable errors<br>② Pre-C++23: Boost.Outcome / leaf / tl::expected<br>③ 异常仍用 for: ctor / OOM / programmer bug<br>④ Error type 用 enum class + 详细 context struct<br>⑤ 链式用 monadic ops"
+      },
+      "failure_modes": [
+        "所有错误都用 expected → ctor/OOM 应该异常",
+        "不用 monadic ops → code 仍 verbose",
+        "Error type 太宽（string）→ 失去类型",
+        "跨 ABI 用 expected → 不稳",
+        "Heavy error type → expected size 浪费"
+      ],
+      "follow_ups": [
+        {
+          "q": "Pre-C++23 怎么模拟 expected？",
+          "hint": "① Boost.Outcome；② tl::expected (header-only)；③ leaf (Niall Douglas)；④ 自己 wrap variant&lt;T, E&gt;"
+        },
+        {
+          "q": "expected 跟 optional 区别？",
+          "hint": "① optional&lt;T&gt;: 值或没值 (no error info)；② expected&lt;T, E&gt;: 值或带类型 error；③ optional 适合 \"missing\" 场景, expected 适合 \"fail with reason\""
+        },
+        {
+          "q": "跟 Rust Result 比较？",
+          "hint": "① 概念同；② Rust 强制 ? operator 处理；③ C++ expected 不强制 (但 [[nodiscard]] 帮)；④ 实际使用相似 patterns"
+        }
+      ]
     },
     {
       "id": 70,
@@ -1144,7 +1468,34 @@
       "q": "make_shared 比 shared_ptr(new T) 好在哪?",
       "ans": "① <strong>一次堆分配</strong> (对象 + 控制块合体), 比两次 new 快; ② 异常安全 (避免 <code>f(shared_ptr&lt;A&gt;(new A), shared_ptr&lt;B&gt;(new B))</code> 中间抛异常的泄漏).",
       "trap": "缺点: 对象与控制块共享内存 — weak_ptr 还活着时, 即便对象已析构, 内存也释放不掉. 大对象 + 长寿 weak_ptr 场景慎用.",
-      "ref": "cpp_modern_features_ppt"
+      "ref": "cpp_modern_features_ppt",
+      "why_asked": "make_shared vs shared_ptr(new) 是 C++ 性能 + 异常安全题。能讲\"single allocation + 异常安全 + weak_ptr lifetime\"的人懂 implementation。",
+      "answers": {
+        "mid": "<strong>3 个优势</strong>:① <strong>单次 allocation</strong>—— object + control block 一起分配 (1 allocation vs 2)；② <strong>异常安全</strong>—— 避免 raw new 泄漏；③ <strong>cache-friendly</strong>—— object 跟 control block 相邻。",
+        "senior": "<strong>详细</strong>:<br><br>1. <strong>单次 allocation 性能</strong>:<br>· make_shared: 1 次 alloc (object + control block)<br>· shared_ptr(new T): 2 次 alloc (new T + new control block)<br>· Allocation cost: ~50-100ns × 2 vs 1<br>· Cache: object + ctrl 相邻 → cache hit on deref<br><br>2. <strong>异常安全</strong>:<br><code>// Unsafe<br>f(shared_ptr&lt;T&gt;(new T), shared_ptr&lt;U&gt;(new U));<br>// 评估顺序未定: new T, new U, ctor shared_ptr<br>// 中间 throw → leak<br>// Safe<br>f(make_shared&lt;T&gt;(), make_shared&lt;U&gt;());  // each is atomic</code><br><br>3. <strong>缺点</strong>:<br>· Object 跟 control block 一起分配 → <strong>weak_ptr 持有时 object memory 也不能 release</strong> (要等 weak count = 0)<br>· 不能 custom deleter (use new + custom_deleter 时)<br>· 大 object + 长 weak_ptr lifetime → memory pinned",
+        "staff": "深一层：make_shared 优化看似简单，但<strong>side effect</strong> 经常被忽略:<br><br><strong>memory pinning by weak_ptr</strong>:<br>· make_shared: object + ctrl 一起分配<br>· 当 shared_ptr 全 release (strong count = 0) → object dtor 调用<br>· 但 memory 仍 pinned 直到 weak count = 0<br>· 即 1 个 weak_ptr 仍 alive 时, object 的 100MB memory 不能 free<br>· vs shared_ptr(new T): object alloc 跟 ctrl alloc 独立 → object dtor 时 object memory 立即 release, weak count 0 后才 release ctrl<br><br><strong>真实事故</strong>: NETCONF agent 缓存 large object + 偶尔有 weak_ptr observer:<br>· 用 make_shared → 大 object memory 持有时间长 (weak_ptr 延长 lifetime)<br>· 切换到 shared_ptr(new T, custom_deleter) → object 立即 free, ctrl 稍后 free<br>· Memory usage 改善 30%<br><br><strong>选择决策</strong>:<br>· <strong>默认</strong>: make_shared (单次 alloc 性能 + 异常安全)<br>· <strong>大 object + 可能有 weak_ptr</strong>: shared_ptr(new T)<br>· <strong>需要 custom deleter</strong>: shared_ptr(new T, deleter)<br>· <strong>需要 aligned alloc</strong>: shared_ptr(new (alignment) T) or std::allocate_shared<br>· <strong>不需要 weak_ptr</strong>: make_shared always OK<br><br><strong>C++17/20 改进</strong>:<br>· C++17: std::make_shared with custom alignment<br>· C++20: std::make_shared&lt;T[]&gt; for array<br>· make_unique (C++14) 类似但 unique_ptr 不 share<br><br><strong>陷阱</strong>:<br>① 大 object + weak_ptr → memory pinned<br>② Custom deleter 不能用 make_shared<br>③ 自定义 allocator (std::allocate_shared 可以)<br>④ 性能微 benchmark 不显（除非 hot path 大量分配）<br>⑤ shared_ptr 自身 24 字节 (vs raw ptr 8) memory overhead<br><br><strong>关键</strong>: ① 默认 make_shared；② 大 object + weak 时用 new；③ 跨 weak_ptr usage pattern 决定。"
+      },
+      "failure_modes": [
+        "大 object + weak_ptr → memory pinning",
+        "Custom deleter 仍用 make_shared",
+        "Hot path 没考虑 make_shared 性能优势",
+        "不知 weak_ptr 延长 memory (ctrl block) lifetime",
+        "Raw new 在 ctor arg → 异常 leak"
+      ],
+      "follow_ups": [
+        {
+          "q": "make_unique 跟 unique_ptr(new) 区别？",
+          "hint": "① make_unique 也异常安全；② 但 unique_ptr 不 share → 没\"双 alloc\"问题；③ make_unique 主要是异常安全 + 简洁；④ 性能 minimal difference"
+        },
+        {
+          "q": "std::allocate_shared 怎么用？",
+          "hint": "① Custom allocator 但仍 single alloc；② 用 polymorphic_allocator + memory pool 在 hot path；③ 接口: <code>std::allocate_shared&lt;T&gt;(allocator, args...)</code>"
+        },
+        {
+          "q": "make_shared 跟 weak_ptr 内部结构？",
+          "hint": "① 单次 alloc: header (ref counts + deleter) + T object；② shared_ptr: strong_count + weak_count + ptr to T；③ weak_ptr.lock(): atomic CAS strong_count；④ Boost.intrusive_ptr 更轻 (no separate ctrl block)"
+        }
+      ]
     },
     {
       "id": 73,
@@ -1155,7 +1506,34 @@
       "q": "循环引用问题 + 解法?",
       "ans": "两个 shared_ptr 互相引用 → 引用计数永不归零 → 内存泄漏. 解法: 一方用 weak_ptr (通常子→父用 weak, 父→子用 shared).",
       "code": "<pre><span class=\"kw\">struct</span> <span class=\"type\">Parent</span> { std::vector&lt;std::shared_ptr&lt;<span class=\"type\">Child</span>&gt;&gt; kids; };\n<span class=\"kw\">struct</span> <span class=\"type\">Child</span> { std::weak_ptr&lt;<span class=\"type\">Parent</span>&gt; parent; };   <span class=\"cm\">// ✅ weak</span></pre>",
-      "ref": "cpp_modern_features_ppt"
+      "ref": "cpp_modern_features_ppt",
+      "why_asked": "循环引用是 shared_ptr 经典陷阱。能讲\"weak_ptr 解决 + design 避免\"的人调过 leak。",
+      "answers": {
+        "mid": "<strong>问题</strong>: A 持 shared_ptr&lt;B&gt;, B 持 shared_ptr&lt;A&gt; → 两者 ref count 永不到 0 → memory leak。<br><strong>解法</strong>: 一方改 <strong>weak_ptr</strong>（typically 是 \"back-reference\"—— 子 → 父）。",
+        "senior": "<strong>典型场景</strong>:<br>1. <strong>Parent-Child</strong>: parent owns children (shared_ptr), child references parent (<strong>weak_ptr</strong>)<br>2. <strong>Observer pattern</strong>: subject owns observers (shared_ptr), observers reference subject (weak_ptr)<br>3. <strong>Doubly linked list</strong>: next 用 shared_ptr, prev 用 weak_ptr<br><br><strong>weak_ptr usage</strong>:<br><code>weak_ptr&lt;T&gt; w = some_shared;<br>if (auto sp = w.lock()) {<br>  // sp is shared_ptr, use sp<br>} else {<br>  // object 已 destroyed<br>}</code><br><br><strong>检测工具</strong>:<br>· LSan / Valgrind: 检测最终 leak<br>· heaptrack: 看 allocation pattern<br>· Manual review: 标识 ownership 关系",
+        "staff": "深一层：循环引用是<strong>\"ownership 设计不清晰\"</strong> 的症状。本质问题不是 shared_ptr 本身，是<strong>没明确\"谁拥有谁\"</strong>。<br><br><strong>设计原则</strong>:<br>1. <strong>每个 object 有 1 个 owner</strong> (root path 唯一)<br>2. <strong>非 owning 关系用 weak_ptr / raw ptr / reference</strong><br>3. <strong>避免双向所有权</strong>—— 一定 wrong<br>4. <strong>Tree-like ownership</strong> 健康<br>5. <strong>Graph-like ownership</strong> 需 weak_ptr or GC<br><br><strong>真实事故</strong>:<br><br><strong>Case 1: Parent-Child</strong><br><code>class Node {<br>  shared_ptr&lt;Node&gt; parent_;  // BAD<br>  vector&lt;shared_ptr&lt;Node&gt;&gt; children_;<br>};<br>// Parent 持 children, children 持 parent → 循环</code><br>修正: <code>weak_ptr&lt;Node&gt; parent_;</code><br><br><strong>Case 2: Observer</strong><br><code>class Subject {<br>  vector&lt;shared_ptr&lt;Observer&gt;&gt; observers_;  // BAD if Observer holds Subject<br>};<br>class Observer {<br>  shared_ptr&lt;Subject&gt; subject_;  // BAD</code><br>修正: Subject 持 raw / weak Observer, Observer 持 weak Subject<br><br><strong>Case 3: Callback</strong><br><code>void register_callback(shared_ptr&lt;Self&gt; this_) {<br>  registry_.push_back([this_]() { this_-&gt;do_it(); });<br>}<br>// lambda 持 shared_ptr&lt;Self&gt;, Self 持 lambda → 循环</code><br>修正: lambda 持 weak_ptr<br><br><strong>检测 + 防范</strong>:<br>1. <strong>Code review</strong>: 看到 shared_ptr 时问 \"谁是 owner\"<br>2. <strong>Test 时跑 LSan / Valgrind</strong>: 检测 leak<br>3. <strong>Heap profiler</strong>: 看 retention path<br>4. <strong>设计</strong>: tree-like ownership优先<br><br><strong>真实经验</strong>: NETCONF agent v2 一个偶发 OOM (~100MB / hour grow). 用 jeprof heap profile 发现 Subject + Observer 互持。Fix weak_ptr 后 OOM 消失。<br><br><strong>跟 GC 语言对比</strong>:<br>· Java/Python: GC 处理循环引用 (mark-and-sweep)<br>· C++/Rust: 必须 explicit ownership design<br>· Rust 编译期强制 (Rc + Weak)，C++ runtime 检测<br><br><strong>陷阱</strong>:<br>① 双向 shared_ptr<br>② Lambda capture this 作 shared_ptr<br>③ Container holds shared_ptr to object holding container<br>④ 跨层级（GUI parent-child）误用 shared_ptr<br>⑤ Detection 推迟到生产 → memory growth long-running service<br><br><strong>建议</strong>:<br>① Design first—— ownership graph 必无环<br>② weak_ptr for 非 owning reference<br>③ Code review 强制 question shared_ptr usage<br>④ Test 跑 LSan / Valgrind<br>⑤ Heap profiler in production monitoring"
+      },
+      "failure_modes": [
+        "双向 shared_ptr → 循环",
+        "Lambda capture this as shared_ptr → 循环",
+        "Observer pattern 不用 weak_ptr",
+        "Tree-like ownership 错画成 graph",
+        "不跑 LSan / Valgrind 检测"
+      ],
+      "follow_ups": [
+        {
+          "q": "enable_shared_from_this 解决啥？",
+          "hint": "① 从 this 获 shared_ptr（不创新 ref count）；② Inherit enable_shared_from_this&lt;T&gt; → shared_from_this()；③ 用法: callback 需要 shared_ptr&lt;Self&gt;；④ 注意: 第一个 shared_ptr 创建后才能用"
+        },
+        {
+          "q": "怎么 detect 循环引用？",
+          "hint": "① LSan / Valgrind on exit；② Heap profiler (jeprof / massif) 看 retention path；③ Code review: 双向 shared_ptr → red flag；④ Some debug allocator track ref count"
+        },
+        {
+          "q": "Hazard pointer 跟 weak_ptr 区别？",
+          "hint": "① weak_ptr: per-object 控制块开销 (32 bytes)；② Hazard pointer: thread-local hazard slot, no per-object overhead；③ Hazard 适合 lock-free 数据结构；④ Folly / userspace-RCU 实现"
+        }
+      ]
     },
     {
       "id": 74,
@@ -1176,7 +1554,34 @@
       "diff": "mid",
       "q": "什么是 RAII? 与异常安全什么关系?",
       "ans": "RAII = Resource Acquisition Is Initialization. 把资源 (内存/锁/fd/连接) 的生命周期绑到对象的生命周期 → 析构时自动释放. <strong>异常安全的基石</strong>: 即便异常导致栈展开, 局部对象的析构仍会执行 → 资源释放有保证.",
-      "ref": "cpp_exceptions_guide"
+      "ref": "cpp_exceptions_guide",
+      "why_asked": "RAII 是 C++ 最核心 idiom。能讲\"构造获取 + 析构释放 + 异常安全 + scoped\"4 个 dimension 的人理解透彻。",
+      "answers": {
+        "mid": "<strong>RAII (Resource Acquisition Is Initialization)</strong>: 资源在<strong>构造时获取</strong>，<strong>析构时自动释放</strong>。Stroustrup 命名，但核心是 C++ 析构机制 + 异常安全 unwind。",
+        "senior": "<strong>4 个 dimension</strong>:<br>1. <strong>构造获取</strong>: 资源在 ctor 内 alloc / lock / open<br>2. <strong>析构释放</strong>: dtor 自动 free / unlock / close<br>3. <strong>异常安全</strong>: 抛异常时 stack unwind 调用 dtor → 资源自动 release<br>4. <strong>Scoped lifetime</strong>: 资源 lifetime = 对象 lifetime<br><br><strong>典型 RAII types</strong>:<br>· std::unique_ptr / shared_ptr: heap memory<br>· std::lock_guard / unique_lock: mutex<br>· std::ifstream / ofstream: file handle<br>· std::thread (C++20 jthread): thread join<br>· 自定义: 自己 wrap pthread / SOCKET / DB connection<br><br><strong>跟异常安全关系</strong>:<br>· RAII 是 strong exception safety 的<strong>基础</strong><br>· 抛异常时局部 RAII 对象自动析构 → 资源 release<br>· 这就是为什么 C++ 不需要 try/finally",
+        "staff": "深一层：RAII 是 C++ 区别于其他语言的<strong>核心设计哲学</strong>。其他语言:<br>· Java: try/finally 或 try-with-resources<br>· Python: with statement (__enter__/__exit__)<br>· Go: defer<br>· Rust: Drop trait (类似 RAII)<br><br>C++ 的 RAII<strong>是 idiomatic / automatic</strong>—— 局部对象生命周期结束自动调 dtor, no need explicit handling.<br><br><strong>实现 RAII type 5 步</strong>:<br>1. Ctor: 获取资源 (设置成员)<br>2. Dtor: 释放资源 (清理成员)<br>3. Copy ctor / assign: 决策 - shared / unique / deleted<br>4. Move ctor / assign: 转移 ownership (typically default if members are smart)<br>5. swap (nothrow): 用于 strong exception safety<br><br><strong>真实 RAII 例</strong>:<br><code>class FileGuard {<br>  FILE* fp_;<br>public:<br>  FileGuard(const char* path) : fp_(fopen(path, \"r\")) {<br>    if (!fp_) throw std::runtime_error(\"open failed\");<br>  }<br>  ~FileGuard() { if (fp_) fclose(fp_); }<br>  FileGuard(const FileGuard&amp;) = delete;<br>  FileGuard&amp; operator=(const FileGuard&amp;) = delete;<br>  FileGuard(FileGuard&amp;&amp; o) noexcept : fp_(std::exchange(o.fp_, nullptr)) {}<br>  FileGuard&amp; operator=(FileGuard&amp;&amp; o) noexcept {<br>    std::swap(fp_, o.fp_); return *this;<br>  }<br>  FILE* get() { return fp_; }<br>};</code><br><br><strong>RAII 不只 memory</strong>:<br>· File handles<br>· Mutex locks<br>· Network sockets<br>· Database connections<br>· GUI resources (handles / contexts)<br>· OpenGL / GPU buffers<br>· Transaction commits / rollbacks<br><br><strong>真实 case</strong>: NETCONF agent 数据库 transaction RAII:<br><code>class TxnGuard {<br>  Connection&amp; conn_;<br>  bool committed_ = false;<br>public:<br>  TxnGuard(Connection&amp; c) : conn_(c) { c.begin(); }<br>  ~TxnGuard() { if (!committed_) conn_.rollback(); }<br>  void commit() { conn_.commit(); committed_ = true; }<br>};<br>// 使用<br>void update() {<br>  TxnGuard tx(conn_);<br>  do_updates();      // 抛异常 → tx dtor rollback<br>  tx.commit();       // 显式 commit<br>}</code><br>异常自动 rollback 比 try/catch 简洁 + 不会漏。<br><br><strong>陷阱</strong>:<br>① <strong>Dtor 抛异常</strong>—— terminate<br>② <strong>没 delete copy</strong> 资源被 double-released<br>③ <strong>Move 后 source 不重置</strong> → dtor double-free<br>④ <strong>跨 ABI</strong>—— RAII 不能跨 C ABI<br>⑤ <strong>Manual cleanup mix RAII</strong>—— 显式 close() + RAII 双重 cleanup<br><br><strong>建议</strong>:<br>① 所有资源 wrap to RAII type<br>② 单一 ownership semantics (copy / move / unique)<br>③ Dtor noexcept (默认 implicit)<br>④ Move 后 reset source<br>⑤ 用 std lib (unique_ptr / lock_guard / fstream) 优先于自己写"
+      },
+      "failure_modes": [
+        "Dtor 抛异常 → terminate",
+        "没 delete copy → double-release",
+        "Move 后 source 不 reset → double-free",
+        "跨 C ABI 用 RAII → 不工作",
+        "Manual close() + RAII dtor → double close"
+      ],
+      "follow_ups": [
+        {
+          "q": "怎么实现 ScopeExit (Go defer 风格)？",
+          "hint": "<code>template&lt;class F&gt; struct ScopeExit { F f_; ~ScopeExit() { f_(); } };</code> + factory func；或 boost::scope_exit；C++17 lambda-based；适合 cleanup ad-hoc resource"
+        },
+        {
+          "q": "RAII 跟 Drop trait (Rust) 区别？",
+          "hint": "① 概念相同；② Rust Drop 编译期强制 ownership move（编译错 vs runtime UB）；③ C++ 更灵活但 require 更多 discipline；④ Rust borrow checker 防 use-after-free"
+        },
+        {
+          "q": "什么时候 RAII 不适用？",
+          "hint": "① 跨线程 ownership transfer（仍可用 RAII + smart ptr）；② Manual cleanup needed (rare, e.g., specific timing)；③ C interop boundary；④ GC-like deferred cleanup 需求"
+        }
+      ]
     },
     {
       "id": 76,
