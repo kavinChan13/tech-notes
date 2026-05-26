@@ -3466,6 +3466,322 @@ const ENRICHMENT = {
         { q: `怎么评估自己 API 设计好坏？`, hint: `① "If you don't read docs, can you use it correctly?"；② New hire 试用看用错点；③ 对比 std / Boost 类似 API；④ Static analyzer 提示用错；⑤ ScottMeyers's "Hard to use wrong" Test` },
       ],
     },
+
+    // ============== Phase 2 续推 · 基础 / 转换 ==============
+    7: {
+      why_asked: `4 种 cast 是 C++ 基础题但筛人很 effective。能讲清"static / dynamic / const / reinterpret + 运行时检查只 dynamic"的人没踩过 UB 坑。`,
+      answers: {
+        mid: `<strong>4 种 cast</strong>:① <strong>static_cast</strong>—— 编译期已知关系的转换（int↔float / Derived↔Base 上下）；② <strong>dynamic_cast</strong>—— <strong>运行时检查</strong>多态指针 / 引用（唯一有运行时检查）；③ <strong>const_cast</strong>—— 加 / 去 const（罕用，多数是 design smell）；④ <strong>reinterpret_cast</strong>—— bit-level 重解释（最危险，UB 高风险）。`,
+        senior: `<strong>详细用法 + 例</strong>:<br>· <strong>static_cast</strong>: 安全的编译期转换<br>· <code>static_cast&lt;int&gt;(3.14)</code> → 3<br>· <code>static_cast&lt;Derived*&gt;(base_ptr)</code> → no runtime check，wrong type = UB<br>· <strong>dynamic_cast</strong>: 多态类型必有 virtual function（vtable）<br>· <code>auto* d = dynamic_cast&lt;Derived*&gt;(base_ptr)</code> → null if wrong type<br>· 失败时 reference 抛 <code>std::bad_cast</code><br>· <strong>const_cast</strong>: 通常 wrong design<br>· 合法 use: 老 C API 不 const-correct 但确实只读<br>· <strong>reinterpret_cast</strong>: bit pattern 不变, 类型重新解释<br>· 主要场景: hardware register / serialize / type erasure<br>· 99% 用法是 UB temptation`,
+        staff: `深一层：选 cast 类型本身是<strong>code review 信号</strong>:<br>· <strong>大量 static_cast</strong>: 正常 (most usage)<br>· <strong>dynamic_cast</strong>: 偶尔 OK (visitor pattern alternative)，但<strong>常见</strong>意味 OOP design smell —— consider std::variant + std::visit<br>· <strong>const_cast</strong>: 通常 design smell —— 你不该需要去 const<br>· <strong>reinterpret_cast</strong>: red flag —— 99% 是 UB 风险<br><br><strong>真实 case</strong>:<br><br>1. <strong>static_cast 错误典型</strong>: <br><code>Base* b = new Derived;<br>Other* o = static_cast&lt;Other*&gt;(b);  // wrong type, UB</code><br>编译期 pass 但 runtime undefined。改用 dynamic_cast 至少有 null check。<br><br>2. <strong>dynamic_cast 性能</strong>: ~10-100ns per call (vtable walk + RTTI lookup). Hot path 避免。<br><br>3. <strong>reinterpret_cast UB</strong>: <code>float f = 1.0; int* i = reinterpret_cast&lt;int*&gt;(&amp;f); *i;</code> → strict aliasing UB. 正确: <code>std::bit_cast</code> (C++20) or <code>std::memcpy</code>.<br><br><strong>建议</strong>:<br>① Default static_cast<br>② OOP downcast: 重新设计避免 / std::variant / 必须用时 dynamic_cast<br>③ const_cast: 极少 + 留 comment 解释<br>④ reinterpret_cast: replace with std::bit_cast / memcpy<br>⑤ <strong>C-style cast 永远不用</strong>—— hide 4 种之一，不易 grep<br><br><strong>跟 C-style cast 区别</strong>: <code>(int)x</code> 实际是<strong>4 种之一 + const_cast 组合</strong>，编译器自动选 "最 permissive"——危险且不显式。新代码应该<strong>禁 C-style cast</strong> (lint warning)。`,
+      },
+      failure_modes: [
+        `用 C-style cast 隐藏真意图`,
+        `static_cast 错型 → UB`,
+        `const_cast 频繁用 → design smell`,
+        `reinterpret_cast 跨类型 read → strict aliasing UB`,
+        `Hot path 大量 dynamic_cast → 性能问题`,
+      ],
+      follow_ups: [
+        { q: `std::bit_cast 是什么 (C++20)？`, hint: `① 安全的 bit-level cast (跟 reinterpret_cast 区别)；② constexpr (编译期 evaluate)；③ Requires trivially copyable + same size；④ 替代 memcpy + reinterpret_cast pattern` },
+        { q: `dynamic_cast 性能怎么优化？`, hint: `① Hot path 改 static_cast (确定类型时)；② 用 std::variant + std::visit 替代；③ Type tag (enum) + switch；④ CRTP 静态多态 (no runtime cost)` },
+        { q: `什么时候 const_cast 合法？`, hint: `① 调老 C API 不 const-correct (确实只读)；② Mutable 成员的 const method 内修改；③ <strong>原对象不能是 const-declared</strong>（否则 UB）；④ 99% case 有更好 design` },
+      ],
+    },
+
+    32: {
+      why_asked: `vector 是最常用容器。能讲"摊销分析 + 2× growth + capacity vs size"的人理解 amortized complexity。`,
+      answers: {
+        mid: `<strong>2 倍扩容</strong>（GCC libstdc++）/ <strong>1.5 倍</strong>（MSVC）。<strong>摊销分析</strong>：N 次 push_back 总 cost ≤ 2N（每个元素平均被 copy/move &lt; 2 次）→ 摊销 O(1)。`,
+        senior: `<strong>摊销分析详解</strong>:<br>· N 次 push_back 触发 log(N) 次扩容<br>· 第 k 次扩容: copy 2^k elements<br>· Total copies: 2^0 + 2^1 + ... + 2^log(N) ≈ 2N<br>· Average per insert: 2N/N = 2 = O(1)<br><br><strong>1.5x vs 2x growth tradeoff</strong>:<br>· 2x: faster amortized, 但 wastes more memory (after grow, half is wasted)<br>· 1.5x: more memory efficient, marginally slower<br>· GCC: 2x; MSVC: 1.5x；都有道理<br><br><strong>size vs capacity</strong>:<br>· size(): 实际元素数<br>· capacity(): 已分配可容纳<br>· reserve(N): 预分配避免扩容<br>· shrink_to_fit(): 实际收回未用 (non-binding hint)`,
+        staff: `深一层：vector 扩容的<strong>性能实战</strong>:<br><br>1. <strong>预知 size 用 reserve</strong>: 100k push_back without reserve → 17 次 reallocation (each copy all). With reserve(100k) → 0 reallocation. 性能 +20-50%.<br><br>2. <strong>noexcept move 影响扩容</strong>: 扩容时若 element move ctor noexcept → 用 move; 否则 fallback to copy (保 strong exception safety)。<br>· 真实案例: NETCONF agent <code>std::vector&lt;Message&gt;</code>，Message 含 <code>std::function</code> (不 noexcept move)，扩容退化为 copy，慢 20×. Fix: 自定义 noexcept move ctor.<br><br>3. <strong>vector vs other containers 性能</strong>:<br>· Insert at end: vector amortized O(1); deque O(1); list O(1)<br>· Insert at middle: vector O(n); deque O(n); list O(1) but list 整体慢<br>· Random access: vector O(1); deque O(1); list O(n)<br>· Cache friendly: vector ≫ deque &gt; list<br>· Default choice: vector<br><br>4. <strong>growth factor &gt; 1 必要</strong>: 1.5 / 2 都 OK；如果是 +constant（如 +10）→ N push back is O(N²) 不 amortized<br><br><strong>面试 follow up</strong>: vector resize() 跟 reserve() 区别？<br>· reserve(N): 改 capacity, size 不变 (元素不构造)<br>· resize(N): 改 size, 多出 default-construct, 少了 destruct<br><br><strong>陷阱</strong>:<br>① 没 reserve 大量 push_back<br>② Element move ctor 没 noexcept → 扩容退化 copy<br>③ growth factor &lt; 1.5 (linear growth → O(N²))<br>④ 大 vector shrink_to_fit 期望立即回收 → impl 可能 ignore<br>⑤ Capacity 跟 size 混 → 读 element 用 size, not capacity`,
+      },
+      failure_modes: [
+        `没 reserve 大量 push_back → reallocation 频繁`,
+        `Element move ctor 没 noexcept → 扩容退化 copy`,
+        `Growth factor 算成 +constant → O(N²)`,
+        `Capacity / size 混`,
+        `shrink_to_fit 期望立即收回 → impl 可能 ignore`,
+      ],
+      follow_ups: [
+        { q: `2x vs 1.5x growth tradeoff？`, hint: `① 2x: faster amortized + more memory waste；② 1.5x: less memory waste + slightly slower；③ Galloping (Folly): adaptive；④ 都 acceptable，差别 marginal` },
+        { q: `vector::reserve 跟 std::vector(size, value) 区别？`, hint: `① reserve(N): 只 alloc capacity, size 不变, 元素不构造；② vector(N): 分配 + size = N + default-construct N elements；③ 不同用法` },
+        { q: `怎么避免 capacity 浪费？`, hint: `① 用 reserve 准确预分配；② shrink_to_fit (non-binding)；③ Move-construct from temp: <code>vec = std::vector(std::move(vec))</code> swap idiom；④ 接受 50% capacity waste 是 2x growth 的代价` },
+      ],
+    },
+
+    33: {
+      why_asked: `vector iterator 失效是 C++ 经典 UB 来源。能讲"insert/erase/扩容三种失效场景"的人调过相关 bug。`,
+      answers: {
+        mid: `<strong>3 类失效</strong>:① <strong>扩容</strong>（push_back / reserve / resize > capacity）→ <strong>所有 iterator 失效</strong>；② <strong>insert</strong>（插入位置后所有 iterator 失效，前面的仍 valid）；③ <strong>erase</strong>（删除位置后所有 iterator 失效，前面仍 valid）。`,
+        senior: `<strong>具体规则</strong>:<br>1. <strong>push_back / emplace_back</strong>: <br>· If new size &lt;= capacity: <strong>只 end() iterator 失效</strong>，其他 valid<br>· If new size &gt; capacity (扩容): <strong>所有 iterator 失效</strong><br>2. <strong>insert(it, val)</strong>:<br>· If 扩容: 所有失效<br>· If 不扩容: it 及之后失效<br>3. <strong>erase(it)</strong>: it 及之后失效（前面 valid）<br>4. <strong>clear()</strong>: 所有失效<br>5. <strong>swap</strong>: <strong>不失效</strong>（two vectors 互换 internal pointer）<br><br><strong>典型 bug</strong>:<br><code>for (auto it = v.begin(); it != v.end(); ++it) {<br>  if (need_insert) v.insert(it, x);  // 失效 it</code> → UB`,
+        staff: `深一层：iterator 失效是 C++ <strong>UB 三大来源</strong>之一 (其他: use-after-free / 数据竞争). 编译期 0 warning, runtime random crash. <strong>预防 &gt; 检测</strong>.<br><br><strong>实战常见错误</strong>:<br><br>1. <strong>循环里 insert / erase 不更新 iterator</strong>:<br><code>for (auto it = v.begin(); it != v.end(); ++it) {<br>  if (pred(*it)) v.erase(it);  // UB after erase<br>}</code><br>正确:<br><code>for (auto it = v.begin(); it != v.end(); ) {<br>  if (pred(*it)) it = v.erase(it);  // erase returns next valid iterator<br>  else ++it;<br>}</code><br>或者 C++20: <code>std::erase_if(v, pred);</code><br><br>2. <strong>缓存 iterator 后扩容</strong>:<br><code>auto it = v.begin();<br>v.push_back(x);  // may invalidate<br>*it;  // potential UB</code><br><br>3. <strong>range-for 内部修改 vector</strong>:<br><code>for (auto&amp; x : v) {<br>  v.push_back(y);  // UB if reallocate<br>}</code><br>(range-for 隐式持有 begin/end iterator)<br><br><strong>预防 best practices</strong>:<br>① 不在 loop 内修改 container size (use copy / index based)<br>② erase-remove idiom: <code>v.erase(std::remove_if(...), v.end())</code>；C++20 简化为 <code>std::erase_if</code><br>③ 大量 insert 用 reserve 预分配避免 mid-loop 扩容<br>④ Index-based loop 对 random access container 更安全 (但 size 变化时 still careful)<br>⑤ ASan / iterator debugging mode (MSVC iterator debug level) catch 大部分<br><br><strong>不同容器失效规则</strong>:<br>· vector: 扩容失效 all, insert/erase 失效 from point<br>· deque: insert/erase 失效 all (different impl)<br>· list/forward_list: 插入不失效, erase 只失效被删的<br>· map/set: insert 不失效, erase 只失效被删的<br>· unordered_map/set: rehash 失效 all<br><br><strong>真实经验</strong>: NETCONF agent 早期一个 P0 crash—— message queue 处理时 push_back 新 message，导致 outer loop iterator 失效. ASan catch 后改为 two-phase（处理 + queue 新 message in batch）。Lesson: 任何 container loop 内修改 size 永远 suspect。`,
+      },
+      failure_modes: [
+        `Loop 内 insert/erase 不更新 iterator`,
+        `缓存 iterator 后扩容 → UB`,
+        `Range-for 内改 vector`,
+        `不知道不同容器失效规则差异`,
+        `不用 erase-remove idiom 自己写 loop`,
+      ],
+      follow_ups: [
+        { q: `erase-remove idiom 是什么？`, hint: `<code>v.erase(std::remove_if(v.begin(), v.end(), pred), v.end())</code>—— remove_if 不真删，把保留元素 move 到前面，返回 logical end；erase 缩 size；C++20 <code>std::erase_if</code> 一行完成` },
+        { q: `vector::end() iterator 永远失效吗？`, hint: `① 任何 size 变化（push/insert/erase/resize）都失效 end()；② begin() 通常 stable（除非扩容）；③ 不要缓存 end()` },
+        { q: `迭代器失效跟 reference 失效一样吗？`, hint: `① 大致相同—— 引用本质也是 pointer to internal storage；② 但 list 等 node-based container, reference 跟 iterator 失效规则可能微妙不同；③ 实战: 同样 careful 处理 reference / iterator / pointer 到容器元素` },
+      ],
+    },
+
+    34: {
+      why_asked: `emplace 是 C++11 high-impact 优化。能讲"in-place construction + perfect forwarding + 收益场景"的人是真用过。`,
+      answers: {
+        mid: `<strong>emplace_back</strong> 直接在容器内存上<strong>原地构造</strong>元素，<strong>不需要先构造再 copy/move</strong>。<strong>push_back</strong> 需要先构造一个临时再 move/copy 进 vector。`,
+        senior: `<strong>差异举例</strong>:<br><code>vec.push_back(MyClass(a, b));   // 1. 临时 MyClass; 2. move/copy 进 vec<br>vec.emplace_back(a, b);          // 直接在 vec 内存上构造</code><br><br><strong>性能差</strong>: <br>· Trivially copyable type: emplace ≈ push (compiler 优化 same)<br>· Non-trivial type (e.g., std::string): emplace 省 1 move/copy<br>· Heavy class (e.g., 含 std::vector / std::map 成员): emplace 显著快<br><br><strong>API</strong>:<br>· <code>emplace_back(args...)</code>: perfect forward args 到 element ctor<br>· <code>emplace(pos, args...)</code>: 在 pos 构造<br>· map/set 有 <code>emplace_hint</code> + <code>try_emplace</code> (C++17)`,
+        staff: `深一层：emplace 本质是<strong>perfect forwarding 应用</strong>—— 转发 args 到 ctor 而不是构造好的 object。<br><br><strong>实战场景何时差异大</strong>:<br>1. <strong>std::string element</strong>: <br><code>vec.emplace_back("hello");        // 1 次 ctor<br>vec.push_back("hello");           // 1 次 ctor + 1 次 move</code><br>(后者编译器优化后也只 1 次 ctor，差异 minimal)<br><br>2. <strong>复杂 object (大 string + vector member)</strong>: emplace 显著省 move cost<br><br>3. <strong>aggregate initialization</strong>:<br><code>vec.push_back({a, b, c});         // 隐式 ctor<br>vec.emplace_back(a, b, c);        // 显式</code><br><br><strong>陷阱 + 反直觉</strong>:<br>1. <strong>emplace 不总是更快</strong>: <br>· Trivially copyable: same<br>· 已有 already-constructed object: <code>vec.push_back(std::move(obj))</code> 也只 1 move<br>· emplace 优势主要在 "<strong>避免临时 object</strong>" 场景<br>2. <strong>explicit ctor 不能 push_back</strong> braced-init: <br><code>struct S { explicit S(int); };<br>vec.push_back({1});  // error if explicit<br>vec.emplace_back(1); // OK</code><br>3. <strong>emplace 跟 initializer_list</strong>: <br><code>vec.emplace_back({1,2,3});   // error: braced-init not a type<br>vec.emplace_back(std::initializer_list&lt;int&gt;{1,2,3}); // OK</code><br><br><strong>真实经验</strong>: NETCONF agent profile hot path，把 100+ push_back 改 emplace_back：性能<strong>不变</strong>（gcc -O2 优化 push_back 临时元素到 in-place ctor）。结论: <strong>emplace_back 是 "free" upgrade 但不是 magic boost</strong>—— 写新代码用 emplace，重构旧代码 push_back ROI 低。<br><br><strong>建议</strong>:<br>① 新代码默认 emplace_back<br>② 不为优化大量 refactor old push_back<br>③ map::try_emplace (C++17) 比 insert 更高效 (avoid construct on key collision)<br>④ 不滥用—— emplace_back(MyClass{a,b}) 没好处，不如 emplace_back(a,b)`,
+      },
+      failure_modes: [
+        `滥用 emplace 期待 magic speedup`,
+        `emplace 跟 initializer_list 混淆`,
+        `Explicit ctor 用 push_back braced-init 编译错`,
+        `不用 try_emplace 在 map / unordered_map`,
+        `重构旧 push_back 投入 vs ROI 不值`,
+      ],
+      follow_ups: [
+        { q: `try_emplace 跟 emplace 区别？`, hint: `① try_emplace (C++17): 仅 key 不存在时 construct value (避免 wasted ctor on collision)；② emplace: 总 construct value 再尝试 insert，collision 时 wasted；③ Map / unordered_map 用 try_emplace` },
+        { q: `emplace_back 怎么 perfect forward 多 arg？`, hint: `① Variadic template + std::forward；<code>template&lt;class... Args&gt; void emplace_back(Args&&... args) { ... new(...) T(std::forward&lt;Args&gt;(args)...); }</code>` },
+        { q: `什么时候 push_back 更合适？`, hint: `① 已有 lvalue object: <code>push_back(obj)</code> 跟 <code>emplace_back(obj)</code> 完全一样；② Code clarity (已 constructed object 用 push 更清晰)；③ emplace 不带 magic 时差异 marginal` },
+      ],
+    },
+
+    35: {
+      why_asked: `std::string SSO 是 C++ 实现 detail 但常被问。能讲"SSO + COW 历史 + ABI"的人深入过 libstdc++。`,
+      answers: {
+        mid: `<strong>SSO (Small String Optimization)</strong>: 短字符串（typical &lt; 16-24 bytes）直接存在 string object 内部（栈），<strong>不分配堆</strong>。长字符串 fall back 到 heap allocation。`,
+        senior: `<strong>SSO 实现细节</strong> (libstdc++ default):<br>· string object 自身 ~32 bytes (包括 size / capacity / data ptr)<br>· SSO buffer: ~15 bytes 内嵌（last byte sentinel）<br>· capacity &gt; SSO size → heap alloc<br>· libc++ SSO size 不同 (~22 bytes)<br><br><strong>历史: COW (Copy-On-Write) 时代</strong>:<br>· C++03 时代 libstdc++ 用 COW: 多个 string copy 共享同一 buffer + 引用计数<br>· C++11 引入 move semantics 后 COW 性能优势消失（move 更快）<br>· COW 多线程不安全（atomic ref count 开销 + 内存模型复杂）<br>· libstdc++ 5+ 抛弃 COW 改 SSO（Dual ABI 来源）<br><br><strong>性能</strong>:<br>· 短 string (95% real world): no alloc, fast<br>· 长 string: heap alloc 同 raw new`,
+        staff: `深一层：SSO 跟 COW 历史是 libstdc++ <strong>Dual ABI 来源</strong>，是 C++ ABI 兼容性最 painful 的问题之一。<br><br><strong>Dual ABI 详解</strong>:<br>· GCC 5+ 引入 <code>_GLIBCXX_USE_CXX11_ABI</code><br>· 0 = 老 COW string (ABI 跟 GCC 4.x 兼容)<br>· 1 = 新 SSO string (默认, C++11 spec 合规)<br>· 不同 ABI 编译的 .so 链接时 std::string 符号不匹配 → link error<br>· 整条工具链必须统一<br><br><strong>真实坑</strong>: 跟老 vendor library (用 GCC 4.x COW string 编译) 一起 link 时:<br>· Option 1: 整 build chain 用 _GLIBCXX_USE_CXX11_ABI=0 (sacrifice C++17 / 20 部分功能)<br>· Option 2: vendor 提供 GCC 5+ 编译版本<br>· Option 3: ABI shim layer (wrapped extern "C")<br>之前 NETCONF agent 跟客户老 vendor SDK 集成时遇过 → 选 Option 3 + 大量 extra work。<br><br><strong>性能差异 (SSO vs COW)</strong>:<br>· 短 string copy:<br>· SSO: 直接 byte copy (cache-friendly, no atomic)<br>· COW: atomic increment ref count (cache miss + barrier)<br>· SSO 通常 faster<br>· 多线程并发:<br>· SSO: no contention<br>· COW: ref count atomic contention<br>· SSO ≫ COW<br>· 长 string copy:<br>· SSO: full heap copy<br>· COW: just bump ref<br>· COW faster for big strings if rarely modified<br>· 现代 use case: move semantics + string_view 让 COW 优势消失<br><br><strong>验证 SSO size</strong>:<br><code>std::string s = "abc";<br>std::cout &lt;&lt; sizeof(s) &lt;&lt; ' ' &lt;&lt; (void*)s.data();</code><br>看 data() 是否在 s 内部地址范围 (是 = SSO, 不是 = heap)<br><br><strong>陷阱</strong>:<br>① 假设所有 string copy 都 alloc (短 string 不 alloc)<br>② 跨 GCC 4.x / 5+ 不知 Dual ABI<br>③ 期望 COW (老 mental model) 但默认 SSO<br>④ 性能 microbenchmark 用短 string → 不反映长 string 性能<br>⑤ libstdc++ vs libc++ SSO size 不同 → 测试结果不可移植`,
+      },
+      failure_modes: [
+        `假设所有 string copy 都 alloc`,
+        `不知 Dual ABI 在 GCC 5+`,
+        `Mental model 仍是 COW`,
+        `Microbenchmark 全用短 string`,
+        `跨 stdlib 假设 SSO size 一致`,
+      ],
+      follow_ups: [
+        { q: `怎么 disable SSO 强制 heap alloc？`, hint: `① 不能 portable disable—— 是 impl detail；② 测试时 reserve(N) 大 N 强制 heap；③ Alternative: 用 std::vector&lt;char&gt; 替代 string` },
+        { q: `string_view 跟 SSO 关系？`, hint: `① string_view 完全不拥有数据—— no allocation；② 比 SSO 还轻 (just ptr + size)；③ Hot path 接口用 string_view 替代 string&；④ 注意 lifetime` },
+        { q: `小字符串高频 copy 怎么优化？`, hint: `① SSO 已经免 alloc；② Move 优于 copy；③ 用 string_view 传递；④ 大量重复字符串考虑 string interning (e.g., absl::string_view + 共享 storage)` },
+      ],
+    },
+
+    38: {
+      why_asked: `unordered_map rehash 是 hash table 经典话题。能讲"rehash trigger + iterator/reference 失效 + reserve"的人是真做过性能调优。`,
+      answers: {
+        mid: `<strong>rehash trigger</strong>: load factor (size / bucket_count) 超过 max_load_factor (default 1.0) → 翻倍 bucket + rehash all elements。<br><strong>失效</strong>: <strong>所有 iterator 失效</strong>；<strong>reference / pointer 不失效</strong>（element 仍在原位置，只是 bucket pointer 重建）。`,
+        senior: `<strong>详细</strong>:<br>· <strong>rehash 不只 insert 触发</strong>: 显式 <code>rehash(N)</code> / <code>reserve(N)</code> 也 trigger<br>· <strong>load factor</strong> 默认 1.0；调小（<code>max_load_factor(0.5)</code>）= 更多 memory + 更少 collision<br>· <strong>iterator 失效</strong>: 所有 begin/end/find 返回的 iterator 失效<br>· <strong>reference 不失效</strong>（unlike vector）：因为 element 在 heap-allocated node, rehash 只改 bucket pointer，node address 不变<br>· <strong>insert/erase 元素</strong> 也不失效 reference (除被 erase 的)<br><br><strong>性能</strong>:<br>· Amortized insert: O(1)<br>· Worst case (rehash): O(N)<br>· Reserve N before insert: avoid mid-way rehash`,
+        staff: `深一层：unordered_map 实现是<strong>chained hash table</strong>（每个 bucket 是 linked list of nodes）。<br><br><strong>性能 reality check</strong>:<br>1. <strong>unordered_map 比 std::map 快？</strong> 不一定:<br>· 小 N (&lt; 100): map 可能更快 (cache locality)<br>· 大 N: unordered_map 更快 (O(1) vs O(log N))<br>· 但 unordered_map 有 hash + collision overhead + node 分散在 heap (cache miss)<br>2. <strong>更快替代</strong>: <br>· <strong>Abseil flat_hash_map</strong>: open-addressing + cache friendly, 2-3× faster than std::unordered_map<br>· <strong>F14 (Folly)</strong>: 类似 fast hash map<br>· <strong>boost::container::flat_map</strong>: sorted vector + binary search (适合小 N)<br><br><strong>rehash 性能 trap</strong>:<br>1. <strong>渐进 grow 没 reserve</strong>: 100k insert 触发多次 rehash, each rehash O(current size)<br>· Without reserve: ~10× slower<br>· With reserve(100k): one-time alloc<br>2. <strong>load factor 设太小</strong>: <code>max_load_factor(0.25)</code> → 4× memory，但 lookup 几乎不快<br>3. <strong>iterator invalidation 后用</strong>: 隐 bug。Reference 不失效是 unordered_map 特性<br><br><strong>真实经验</strong>: NETCONF agent device state cache (100k device, ~1M lookup/s):<br>· baseline std::unordered_map: P99 lookup 800ns<br>· change to absl::flat_hash_map: P99 200ns (4×)<br>· cache miss 数从 25% → 6% (perf c2c)<br><br><strong>陷阱</strong>:<br>① 渐增 insert 没 reserve<br>② Iterator 失效不知，crash random<br>③ 假设 unordered_map 永远比 map 快<br>④ Hash function 烂（用 sequential ID 当 key, all collide in bucket 0）<br>⑤ 不知 reference 不失效（误以为跟 vector 一样）<br><br><strong>选型决策</strong>:<br>· N &lt; 50, 多读少写: <strong>flat_map / sorted vector</strong> (cache locality)<br>· 50-10k, 通用: <strong>absl::flat_hash_map</strong> (best)<br>· 10k+ 或需要 ordering: <strong>std::map / std::unordered_map</strong><br>· concurrent: <strong>tbb::concurrent_hash_map / folly::ConcurrentHashMap</strong>`,
+      },
+      failure_modes: [
+        `渐增 insert 不 reserve → 多次 rehash`,
+        `Iterator 失效不知 → crash`,
+        `Hash function 烂 → all collide`,
+        `Load factor 设太小 → 浪费 memory`,
+        `假设 unordered_map &gt; map for all N`,
+      ],
+      follow_ups: [
+        { q: `好的 hash function 长啥样？`, hint: `① Uniform distribution；② Low collision rate；③ Cheap to compute；④ std::hash 通常够用；⑤ Custom key 要专门 hash (e.g., struct of int + string → combine)` },
+        { q: `absl::flat_hash_map 比 std::unordered_map 快在哪？`, hint: `① Open addressing not chaining—— cache friendly；② SIMD lookup for empty/deleted slots；③ Robin hood hashing；④ Comprehensive analysis: Abseil documentation` },
+        { q: `concurrent hash map 怎么选？`, hint: `① Read-heavy: folly::ConcurrentHashMap (lock-free reads)；② Mixed: tbb::concurrent_hash_map (fine-grained lock)；③ Simple: std::shared_mutex + std::unordered_map；④ 高 contention: 用 striped lock / lock-free 数据结构` },
+      ],
+    },
+
+    47: {
+      why_asked: `Top-K 是 STL 经典综合题。能讲"std::nth_element + 部分 sort + heap"3 方法的人懂复杂度。`,
+      answers: {
+        mid: `<strong>3 种方法</strong>:① <strong>std::nth_element</strong>（O(n) average，找第 k 大但 unordered）；② <strong>std::partial_sort</strong>（O(n log k)，前 k 个 sorted）；③ <strong>std::priority_queue (heap)</strong>（O(n log k)，适合 streaming）。`,
+        senior: `<strong>详细对比</strong>:<br>1. <strong>std::nth_element(first, nth, last)</strong>: <br>· O(n) average (quickselect)<br>· O(n²) worst case<br>· 之后 [first, nth) 都 ≤ *nth, (nth, last) 都 ≥<br>· 但 [first, nth) 不 sorted<br>2. <strong>std::partial_sort(first, middle, last)</strong>:<br>· O(n log k) where k = middle - first<br>· [first, middle) is sorted top k<br>3. <strong>std::priority_queue + 维护 size k</strong>:<br>· Streaming (data 一次性看不完)<br>· O(n log k) per processing<br>· Memory O(k)<br><br><strong>选择</strong>:<br>· k 远小于 n + 只要 unordered: <strong>nth_element</strong> (fastest)<br>· k 远小于 n + 要 sorted: <strong>partial_sort</strong><br>· Streaming 数据: <strong>priority_queue</strong>`,
+        staff: `深一层：Top-K 看似简单实际有<strong>不少 senior 区分点</strong>:<br><br>1. <strong>k 跟 n 比例 matter</strong>:<br>· k = n/2: nth_element no advantage over sort<br>· k &lt;&lt; n: nth_element 显著快<br>· k = 1 (find max): std::max_element O(n), best<br>2. <strong>是否需要 sorted</strong>:<br>· 不需要 sorted (e.g., 求 top-100 students 的集合，不在乎顺序): nth_element<br>· 需要 sorted (e.g., leaderboard): partial_sort<br>3. <strong>是否 streaming</strong>:<br>· Batch (data 全在 memory): nth_element / partial_sort<br>· Streaming (one pass / data 太大): priority_queue 维护 size k<br>4. <strong>是否 stable</strong>:<br>· nth_element / partial_sort: <strong>not stable</strong><br>· 需要 stable: std::stable_sort + slice (O(n log n))<br><br><strong>真实案例</strong>: NETCONF agent telemetry，每秒 100k events 找 top-100 异常 device:<br>· Batch (1 sec buffer): nth_element 50ms<br>· Streaming: priority_queue maintain top-100 (each insert O(log 100)) → 总 O(n log k), real-time<br>· 选 streaming (low latency requirement)<br><br><strong>性能 数字</strong>:<br>· n = 1M, k = 100<br>· std::sort: ~100ms (cache-friendly)<br>· partial_sort: ~10ms<br>· nth_element: ~3ms (10× faster)<br>· priority_queue streaming: comparable to nth_element (each insertion overhead but distributed)<br><br><strong>陷阱</strong>:<br>① 用 std::sort 当 top-K 工具—— 浪费 O(n log n)<br>② 不知道 nth_element 是 partial QuickSort<br>③ 期望 nth_element 后 [first, nth) 是 sorted<br>④ k 大时 priority_queue 比 partial_sort 慢（k log k vs k log k 但 const factor 大）<br>⑤ Worst case O(n²) of nth_element 不知（malicious input 可触发）<br><br><strong>替代方案</strong>:<br>· Randomized selection (Quickselect + random pivot)<br>· 介绍 select algorithm (BFPRT, O(n) worst case 但 const factor 大, 实战很少用)<br>· 数据可并行: 分块 + merge top-K`,
+      },
+      failure_modes: [
+        `用 std::sort 当 top-K 工具`,
+        `期望 nth_element 后 sorted`,
+        `k 大时仍用 priority_queue`,
+        `Worst case O(n²) 不知`,
+        `Stable 跟 unstable 混`,
+      ],
+      follow_ups: [
+        { q: `怎么 parallel top-K？`, hint: `① 数据分块，每块 partial_sort top-K；② Merge top-K of all blocks；③ Total O(n/p × log k + p × k log k)；④ TBB / std::execution::par_unseq` },
+        { q: `Streaming top-K 算法？`, hint: `① priority_queue (min-heap of size k)；② 新元素 &gt; heap.top() 则 pop + push；③ Time O(n log k)；④ Memory O(k)；⑤ 适合 data 一次性 stream` },
+        { q: `Top-K of sorted streams (k-way merge)？`, hint: `① priority_queue of stream iterators；② Pop smallest, advance that stream；③ Time O(n log k) where k = stream count；④ 经典 external sort building block` },
+      ],
+    },
+
+    56: {
+      why_asked: `Rule of 0/3/5 是现代 C++ 设计原则。能讲"3 → 5 演进 + Rule of 0 哲学"的人懂 RAII。`,
+      answers: {
+        mid: `<strong>Rule of 3 (C++03)</strong>: 自定义任一 (dtor / copy ctor / copy assign) → 必须自定义另外 2 个。<br><strong>Rule of 5 (C++11)</strong>: 加 move ctor / move assign 共 5 个。<br><strong>Rule of 0 (modern)</strong>: <strong>尽量不自定义任何</strong>—— 让 compiler 生成默认; 资源管理交给 RAII type (unique_ptr / vector / lock_guard)。`,
+        senior: `<strong>具体规则</strong>:<br>· 自定义 dtor → 通常意味管 resource → copy/move 需要正确处理 (deep copy / transfer ownership)<br>· 编译器默认 copy/move = member-wise → 资源 type member-wise 可能 wrong<br><br><strong>Rule of 0 实战</strong>:<br>· 用 std::unique_ptr 管 ownership → 不用写 dtor / move (default ok)<br>· 用 std::vector / std::string → 同上<br>· 类自然 move-only / copyable based on members<br><br><strong>例</strong>:<br><code>class Foo {<br>  std::unique_ptr&lt;Bar&gt; ptr_;     // owns Bar<br>  std::vector&lt;int&gt; data_;        // owns vector<br>  // No need to define dtor / copy / move<br>  // Default-generated: move-only (because unique_ptr)<br>};</code>`,
+        staff: `深一层：Rule of 0 是<strong>现代 C++ 最重要原则之一</strong>—— "<strong>resource management should be a separate concern from business logic</strong>"。如果你写 dtor，你应该 question why（是不是该 wrap to RAII type）。<br><br><strong>Rule of 5 详细行为</strong>:<br>1. <strong>用户自定义 dtor</strong> → compiler 不生成 move (但仍生成 deprecated copy)<br>2. <strong>用户自定义 move ctor/assign</strong> → compiler 不生成 copy<br>3. <strong>= default 显式</strong> 让 compiler 生成 (区别于 not declared)<br>4. <strong>= delete</strong> 显式禁止<br><br><strong>真实陷阱</strong>:<br>1. <strong>写了 dtor 但忘写 move</strong>:<br><code>class Foo {<br>  std::unique_ptr&lt;Bar&gt; ptr_;<br>  ~Foo() { log("destroying"); }  // user-declared dtor<br>};<br>// Compiler 不生成 move → Foo 不是 movable<br>// std::vector&lt;Foo&gt; 退化 to copy → unique_ptr copy = error</code><br>修正: 显式 <code>Foo(Foo&amp;&amp;) = default;</code><br><br>2. <strong>= default move noexcept</strong>:<br>· Compiler 生成 move 时根据 member move 推导 noexcept<br>· 一个 member 不 noexcept → Foo move 也不 noexcept<br>· 影响 std::vector&lt;Foo&gt; 扩容 (退化 copy)<br>· Fix: ensure members noexcept; static_assert<br><br>3. <strong>Rule of 5 应用过度</strong>:<br>· 简单 type 不应该写 5 个 (Rule of 0 优先)<br>· 写 5 个意味着 manual resource management → consider RAII<br><br><strong>真实经验</strong>: NETCONF agent 代码 review 中常见 anti-pattern:<br>· 100+ line class with manual <code>new/delete</code> in dtor → refactor to std::unique_ptr<br>· Member 包含 raw pointer + manual copy/move → wrap to RAII type<br><br>Rule of 0 是 modern code review checklist 必查项。<br><br><strong>关键</strong>: ① Rule of 0 优先；② Rule of 5 当真需要 manual resource；③ Rule of 3 已 obsolete (但仍要懂 legacy code)；④ 显式 = default / = delete 表达意图；⑤ Code review flag 大量自定义 special member functions。`,
+      },
+      failure_modes: [
+        `写 dtor 忘写 move → compiler 不生成 move → 退化 copy`,
+        `Manual new/delete 在 dtor 不用 unique_ptr`,
+        `Member move 不 noexcept → vector 扩容退化 copy`,
+        `Rule of 5 写到简单 type（应该 Rule of 0）`,
+        `= delete vs not declared 混 → 隐式生成 unexpected`,
+      ],
+      follow_ups: [
+        { q: `什么时候真的需要 Rule of 5？`, hint: `① 类实现 RAII wrapper (e.g., 自己 wrap pthread mutex / file handle)；② 类直接管 raw resource not in std lib；③ 99% case 用 unique_ptr / vector / wrap-existing-RAII` },
+        { q: `Move-only vs copyable 怎么决定？`, hint: `① 包含 unique_ptr / thread → move-only；② 包含 shared_ptr / value type → copyable；③ 显式 = delete copy 让 move-only；④ Default 通常正确` },
+        { q: `Empty base class optimization 跟 Rule of 0 关系？`, hint: `① EBO (Empty Base Optimization) 让 empty type 不占空间；② C++20 [[no_unique_address]] 现代替代；③ Rule of 0 + EBO 让 wrapper class 真的 zero-overhead` },
+      ],
+    },
+
+    57: {
+      why_asked: `析构函数声明影响其他成员是 C++ 规则坑。能讲"5 个 special member functions 互相影响"的人懂 standard。`,
+      answers: {
+        mid: `<strong>用户声明 dtor</strong> → compiler <strong>不生成 move ctor / move assign</strong>（但仍生成 copy ctor / copy assign，C++ 11 后这两个 deprecated）。<br>结果：类<strong>退化为 copy-only</strong>，失去 move 优化。`,
+        senior: `<strong>完整规则 (C++ Standard)</strong>:<br>1. 用户声明 <strong>copy ctor / copy assign / dtor</strong> 任一 → <strong>不生成 move ctor/assign</strong><br>2. 用户声明 <strong>move ctor / move assign</strong> 任一 → <strong>不生成 copy ctor/assign (= delete)</strong><br>3. 用户声明 dtor → 生成的 copy ctor/assign <strong>deprecated</strong>（C++11+）<br><br><strong>典型踩坑</strong>:<br><code>class Foo {<br>  std::vector&lt;int&gt; data_;<br>  ~Foo() { /* log destruction */ }<br>};<br>// Compiler 不生成 move → Foo 不 movable<br>// std::vector&lt;Foo&gt; 扩容时退化为 copy<br>// 性能 -50% or worse</code><br><br><strong>修正</strong>: 显式声明<br><code>Foo(Foo&amp;&amp;) noexcept = default;<br>Foo&amp; operator=(Foo&amp;&amp;) noexcept = default;</code>`,
+        staff: `深一层：这条规则是<strong>C++ 历史包袱</strong>——为兼容 C++03 code（没 move 概念）保留默认 copy 行为。Modern C++ guidelines 强烈建议<strong>显式控制全部 5 个</strong>或<strong>都不声明 (Rule of 0)</strong>。<br><br><strong>真实事故 case</strong>:<br>1. <strong>NETCONF agent 性能事故</strong>: Message class 含 std::function。某天 dev 加了 <code>~Message() { metrics_.dec(); }</code>。<br>· Compiler 不生成 move ctor → Message 不 movable<br>· std::vector&lt;Message&gt; queue 扩容时 copy 整个 Message (含 std::function copy ~ 100ns)<br>· 高 QPS 下 P99 latency +50%<br>· Profile + look at codegen 才发现<br>· 修正: 显式 <code>Message(Message&amp;&amp;) noexcept = default;</code> → 性能恢复<br><br>2. <strong>Subtle bug: 隐式 copy still works</strong>:<br><code>class Resource {<br>  int* data_;<br>  ~Resource() { delete data_; }  // 用户声明 dtor<br>  // No copy ctor declared → compiler 生成 default copy (deprecated but still works)<br>};<br>Resource a, b = a;  // shallow copy! 两个对象同 data_ → double delete</code><br>修正: <code>Resource(const Resource&amp;) = delete;</code> 或 deep copy<br><br><strong>规则记忆 trick</strong>: "<strong>当你声明 5 中任一，重新思考另外 4 个</strong>"<br><br><strong>建议</strong>:<br>① Rule of 0 优先（不写任何 special member）<br>② 如果必须写，<strong>全部 5 个显式</strong> (= default / = delete / 自定义)<br>③ Move ctor / move assign <strong>显式 noexcept</strong><br>④ Static_assert 验证: <code>static_assert(std::is_nothrow_move_constructible_v&lt;Foo&gt;);</code><br>⑤ Code review tools (clang-tidy) check<br><br><strong>关键</strong>: 析构声明 ≠ 单纯加 logging—— 一定<strong>影响 4 个其他 special member functions</strong>，可能 silent perf 退化或 silent 错误 copy。`,
+      },
+      failure_modes: [
+        `自定义 dtor 没补 move → 退化 copy`,
+        `Subtle shallow copy（compiler 默认 generate）→ double delete`,
+        `Move 没显式 noexcept → vector 扩容退化`,
+        `不知道 dtor 影响其他 4 个`,
+        `不用 static_assert 验证 noexcept move`,
+      ],
+      follow_ups: [
+        { q: `什么时候用 = default？`, hint: `① 你想要 compiler 生成（明确意图）；② 防止 deprecated copy generation；③ 跟 = delete 配合精确控制；④ 默认 inline / trivial-preserving` },
+        { q: `Trivially copyable 是什么？`, hint: `① 所有 special members 都是 trivial（compiler 生成）；② 可以 memcpy；③ std::is_trivially_copyable_v；④ POD-like type 主流；⑤ 容器 algorithm 优化（vector reserve 用 memcpy not copy ctor）` },
+        { q: `Compiler-generated 跟自定义性能差？`, hint: `① Compiler-generated 通常 inline + 优化更激进；② 自定义即使一样代码可能不 inline；③ benchmark 测；④ 大多 case 无差异` },
+      ],
+    },
+
+    63: {
+      why_asked: `异常安全 3 级是 C++ 经典理论 (Stroustrup / Sutter)。能讲清"basic / strong / nothrow"+ 实战的人写过 library。`,
+      answers: {
+        mid: `<strong>3 级 (Sutter)</strong>:① <strong>Basic</strong>—— 异常后 object 仍 valid (但 state may change), no resource leak；② <strong>Strong</strong>—— 异常后<strong>commit or rollback</strong>，state 不变；③ <strong>Nothrow / No-throw</strong>—— 永不抛 (noexcept)。`,
+        senior: `<strong>每级 example</strong>:<br>1. <strong>Basic guarantee</strong>:<br>· std::vector::push_back: 失败时 vector 仍 valid, 但元素可能部分构造<br>· 大多数 STL 操作至少 basic<br>2. <strong>Strong guarantee</strong>:<br>· std::vector::push_back if element copy ctor 不抛 OR move noexcept: strong<br>· 关键技术: copy-and-swap idiom<br>· Performance cost: 通常需要 extra copy<br>3. <strong>Nothrow</strong>:<br>· 关键操作（dtor / swap / move）必须<br>· compiler check: noexcept specifier<br><br><strong>实战 priority</strong>:<br>· dtor: 永远 nothrow (隐式 noexcept; 抛异常 = std::terminate)<br>· swap: 永远 nothrow<br>· move: 努力 nothrow (vector 扩容 move_if_noexcept)<br>· 其他操作: at least basic`,
+        staff: `深一层：异常安全是<strong>library / API 设计核心</strong>。Sutter "<strong>Exceptional C++</strong>" 是经典。<br><br><strong>设计原则</strong>:<br>1. <strong>构造函数</strong>: strong (要么完整构造要么不 commit)<br>· 失败抛异常 → 已构造 members 自动析构 (RAII)<br>· 不要 "partial constructed" state<br>2. <strong>析构函数</strong>: nothrow (always)<br>· dtor 抛 + 另一异常 stack unwind = std::terminate<br>· C++11 起 dtor 隐式 noexcept (除非显式 noexcept(false))<br>3. <strong>赋值 (copy/move assign)</strong>: 至少 basic, 理想 strong<br>· copy assign: copy-and-swap idiom 实现 strong<br>4. <strong>swap</strong>: nothrow (member-wise swap of nothrow types)<br><br><strong>copy-and-swap idiom</strong>:<br><code>Foo&amp; operator=(Foo other) {  // 注意是 value param (copy in)<br>  swap(other);  // nothrow swap<br>  return *this;<br>}  // other dtor</code><br>· 异常发生在 copy （early），this 不变 → strong guarantee<br>· Code 简洁 (handle copy/move via param convention)<br><br><strong>真实案例</strong>: NETCONF agent SafeConfig class:<br>· apply(new_config) operation 需要 strong guarantee (atomic apply or rollback)<br>· 用 copy-and-swap: <code>auto temp = current; temp.merge(new_config); swap(current, temp);</code><br>· 中途失败 (merge 抛) → current 不变, rollback automatic<br><br><strong>性能 tradeoff</strong>:<br>· Strong guarantee 通常需要 copy (memory + CPU cost)<br>· Hot path 可能选 basic + 业务层 retry<br>· 关键 financial / atomic op 选 strong<br><br><strong>陷阱</strong>:<br>① dtor 抛异常 (C++11+ 直接 terminate)<br>② swap 抛异常 (assignment 失败状态)<br>③ Strong guarantee 不 verify (测试: 注入异常看 state)<br>④ noexcept 标记错（声明 noexcept 但实际抛 = terminate）<br>⑤ Move 不 noexcept → vector reservation 退化 copy<br><br><strong>验证</strong>:<br>① static_assert noexcept<br>② Code review: 关注 dtor / swap / move<br>③ Sanitizer 测试: 注入异常看 invariant`,
+      },
+      failure_modes: [
+        `dtor 抛异常 → terminate`,
+        `swap 抛异常 → assignment 半状态`,
+        `Strong guarantee 不 verify`,
+        `noexcept 标记错 → 抛即 terminate`,
+        `Hot path 强求 strong → 性能浪费`,
+      ],
+      follow_ups: [
+        { q: `Copy-and-swap idiom 完整 implementation？`, hint: `① Member swap (nothrow)；② Free swap function (ADL)；③ copy ctor / move ctor (= default OK)；④ operator= takes value param + swap；⑤ Rule of 5 兼容` },
+        { q: `noexcept(noexcept(...)) 是什么？`, hint: `① 条件性 noexcept—— 基于其他表达式是否 noexcept；② 例: <code>void swap(T&amp; a, T&amp; b) noexcept(noexcept(a.swap(b)))</code>；③ 模板代码常用` },
+        { q: `异常安全跟 thread safety 关系？`, hint: `① 独立维度；② 但 strong exception safety 通常需要 atomic / lock 配合 thread safety；③ 写 thread-safe library 必须同时考虑两者` },
+      ],
+    },
+
+    65: {
+      why_asked: `栈展开是 C++ 异常实现 detail。能讲"unwind table + RAII + 性能"的人懂 zero-overhead exception。`,
+      answers: {
+        mid: `<strong>Stack Unwinding</strong>: 抛异常时，runtime <strong>反向遍历调用栈</strong>，对每个栈帧调用<strong>所有局部对象的析构</strong>（RAII），直到匹配的 catch。`,
+        senior: `<strong>详细过程</strong>:<br>1. throw 表达式 → runtime 构造 exception object (typically heap-allocated)<br>2. 查 <strong>EH frame table</strong> (.eh_frame section) 找当前 PC 的 cleanup info<br>3. <strong>Phase 1 (search)</strong>: 反向遍历栈帧找匹配 catch<br>4. <strong>Phase 2 (cleanup)</strong>: 对每个栈帧调用 <strong>local destructors</strong>（按构造逆序）<br>5. 到匹配 catch block → transfer control<br>6. 没匹配 catch → std::terminate<br><br><strong>关键</strong>:<br>· 局部对象 dtor 自动调用 = <strong>RAII</strong> 安全基础<br>· dtor 不能 throw（C++11+ 强制 noexcept）<br>· 性能: throw 1 次 ~1-100 µs，no-throw path 0 overhead`,
+        staff: `深一层：栈展开机制是<strong>"zero-cost exception"</strong> 的实现基础。<br><br><strong>关键概念</strong>:<br>1. <strong>Itanium ABI exception handling</strong> (GCC / Clang Linux): <br>· <strong>.eh_frame + .gcc_except_table</strong> sections 存 unwind info (DWARF format)<br>· no-throw path: 完全不读这些 (zero cost on hot path)<br>· throw path: libgcc_eh.a / libunwind 执行 unwind<br>2. <strong>Two-phase</strong>: phase 1 (search) + phase 2 (cleanup)<br>· Phase 1 找 catch 但不 destroy<br>· 找到才 phase 2 destroy + transfer<br>· 没找到 (uncaught) → terminate 前不 destroy (UB-ish but standard)<br>3. <strong>性能</strong>:<br>· No throw: 0 ns overhead<br>· Throw: 1-100 µs (proportional to stack depth + dtor count)<br>· 不适合 hot path 控制流<br><br><strong>RAII safety</strong>:<br>· 局部 unique_ptr → dtor 自动 release<br>· 局部 lock_guard → dtor 自动 unlock<br>· 局部 vector → dtor 自动 free<br>· 这就是 "<strong>构造函数 strong guarantee + RAII</strong>" 的基础<br><br><strong>真实案例 1</strong>: NETCONF agent 早期一段代码:<br><code>void f() {<br>  auto lock = mtx.lock();  // RAII<br>  do_work();               // throw inside<br>}  // unwinding: lock dtor auto release</code><br>异常没 catch → terminate 但 lock 仍 release。<br><br><strong>真实案例 2</strong>: dtor 抛异常事故:<br><code>struct R {<br>  ~R() { throw std::runtime_error("..."); }  // BAD<br>};<br>void f() {<br>  R r;<br>  throw std::runtime_error("other");  // already unwinding<br>  // r dtor throws → std::terminate</code><br>修正: dtor 永不抛 (C++11+ implicit noexcept)<br><br><strong>陷阱</strong>:<br>① <strong>dtor throw</strong>—— terminate 直接<br>② <strong>跨 .so 异常</strong>—— typeid 跨边界可能不匹配<br>③ <strong>跨 C ABI</strong>—— C 不能 catch C++ 异常, UB<br>④ <strong>异常做控制流</strong>—— hot path 性能崩 (1000× 慢于 if/else)<br>⑤ <strong>不 catch by const reference</strong>—— catch by value slicing 派生信息丢<br><br><strong>跨编译器 / 平台</strong>:<br>· GCC / Clang: Itanium ABI<br>· MSVC: 自己的 SEH-based ABI（不兼容 Itanium）<br>· 跨编译器 .so 不能 throw 异常`,
+      },
+      failure_modes: [
+        `dtor 抛异常 → terminate`,
+        `异常做控制流 → 性能崩`,
+        `跨 C ABI 抛异常`,
+        `catch by value slicing`,
+        `dtor 内 catch all 掩盖错误`,
+      ],
+      follow_ups: [
+        { q: `Zero-cost exception 真的 zero cost 吗？`, hint: `① No-throw path: yes (only metadata in eh_frame section)；② Binary size +5-15%；③ Throw cost 1-100 µs；④ "Zero cost" 指 normal execution path` },
+        { q: `noexcept 函数抛异常会怎样？`, hint: `① 直接 std::terminate（不 unwind 进一步）；② 用 noexcept 是 contract / 编译器优化提示；③ 错标 noexcept = 隐藏 bug` },
+        { q: `跟其他语言异常 (Java / Python) 比？`, hint: `① Java/Python: 异常 cost 较低 (throw ~ µs)；② C++: throw 较慢但 no-throw zero cost；③ Java/Python: 常用异常做控制流 (OK); C++: 不该` },
+      ],
+    },
+
+    69: {
+      why_asked: `std::expected 是 C++23 关键新特性，2026 hot 题。能讲"vs 异常 + monadic ops + 适用场景"的人跟上 C++ 发展。`,
+      answers: {
+        mid: `<strong>std::expected&lt;T, E&gt;</strong>: 包含 value (T) 或 error (E)，类似 Rust Result。<strong>vs 异常</strong>:<br>· 性能 zero overhead (stack-only)<br>· 显式 error handling（caller 强制看）<br>· 适合频繁错误 / hot path<br>· 异常适合罕见 / catastrophic`,
+        senior: `<strong>用法</strong>:<br><code>std::expected&lt;int, std::string&gt; divide(int a, int b) {<br>  if (b == 0) return std::unexpected("div by zero");<br>  return a / b;<br>}<br>auto r = divide(10, 0);<br>if (r) use(*r);<br>else log(r.error());</code><br><br><strong>monadic operations</strong>:<br>· <code>.and_then(f)</code>: if value, apply f; else propagate error<br>· <code>.transform(f)</code>: map value through f<br>· <code>.or_else(f)</code>: if error, apply f<br>· 链式 error handling 无 nested if<br><br><strong>选择指南</strong>:<br>· <strong>异常</strong>: catastrophic / programmer error / 无 valid return value<br>· <strong>expected</strong>: 业务可预期错误 / 频繁触发 / hot path<br>· 项目内可混用: API boundary expected, 内部 catastrophic 异常`,
+        staff: `深一层：expected 是 <strong>C++23 标准化 Rust-style error handling</strong>—— 2024-2026 主流。Boost.Outcome / leaf 是 pre-C++23 替代。<br><br><strong>性能对比 (typical hot path)</strong>:<br>· Exception throw + catch: 1-100 µs<br>· expected return + check: &lt; 1 ns<br>· Difference: <strong>1000-100000×</strong><br><br><strong>真实迁移案例</strong>: NETCONF agent v3 把 parse error 从异常改 expected:<br>· Before: <code>Message parse(string)</code> throws on parse error<br>· After: <code>std::expected&lt;Message, ParseError&gt; parse(string)</code><br>· Hot path benchmark: throughput +12%<br>· Code 改动: callers 必须显式 handle error (一开始 verbose)<br>· 后期发现: 实际 error rate 10% 不算"<strong>罕见</strong>", expected 更 fit<br><br><strong>monadic chaining 优雅</strong>:<br><code>auto result = parse(input)<br>  .and_then([](auto m) { return validate(m); })<br>  .and_then([](auto m) { return process(m); })<br>  .transform([](auto r) { return r.summary(); });</code><br>vs nested if-else + manual error propagation:<br><code>auto m = parse(input);<br>if (!m) return std::unexpected(m.error());<br>auto v = validate(*m);<br>if (!v) return std::unexpected(v.error());<br>...</code><br><br><strong>陷阱</strong>:<br>① <strong>所有错误都用 expected</strong>—— programmer error / OOM 用异常更合理<br>② <strong>不用 monadic ops</strong>—— code 仍 verbose<br>③ <strong>Error type 太宽</strong>—— <code>std::expected&lt;T, std::string&gt;</code> 失去类型信息，改用 enum / variant<br>④ <strong>跨 ABI 用 expected</strong>—— 标准 type ABI 仍可能不稳<br>⑤ <strong>Heavy error type</strong>—— expected size = sizeof(T) + sizeof(E) + 1, error type 大时浪费<br><br><strong>跟 Result&lt;T, E&gt; (Rust) / Result (Haskell)</strong>: 完全同概念，C++23 标准化版。<br><br><strong>建议</strong>:<br>① C++23 项目优先 expected for predictable errors<br>② Pre-C++23: Boost.Outcome / leaf / tl::expected<br>③ 异常仍用 for: ctor / OOM / programmer bug<br>④ Error type 用 enum class + 详细 context struct<br>⑤ 链式用 monadic ops`,
+      },
+      failure_modes: [
+        `所有错误都用 expected → ctor/OOM 应该异常`,
+        `不用 monadic ops → code 仍 verbose`,
+        `Error type 太宽（string）→ 失去类型`,
+        `跨 ABI 用 expected → 不稳`,
+        `Heavy error type → expected size 浪费`,
+      ],
+      follow_ups: [
+        { q: `Pre-C++23 怎么模拟 expected？`, hint: `① Boost.Outcome；② tl::expected (header-only)；③ leaf (Niall Douglas)；④ 自己 wrap variant&lt;T, E&gt;` },
+        { q: `expected 跟 optional 区别？`, hint: `① optional&lt;T&gt;: 值或没值 (no error info)；② expected&lt;T, E&gt;: 值或带类型 error；③ optional 适合 "missing" 场景, expected 适合 "fail with reason"` },
+        { q: `跟 Rust Result 比较？`, hint: `① 概念同；② Rust 强制 ? operator 处理；③ C++ expected 不强制 (但 [[nodiscard]] 帮)；④ 实际使用相似 patterns` },
+      ],
+    },
+
+    72: {
+      why_asked: `make_shared vs shared_ptr(new) 是 C++ 性能 + 异常安全题。能讲"single allocation + 异常安全 + weak_ptr lifetime"的人懂 implementation。`,
+      answers: {
+        mid: `<strong>3 个优势</strong>:① <strong>单次 allocation</strong>—— object + control block 一起分配 (1 allocation vs 2)；② <strong>异常安全</strong>—— 避免 raw new 泄漏；③ <strong>cache-friendly</strong>—— object 跟 control block 相邻。`,
+        senior: `<strong>详细</strong>:<br><br>1. <strong>单次 allocation 性能</strong>:<br>· make_shared: 1 次 alloc (object + control block)<br>· shared_ptr(new T): 2 次 alloc (new T + new control block)<br>· Allocation cost: ~50-100ns × 2 vs 1<br>· Cache: object + ctrl 相邻 → cache hit on deref<br><br>2. <strong>异常安全</strong>:<br><code>// Unsafe<br>f(shared_ptr&lt;T&gt;(new T), shared_ptr&lt;U&gt;(new U));<br>// 评估顺序未定: new T, new U, ctor shared_ptr<br>// 中间 throw → leak<br>// Safe<br>f(make_shared&lt;T&gt;(), make_shared&lt;U&gt;());  // each is atomic</code><br><br>3. <strong>缺点</strong>:<br>· Object 跟 control block 一起分配 → <strong>weak_ptr 持有时 object memory 也不能 release</strong> (要等 weak count = 0)<br>· 不能 custom deleter (use new + custom_deleter 时)<br>· 大 object + 长 weak_ptr lifetime → memory pinned`,
+        staff: `深一层：make_shared 优化看似简单，但<strong>side effect</strong> 经常被忽略:<br><br><strong>memory pinning by weak_ptr</strong>:<br>· make_shared: object + ctrl 一起分配<br>· 当 shared_ptr 全 release (strong count = 0) → object dtor 调用<br>· 但 memory 仍 pinned 直到 weak count = 0<br>· 即 1 个 weak_ptr 仍 alive 时, object 的 100MB memory 不能 free<br>· vs shared_ptr(new T): object alloc 跟 ctrl alloc 独立 → object dtor 时 object memory 立即 release, weak count 0 后才 release ctrl<br><br><strong>真实事故</strong>: NETCONF agent 缓存 large object + 偶尔有 weak_ptr observer:<br>· 用 make_shared → 大 object memory 持有时间长 (weak_ptr 延长 lifetime)<br>· 切换到 shared_ptr(new T, custom_deleter) → object 立即 free, ctrl 稍后 free<br>· Memory usage 改善 30%<br><br><strong>选择决策</strong>:<br>· <strong>默认</strong>: make_shared (单次 alloc 性能 + 异常安全)<br>· <strong>大 object + 可能有 weak_ptr</strong>: shared_ptr(new T)<br>· <strong>需要 custom deleter</strong>: shared_ptr(new T, deleter)<br>· <strong>需要 aligned alloc</strong>: shared_ptr(new (alignment) T) or std::allocate_shared<br>· <strong>不需要 weak_ptr</strong>: make_shared always OK<br><br><strong>C++17/20 改进</strong>:<br>· C++17: std::make_shared with custom alignment<br>· C++20: std::make_shared&lt;T[]&gt; for array<br>· make_unique (C++14) 类似但 unique_ptr 不 share<br><br><strong>陷阱</strong>:<br>① 大 object + weak_ptr → memory pinned<br>② Custom deleter 不能用 make_shared<br>③ 自定义 allocator (std::allocate_shared 可以)<br>④ 性能微 benchmark 不显（除非 hot path 大量分配）<br>⑤ shared_ptr 自身 24 字节 (vs raw ptr 8) memory overhead<br><br><strong>关键</strong>: ① 默认 make_shared；② 大 object + weak 时用 new；③ 跨 weak_ptr usage pattern 决定。`,
+      },
+      failure_modes: [
+        `大 object + weak_ptr → memory pinning`,
+        `Custom deleter 仍用 make_shared`,
+        `Hot path 没考虑 make_shared 性能优势`,
+        `不知 weak_ptr 延长 memory (ctrl block) lifetime`,
+        `Raw new 在 ctor arg → 异常 leak`,
+      ],
+      follow_ups: [
+        { q: `make_unique 跟 unique_ptr(new) 区别？`, hint: `① make_unique 也异常安全；② 但 unique_ptr 不 share → 没"双 alloc"问题；③ make_unique 主要是异常安全 + 简洁；④ 性能 minimal difference` },
+        { q: `std::allocate_shared 怎么用？`, hint: `① Custom allocator 但仍 single alloc；② 用 polymorphic_allocator + memory pool 在 hot path；③ 接口: <code>std::allocate_shared&lt;T&gt;(allocator, args...)</code>` },
+        { q: `make_shared 跟 weak_ptr 内部结构？`, hint: `① 单次 alloc: header (ref counts + deleter) + T object；② shared_ptr: strong_count + weak_count + ptr to T；③ weak_ptr.lock(): atomic CAS strong_count；④ Boost.intrusive_ptr 更轻 (no separate ctrl block)` },
+      ],
+    },
+
+    73: {
+      why_asked: `循环引用是 shared_ptr 经典陷阱。能讲"weak_ptr 解决 + design 避免"的人调过 leak。`,
+      answers: {
+        mid: `<strong>问题</strong>: A 持 shared_ptr&lt;B&gt;, B 持 shared_ptr&lt;A&gt; → 两者 ref count 永不到 0 → memory leak。<br><strong>解法</strong>: 一方改 <strong>weak_ptr</strong>（typically 是 "back-reference"—— 子 → 父）。`,
+        senior: `<strong>典型场景</strong>:<br>1. <strong>Parent-Child</strong>: parent owns children (shared_ptr), child references parent (<strong>weak_ptr</strong>)<br>2. <strong>Observer pattern</strong>: subject owns observers (shared_ptr), observers reference subject (weak_ptr)<br>3. <strong>Doubly linked list</strong>: next 用 shared_ptr, prev 用 weak_ptr<br><br><strong>weak_ptr usage</strong>:<br><code>weak_ptr&lt;T&gt; w = some_shared;<br>if (auto sp = w.lock()) {<br>  // sp is shared_ptr, use sp<br>} else {<br>  // object 已 destroyed<br>}</code><br><br><strong>检测工具</strong>:<br>· LSan / Valgrind: 检测最终 leak<br>· heaptrack: 看 allocation pattern<br>· Manual review: 标识 ownership 关系`,
+        staff: `深一层：循环引用是<strong>"ownership 设计不清晰"</strong> 的症状。本质问题不是 shared_ptr 本身，是<strong>没明确"谁拥有谁"</strong>。<br><br><strong>设计原则</strong>:<br>1. <strong>每个 object 有 1 个 owner</strong> (root path 唯一)<br>2. <strong>非 owning 关系用 weak_ptr / raw ptr / reference</strong><br>3. <strong>避免双向所有权</strong>—— 一定 wrong<br>4. <strong>Tree-like ownership</strong> 健康<br>5. <strong>Graph-like ownership</strong> 需 weak_ptr or GC<br><br><strong>真实事故</strong>:<br><br><strong>Case 1: Parent-Child</strong><br><code>class Node {<br>  shared_ptr&lt;Node&gt; parent_;  // BAD<br>  vector&lt;shared_ptr&lt;Node&gt;&gt; children_;<br>};<br>// Parent 持 children, children 持 parent → 循环</code><br>修正: <code>weak_ptr&lt;Node&gt; parent_;</code><br><br><strong>Case 2: Observer</strong><br><code>class Subject {<br>  vector&lt;shared_ptr&lt;Observer&gt;&gt; observers_;  // BAD if Observer holds Subject<br>};<br>class Observer {<br>  shared_ptr&lt;Subject&gt; subject_;  // BAD</code><br>修正: Subject 持 raw / weak Observer, Observer 持 weak Subject<br><br><strong>Case 3: Callback</strong><br><code>void register_callback(shared_ptr&lt;Self&gt; this_) {<br>  registry_.push_back([this_]() { this_-&gt;do_it(); });<br>}<br>// lambda 持 shared_ptr&lt;Self&gt;, Self 持 lambda → 循环</code><br>修正: lambda 持 weak_ptr<br><br><strong>检测 + 防范</strong>:<br>1. <strong>Code review</strong>: 看到 shared_ptr 时问 "谁是 owner"<br>2. <strong>Test 时跑 LSan / Valgrind</strong>: 检测 leak<br>3. <strong>Heap profiler</strong>: 看 retention path<br>4. <strong>设计</strong>: tree-like ownership优先<br><br><strong>真实经验</strong>: NETCONF agent v2 一个偶发 OOM (~100MB / hour grow). 用 jeprof heap profile 发现 Subject + Observer 互持。Fix weak_ptr 后 OOM 消失。<br><br><strong>跟 GC 语言对比</strong>:<br>· Java/Python: GC 处理循环引用 (mark-and-sweep)<br>· C++/Rust: 必须 explicit ownership design<br>· Rust 编译期强制 (Rc + Weak)，C++ runtime 检测<br><br><strong>陷阱</strong>:<br>① 双向 shared_ptr<br>② Lambda capture this 作 shared_ptr<br>③ Container holds shared_ptr to object holding container<br>④ 跨层级（GUI parent-child）误用 shared_ptr<br>⑤ Detection 推迟到生产 → memory growth long-running service<br><br><strong>建议</strong>:<br>① Design first—— ownership graph 必无环<br>② weak_ptr for 非 owning reference<br>③ Code review 强制 question shared_ptr usage<br>④ Test 跑 LSan / Valgrind<br>⑤ Heap profiler in production monitoring`,
+      },
+      failure_modes: [
+        `双向 shared_ptr → 循环`,
+        `Lambda capture this as shared_ptr → 循环`,
+        `Observer pattern 不用 weak_ptr`,
+        `Tree-like ownership 错画成 graph`,
+        `不跑 LSan / Valgrind 检测`,
+      ],
+      follow_ups: [
+        { q: `enable_shared_from_this 解决啥？`, hint: `① 从 this 获 shared_ptr（不创新 ref count）；② Inherit enable_shared_from_this&lt;T&gt; → shared_from_this()；③ 用法: callback 需要 shared_ptr&lt;Self&gt;；④ 注意: 第一个 shared_ptr 创建后才能用` },
+        { q: `怎么 detect 循环引用？`, hint: `① LSan / Valgrind on exit；② Heap profiler (jeprof / massif) 看 retention path；③ Code review: 双向 shared_ptr → red flag；④ Some debug allocator track ref count` },
+        { q: `Hazard pointer 跟 weak_ptr 区别？`, hint: `① weak_ptr: per-object 控制块开销 (32 bytes)；② Hazard pointer: thread-local hazard slot, no per-object overhead；③ Hazard 适合 lock-free 数据结构；④ Folly / userspace-RCU 实现` },
+      ],
+    },
+
+    75: {
+      why_asked: `RAII 是 C++ 最核心 idiom。能讲"构造获取 + 析构释放 + 异常安全 + scoped"4 个 dimension 的人理解透彻。`,
+      answers: {
+        mid: `<strong>RAII (Resource Acquisition Is Initialization)</strong>: 资源在<strong>构造时获取</strong>，<strong>析构时自动释放</strong>。Stroustrup 命名，但核心是 C++ 析构机制 + 异常安全 unwind。`,
+        senior: `<strong>4 个 dimension</strong>:<br>1. <strong>构造获取</strong>: 资源在 ctor 内 alloc / lock / open<br>2. <strong>析构释放</strong>: dtor 自动 free / unlock / close<br>3. <strong>异常安全</strong>: 抛异常时 stack unwind 调用 dtor → 资源自动 release<br>4. <strong>Scoped lifetime</strong>: 资源 lifetime = 对象 lifetime<br><br><strong>典型 RAII types</strong>:<br>· std::unique_ptr / shared_ptr: heap memory<br>· std::lock_guard / unique_lock: mutex<br>· std::ifstream / ofstream: file handle<br>· std::thread (C++20 jthread): thread join<br>· 自定义: 自己 wrap pthread / SOCKET / DB connection<br><br><strong>跟异常安全关系</strong>:<br>· RAII 是 strong exception safety 的<strong>基础</strong><br>· 抛异常时局部 RAII 对象自动析构 → 资源 release<br>· 这就是为什么 C++ 不需要 try/finally`,
+        staff: `深一层：RAII 是 C++ 区别于其他语言的<strong>核心设计哲学</strong>。其他语言:<br>· Java: try/finally 或 try-with-resources<br>· Python: with statement (__enter__/__exit__)<br>· Go: defer<br>· Rust: Drop trait (类似 RAII)<br><br>C++ 的 RAII<strong>是 idiomatic / automatic</strong>—— 局部对象生命周期结束自动调 dtor, no need explicit handling.<br><br><strong>实现 RAII type 5 步</strong>:<br>1. Ctor: 获取资源 (设置成员)<br>2. Dtor: 释放资源 (清理成员)<br>3. Copy ctor / assign: 决策 - shared / unique / deleted<br>4. Move ctor / assign: 转移 ownership (typically default if members are smart)<br>5. swap (nothrow): 用于 strong exception safety<br><br><strong>真实 RAII 例</strong>:<br><code>class FileGuard {<br>  FILE* fp_;<br>public:<br>  FileGuard(const char* path) : fp_(fopen(path, "r")) {<br>    if (!fp_) throw std::runtime_error("open failed");<br>  }<br>  ~FileGuard() { if (fp_) fclose(fp_); }<br>  FileGuard(const FileGuard&amp;) = delete;<br>  FileGuard&amp; operator=(const FileGuard&amp;) = delete;<br>  FileGuard(FileGuard&amp;&amp; o) noexcept : fp_(std::exchange(o.fp_, nullptr)) {}<br>  FileGuard&amp; operator=(FileGuard&amp;&amp; o) noexcept {<br>    std::swap(fp_, o.fp_); return *this;<br>  }<br>  FILE* get() { return fp_; }<br>};</code><br><br><strong>RAII 不只 memory</strong>:<br>· File handles<br>· Mutex locks<br>· Network sockets<br>· Database connections<br>· GUI resources (handles / contexts)<br>· OpenGL / GPU buffers<br>· Transaction commits / rollbacks<br><br><strong>真实 case</strong>: NETCONF agent 数据库 transaction RAII:<br><code>class TxnGuard {<br>  Connection&amp; conn_;<br>  bool committed_ = false;<br>public:<br>  TxnGuard(Connection&amp; c) : conn_(c) { c.begin(); }<br>  ~TxnGuard() { if (!committed_) conn_.rollback(); }<br>  void commit() { conn_.commit(); committed_ = true; }<br>};<br>// 使用<br>void update() {<br>  TxnGuard tx(conn_);<br>  do_updates();      // 抛异常 → tx dtor rollback<br>  tx.commit();       // 显式 commit<br>}</code><br>异常自动 rollback 比 try/catch 简洁 + 不会漏。<br><br><strong>陷阱</strong>:<br>① <strong>Dtor 抛异常</strong>—— terminate<br>② <strong>没 delete copy</strong> 资源被 double-released<br>③ <strong>Move 后 source 不重置</strong> → dtor double-free<br>④ <strong>跨 ABI</strong>—— RAII 不能跨 C ABI<br>⑤ <strong>Manual cleanup mix RAII</strong>—— 显式 close() + RAII 双重 cleanup<br><br><strong>建议</strong>:<br>① 所有资源 wrap to RAII type<br>② 单一 ownership semantics (copy / move / unique)<br>③ Dtor noexcept (默认 implicit)<br>④ Move 后 reset source<br>⑤ 用 std lib (unique_ptr / lock_guard / fstream) 优先于自己写`,
+      },
+      failure_modes: [
+        `Dtor 抛异常 → terminate`,
+        `没 delete copy → double-release`,
+        `Move 后 source 不 reset → double-free`,
+        `跨 C ABI 用 RAII → 不工作`,
+        `Manual close() + RAII dtor → double close`,
+      ],
+      follow_ups: [
+        { q: `怎么实现 ScopeExit (Go defer 风格)？`, hint: `<code>template&lt;class F&gt; struct ScopeExit { F f_; ~ScopeExit() { f_(); } };</code> + factory func；或 boost::scope_exit；C++17 lambda-based；适合 cleanup ad-hoc resource` },
+        { q: `RAII 跟 Drop trait (Rust) 区别？`, hint: `① 概念相同；② Rust Drop 编译期强制 ownership move（编译错 vs runtime UB）；③ C++ 更灵活但 require 更多 discipline；④ Rust borrow checker 防 use-after-free` },
+        { q: `什么时候 RAII 不适用？`, hint: `① 跨线程 ownership transfer（仍可用 RAII + smart ptr）；② Manual cleanup needed (rare, e.g., specific timing)；③ C interop boundary；④ GC-like deferred cleanup 需求` },
+      ],
+    },
   },
 
   pm: {
@@ -3892,6 +4208,325 @@ const ENRICHMENT = {
         { q: `怎么平衡 "我" vs "team player"？`, hint: `① S/T/A 80% "我"；② R "我们 achieved" 但具体 attribute "我贡献是 X"；③ 主动 credit team for specific things；④ 不暗示 "我自己做完所有"` },
         { q: `面试官问 "what did your team do" vs "what did you do" 区别？`, hint: `① "team did X": zoom out 讲 team accomplishment；② "you did X": 必须 specific your action；③ 听 question 谁是 subject` },
         { q: `怎么 practice 这点？`, hint: `① 录音 self-introduction + 6 个 STAR；② 数 "我" vs "我们" frequency；③ 朋友 mock 让他 flag "我们" usage；④ 重写 STAR scripts 直到 conscious style 形成` },
+      ],
+    },
+
+    // ============== Phase 2 续推 · 行为题 ==============
+    5: {
+      why_asked: `团队反对你方向是新晋 PM/EM 必遇场景。能讲"diagnose root cause → influence not push → 决策框架"的人是真做过冲突管理。`,
+      answers: {
+        mid: `<strong>4 步</strong>：① 先<strong>真正听</strong>（不 defend）；② 区分<strong>真 disagree</strong> vs <strong>没理解</strong>；③ 用<strong>data + 多方案</strong>不用<strong>权威</strong>；④ 真 disagree 时<strong>commit and disagree</strong>（接受决策但 capture concerns）。`,
+        senior: `<strong>决策框架</strong>：<br>1. <strong>判断 reversibility</strong>: 容易改 → speed over consensus；难改 → 多投资 consensus<br>2. <strong>识别 disagree 类型</strong>:<br>· <strong>事实分歧</strong>（"data 不一样"）→ 用 evidence 解决<br>· <strong>价值观分歧</strong>（"质量 vs 速度"）→ 需要 leadership / stakeholder 仲裁<br>· <strong>沟通问题</strong>（其实理解不一致）→ 重新对齐<br>3. <strong>不强 push</strong>: "Disagree and commit" 是 Amazon 文化—— 接受决策同时<strong>document concerns</strong>，事后看 outcome calibrate`,
+        staff: `深一层：团队不同意你的方向<strong>通常是好事</strong>—— 说明 team 有 ownership + critical thinking。最差的 team 是"<strong>EM 说啥都 yes</strong>"—— 后期事故时无人挺身。<br><br><strong>真实案例</strong>: NETCONF agent v3 启动时我作为 EM 主张"用 Rust 写新模块"，team 6 人有 4 个反对（C++ 熟悉，不愿学）。<br><br>1. <strong>1on1 deep dive</strong>: 跟反对的 4 人各 1on1，发现真 root cause:<br>· 2 人是 fear of learning curve（不 want spend 2 月学 Rust）<br>· 1 人是 confidence issue（"我 Rust 写不好 PR review 难"）<br>· 1 人真 disagree（"Rust ecosystem for NETCONF 不够 mature"）<br><br>2. <strong>分类处理</strong>:<br>· 2 个 fear: 给 onboarding plan + pair with Rust mentor → 2 月后 productive<br>· 1 个 confidence: 私下 reassure + 让他 own small Rust module first<br>· 1 个真 disagree: 跟他 deep tech discussion → 他举了 3 个真问题（YANG parser lib / SNMP integration / debug toolchain），我 acknowledge 这些都是 real concern<br><br>3. <strong>调整 plan</strong>: 不是"全 Rust"，是"<strong>新性能 critical 模块 Rust + 老模块继续 C++ + interop layer</strong>"—— 接受真 disagree 的部分。<br><br>4. <strong>Document</strong>: ADR 记录 trade-off + 反对意见 + 决定 + 6 月 retrospective plan。<br><br>结果: 6 月后 Rust 模块 production stable，C++ 模块继续 maintain，<strong>那个原本最反对的 Engineer 后来 lead Rust 团队</strong>—— 因为他看到自己的 concern 被认真对待。<br><br><strong>陷阱</strong>:<br>① <strong>用 authority push</strong> "我决定就这样"—— 短期服从长期反弹<br>② <strong>过度 consensus 寻求</strong>—— 决策瘫痪<br>③ <strong>忽略真 disagree</strong>—— 错过真 risk<br>④ <strong>不区分 fear / disagree / confusion</strong>—— 治标不治本<br>⑤ <strong>不 document concerns</strong>—— 事后 retro 时大家都说"我早说过了"<br><br><strong>关键</strong>：① 1on1 优先于群体；② 识别 disagree 类型；③ 接受部分真 concern；④ Disagree and commit；⑤ Document for retro。`,
+      },
+      failure_modes: [
+        `Authority push → 短期服从长期反弹`,
+        `过度 consensus → 决策瘫痪`,
+        `忽略真 disagree → 错过 risk`,
+        `不区分 fear / disagree / confusion → 治标`,
+        `不 document → retro 时甩锅`,
+      ],
+      follow_ups: [
+        { q: `"Disagree and commit" 怎么实践？`, hint: `① 决策前充分讨论；② 决策后 explicit commit 不再 undermine；③ 仍 capture concern in ADR；④ 6 月 retro calibrate；⑤ Amazon Leadership Principle 之一` },
+        { q: `team 一致赞同你的方向怎么办？`, hint: `① 警惕 echo chamber—— 是不是 team 不敢反对；② 主动 invite devil's advocate；③ Pre-mortem 假设失败找 risk；④ Healthy team 应该 disagree 5-20% 时间` },
+        { q: `跟同 level peer disagree 怎么 resolve？`, hint: `① 1on1 私下 first；② 如果 deadlock, 找 common boss 仲裁；③ 不在 group meeting 当面 disagree（伤 face）；④ Disagree 但<strong>同 message</strong> 跟 team` },
+      ],
+    },
+
+    12: {
+      why_asked: `最大冲突题考<strong>真实经验 + 处理成熟度</strong>。能讲清"冲突 + 升级 + 最终解决方式"的人通常是 senior。`,
+      answers: {
+        mid: `<strong>STAR + 强调过程</strong>：① 冲突真实背景；② 我做了什么尝试（1on1 / data / 中立 facilitator）；③ 升级到 leadership；④ 最终如何 resolve；⑤ 学到什么。`,
+        senior: `<strong>结构 4 段</strong>:<br>1. <strong>S</strong>: 冲突 stakes（团队 / 项目 / 客户 / 钱）<br>2. <strong>T</strong>: 我的 stake 跟 conflicting party stake<br>3. <strong>A</strong>: ① 先 1on1 私下尝试；② 用 data 不用 emotion；③ 找 common ground；④ 必要时 escalate；⑤ 接受不是 zero-sum<br>4. <strong>R</strong>: 量化 outcome + 关系是否 maintain<br><br><strong>关键 signal</strong>: 选真 stakes 冲突（不是"我跟同事讨论字体"）+ 自己 own 部分错（不全 blame other）+ relationship preserved。`,
+        staff: `深一层：最大冲突题<strong>不是讲故事</strong>，是<strong>展示 emotional maturity</strong>。面试官 looking for：① 能 acknowledge own role；② 不 demonize other party；③ 关注 outcome 不 ego；④ Learning 反思真实。<br><br><strong>真实案例 talk track</strong>: "<strong>S</strong>: 我作为 NETCONF agent PM，跟 Engineering EM (X) 因为 v3 launch timeline 严重冲突。他想推 6 个月 ship 完整 v3，我跟 sales 承诺 4 个月 ship MVP 给 strategic customer Y。\n\n<strong>T</strong>: 表面是 timeline，深层是<strong>我跟 X 对 product 优先级看法不同</strong>。X 认为 quality first，我认为 customer commitment first。\n\n<strong>A</strong>: 早期我 emotional——跟 X argue in group meeting，引起团队 awkwardness。意识到错后我 step back:<br>① 私下跟 X 1on1 4 hours：先听他 concern (quality / team burnout)，然后 share 我 concern (customer churn risk)<br>② 我 own 部分 mistake：我之前 promise sales 没跟 engineering pre-align，是 unilateral commitment<br>③ 一起设计 compromise: 4 月 ship Y customer-specific MVP（功能子集），6 月 ship 完整 v3<br>④ Reset sales expectation 给 customer Y<br>⑤ Joint 2-week retrospective 看 process improvement<br><br><strong>R</strong>: 4 月 ship MVP 满足 Y，customer 满意；6 月 ship 完整 v3。我跟 X 的合作关系 long-term 变好（因为 conflict 后建立的 trust）。<strong>我学到</strong>：① Cross-functional commitment 必须 align 后再 promise；② Conflict in group meeting 严重伤 team morale；③ Own own mistake first 让对方更 open。"<br><br><strong>陷阱</strong>:<br>① 选 trivial conflict（"我跟同事讨论 stand-up 时间"）—— 不严肃<br>② 全 blame 对方—— 缺 maturity<br>③ Outcome 是<strong>"我赢了"</strong>—— ego 太重<br>④ Learning vague—— "我学到 communication 重要"（vacuous）<br>⑤ Relationship 没 preserved—— 显示长期 EQ 不够<br>⑥ 没 own own role—— 不诚实<br><br><strong>关键</strong>: 真 stakes + own own role + outcome focused + maturity + relationship preserved。`,
+      },
+      failure_modes: [
+        `选 trivial conflict → 不严肃`,
+        `全 blame 对方 → 缺 maturity`,
+        `Outcome "我赢了" → ego 太重`,
+        `Learning vague → vacuous`,
+        `Relationship 崩 → 长期 EQ 不够`,
+      ],
+      follow_ups: [
+        { q: `如果对方仍 unreasonable 怎么办？`, hint: `① 尝试 multiple channel（1on1 / written / 3rd party）；② Escalate 当 last resort；③ Document for self-protection；④ 接受 walk away（少数情况，但 OK）；⑤ Long-term: assess if work environment sustainable` },
+        { q: `Conflict 跟自己 boss 怎么处理？`, hint: `① 1on1 私下 first，不 group challenge；② Use data not emotion；③ Disagree and commit；④ Worst case: skip-level 谈但 high risk；⑤ 如果系统性冲突 → consider transfer / leave` },
+        { q: `面试官追问 "如果再来一次你会怎么做"？`, hint: `① Specific change（不 vague）；② 早期 1on1 不 group challenge；③ Pre-align before commitment；④ 主动 own mistake earlier；⑤ Show calibration` },
+      ],
+    },
+
+    16: {
+      why_asked: `延期向 VP 汇报是 PM/EM 高频痛点。能讲"BLUF + Root cause + Options + Recommendation + Ask"5 段的人能通过 senior 面试。`,
+      answers: {
+        mid: `用 <strong>BLUF + 5 段</strong> 跟 #33 EVM 答法一样：① <strong>BLUF</strong>（项目延期 2 月）；② <strong>data</strong>（SPI/CPI/cause）；③ <strong>3 options</strong>（加资源 / 减 scope / 延期）；④ <strong>recommendation</strong>；⑤ <strong>ask</strong>（决策 + by when）。`,
+        senior: `<strong>详细 talk track</strong>:<br>1. "<strong>BLUF: NETCONF v3 项目延期 2 月，从 Oct → Dec，需要你决策 by EOW</strong>"<br>2. "<strong>Data</strong>: SPI 0.72 / CPI 0.85，4 周持续 trend 下滑"<br>3. "<strong>Root cause</strong>:<br>· Senior eng X 离职（影响 4 周）<br>· Vendor SDK 兼容性比预期复杂（2 周）<br>· Spec 中途加 customer Z 定制需求（1 周 scope creep）"<br>4. "<strong>3 options</strong>:<br>· A: 加 contractor +$60k → ship on time<br>· B: cut customer Z scope → ship on time<br>· C: 接受延期 2 月 + customer expectation reset"<br>5. "<strong>Recommend A</strong>: customer Z 是 strategic，cut 风险大；contractor ROI 8x"<br>6. "<strong>Ask</strong>: budget approval +$60k by EOW；sales align customer expectation if not approve"`,
+        staff: `深一层：跟<strong>#33 EVM 汇报</strong>本质同—— 都考 BLUF + options + ask。区别在<strong>面试场景</strong> vs 实际汇报：<br>· <strong>实际汇报</strong>: 你已知道 root cause + 准备好 data<br>· <strong>面试题</strong>: 面试官想看你的<strong>结构化思考过程</strong>—— 没真实背景时仍能 frame 出 BLUF 结构<br><br><strong>面试场景准备</strong>:<br>① 选一个 you've actually done 的延期项目<br>② STAR talk through<br>③ 量化 dollar / week / team / customer impact<br>④ Show learning + future prevention<br><br><strong>常见 anti-pattern</strong>:<br>① "<strong>项目可能要晚一点</strong>"—— vague，VP 无法决策<br>② 长篇 implementation detail—— VP zoned out<br>③ 没 option 直接 "<strong>怎么办</strong>"—— 甩问题<br>④ Hide and hope 不 surface—— ship 前一周 surprise<br>⑤ Late surface 限制 option 空间<br><br><strong>真实经验</strong>: 我作为 PM 第一次给 VP 汇报延期，准备了 20 min PPT + 5 个 options。VP 5 分钟后 "<strong>What do you recommend?</strong>" → 我没准备 → fumbled。教训：① 准备 90 秒 BLUF；② 1-2 recommendation max；③ Anticipate VP question；④ Written follow-up email。<br><br>第二次延期汇报：90 秒 BLUF 完成 + VP approve recommendation in 5 minutes。<br><br><strong>跟 #33 SPI/CPI 题 cross-link</strong>: 完全一样的框架，区别仅在<strong>侧重点</strong>：#33 偏量化 metric，#16 偏 communication tactics。`,
+      },
+      failure_modes: [
+        `"项目可能要晚一点" vague`,
+        `20 min PPT VP 没耐心`,
+        `没 recommendation 甩问题`,
+        `Hide and hope late surface`,
+        `没 written follow-up VP 忘事`,
+      ],
+      follow_ups: [
+        { q: `VP angry 怎么办？`, hint: `① Acknowledge frustration "I understand"；② Don't defensive；③ Reiterate commitment；④ Ask "what additional info do you need"；⑤ Written 24h follow-up；⑥ Don't avoid future face` },
+        { q: `如果 VP 不同意 recommendation？`, hint: `① 不 defend，听完 reasoning；② Ask clarifying questions；③ 24h 内重新 evaluate + revised proposal；④ Walk away ready 如果 fundamental disagreement；⑤ Document for transparency` },
+        { q: `第 2 / 3 次延期同一项目怎么 communicate？`, hint: `① 严肃 retrospective—— 估算 vs execution；② 跟 leadership reset—— "可能项目 fundamentally underscoped"；③ Consider escalating—— 是否要 kill / re-charter；④ Self-reflect as PM` },
+      ],
+    },
+
+    17: {
+      why_asked: `客户加范围是 PM 经典 scope creep 场景。能讲"CR process + impact analysis + 3 options"的人是真做过 client management。`,
+      answers: {
+        mid: `<strong>3 步</strong>: ① <strong>立即 acknowledge</strong>（不立 commit）；② <strong>impact analysis</strong>（time / cost / risk to existing scope）；③ 走 <strong>CR (Change Request) process</strong> + 给客户 3 options（加 budget / extend timeline / swap scope）。`,
+        senior: `<strong>详细 process</strong>:<br>1. <strong>不当场 say yes</strong> "Let me understand the request, I'll get back to you in 48h"<br>2. <strong>Internal impact analysis</strong>:<br>· Effort estimate（人月 + duration）<br>· Risk to existing commitments<br>· Dependency / sequencing<br>3. <strong>3 options 给 customer</strong>:<br>· A: <strong>Accept with budget +X / timeline +Y</strong>（标准 CR）<br>· B: <strong>Swap</strong>（cut feature Z 换新 feature W）<br>· C: <strong>Defer</strong>（next release / Q+1）<br>4. <strong>Formal CR document</strong>：双方签字<br>5. <strong>Comm to team</strong>: 不是 EM 默默吞下，team 知道 scope 变更`,
+        staff: `深一层：Scope creep 是 PM 长期最大 risk。客户的"<strong>just one more thing</strong>" 单看小，累积起来 sink 项目。<strong>3 个心态</strong>:<br>1. <strong>Saying no is OK</strong>—— 客户可能不爽但 long-term respect you 的 discipline<br>2. <strong>Free 是最贵的</strong>—— 接受 free scope creep 教坏客户期待<br>3. <strong>Document everything</strong>—— "我们以为他/她说 X" 无证据 = lose<br><br><strong>真实案例</strong>: NETCONF agent customer X 在 month 3 ask "再加 SDN integration"，"<strong>不会很多工作吧</strong>"。<br><br>我的 response process:<br>1. "<strong>Let me get back to you in 48h with impact analysis</strong>" (不当场 commit)<br>2. <strong>Internal eng team estimate</strong>: 6 weeks + 2 engineers full time（不小）<br>3. <strong>3 options 给 customer</strong>:<br>· A: <strong>Accept</strong>: Add 6 weeks to timeline + $40k cost (signed CR)<br>· B: <strong>Swap</strong>: defer original feature Y (less critical) → ship on time<br>· C: <strong>Phased</strong>: ship original scope on time, SDN integration as Phase 2 in Q+1<br>4. <strong>Recommendation</strong>: C（不影响 timeline + customer 仍 get value within 6 month）<br><br>Customer 反应: 当场 not happy 因为他想 "<strong>free</strong>"，但 1 周后 sales mgr 说 customer fine with C 因为 ROI 计算后 budget 真的不够 +$40k。<br><br><strong>结果</strong>: ① 不延期；② customer get full scope eventually；③ Team morale 不受 sudden push 影响；④ Sales 也学到 future commitment 跟 PM align。<br><br><strong>常见 anti-pattern</strong>:<br>① <strong>当场 say yes</strong>—— Team 后续填坑 + 没有 documented commitment<br>② <strong>Pure no</strong>—— customer 失望 + sales 反弹<br>③ <strong>没 CR formal process</strong>—— 后期 dispute 时无依据<br>④ <strong>Pad estimate</strong>（"6 weeks 实际 4 weeks 我加 buffer"）—— customer 知道后 trust 崩<br>⑤ <strong>不 escalate sales 那边</strong>—— sales 还在 promise customer<br><br><strong>关键</strong>: ① 48h cool-down；② impact analysis；③ 3 options；④ Formal CR；⑤ Comm everywhere（team + sales + customer）。`,
+      },
+      failure_modes: [
+        `当场 say yes → team 填坑`,
+        `Pure no → customer / sales 反弹`,
+        `没 CR formal process → 后期 dispute 无依据`,
+        `Pad estimate → trust 崩`,
+        `不跟 sales align → 仍 promise free`,
+      ],
+      follow_ups: [
+        { q: `Customer 当场 push back "but this is small"？`, hint: `① "Help me understand the underlying need"—— 可能其实 alternative；② "If small, I'll get exact estimate in 48h"；③ Don't accept "small" labeling without analysis；④ Show CR is process not bureaucracy` },
+        { q: `Sales 已经 promise customer free 怎么办？`, hint: `① 不在 customer 面前 contradict sales (face issue)；② 私下跟 sales align "this is unsustainable"；③ Sales mgr / VP 升级；④ Long-term: sales engagement process 加 PM review` },
+        { q: `Customer 是 strategic 不能 say no？`, hint: `① 还可以 negotiate timeline / phased；② Accept 时 explicit ROI calculation 给 own VP（"这个 $40k cost 换 $X ARR"）；③ Document strategic exception；④ 用 momentum push internal eng support` },
+      ],
+    },
+
+    19: {
+      why_asked: `复盘是 senior PM/EM 必备技能。能讲"blameless + 5 whys + action items + 跟进"的人是真做过 postmortem。`,
+      answers: {
+        mid: `<strong>4 个原则</strong>: ① <strong>Blameless</strong>（不针对 individual）；② <strong>Timeline first</strong>（事实 before judgement）；③ <strong>5 whys 找 root cause</strong>（不止 stop at first answer）；④ <strong>Action items + owner + deadline</strong>（不只学习）。`,
+        senior: `<strong>典型 postmortem 结构</strong>:<br>1. <strong>Summary</strong>: 1 段话讲事故 / 失败的本质<br>2. <strong>Impact</strong>: customer / revenue / 团队 morale 量化<br>3. <strong>Timeline</strong>: 客观时间线 (T0 / T+5m / T+30m / 解决)<br>4. <strong>Root cause analysis (5 whys)</strong>:<br>· Why 1: 直接 trigger<br>· Why 2: 为啥 trigger 没被 prevent<br>· Why 3: 为啥 monitor 没 catch<br>· Why 4: 为啥 process 没 防止<br>· Why 5: System / culture 层<br>5. <strong>What went well</strong>（不只 negative）<br>6. <strong>Action items</strong>: <strong>SMART</strong> (具体 / 可测 / Owner / Deadline)<br>7. <strong>Lessons</strong>: 团队 / 组织层面 learnings<br><br><strong>关键</strong>: ① 不 blame；② 不 stop at surface；③ Action items track 到底。`,
+        staff: `深一层：复盘的<strong>真实价值</strong>是<strong>"防止类似问题再发生"</strong>，不是"找 blame"。Google SRE 强调 <strong>Blameless Postmortem</strong> 文化—— 不仅<strong>不 blame</strong>，是<strong>主动 reframe</strong> "如果 X 是问题，那为啥我们的 system / process 允许 X 发生？"<br><br><strong>真实案例</strong>: NETCONF agent 一个项目失败（6 个月 ship 不出来），复盘 process:<br><br>1. <strong>Scheduled 2 hour blameless meeting</strong>，邀请 entire team + key stakeholders<br>2. <strong>预先 1on1 collection</strong> (1 周): 每个 team member 私下 share 他们的 perspective—— anonymized 入 doc<br>3. <strong>Meeting 4 sections</strong>:<br>· Section 1 (30 min): Timeline 重建 (objective facts only)<br>· Section 2 (45 min): 5 whys + system analysis<br>· Section 3 (30 min): What went well<br>· Section 4 (15 min): Action items + owner<br><br>4. <strong>5 whys 实际找到的</strong>:<br>· Why 1: feature complexity 比预期高 → 直接因素<br>· Why 2: 为啥估算错？→ 没 reference class 数据<br>· Why 3: 为啥没 reference class？→ 团队没 estimation process<br>· Why 4: 为啥没 process？→ 新 EM 没 prioritize estimation discipline<br>· Why 5: 为啥 EM 不知道？→ Onboard EM training 缺这一块<br><br>5. <strong>Action items</strong>:<br>· [Owner: PM] 引入 reference class forecasting + planning poker (Q+1 sprint 1)<br>· [Owner: VP] EM onboarding 加 estimation training (next hire)<br>· [Owner: tech lead] 历史项目 retrospective 数据库 (90 天内)<br>· [Owner: PM] Quarterly estimation calibration retrospective (ongoing)<br><br>6. <strong>3 months later check-in</strong>: 4/4 action items completed → 下个项目 estimation ratio 1.5× → 1.2×<br><br><strong>陷阱</strong>:<br>① <strong>Blame individual</strong>—— "X 做错了"—— individual 离职后问题 persist<br>② <strong>Stop at why 1-2</strong>—— surface symptom 不到 system / culture<br>③ <strong>Action items vague</strong>—— "improve communication"—— 不 actionable<br>④ <strong>No owner / deadline</strong>—— 6 个月后没人执行<br>⑤ <strong>不 follow-up 3 月后</strong>—— 复盘文档归档无 impact<br>⑥ <strong>只 do for big failure</strong>—— 应该 routine retro 每 sprint + 大复盘每事故<br><br><strong>关键</strong>: ① Blameless culture；② 5+ whys 到 system；③ SMART action items；④ Track follow-up；⑤ Make routine。`,
+      },
+      failure_modes: [
+        `Blame individual → 离职后问题 persist`,
+        `Stop at why 1-2 → surface symptom`,
+        `Action items vague`,
+        `No owner / deadline → 6 月后无执行`,
+        `不 follow-up 3 月后 → 复盘归档无 impact`,
+      ],
+      follow_ups: [
+        { q: `怎么 facilitate blameless atmosphere？`, hint: `① EM open with own mistake first；② 严禁"why didn't X do Y" 改成 "what made it easy to miss Y"；③ 邀请 leadership 出席体现 priority；④ 不 publicize individual blame；⑤ Reward "找 root cause" 不"惩罚 owner"` },
+        { q: `Postmortem doc 怎么写？`, hint: `① Template 标准化（Google SRE Book Chapter 15 template）；② Public visible 给整 team；③ Concise (5-10 pages max)；④ Searchable archive；⑤ Quarterly aggregate retro 看 trends` },
+        { q: `如果 root cause 是某个 individual 真做错？`, hint: `① 仍 framing 为 "system 允许 individual error"——typo / missed step / vague spec；② Action items focus on system fix (review / automation / training)；③ 私下跟 individual coach（separate from blameless postmortem）；④ Never public blame` },
+      ],
+    },
+
+    21: {
+      why_asked: `优先级冲突跟 #54 EM 题相通。能讲"force ranking + cost of delay + escalate"的人是真做过 PM 工作。`,
+      answers: {
+        mid: `<strong>3 招</strong>: ① <strong>Force ranking</strong>—— 不允许 "all P0"；② <strong>Cost of Delay</strong>—— 量化每个 delay 1 月损失；③ <strong>Escalate to leadership</strong>—— 多 P0 是 leadership alignment failure。`,
+        senior: `跟 EM #54 题相通。PM 版本侧重<strong>跨多 stakeholder</strong>（sales / customer success / engineering / leadership 各自有"P0"），EM 版本侧重<strong>跨多团队</strong>。<br><br><strong>PM 特有 challenge</strong>: <br>· 没 direct authority over engineering team<br>· 必须 negotiate scope with sales / customer<br>· 跟 PM peers 之间也有 priority 冲突<br><br><strong>方法</strong>:<br>1. <strong>列出 stakeholders 的 "P0"</strong>: sales 的 customer commitment / customer 的 feature request / engineering 的 tech debt / leadership 的 strategic initiative<br>2. <strong>Cost of Delay 量化</strong>: ARR / 风险 / strategic value<br>3. <strong>跟 leadership pre-align 优先级框架</strong>（不在每个具体决策时 escalate）<br>4. <strong>Document + communicate</strong> 决策 + rationale + alternative timeline`,
+        staff: `深一层：PM 优先级管理跟 EM 区别——PM 不只是 "<strong>scope 内排序</strong>"，是 "<strong>跟所有 stakeholder 教育 priority framework</strong>"。<br><br><strong>真实案例</strong>: 作为 NETCONF agent PM，Q4 收到:<br>1. <strong>Sales</strong>: customer X 要 SDN integration (deal $500k/yr)<br>2. <strong>Customer Success</strong>: existing customer Y 报 P0 bug<br>3. <strong>Engineering</strong>: tech debt 重构（影响 future velocity）<br>4. <strong>Leadership</strong>: AI feature 要 ship for marketing<br>5. <strong>另一 PM</strong>: 共享 infra 也要他们的 feature<br><br><strong>我的 process</strong>:<br>1. <strong>1on1 each stakeholder</strong>: 量化他们的 P0 cost of delay<br>· Sales: ARR $500k/yr + customer X strategic / 长期客户<br>· CS: P0 bug → customer Y churn risk $200k/yr<br>· Eng: tech debt → future velocity -30%, but fuzzy<br>· Leadership: AI feature marketing - $50k visibility 但 nice-to-have<br>· Peer PM: 共享 infra 可以等 1-2 sprint<br><br>2. <strong>Force ranking</strong>:<br>· P0 真: CS bug + Sales SDN<br>· P1: Engineering tech debt（partial 在 P0 + 当 capacity 允许）<br>· P2: AI feature / peer PM<br><br>3. <strong>跟 VP align</strong>（不是问每个具体，是 align framework）: "<strong>我们用 ARR-at-risk + strategic value 排序，这个 quarter focus customer retention + strategic deal。其他推 Q1</strong>"<br><br>4. <strong>Communicate to each stakeholder</strong>:<br>· Sales: confirmed SDN priority + 时间表<br>· CS: P0 bug priority<br>· Eng: tech debt 占 capacity 的 20%（routine）<br>· Leadership: AI feature Q1 ship + Q4 communicate context<br>· Peer PM: Q1 align timeline<br><br>5. <strong>Document</strong>: 季度 priority memo 给所有 stakeholders<br><br>结果: 所有 P0 都 hit，P1 部分 ship，P2 Q1 reset。各 stakeholder 短期失望但理解 framework + 长期 trust PM。<br><br><strong>陷阱</strong>:<br>① <strong>Loudest wins</strong>—— sales 通常 loudest，导致 quiet stakeholder (eng) 永远 deprioritize<br>② <strong>"All P0" → all suffer</strong>—— PM 必须 force ranking<br>③ <strong>不跟 leadership align framework</strong>—— 每个具体决策都 escalate, leadership 累<br>④ <strong>不 document</strong>—— retro 时甩锅<br>⑤ <strong>不 communicate "no"</strong>—— stakeholder 一直 expect<br><br><strong>关键</strong>: ① Quantify CoD；② Force ranking；③ Leadership align framework；④ Communicate explicitly；⑤ Document。`,
+      },
+      failure_modes: [
+        `Loudest wins → quiet stakeholder 永远 deprioritize`,
+        `All P0 → all suffer`,
+        `不跟 leadership align framework → 每决策都 escalate`,
+        `不 document → retro 甩锅`,
+        `不 communicate "no" → stakeholder 一直 expect`,
+      ],
+      follow_ups: [
+        { q: `Stakeholder 抱怨自己项目被 deprioritize？`, hint: `① 1on1 解释 rationale + data；② 给 alternative timeline；③ 邀请他们 challenge ranking (data-based)；④ 不 unilaterally change；⑤ Escalate if unhappy 但 own decision` },
+        { q: `Leadership 也说 "all 5 are P0"？`, hint: `① Skip-level；② Show capacity math (5 P0 = 3x capacity)；③ 给 hire / contractor option；④ If unmovable, document risk acknowledgement` },
+        { q: `Cost of Delay 怎么量化？`, hint: `① Revenue impact / 月；② Risk × probability；③ Strategic value (market window / competitive)；④ 越量化越易 leadership 决策` },
+      ],
+    },
+
+    30: {
+      why_asked: `反向问题是面试结尾<strong>必问</strong>。能讲"问出 senior signal + 体现 fit + 风险信号"的人通过；不问问题等于 0 interest red flag。`,
+      answers: {
+        mid: `<strong>必须问 3-5 个</strong>。问 senior 级问题（不是 "<strong>公司福利怎么样</strong>"）。Categories: ① <strong>角色 / team</strong>；② <strong>挑战 / opportunity</strong>；③ <strong>面试官 own experience</strong>；④ <strong>Calibration 我能不能 fit</strong>。`,
+        senior: `<strong>高质量问题示例</strong>:<br>1. <strong>角色挑战</strong>: "这个 role 90 天 / 6 月 / 1 年的 success 长什么样？"<br>2. <strong>Team 文化</strong>: "Team 最近一次 conflict 是关于啥？怎么 resolve 的？"<br>3. <strong>面试官 own perspective</strong>: "你在这工作 X 年了，最 surprise 你的是啥？"<br>4. <strong>挑战</strong>: "如果我 join，前 3 月最大 risk 是啥？"<br>5. <strong>Calibration</strong>: "Based on 这场 interview，你对我有啥 concern 我可以 address？"<br><br><strong>避免</strong>:<br>· Benefits / vacation / WFH（HR 问，不是面试官问）<br>· "Tell me about company"（Google 一下）<br>· "How long until promotion?" (显得 transactional)<br>· "Anything I should know"（vague）`,
+        staff: `深一层：反向问题<strong>不只是 ritual</strong>，是<strong>双向 evaluation 工具</strong>。Senior PM/EM 通过 question quality 体现：① 真有 think about role；② Critical thinking；③ Maturity；④ Calibration ability。<br><br>同时<strong>你也在面试公司</strong>—— 答案能 reveal：① Team health；② Leadership quality；③ Real challenges。<br><br><strong>真实经验</strong>: 我面过 4 个公司 PM role，反向问题影响选择:<br><br>· <strong>Company A</strong>: 我问 "team 最近 conflict？" → 面试官答 "我们 team 不太有 conflict"—— red flag (要么不真实要么 echo chamber)<br>· <strong>Company B</strong>: 同问题 → 面试官详细讲 1 个 recent disagreement + 怎么 resolve—— green flag, team 心理安全<br>· <strong>Company C</strong>: 我问 "我前 3 月最大 risk?" → 答 "no risk, you'll do great"—— red flag (lie or naive)<br>· <strong>Company D</strong>: 同问 → "X stakeholder 难合作，Y system 是 legacy 你要 navigate"—— green flag, honest<br><br>最终接 B 跟 D 之一（D），过去 2 年很满意。<br><br><strong>5 个 senior-tier 问题模板</strong>:<br>1. "<strong>Team disagree most recent?</strong>"—— 看 conflict handling<br>2. "<strong>What surprised you?</strong>"—— 面试官真实 perspective<br>3. "<strong>3-month risk?</strong>"—— honest assessment<br>4. "<strong>Concerns about me?</strong>"—— calibration + close gap<br>5. "<strong>How do you measure success of this role?</strong>"—— alignment<br><br><strong>陷阱</strong>:<br>① <strong>"No questions"</strong>—— 极 red flag (no interest)<br>② <strong>Google-able 问题</strong>（公司规模 / 上市状态）—— didn't prep<br>③ <strong>Transactional</strong>（promotion / comp）—— 给 HR，不是面试官<br>④ <strong>Yes/No 问题</strong>—— close-ended，no insight<br>⑤ <strong>多次 round 都同问题</strong>—— 显示 lazy<br><br><strong>关键</strong>: ① 准备 5-7 个高 quality 问题；② 每 round 不同；③ 听答案的 quality 评估公司；④ Reveal critical thinking + calibration。`,
+      },
+      failure_modes: [
+        `"No questions" → red flag no interest`,
+        `Google-able 问题 → didn't prep`,
+        `Transactional (promotion/comp)`,
+        `Yes/No 问题 close-ended`,
+        `多 round 同问题 lazy`,
+      ],
+      follow_ups: [
+        { q: `面试官答得 vague 怎么办？`, hint: `① Follow up specific example；② "Can you give me a specific story of...?"；③ 同问题问下个面试官 cross-validate；④ Vague answer 本身是 signal` },
+        { q: `什么样的答案是 red flag？`, hint: `① "我们没有 conflict" / "no risk" → 不诚实 / naive；② Generic answer (HR-like)；③ 跟其他 round 答案矛盾；④ 不能讲具体 example；⑤ Defensive 回应你的 question` },
+        { q: `怎么问 about salary / promotion 不显 transactional？`, hint: `① 留给 HR / recruiter 阶段；② Final round 偶尔可以 high-level 问 "career path of this role"；③ 不在 hiring manager / peer round 问；④ Focus content over comp` },
+      ],
+    },
+
+    // ============== PgM ==============
+    34: {
+      why_asked: `CPM 是 PgM 基础。能讲"关键路径 + float + crashing"的人是真做过 schedule management。`,
+      answers: {
+        mid: `<strong>关键路径 (Critical Path)</strong>: 项目中<strong>最长的 task chain</strong>—— 决定项目最早完成时间。<strong>float / slack = 0</strong> 的 tasks。Delay 任何 critical path task → 整项目延期。`,
+        senior: `<strong>CPM (Critical Path Method) 完整概念</strong>:<br>· <strong>Task / Activity</strong>: 工作单元 + duration<br>· <strong>Dependency</strong>: A must finish before B (FS / SS / FF / SF 4 种)<br>· <strong>ES / EF</strong>: Earliest Start / Finish<br>· <strong>LS / LF</strong>: Latest Start / Finish<br>· <strong>Float / Slack</strong>: LS - ES = LF - EF<br>· <strong>Critical Path</strong>: float = 0 的 path（最长）<br><br><strong>实战 use</strong>:<br>1. 识别 critical path → prioritize resource<br>2. <strong>Crashing</strong>: 加资源缩短 critical task（cost extra $$）<br>3. <strong>Fast tracking</strong>: 并行原本 sequential task（add risk）<br>4. <strong>Buffer management</strong> (Critical Chain): 加 project buffer 防 statistical variation`,
+        staff: `深一层：CPM 是 1950s 化工 / 国防项目发明的，今天<strong>仍是大型项目核心</strong>。但<strong>软件项目少用纯 CPM</strong>—— 软件 task dependency 弱 + estimation 不准 + scope 经常变。<strong>替代</strong>: agile burn-down + critical-path-lite。<br><br><strong>实战场景</strong>: 适合用 CPM 的:<br>· 客户 deployment / migration（task fixed + dependency 明确）<br>· 硬件 / 物理 setup<br>· Compliance audit (regulatory deadline)<br>· Conference / product launch（fixed end date）<br><br>不适合用纯 CPM 的:<br>· Discovery / R&D 阶段（task uncertain）<br>· Agile feature development<br>· 长期演进项目（&gt; 1 年）<br><br><strong>真实案例</strong>: NETCONF agent 客户 migration 项目，CPM 关键路径:<br>· Day 1-3: customer env survey<br>· Day 4-7: agent install + config (critical, 必 follow survey)<br>· Day 8-10: integration test (critical)<br>· Day 11-14: cutover + monitor (critical)<br>· Parallel: Day 1-5 documentation (float = 5 day, 非 critical)<br><br>客户 push timeline 5 day（Day 7-10 holiday）→ 我 evaluate:<br>· Crash install (加 2 个 contractor，cost $30k) → save 2 day<br>· Fast track install + test 并行 → save 1 day 但 add risk<br>· 不 work on document parallel → not on critical path, irrelevant<br><br>选 crashing → 5 day → 7 day, customer happy。<br><br><strong>常见 mistake</strong>:<br>① <strong>不 identify critical path</strong>—— 把资源平均铺到所有 task<br>② <strong>不更新 critical path</strong>—— 项目中期 dependency 变了，critical path 也变<br>③ <strong>软件项目硬套 CPM</strong>—— task uncertain 时 CPM 不准<br>④ <strong>Crashing 不算 cost</strong>—— 加资源不是 free，且 Brooks' Law 限制<br>⑤ <strong>Fast tracking 不算 risk</strong>—— 并行的 risk 后期暴露<br><br><strong>跟 Critical Chain 区别</strong>: Goldratt 1997 提出，<strong>不止找 longest path，还考虑 resource constraint</strong>（同一 resource 不能同时做两个 task）。更现实但更复杂。`,
+      },
+      failure_modes: [
+        `不 identify critical path → 资源平均铺`,
+        `不更新 critical path → dependency 变后失效`,
+        `软件项目硬套 CPM`,
+        `Crashing 不算 cost / Brooks' Law`,
+        `Fast tracking 不算 risk`,
+      ],
+      follow_ups: [
+        { q: `Crashing vs Fast tracking 选哪个？`, hint: `① Crashing: 加 cost 不加 risk（加资源 / 加班）；② Fast tracking: 加 risk 不加 cost（并行 sequential task）；③ 通常先 fast tracking（cheap），不够再 crashing` },
+        { q: `Critical Chain 跟 CPM 区别？`, hint: `① CPM 只看 task dependency；② CC 加 resource constraint（同 resource 不并行）；③ CC 加 buffer 防 variation；④ 现代项目 CC 更现实但复杂` },
+        { q: `Agile 项目怎么用 critical path 思维？`, hint: `① Backlog 排序 + dependency 标记；② 每 sprint identify "must complete this sprint" 任务；③ Burn-down + cumulative flow diagram；④ 灵活 over 严格 critical path` },
+      ],
+    },
+
+    37: {
+      why_asked: `风险评分 P×I 是 PMBOK 标准。能讲"P×I 矩阵 + 16 = high + response strategy"的人是真做过风险登记。`,
+      answers: {
+        mid: `<strong>P × I 矩阵</strong>: Probability × Impact 各 1-5 → 1-25 score。<strong>16+ = High</strong>—— 必须有 mitigation plan + owner + review cadence。`,
+        senior: `<strong>响应策略 4 类</strong>:<br>1. <strong>Avoid (避免)</strong>: 重新设计避免风险（最贵但最 effective）<br>2. <strong>Transfer (转移)</strong>: 给 vendor / insurance / contractor（成本 transfer）<br>3. <strong>Mitigate (缓解)</strong>: 降低 P 或 I (主流，~70% case)<br>4. <strong>Accept (接受)</strong>: 监控 + contingency reserve<br><br><strong>P × I = 16 specific 处理</strong>:<br>① 立 mitigation plan + owner + 周 review<br>② 5%-10% contingency budget reserve<br>③ Escalate 到 steering committee monthly<br>④ Trigger event define + auto-escalate threshold<br>⑤ Pre-mortem (假设 risk happens, what's our response)`,
+        staff: `深一层：P × I 矩阵的<strong>本质问题</strong>是<strong>P 跟 I 都难量化</strong>。"<strong>50% 概率影响 customer X 100k</strong>" 在新 PM 嘴里完全 made up。但<strong>结构化讨论本身有 value</strong>——团队 alignment + surface unknown unknowns。<br><br><strong>4 类响应实战</strong>:<br><br><strong>Avoid 示例</strong>: NETCONF agent 早期考虑用 vendor X SDK，P×I=20（vendor 不稳定 + 影响 critical path）。Avoid: 自研 minimal SDK 替代 vendor。Cost: +2 月 dev time，<strong>但</strong>砍掉 P×I=20 风险。<br><br><strong>Transfer 示例</strong>: 数据中心物理 setup P×I=15。Transfer: 用 AWS / Azure（hosting cost 但 risk 转给 cloud vendor）。<br><br><strong>Mitigate 示例</strong>: senior eng X 可能离职 P=0.4 I=4 → 8。Mitigate: cross-training (减 I to 2) + retention bonus (减 P to 0.2) → P×I 8 → 0.4。<br><br><strong>Accept 示例</strong>: 客户 country 政治 instability P=0.1 I=5 → 0.5。Accept + monitor。Contingency: backup customer pipeline。<br><br><strong>真实经验</strong>: NETCONF agent v3 project risk register top 5:<br>1. Senior eng X 离职 (P×I=12) → mitigate: cross-train + bonus<br>2. Vendor SDK 不兼容 (P×I=16) → mitigate: spike 验证 in 2 weeks<br>3. Customer Y migration 复杂 (P×I=15) → mitigate: 1 month early pilot<br>4. Compliance feature 需求变 (P×I=10) → accept + 跟 legal weekly<br>5. Team capacity 不足 (P×I=20) → avoid: scope cut OR transfer: contractor<br><br>Risk #5 escalate VP → approved contractor budget → P×I 降到 6。<br><br><strong>陷阱</strong>:<br>① <strong>P / I 随便填</strong>—— "I feel like 30%" → useless<br>② <strong>不 review 不更新</strong>—— P×I = 16 半年前现在还在 register 没人看<br>③ <strong>只 identify 不 action</strong>—— register 30 个 risk 没 mitigation owner<br>④ <strong>Top management 不参与 review</strong>—— senior risk 没 leadership visibility<br>⑤ <strong>不区分 P × I = 16 不同来源</strong>—— P=4 I=4 跟 P=8 I=2 处理不同<br><br><strong>关键</strong>: ① 量化基于 evidence（如类似过去项目）；② Weekly review high risk；③ Owner + deadline；④ Escalate top 3-5 to leadership monthly；⑤ Pre-mortem。`,
+      },
+      failure_modes: [
+        `P / I 随便填 (made up)`,
+        `不 review 不更新 → 过期 register`,
+        `只 identify 不 action`,
+        `不 escalate top risk 给 leadership`,
+        `不区分 P=4 I=4 vs P=8 I=2`,
+      ],
+      follow_ups: [
+        { q: `怎么 calibrate P 估算？`, hint: `① Reference Class（类似过去项目实际发生率）；② Expert panel (multi-perspective + 投票)；③ Pre-mortem (假设 happens, working backwards)；④ Update P 当新信息 come` },
+        { q: `Contingency Reserve 怎么定？`, hint: `① 项目 budget 5-15% 通常 reserve；② 基于 high risk 总 expected value (Σ P×I×cost)；③ Reserve PM 控制 not project budget；④ Use 时 document trigger event` },
+        { q: `Risk Register 怎么 manage scale？`, hint: `① Tier (high/med/low)；② High weekly review，med biweekly，low monthly；③ Tool: spreadsheet / Jira / Smartsheet；④ Quarterly aggregate retro 看 trend` },
+      ],
+    },
+
+    38: {
+      why_asked: `5 类风险应对是 PMBOK 标准。能列全 + 给场景的人 well-prepared。`,
+      answers: {
+        mid: `<strong>5 类（PMBOK 正负风险各分 4 + 接受）</strong>:<br><strong>负风险 (Threats)</strong>: ① <strong>Avoid</strong>（避免）；② <strong>Transfer</strong>（转移）；③ <strong>Mitigate</strong>（缓解）；④ <strong>Accept</strong>（接受）<br><strong>正风险 (Opportunities)</strong>: 对应 Exploit / Share / Enhance / Accept`,
+        senior: `<strong>详细 + 场景</strong>:<br><br><strong>Threats (4 + Accept)</strong>:<br>1. <strong>Avoid</strong>: 改设计完全避免（最 effective 最贵）。例: 不用 vendor X 自研<br>2. <strong>Transfer</strong>: 给第三方承担（insurance / contractor / cloud）。例: 物理 hosting 给 AWS<br>3. <strong>Mitigate</strong>: 降 P 或 I（主流，70% case）。例: cross-train + retention bonus<br>4. <strong>Accept (passive)</strong>: 监控 + 不主动 mitigate<br>5. <strong>Accept (active)</strong>: 接受 + contingency reserve（典型 5-15% budget）<br><br><strong>Opportunities (mirror)</strong>:<br>1. <strong>Exploit</strong>: 确保 opportunity 实现（如 hire 已知 senior eng）<br>2. <strong>Share</strong>: partner 一起追 opportunity（如 JV）<br>3. <strong>Enhance</strong>: 提高 P 或 I（如 invest marketing）<br>4. <strong>Accept</strong>: 不主动追，机会 come 也 OK`,
+        staff: `深一层：PMBOK 5 类应对在<strong>软件项目实战 80% 是 mitigate</strong>。Pure avoid 罕见（项目本身 by nature 有 risk），transfer 限于 outsource 场景，accept 是 default。<br><br><strong>选择决策框架</strong>:<br>1. <strong>Cost of avoidance vs Cost of impact</strong>:<br>· Avoidance &lt; expected impact (P × I × cost) → Avoid<br>· Avoidance &gt;&gt; impact → Mitigate / Accept<br>2. <strong>Reversibility</strong>:<br>· 不可逆 (regulatory fine / safety) → Avoid 优先<br>· 可逆 (perf miss / feature delay) → Mitigate or Accept<br>3. <strong>Probability</strong>:<br>· P 高 → Mitigate（降 P）<br>· P 低 → Accept + 监控<br>4. <strong>Impact concentration</strong>:<br>· Single point of failure → Transfer / Avoid<br>· Distributed → Mitigate<br><br><strong>真实案例</strong>: NETCONF agent v3 风险应对组合:<br>· Risk A: senior eng 离职 (P=0.4 I=4) → <strong>Mitigate</strong>（cross-train + retention）<br>· Risk B: vendor SDK 不兼容 (P=0.6 I=5) → <strong>Avoid</strong>（自研 minimal SDK）<br>· Risk C: 数据中心物理 setup (P=0.2 I=4) → <strong>Transfer</strong>（AWS hosting）<br>· Risk D: customer country political (P=0.1 I=5) → <strong>Accept (active)</strong>（backup customer pipeline）<br>· Risk E: 老 team member 上 promote (P=0.4 I=+3 positive) → <strong>Enhance</strong>（早期 visibility / mentorship）<br><br><strong>陷阱</strong>:<br>① <strong>所有 risk 都 mitigate</strong>—— 不够资源 + 浪费<br>② <strong>不 distinguish active / passive accept</strong>—— passive 没 contingency<br>③ <strong>Transfer 不算 cost</strong>—— insurance / cloud / contractor 仍要 budget<br>④ <strong>不识别 positive risk (opportunity)</strong>—— 错过<br>⑤ <strong>Accept 不 review</strong>—— P 变了仍当低 risk<br><br><strong>关键</strong>: ① 按 cost-benefit 选 response；② 区分 active / passive accept；③ Don't ignore opportunities；④ Quarterly re-assess。`,
+      },
+      failure_modes: [
+        `所有 risk 都 mitigate → 资源不够`,
+        `不区分 active / passive accept`,
+        `Transfer 不算 cost`,
+        `不识别 positive risk`,
+        `Accept 不 review → P 变后失效`,
+      ],
+      follow_ups: [
+        { q: `什么时候 Avoid 优先？`, hint: `① 不可逆 impact (regulatory / safety)；② Cost of avoidance &lt; expected impact；③ Single point of failure；④ Strategic priority` },
+        { q: `Transfer 真的转移了 risk 吗？`, hint: `① Cost yes (insurance 赔 / vendor 担责)；② Operational risk partial (vendor 跑路时你仍 affected)；③ Reputation risk 不能 transfer；④ Always read fine print` },
+        { q: `Positive risk (opportunity) 怎么 manage？`, hint: `① 同样 P × I scoring；② Exploit (确保 happen) / Enhance (提高 P/I) / Share (partner) / Accept；③ 多数项目 only track threats, but opportunity 同样重要` },
+      ],
+    },
+
+    // ============== PdM ==============
+    65: {
+      why_asked: `Kano 模型是 PdM 经典工具。能讲"5 类需求 + 时间 decay + 实战 use"的人是真用过。`,
+      answers: {
+        mid: `<strong>5 类需求</strong>:① <strong>Basic / Must-have</strong>（缺则崩，有也不喜）；② <strong>Performance / Linear</strong>（越好越喜）；③ <strong>Excitement / Delighter</strong>（意料外的惊喜）；④ <strong>Indifferent</strong>（没影响）；⑤ <strong>Reverse</strong>（有了反而不喜）。<br><strong>Time decay</strong>: Delighter 久了变 Performance 再变 Basic。`,
+        senior: `<strong>典型 use case</strong>:<br>1. <strong>Feature 优先级</strong>: Must-have 必做 + Performance 持续 invest + Delighter 选择性 invest<br>2. <strong>Survey 设计</strong>: Kano questionnaire (functional + dysfunctional question pair)<br>3. <strong>Competitive analysis</strong>: 竞品 Basic 都有 → 你必有；Delighter 是 differentiator<br><br><strong>典型 evolution</strong>:<br>· iPhone retina display (2010): Delighter → 2014 Performance → 2020 Basic<br>· 智能手机 camera: 2007 Performance → 2025 Basic（所有手机都好）<br><br><strong>关键 insight</strong>: Delighter 是<strong>差异化关键</strong>但 short-lived；Basic 必须不输竞品；Performance 持续 invest。`,
+        staff: `深一层：Kano 模型的<strong>真实价值</strong>是<strong>"教育 stakeholder 不要平等对待所有 feature"</strong>。<br><br>· Sales 通常 push <strong>customer-asked features</strong>—— 大多是 Performance (linear)<br>· Engineer push <strong>tech debt fixes</strong>—— 大多是 Basic (must-have, 但不 differentiator)<br>· PM 应该 push <strong>Delighter</strong>—— 客户没 ask 但 reveal 后 wow，长期 build moat<br><br><strong>真实案例</strong>: NETCONF agent v3 我作为 PM 用 Kano 分类:<br>· <strong>Basic</strong>: NETCONF 标准 protocol 支持 + customer's existing device firmware 兼容 + basic CLI<br>· <strong>Performance</strong>: P99 latency / 吞吐 / availability—— 越快越好<br>· <strong>Delighter</strong>:<br>· <strong>"Show me everything"</strong> diagnostic tool (一键 dump 整个 device state)—— 客户没要，但发现后 every demo 都"<strong>wow</strong>"<br>· <strong>Pre-flight check</strong>（操作前 dry run 预测影响）—— 防止 customer fat finger<br><br>Result: Basic + Performance 让我们 catch up vendor，<strong>Delighter 让我们 differentiator</strong> → 6 个月赢 3 个 enterprise deal "原本不打算切 vendor 的 customer 因为我们这两个 feature 切了"。<br><br><strong>Time decay 实战</strong>: 2024 一键 dump 是 Delighter，2026 已经 industry standard → 变 Performance。我们要继续找 next Delighter（如 AI-powered config recommendation）。<br><br><strong>陷阱</strong>:<br>① <strong>只 listen customer</strong>—— customer 不 ask Delighter（他们想不到）<br>② <strong>Equal invest 所有类型</strong>—— Basic 跟 Delighter 同等资源 = waste<br>③ <strong>不考虑 time decay</strong>—— 6 月前 Delighter 现在 baseline<br>④ <strong>Delighter 跟 unnecessary 混</strong>—— "engineer 觉得 cool" ≠ Delighter，必须 customer 真 wow<br>⑤ <strong>不 quantitative survey 验证</strong>—— pure intuition 易错<br><br><strong>验证方法</strong>: Kano survey (Noriaki Kano original):<br>· Q: "如果产品有 X 你感觉？" (functional)<br>· Q: "如果没 X 你感觉？" (dysfunctional)<br>· 答案矩阵 → 自动分类 Basic / Performance / Delighter / Indifferent / Reverse`,
+      },
+      failure_modes: [
+        `只 listen customer → 错过 Delighter`,
+        `Equal invest 所有类型`,
+        `不考虑 time decay`,
+        `Delighter 跟 engineer-cool 混`,
+        `不 quantitative survey 验证`,
+      ],
+      follow_ups: [
+        { q: `Kano survey 怎么 design？`, hint: `① Each feature 2 question (functional + dysfunctional)；② Likert scale (like / expect / neutral / dislike-tolerate / dislike)；③ 答案矩阵自动分类；④ Sample size 30-100 customer 足够` },
+        { q: `Reverse 需求是啥？`, hint: `① 有了反而 less satisfied (e.g., 太多 notification → 反感)；② 罕见但 critical 识别；③ 例: simplify UI 删功能可能让 power user 反感` },
+        { q: `怎么找 Delighter？`, hint: `① Observation (用户 workaround / pain points 但他们不 ask fix)；② Adjacent industry inspiration；③ Internal team's "wouldn't it be cool if"；④ Customer interview 问 "<strong>最 frustrating moment</strong>"反推` },
+      ],
+    },
+
+    68: {
+      why_asked: `留存曲线是 PdM 核心 metric。能讲"4 形状 + 含义 + action"的人是真做过 retention analysis。`,
+      answers: {
+        mid: `<strong>4 种形状</strong>:① <strong>Flat-bottom</strong>（健康）—— 长期稳定 retention；② <strong>Smile</strong>—— low after grace period 但能 win back；③ <strong>Hockey stick</strong>（极少）—— 持续增长；④ <strong>Cliff</strong>—— drop to 0，dead。`,
+        senior: `<strong>4 种形状详解 + 含义</strong>:<br><br>1. <strong>Flat-bottom (healthy)</strong>: D1 60% → D7 40% → D30 35% → D90 35% (stabilize)<br>· 含义: 找到 product-market fit，stable user base<br>· Action: Maintain + grow acquisition<br><br>2. <strong>Smile</strong>: D1 60% → D7 30% → D30 20% → D90 25% → D180 30% (回升)<br>· 含义: 部分 user 离开但 win-back works（如 re-engagement campaign）<br>· Action: Optimize re-engagement + identify why mid-period drop<br><br>3. <strong>Hockey stick</strong>: D1 40% → D7 30% → D30 25% → D90 35% → D180 50%<br>· 罕见 (typically B2B with growing power user usage)<br>· 含义: 用户越用越 hooked<br>· Action: Double down<br><br>4. <strong>Cliff</strong>: D1 50% → D7 20% → D30 5% → D90 1%<br>· 含义: 没 PMF / leaky bucket<br>· Action: 停 acquisition 先 fix retention (RARRA 逻辑)`,
+        staff: `深一层：留存曲线的<strong>真实信号</strong>不是绝对数字，是<strong>shape</strong>。Andrew Chen 写过 "<strong>The Only Metric That Matters is Retention</strong>"—— 因为 retention 反映<strong>real value delivery</strong>，而 acquisition 可以靠 marketing $$ 买。<br><br><strong>真实案例对比</strong>:<br><br><strong>Product A (Cliff)</strong>: D30 1% retention<br>· 100k MAU but 99% 1 月内流失<br>· 单看 MAU 数字 vanity；实际 leaky bucket<br>· 不 fix retention，acquisition $$ 等于扔火里<br><br><strong>Product B (Flat-bottom)</strong>: D30 35% stable<br>· 30k MAU but 35% 长期保留<br>· 实际 long-term active user base 大 (10500 stable vs 1000 in A)<br>· 即使 MAU 少 1/3，business value 大 10×<br><br><strong>Action 决策</strong>:<br>· Cliff (D30 &lt; 10%) → 停 acquisition + fix retention (PMF gap)<br>· Smile (mid-period drop + 回升) → optimize re-engagement (push / email)<br>· Flat-bottom (healthy) → 同时 grow acquisition + maintain retention<br>· Hockey stick → invest in power user features<br><br><strong>怎么诊断 Cliff?</strong> 拆 funnel:<br>1. D0-D1: activation (用户 first session 是否成功)<br>2. D1-D7: habit formation (用户 form usage habit)<br>3. D7-D30: long-term value (用户感知 product value)<br>4. D30+: power user transformation<br><br>每段 drop-off 不同 root cause + fix。<br><br><strong>真实经验</strong>: NETCONF agent customer churn 6 月发现 D30 customer NPS 30 (低)，churn 12%。诊断 cliff:<br>· D0-D1: deployment 复杂（30% fail first attempt）<br>· D1-D7: customer 找 admin 学习 cost 大<br>· D7-D30: 觉得 vendor 老 product "<strong>fine</strong>"<br><br>Action:<br>1. Onboarding wizard + customer success team → fix D0-D1 (deployment success 90%)<br>2. Better doc + video tutorial → fix D1-D7<br>3. Delighter feature ("show me everything")→ fix D7-D30 wow moment<br><br>6 month later: D30 churn 12% → 5% (industry baseline)。<br><br><strong>陷阱</strong>:<br>① <strong>看 MAU 不看 retention curve</strong>—— vanity<br>② <strong>不 cohort 分</strong>—— mix new + old cohort, signal 模糊<br>③ <strong>D30 stable 就 assume PMF</strong>—— 可能只是 sticky workflow 不是 valued<br>④ <strong>Pour acquisition $$ before fix retention</strong> (cliff case)<br>⑤ <strong>不区分 segment</strong>—— 小客户 vs 大客户 vs 不同 industry curve 不同`,
+      },
+      failure_modes: [
+        `看 MAU 不看 retention curve → vanity`,
+        `不 cohort 分 → signal 模糊`,
+        `D30 stable 就 assume PMF → 可能 sticky workflow`,
+        `Pour acquisition $$ before fix retention (cliff case)`,
+        `不区分 segment`,
+      ],
+      follow_ups: [
+        { q: `怎么定义 "active user"？`, hint: `① Product-specific (not blanket)；② 反映 core value (Spotify: 播放 30s；Slack: send msg；非 just login)；③ Aligned with 北极星 metric；④ Different cohorts may need different definition` },
+        { q: `Smile curve 怎么 capitalize?`, hint: `① Re-engagement campaign at mid-period drop (push / email / in-app)；② Identify what brings them back (analyze win-back cohort)；③ Move that moment earlier in lifecycle` },
+        { q: `B2B 的 retention curve 跟 B2C 差异？`, hint: `① B2B retention 通常更高 (switching cost + multi-user adoption)；② 但 churn 影响 ARR 大；③ Net Revenue Retention (NRR) &gt; 100% 健康；④ B2C focus DAU/MAU，B2B focus account-level retention` },
+      ],
+    },
+
+    69: {
+      why_asked: `A/B 设计是 senior PdM 必备。能讲"Hypothesis + sample size + guardrail + statistical significance"的人是真做过 experiment。`,
+      answers: {
+        mid: `<strong>5 步</strong>:① <strong>Hypothesis</strong>（"If X then Y because Z"）；② <strong>Traffic split + sample size</strong>（calculate via power analysis）；③ <strong>Duration</strong>（typical 1-4 weeks 跨业务 cycle）；④ <strong>Guardrail metrics</strong>（防别处 regress）；⑤ <strong>Significance + practical effect</strong>。`,
+        senior: `<strong>详细 design checklist</strong>:<br>1. <strong>Clear hypothesis</strong>: "If we change CTA color from blue to green, conversion will improve by 5% because color affects attention"<br>2. <strong>Primary metric</strong>: conversion rate (NSM-aligned)<br>3. <strong>Guardrail metrics</strong>: <br>· Revenue per user (防 cannibalization)<br>· Retention (防 short-term boost long-term loss)<br>· Engineering health (latency / error rate)<br>4. <strong>Sample size calculation</strong>:<br>· Baseline conversion 10%<br>· MDE (Minimum Detectable Effect) 5% relative<br>· Statistical power 80%<br>· Significance level 95%<br>· → ~30k users per group<br>5. <strong>Duration</strong>: 至少 2 weeks (full business cycle)<br>6. <strong>Run + analyze</strong>: t-test / chi-square / Bayesian<br>7. <strong>Practical significance</strong>: p &lt; 0.05 但 effect size 0.1%？ship or not 看 cost`,
+        staff: `深一层：A/B 设计最容易错的 4 个点:<br><br>1. <strong>Sample size 太小</strong>—— Power 不够 → 真 effect 测不出来（false negative）<br>· 真实情况: 团队跑 1 周 1000 user，"<strong>没 significant difference</strong>"→ 实际可能是 5% improvement 但 sample 不够<br><br>2. <strong>太多 metric</strong>—— 同时看 20 metric 必有 1 个"significant"（multiple comparison）<br>· 解: 预先 declare 1 primary + 3-5 guardrails，不 fishing<br><br>3. <strong>过早 stop</strong>—— 1 周看到 significant 就 stop → 实际 noise<br>· 解: pre-commit duration + 不 peek<br><br>4. <strong>Practical vs Statistical significance</strong>—— p &lt; 0.001 但 lift 0.1% → not worth ship<br>· 解: 预先 declare MDE，effect &lt; MDE 不 ship<br><br><strong>真实案例</strong>: NETCONF agent UI 改进 A/B:<br>· Hypothesis: "If we add wizard onboarding, customer activation rate +20%"<br>· Primary: D7 activation rate<br>· Guardrails: D30 retention / customer satisfaction / support ticket<br>· Sample size: 10k user / variant (calculation given baseline 30% MDE 20% relative)<br>· Duration: 4 weeks<br>· Result: <br>· Treatment: 35% activation vs Control 30% → 17% lift, p &lt; 0.01<br>· Guardrail: D30 retention same，customer satisfaction +5，support ticket -10%<br>· → Ship<br><br><strong>失败的 A/B 案例</strong>:<br>· Hypothesis: "Better doc reduces support ticket"<br>· Sample: 500 customer<br>· Duration: 1 week<br>· Result: ticket -10% but p = 0.15 (not significant)<br>· Team push to ship anyway → 3 month later actually no change (was noise)<br><br>教训: 不 ship marginal A/B（"<strong>p &lt; 0.05 但 actually noise</strong>"）。<br><br><strong>陷阱</strong>:<br>① Sample size 太小<br>② 过早 stop<br>③ 太多 metric (multiple comparison)<br>④ Cherry-pick segment ("整 group 不 significant 但 mobile user significant"—— 找细分群是 fishing)<br>⑤ A/A test 没做 (validate platform 本身没 bias)<br>⑥ Network effect 忽略 (social product 用户互相影响 break independence)<br><br><strong>关键</strong>: ① Pre-commit hypothesis + metrics + duration；② Calculate sample size；③ Multiple comparison correction；④ A/A test validate；⑤ Long-term follow-up post-ship。`,
+      },
+      failure_modes: [
+        `Sample size 太小 → false negative`,
+        `过早 stop → noise misinterpreted`,
+        `太多 metric → multiple comparison`,
+        `Cherry-pick segment fishing`,
+        `Network effect 忽略 break independence`,
+      ],
+      follow_ups: [
+        { q: `Sample size 怎么 calculate？`, hint: `① 工具: Optimizely / VWO calculator / G*Power；② Inputs: baseline rate / MDE / power (80%) / significance (95%)；③ 通常 1k-100k per group；④ Tradeoff: smaller MDE → larger sample` },
+        { q: `Multiple comparison 怎么 correct？`, hint: `① Bonferroni correction (α / # comparisons)—— conservative；② Benjamini-Hochberg FDR—— less conservative；③ Pre-commit primary metric 减 comparisons` },
+        { q: `Bayesian A/B 跟 frequentist 区别？`, hint: `① Frequentist: p-value / significance threshold；② Bayesian: posterior probability ("70% chance B is better than A by X")；③ Bayesian 更易解释 + can stop early；④ 现代主流大公司多用 Bayesian` },
+      ],
+    },
+
+    76: {
+      why_asked: `LTV/CAC 是 PdM 商业题。能讲"3x healthy + 18 month payback + unit economics"的人 senior+。`,
+      answers: {
+        mid: `<strong>LTV / CAC &gt; 3</strong> healthy。<strong>Payback period &lt; 18 month</strong> ideal (SaaS)。<br>· <strong>LTV</strong>: Customer Lifetime Value—— customer total revenue<br>· <strong>CAC</strong>: Customer Acquisition Cost—— sales + marketing per new customer`,
+        senior: `<strong>完整 unit economics</strong>:<br>· <strong>ARPU</strong> (Average Revenue Per User) per month<br>· <strong>Gross Margin %</strong> (after COGS)<br>· <strong>Churn %</strong> per month<br>· <strong>LTV = ARPU × Gross Margin / Monthly Churn</strong><br>· <strong>CAC</strong>: total S&M cost / # new customers<br>· <strong>LTV/CAC ratio</strong>: 3+ healthy, &lt; 1 burning money, &gt; 5 可能 under-investing<br>· <strong>Payback</strong>: CAC / (ARPU × Gross Margin) ≤ 18 month<br><br><strong>典型范围</strong>:<br>· SaaS: LTV/CAC 3-5, payback 12-18 月<br>· Consumer subscription: LTV/CAC 2-4, payback 6-12 月<br>· Marketplace: payback &lt; 6 month`,
+        staff: `深一层：LTV/CAC 是<strong>business viability 的 north star</strong>—— PM 必须懂，但<strong>很多 PdM 只关注 product metric 不关注 business model</strong>。Senior PdM 必须 fluent。<br><br><strong>实战陷阱</strong>:<br>1. <strong>LTV 太乐观</strong>: 假设 customer 用 5 年 → LTV 5×ARPU. 实际 churn 20%/yr → 真 lifetime 3 year not 5<br>2. <strong>CAC 不算 fully loaded</strong>: 只算 ads 不算 sales 工资 + customer success<br>3. <strong>Gross Margin 不算 COGS</strong>: hosting + support + payment processing = 真 GM 60-70% not 100%<br>4. <strong>Cohort 差异忽略</strong>: 不同 channel / segment LTV/CAC 完全不同<br><br><strong>真实案例</strong>: NETCONF agent SaaS pricing analysis:<br>· ARPU: $10k/year / customer<br>· Gross Margin: 75% (hosting + support cost)<br>· Monthly Churn: 0.5% (annual churn 6%)<br>· LTV = $10k × 75% / 0.5% / 12 = $125k<br>· CAC: total S&M $1M / 50 new customer/yr = $20k<br>· LTV/CAC = 6.25 (healthy)<br>· Payback = $20k / ($10k × 75%) = 2.7 month (excellent)<br>· → unit economics 健康，可以 scale sales spend<br><br>但 segment 分:<br>· SMB customer: ARPU $5k, churn 1%/月, CAC $10k → LTV $37.5k, LTV/CAC 3.75 (OK)<br>· Enterprise customer: ARPU $50k, churn 0.2%/月, CAC $50k → LTV $1.5M, LTV/CAC 30 (amazing)<br><br>Action: focus sales on enterprise (much better unit economics)。<br><br><strong>陷阱</strong>:<br>① <strong>LTV 太乐观</strong>（假设 perpetual customer）<br>② <strong>CAC 不 fully loaded</strong><br>③ <strong>Gross Margin 不算</strong><br>④ <strong>Cohort / segment 不分</strong><br>⑤ <strong>Pre-revenue / early stage 用 LTV/CAC</strong>—— 数据不够 noisy<br>⑥ <strong>LTV/CAC 高就 over-spend</strong>—— 8 跟 3 都健康，但 8 时 over-investing 可能合理（grow faster）<br><br><strong>关键</strong>: ① Fully loaded CAC + realistic LTV；② Segment analysis；③ Quarterly track trend；④ 不 over-index on absolute ratio (3+ healthy)；⑤ Tied to retention curve analysis。`,
+      },
+      failure_modes: [
+        `LTV 太乐观（perpetual customer）`,
+        `CAC 不 fully loaded`,
+        `Gross Margin 不算`,
+        `Cohort / segment 不分`,
+        `Early stage 数据不够还硬算`,
+      ],
+      follow_ups: [
+        { q: `Negative LTV/CAC 怎么办？`, hint: `① 危险 sign—— burning money per customer；② Investigate: too cheap pricing or too expensive acquisition；③ Cut S&M spend OR raise price；④ Consider segment focus (some segments may have positive LTV/CAC)` },
+        { q: `LTV 怎么 calibrate？`, hint: `① Don't extrapolate from short period (1-month churn → 5-yr LTV)；② Use cohort retention curve；③ Discount future revenue (10% discount rate)；④ Conservative—— "expected" LTV not "best case"` },
+        { q: `B2B 跟 B2C unit economics 差异？`, hint: `① B2B: higher ARPU (10x-100x)；② B2B: longer payback (12-24 month)；③ B2B: lower churn (5-10%/yr vs 30-50% B2C)；④ B2B: enterprise sales motion (longer cycle but stickier)` },
+      ],
+    },
+
+    // ============== Case / Estimation ==============
+    92: {
+      why_asked: `TAM/SAM/SOM 是 PdM / strategy 必考。能讲"3 层 + top-down/bottom-up 双向 + sanity check"的人是真做过 business plan。`,
+      answers: {
+        mid: `<strong>3 层市场</strong>:① <strong>TAM</strong> (Total Addressable Market)—— 全球 total demand；② <strong>SAM</strong> (Serviceable Addressable Market)—— 你能 serve 的部分；③ <strong>SOM</strong> (Serviceable Obtainable Market)—— 实际可获得 (typically 1-10% of SAM)。`,
+        senior: `<strong>计算 + sanity check</strong>:<br>1. <strong>TAM</strong>: <br>· Top-down: industry report / IDC / Gartner<br>· Bottom-up: # potential customer × ARPU<br>· 两者对比 → 一致量级 OK<br>2. <strong>SAM</strong>: TAM × % geo / channel / segment you can serve<br>3. <strong>SOM</strong>: SAM × realistic market share (typically 1-10% for new entrant, 20-40% for leader)<br><br><strong>典型 example (NETCONF agent SaaS)</strong>:<br>· TAM: 全球 enterprise NETCONF demand $5B/yr (Gartner)<br>· SAM: 北美 + EU + APAC primary segment = $2B/yr<br>· SOM: 5-year target 5% share = $100M ARR<br>· Year 1 SOM: 0.5% = $10M ARR (realistic startup)`,
+        staff: `深一层：TAM/SAM/SOM 的<strong>真实使用 case</strong>:<br>1. <strong>Investor pitch</strong>: VC 要 TAM &gt; $1B 才看<br>2. <strong>Product strategy</strong>: 选大市场 invest，避免小市场 stuck<br>3. <strong>Sales team sizing</strong>: SAM determine sales team size<br>4. <strong>Competition analysis</strong>: TAM 大 → 多 player；TAM 小 → likely consolidation<br><br><strong>实战 mistakes</strong>:<br>1. <strong>TAM inflate</strong>: "全球 software market $X 亿"—— 太宽，VC reject<br>· 正确: narrow to specific segment "NETCONF management software for telecom"<br>2. <strong>SAM = TAM</strong>: 没 serve constraint (geo / industry / pricing)—— unrealistic<br>3. <strong>SOM 过乐观</strong>: 假设 50% market share—— 现实 1-10% 起步<br>4. <strong>不 sanity check</strong>: top-down $1B 但 bottom-up $100M → flag<br><br><strong>真实案例</strong>: 我作为 PM 给 VP 做 NETCONF agent expansion proposal:<br>· <strong>TAM</strong>: telecom network mgmt software $5B/yr (Gartner 2024)<br>· <strong>SAM</strong>: NETCONF-protocol-based portion $2B (60% of telco moving to NETCONF)<br>· <strong>SOM Year 1-3</strong>: existing 8 enterprise customer + 20 new = $50M ARR (1% SAM)<br>· <strong>SOM Year 5</strong>: 5% SAM = $100M ARR (aggressive but reachable)<br><br>Bottom-up validation:<br>· 100 target enterprise × $500k ARR each = $50M (matches Year 1-3 SOM)<br>· Sanity check pass<br><br>VP approve expansion plan。<br><br><strong>反例</strong>: 早期 startup pitch:<br>· TAM: "全球 cloud software $500B" (太宽)<br>· SAM: $50B (still too broad)<br>· SOM: "10% in 3 years" = $5B (delusional)<br>· VC reject "<strong>not credible</strong>"<br><br><strong>陷阱</strong>:<br>① TAM 太宽（"software market"）<br>② SAM 没 serve constraint<br>③ SOM 过乐观（&gt; 10% new entrant）<br>④ 不 top-down + bottom-up cross-validate<br>⑤ Static analysis（市场 dynamic, 5 年 TAM 可能翻倍）<br>⑥ Ignore competition share (SOM 不能算 100% market 都你的)<br><br><strong>关键</strong>: ① Narrow specific TAM；② Realistic SAM constraint；③ Conservative SOM；④ Cross-validate top-down + bottom-up；⑤ 5-year trajectory not single year。`,
+      },
+      failure_modes: [
+        `TAM 太宽（"software market"）`,
+        `SAM 没 serve constraint`,
+        `SOM 过乐观 (&gt; 10% new entrant)`,
+        `不 cross-validate top-down + bottom-up`,
+        `Static analysis 不考虑 market dynamic`,
+      ],
+      follow_ups: [
+        { q: `TAM 怎么 estimate without industry report？`, hint: `① Bottom-up: # potential customer × ARPU；② Top-down via proxy (% GDP / industry size)；③ Compare to similar markets (analogous);  ④ Multiple methods triangulate` },
+        { q: `早期产品 SOM 怎么定？`, hint: `① 不超 5% new entrant year 1；② Based on sales capacity (1 AE close 5-10 deal/year)；③ Bottom-up: target account list (top 20 prospect)；④ 不 over-promise to VP / board` },
+        { q: `Market 不存在的 product 怎么 TAM？`, hint: `① Adjacent market substitute analysis；② Bottom-up: pain point quantify × # affected users × WTP；③ Survey willingness-to-pay (Mom Test rigorous)；④ Acknowledge uncertainty (TAM range 不 single number)` },
       ],
     },
   },
