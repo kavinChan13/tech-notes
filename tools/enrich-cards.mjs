@@ -1041,6 +1041,196 @@ const ENRICHMENT = {
         { q: `Tail sampling 不够时怎么进一步降成本？`, hint: `① 删 verbose / debug log spans；② 限制 span attribute 数量；③ 大请求用 link 而非 child span；④ 转向 metric-from-trace（聚合后只存 metric） ` },
       ],
     },
+
+    // ============== 软技能 / 沟通 / 角色 ==============
+    51: {
+      why_asked: `分布式 trace 跨服务必备协议。能背 traceparent 4 字段的人是真做过 OTel 集成。`,
+      answers: {
+        mid: `<code>traceparent: 00-{traceId 32 hex}-{spanId 16 hex}-{flags 2 hex}</code>。<strong>00</strong> = version，<strong>traceId</strong> = 128 bit 全局追踪 ID，<strong>spanId</strong> = 64 bit 当前 span，<strong>flags</strong> 含 sampled bit。`,
+        senior: `<strong>完整格式</strong>: <code>00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01</code>—— 4 段用 <code>-</code> 分隔，全部 hex lowercase。<strong>关键字段</strong>：<br>· <strong>version (00)</strong>: W3C 当前唯一版本<br>· <strong>traceId</strong>: 全 0 = invalid；跨服务保持不变<br>· <strong>spanId</strong>: 每段 RPC 重新生成<br>· <strong>flags</strong>: 最低位 = sampled（1 = 上报，0 = 不上报）<br><br><strong>配套 tracestate</strong>（可选）: 厂商扩展 KV（如 <code>tracestate: vendor1=value1,vendor2=value2</code>），跨 vendor 信息透传。`,
+        staff: `深一层：W3C TraceContext 是 2020 标准化的结果，<strong>取代</strong>各家自定义格式（B3 / X-Cloud-Trace-Context / Jaeger UBER-Trace-ID 等）。<strong>OTel SDK 默认</strong>注入 traceparent header，但部分老 vendor 仍只认 B3 → 配双 propagator（W3C + B3）兼容。<br><br><strong>实战陷阱</strong>：<br>① <strong>HTTP/2 / gRPC header 名大小写敏感</strong>—— traceparent 必须 lowercase；<br>② <strong>load balancer / proxy 不透传</strong>—— 早期 Nginx / Envoy 默认 strip 未知 header，需显式 forward；<br>③ <strong>跨 message broker</strong>（Kafka / RabbitMQ）—— message header 需手动注入 traceparent；<br>④ <strong>异步任务</strong>—— 入队时存 trace context，出队时 restore（OTel 提供 Context API）。<br><br><strong>真实案例</strong>：NETCONF agent 项目跨 5 个 microservice + 2 个 message queue。上线 W3C TraceContext 前事故排查靠 grep log 找请求 ID，~30 min 拼一个 trace。上线后 Jaeger UI 30s 看完整调用链 + 时延 breakdown，<strong>P0 事故 MTTR 从 45 min 降到 12 min</strong>。`,
+      },
+      failure_modes: [
+        `不区分 traceId / spanId（一个是全局，一个是单段）`,
+        `B3 / W3C 混用导致 trace 断链`,
+        `不知道 sampled bit，下游 sampler 错过关键 trace`,
+        `跨 message broker 不传 traceparent → async 链路断`,
+        `Header 名大小写错（W3C 强制 lowercase）`,
+      ],
+      follow_ups: [
+        { q: `B3 跟 W3C TraceContext 区别？`, hint: `B3 (Zipkin) 用多个 header（X-B3-TraceId / X-B3-SpanId / X-B3-Sampled）；W3C 单个 traceparent header；2026 W3C 是主流，B3 仍兼容` },
+        { q: `怎么自定义 sampler？`, hint: `① 实现 Sampler interface 返回 RECORD_AND_SAMPLE / DROP；② 常见：always-on / always-off / ratio / parent-based / rate-limited；③ Tail sampling 在 collector 端做（见 #50）` },
+        { q: `tracestate 用来做什么？`, hint: `vendor-specific 扩展信息；典型用法：DataDog / NewRelic 传内部 ID + 采样决策；W3C 限制 32 KB / 32 entries` },
+      ],
+    },
+
+    52: {
+      why_asked: `SLO / Error Budget 是<strong>SRE 文化</strong>核心概念。能讲"基于 SLO 反推告警阈值 + 错误预算耗尽流程"的人是真做过 on-call 改进。`,
+      answers: {
+        mid: `不要凭感觉定 P99 阈值——基于 <strong>SLO</strong>（如可用性 99.9%）反推。<strong>Error Budget</strong> = 1 - SLO（如 0.1% 允许失败）。月度 budget 用完 → 冻结发布 / 全力修可靠性。`,
+        senior: `<strong>SLI / SLO / SLA 三层</strong>：<br>· <strong>SLI (Service Level Indicator)</strong>: 实际度量（成功率 / P99 latency / 数据 freshness）<br>· <strong>SLO (Objective)</strong>: 内部目标（99.9% / 200ms）<br>· <strong>SLA (Agreement)</strong>: 对客户的合同承诺（通常宽于 SLO，违约赔钱）<br><strong>告警阈值</strong>: 不要"P99 &gt; 200ms 立刻 page"——基于 <strong>burn rate</strong>。如 30 天 budget 1 小时内烧掉 10% → fast burn alert（P0）；3 天烧掉 10% → slow burn（P1）。`,
+        staff: `深一层：Error Budget 的<strong>真实价值</strong>不是告警阈值，是<strong>"平衡 reliability vs feature velocity"的契约</strong>。SRE 团队 + Dev 团队 share budget：① 系统稳 → 多 budget → dev 可以激进发布；② budget 用完 → 冻结发布 + SRE / Dev 一起修。<br><br><strong>多 SLO 实战</strong>：典型服务 3-5 个 SLO：<br>· 可用性 (success rate &gt; 99.9%)<br>· latency (P99 &lt; 200ms)<br>· 数据 freshness (P99 &lt; 5 min)<br>· 吞吐 / 容量<br>每个 SLO 独立 budget + alert + ownership。<br><br><strong>Burn rate alert 公式</strong>：<code>alert if (1h_error_rate &gt; 14.4 × SLO_budget) AND (5m_error_rate &gt; 14.4 × budget)</code>—— 双窗口避免误报（1h 抓真问题，5m 防止已恢复仍报警）。<br><br><strong>真实经验</strong>：NETCONF agent 项目早期 P99 alert 5 分钟一次（午夜误报 + 周末 burnout）。改用 SLO + multi-window burn rate：alert 数 -85%，但<strong>真问题 catch rate 反而 +30%</strong>（之前误报多导致团队 alert fatigue 忽视真告警）。On-call 满意度从 4/10 → 8/10。<strong>工具</strong>：① Google SRE Workbook 提供完整 burn rate 算法；② Prometheus + Alertmanager 实现 multi-window；③ Datadog / NewRelic 内置 SLO dashboard。`,
+      },
+      failure_modes: [
+        `把 SLO 当 SLA 用（内部目标 ≠ 客户承诺）`,
+        `定 P99 &gt; X 立刻 page → alert fatigue`,
+        `单窗口 burn rate（5 min）→ 大量误报`,
+        `不跟 dev share budget → SRE/Dev 对立`,
+        `没 process budget 耗尽 → 冻结发布只是嘴上说`,
+      ],
+      follow_ups: [
+        { q: `Multi-window burn rate 怎么算？`, hint: `典型 4 个组合：1h&5m / 6h&30m / 1d&3h / 3d&12h，各对应不同 page 优先级；Google SRE Workbook Chapter 5 有详细公式` },
+        { q: `SLI 怎么选？`, hint: `① 用户视角的"成功"（不是内部 RPC 成功率，是端到端用户成功率）；② 可量化 + 持续测；③ 反映 user-facing latency 而非 server 内部 timing；④ 标准模板：availability / latency / freshness / correctness / throughput` },
+        { q: `Error budget 耗尽怎么办？`, hint: `① 冻结非必要发布；② Postmortem + action items；③ 调整 SLO（如果总耗尽说明 SLO 不现实）；④ 投资 reliability work（buffer / circuit breaker / 降级）` },
+      ],
+    },
+
+    53: {
+      why_asked: `初级 EM 必问角色区分。能讲"决策半径 + 时间尺度"维度的人是真做过架构师工作。`,
+      answers: {
+        mid: `用决策<strong>影响半径</strong> + <strong>时间尺度</strong>区分：<br>· <strong>Tech Lead</strong>: 影响<strong>一个服务 / 产品功能</strong>，时间尺度 <strong>1 季度</strong><br>· <strong>架构师</strong>: 影响<strong>多个服务 / 产品线</strong>，时间尺度 <strong>1-3 年</strong>`,
+        senior: `<strong>详细对比</strong>：<br><table style="border-collapse:collapse"><tr><th>维度</th><th>Tech Lead</th><th>架构师</th></tr><tr><td>团队大小</td><td>5-10 人</td><td>横跨多团队</td></tr><tr><td>决策粒度</td><td>API 设计 / 模块拆分 / 选型</td><td>系统拆分 / 跨服务通信 / 演进策略</td></tr><tr><td>时间</td><td>季度 / 半年</td><td>1-3 年</td></tr><tr><td>code 比例</td><td>50-80%</td><td>10-30%</td></tr><tr><td>文档</td><td>设计文档 / PR review</td><td>ADR / RFC / 架构图 / 蓝图</td></tr></table>`,
+        staff: `深一层：两个角色<strong>不是 hierarchy</strong>（架构师不一定比 TL 高）—— 是<strong>不同 track</strong>。Google 的 Staff/Senior Staff Engineer 经常做架构师的事但保留 IC title。<br><br><strong>真实经验</strong>：作为某产品 TL 3 年，发现自己 80% 时间在<strong>一个服务内</strong>做选型 + 教 team。后期晋升 Principal/Architect，时间分配反转：<br>· 跨 3-5 团队对齐架构方向（30%）<br>· 写 ADR / Tech Strategy 文档（25%）<br>· Tech debt 战略规划（15%）<br>· 跨团队 design review（15%）<br>· 自己写代码（&lt; 10%）<br><br>转型最难的不是技术深度，是<strong>"接受 80% 时间不写代码"</strong>+ <strong>"靠影响力而非权威推动"</strong>。<br><br><strong>陷阱</strong>：① TL 升架构师后还想"动手做"—— 时间不够；② 架构师不下来跟 team 写代码 → 架构空中楼阁 / 失去 calibration；③ 把"做架构师"等同于"画图"—— 80% 价值在<strong>判断 + 沟通 + 写决策文档</strong>。`,
+      },
+      failure_modes: [
+        `认为架构师 = TL 升级版（实际是不同 track）`,
+        `把 "架构" 等同于 "画图"`,
+        `升架构师后不再下沉团队 → 失去现实 feedback`,
+        `不用 ADR 记录决策 → 半年后没人记得为什么这么定`,
+        `不区分 1-2 年 vs 5-10 年时间尺度的决策`,
+      ],
+      follow_ups: [
+        { q: `怎么从 TL 转架构师？`, hint: `① 主动 take 跨团队 design review；② 写 1-2 个 long-term tech strategy 文档；③ Show influence beyond own team；④ Volunteer 当公司架构委员会成员 / RFC author` },
+        { q: `Senior 架构师 vs Principal 架构师区别？`, hint: `① Senior：单产品线 / business unit；② Principal：跨业务线 / 整个公司 tech direction；③ 影响力 + 复杂度差一个 order of magnitude` },
+        { q: `架构师该做多少 coding？`, hint: `① 0% 危险（失 calibration）；② 50%+ 也危险（没时间影响）；③ 健康 10-25%——保持手感 + 关键模块 prototype + 帮 team unblock` },
+      ],
+    },
+
+    54: {
+      why_asked: `行为题模板，几乎每个架构师 / Staff 面试必出。能用 STAR + ADR 结构的人通过；散讲故事的人 fail。`,
+      answers: {
+        mid: `用 <strong>STAR + ADR</strong> 结构：<br>· <strong>S</strong>itutation：当时业务背景<br>· <strong>T</strong>ask：要解决的问题（<strong>量化质量属性</strong>—— 性能 / 可用性 / 成本）<br>· <strong>A</strong>ction：列出 <strong>2-3 个候选方案</strong> + 取舍<br>· <strong>R</strong>esult：选了哪个 + 实际效果（量化）`,
+        senior: `<strong>详细 talk track（4-5 min 版本）</strong>：<br>1. <strong>S (30 sec)</strong>: "项目背景 X，团队 Y 人，预算 Z 万，时间 N 个月"<br>2. <strong>T (45 sec)</strong>: "关键约束：P99 &lt; 100ms / 可用性 99.95% / 月成本 &lt; $50k"<br>3. <strong>A (2.5 min)</strong>: "我考虑了 3 方案：① A 方案 优势 X 劣势 Y；② B 方案 ...；③ C 方案 ..."—— 显示 trade-off 思维<br>4. <strong>选了 B</strong>（明确表态 + 理由）<br>5. <strong>R (45 sec)</strong>: "结果 P99 = 80ms，可用性 99.97%，成本 $42k / 月。事后回顾 X 没考虑到 Y，但整体决策对。"`,
+        staff: `深一层：这道题考<strong>3 个信号</strong>：① 真做过<strong>架构级</strong>决策（不是 module 选型）；② <strong>结构化思考</strong>（不只一个方案）；③ <strong>事后 calibrate</strong>（敢承认哪部分判断错）。<br><br><strong>真实例子 talk track</strong>："NETCONF agent v3 替代 vendor proprietary agent。S: 8 个 enterprise 客户用旧 vendor agent 但反馈性能差，公司想自研。T: 3 大约束：① P99 RPC latency &lt; 5ms（vendor ~50ms）；② 兼容 8 个客户 device firmware；③ 6 个月内 ship + 在 EOS 前完成 customer migration。A: 我列了 3 方案：① fork 开源 sysrepo + 改造（短期快，长期 maintenance 重）；② 完全自研（控制全 + 周期长）；③ 跟 vendor X 合作 OEM（费用高 + 失去 differentiation）。我选了 ②自研——原因是 customer 需要 30% 定制 + competitive moat 重要。R: 6 个月 ship + P99 = 4ms（超 SLO）+ 7/8 客户成功 migrate。事后看 customer firmware 兼容性 underestimate，多投入 2 工程师月。<strong>整体决策对</strong>—— 4 年后这块代码仍在用，竞品没赶上。"<br><br><strong>陷阱</strong>：① 故事散没结构；② 只讲选了什么，不讲<strong>没选什么 + 为什么</strong>（缺 trade-off 思维）；③ R 没量化；④ 不承认任何错误判断 → 显得不 calibrated。`,
+      },
+      failure_modes: [
+        `故事散乱无 STAR 骨架`,
+        `只讲选了什么不讲 alternatives → trade-off 思维缺失`,
+        `R 段无量化`,
+        `不承认 calibration miss → 不 honest`,
+        `选的"决策"太小（属于 TL 级，不是架构级）`,
+      ],
+      follow_ups: [
+        { q: `什么样的决策算"架构级"？`, hint: `① 影响半径跨多服务 / 多团队；② 时间尺度 &gt; 1 年；③ 回滚成本月级；④ 影响系统的核心质量属性（性能 / 可扩展 / 可演进）` },
+        { q: `如果选错了怎么办？`, hint: `① 用相同 ADR 框架记新决策；② Postmortem 不 blame 个人；③ 显示 learning + 后续改进；④ 大多数错决策可分阶段 walk-back（feature flag / 渐进迁移）` },
+        { q: `怎么准备这道题？`, hint: `① 准备 2-3 个 ADR 故事（不同维度：性能 / 可用性 / 成本）；② 4 min + 90 sec 两版本；③ 故意留钩子让面试官追问；④ 跟 mentor mock 录音听结构` },
+      ],
+    },
+
+    55: {
+      why_asked: `架构师常被吐槽"太技术"。能把决策<strong>翻译成业务语言</strong>的人能晋升到 Principal。`,
+      answers: {
+        mid: `翻译成业务语言：<br>· 用<strong>业务影响</strong>（用户体验 / 营收 / 风险）<br>· 用<strong>类比</strong>（"分布式锁就像图书馆的借阅卡"）<br>· 用<strong>数字</strong>（"P99 从 200ms 降到 50ms = 转化率提升 X%"）`,
+        senior: `<strong>4 个翻译技巧</strong>：<br>1. <strong>性能 → 转化 / 留存</strong>：Amazon 数据 "100ms 延迟降低 1% 销售"<br>2. <strong>可用性 → 客户信任 + SLA 赔款</strong>：99.9% → 99.95% 等于"每月减少 22 min 不可用"<br>3. <strong>技术债 → 速度 + 风险</strong>："这块代码每个 feature 多花 50% 时间，且 P0 事故概率 +30%"<br>4. <strong>架构演进 → 长期战略 + ROI</strong>："今年投 3 工程师月，未来 3 年节省 20 工程师月"`,
+        staff: `深一层：能向业务沟通是<strong>Senior → Principal</strong> 的关键跃迁。Principal 不只是技术好，是"<strong>能把技术决策跟商业目标对齐</strong>"。<br><br><strong>实战示例</strong>：要从单体 → 微服务迁移，工程团队想做但 VP 不批。<br>· <strong>技术语言</strong>（差）："我们想拆 microservice，更解耦、scale 好、技术栈灵活"<br>· <strong>业务语言</strong>（好）："过去 6 个月 90% 的事故都源于<strong>单体内部模块互相影响</strong>。每次 deploy 风险高 → 团队不敢发布 → 平均 ship cadence 从 weekly 退化到 monthly → 我们丢了 3 个 customer feature competitive opportunity。投资 6 个月做微服务拆分，估算可恢复 weekly deploy，同时降低 P0 事故概率 60%。"<br><br><strong>关键</strong>：<br>① 用<strong>VP 听得懂的指标</strong>（事故数 / ship cadence / customer impact）<br>② <strong>量化</strong>（"60%" 不是"提升很多"）<br>③ <strong>类比</strong>（如对非技术 VP："微服务就像把一栋楼拆成 30 间公寓——每间装修不影响其他"）<br>④ <strong>明确 ask</strong>（不是讲完了，是要 "approve 6 个月投入 5 人"）<br><br><strong>陷阱</strong>：① 技术细节给非技术听 → 失去注意力；② "我们 engineer 觉得..." 弱论证（用数据）；③ 不给业务方 trade-off → 显得只索取不付出；④ 没 follow up 量化结果 → 下次他们不再 trust。`,
+      },
+      failure_modes: [
+        `技术语言 vs 业务方 → 听不懂或不感兴趣`,
+        `没量化（"提升很多"）`,
+        `没类比 → 抽象`,
+        `没明确 ask（要钱要人要时间）`,
+        `没 follow up 量化实际结果`,
+      ],
+      follow_ups: [
+        { q: `VP 反复问 "ROI 在哪" 怎么办？`, hint: `① 给具体数字（人月 vs 节省人月）；② 类似过去 case study；③ Phased plan + 阶段 milestone；④ 接受 "VP 没 buy in" 可能要 walk away 不强推` },
+        { q: `怎么获取非技术领域的业务直觉？`, hint: `① 听几次 Sales call；② Skip-level meet customer-facing role；③ 每 quarter 读公司 OKR + 财报；④ 跟 PM / 销售 1on1 学习他们关注什么` },
+        { q: `决策失败怎么向业务方解释？`, hint: `① 直接 own（不甩 engineer）；② 量化损失；③ 列学到什么；④ 重建 credibility 靠下一个决策的成功` },
+      ],
+    },
+
+    56: {
+      why_asked: `Build vs Buy 是 EM/架构师常见题。能讲<strong>4 维度框架 + 真案例</strong>的人是真做过 SaaS 选型。`,
+      answers: {
+        mid: `看四个维度：<br>· <strong>核心竞争力？</strong>（Core Domain → 自研）<br>· <strong>团队能力？</strong>（不擅长 → 买）<br>· <strong>成本？</strong>（人力 + 维护 vs 订阅）<br>· <strong>定制需求？</strong>（标准化 → 买；定制重 → 自研）`,
+        senior: `<strong>详细评估</strong>：<br>1. <strong>战略 (DDD Core/Supporting/Generic)</strong>: <br>· Core Domain（差异化能力）→ <strong>必须自研</strong><br>· Supporting Domain → flexible<br>· Generic Domain（如认证 / 日志 / monitoring）→ <strong>必须买</strong><br>2. <strong>TCO (3 year)</strong>:<br>· Build: 工程师 × 月 × 薪资 + 后续维护人月（通常被低估 3×）<br>· Buy: 订阅费 + 集成成本 + vendor lock-in 风险<br>3. <strong>Time-to-Market</strong>: Buy 通常 2-3× faster<br>4. <strong>Risk</strong>:<br>· Build: schedule slip / quality issue<br>· Buy: vendor 跑路 / 涨价 / 不满足需求`,
+        staff: `深一层：90% 的 Build vs Buy 错误是<strong>"高估自研价值 + 低估 maintenance 成本"</strong>。<br><br><strong>真实案例 1 (Buy 决策正确)</strong>: 我作为架构师建议<strong>买 Auth0</strong> 而不是自研 OAuth/SSO。Engineering 抵触："这有什么难？我们 1 个月写完。" → 我用 TCO 算："1 个月写 + 3 年维护（密码 rotation / SAML / SCIM / 客户 IT 兼容）= 24 工程师月 = $400k。Auth0 是 $50k/年 = $150k 3 年。Buy 节省 $250k + 团队精力 focus 在 core domain。"<br><br><strong>真实案例 2 (Build 决策正确)</strong>: NETCONF agent vendor product 想"<strong>买 cisco SDN 然后包装</strong>"，我反对。理由：① NETCONF agent 是<strong>Core Domain</strong>（公司差异化在这），不能依赖竞争对手；② vendor lock-in 致命；③ 定制需求 vendor 不会满足。最终自研，成为公司 moat。<br><br><strong>陷阱</strong>：① <strong>NIH（Not Invented Here）综合症</strong>—— engineer 倾向自研，需要 EM/架构师推 buy；② <strong>低估 maintenance</strong>—— "build it & forget it" 不存在；③ <strong>过分依赖 vendor</strong>—— 关键 core domain 买 → 失去 differentiation；④ <strong>没 exit strategy</strong>—— buy 了但不准备 vendor lock-in escape plan。`,
+      },
+      failure_modes: [
+        `NIH 直觉自研所有 → 团队精力分散`,
+        `低估 maintenance 成本（典型 underestimate 3×）`,
+        `Core Domain 买 → 失去 differentiation`,
+        `Generic Domain 自研 → 浪费资源`,
+        `没 exit strategy 应对 vendor lock-in`,
+      ],
+      follow_ups: [
+        { q: `怎么评估 vendor lock-in 风险？`, hint: `① Switching cost（API / data export / 培训）；② Vendor 财务健康度（现金流 / 增长 / acquisition risk）；③ 替代方案存在？；④ 标准协议 vs proprietary` },
+        { q: `Hybrid 方案怎么做？`, hint: `① Build 核心 + Buy 非核心组件（如自研 NETCONF + 买 Auth）；② Buy + 包装自己 API（hide vendor lock-in）；③ 双 vendor（Multi-cloud / 双 DB）；④ 渐进 build out（先 buy 后逐步替换核心）` },
+        { q: `已经买了发现不合适怎么办？`, hint: `① 评估 switching cost vs 继续容忍；② Build 一个轻量替代 layer；③ 跟 vendor 谈定制 / 影响 roadmap；④ Walk away（要写好 exit plan + 数据迁移）` },
+      ],
+    },
+
+    57: {
+      why_asked: `技术债是 EM/架构师永恒话题。能<strong>翻译成业务语言 + 量化</strong>的人能成功争取到资源。`,
+      answers: {
+        mid: `把技术债翻译成<strong>业务影响</strong>：<br>· <strong>量化</strong>："这块代码每次改动 5 人天，重构后 1 人天"<br>· <strong>风险化</strong>："这个 bug 每月发生 1 次，重构后归零"<br>· <strong>速度化</strong>："修了之后新功能开发提速 30%"`,
+        senior: `<strong>4 类技术债 + 各自论证</strong>：<br>1. <strong>代码债</strong>（重复 / 死代码 / 复杂度高）→ 量化"每个 feature 多花 X 时间"<br>2. <strong>架构债</strong>（耦合 / 拆分不合理）→ 风险化"每个 deploy P0 风险 X%"<br>3. <strong>测试债</strong>（覆盖率低 / E2E 缺失）→ 风险化"production bug 数 / 月"<br>4. <strong>工具债</strong>（CI 慢 / 部署手动）→ 速度化"build time / deploy time"<br><br><strong>策略</strong>：① <strong>不一次性还清</strong>—— 每 sprint 20% capacity；② <strong>跟 feature 绑定</strong>—— "做 X feature 时顺便重构 Y"；③ <strong>tracked Jira backlog</strong> 不只是嘴上说`,
+        staff: `深一层：技术债跟金融债一样—— <strong>不全是坏</strong>。Martin Fowler 把技术债分 <strong>4 象限</strong>（Reckless / Prudent × Deliberate / Inadvertent）：<br>· Prudent Deliberate（"我们知道是 quick fix，下季度重构"）—— <strong>健康</strong><br>· Prudent Inadvertent（"做完才发现有更好方法"）—— 正常学习<br>· Reckless Deliberate（"<strong>我们不在乎 best practice 直接 ship</strong>"）—— 致命<br>· Reckless Inadvertent（"我们也不知道 best practice"）—— 团队成熟度不够<br><br><strong>真实案例</strong>: NETCONF agent v2 累积 18 个月技术债，团队抱怨但 VP "为啥要花时间重构？"。我做了 3 步：<br>1. <strong>量化</strong>: 对比新 feature 在 v1（无债）vs v2 的开发时间，发现 v2 平均 2× 慢。<br>2. <strong>风险化</strong>: 列出过去 6 个月 P0 事故，<strong>75% 直接关联到 3 个技术债区域</strong>。<br>3. <strong>提案</strong>: 不是 "停所有 feature 重构 3 个月"，是 <strong>每 quarter dedicate 20% capacity（2 工程师）</strong> 攻 top 3 债区，2 个 quarter 完成。<br>VP 同意。Quarter 1 后 P0 事故 -50%，feature ship 速度 +30%。Quarter 2 后 v2 重构完成，团队 satisfaction +35%。<br><br><strong>陷阱</strong>：① 用技术语言（"代码不干净"）VP 不 care；② 要"<strong>全部停止 feature 3 个月</strong>"—— 不现实；③ 不 tracked → 团队私下做 → 没 credit；④ "<strong>tech debt 永远还不清</strong>"心态 → 不投入。`,
+      },
+      failure_modes: [
+        `用 "代码不干净" 这种纯技术语言`,
+        `要求 100% capacity 停 feature 还债（不现实）`,
+        `不量化（"我感觉很慢"）`,
+        `不 tracked Jira → 没 credit + 易回潮`,
+        `认为技术债不能还（应有 plan）`,
+      ],
+      follow_ups: [
+        { q: `Reckless 技术债怎么处理？`, hint: `① 公开 calibrate—— 老板团队都知道；② Postmortem 找 process gap；③ 改 dev process（如 mandatory design review / pair）；④ 严重时换流程 / 换 lead` },
+        { q: `怎么决定哪个债先还？`, hint: `① Cost-of-Delay（如不还每月损失 X）；② Risk × Probability；③ 跟 hot feature 区域重叠；④ Engineer 满意度（影响 retention）` },
+        { q: `Code review 时怎么 prevent new 技术债？`, hint: `① Checklist（包括 test coverage / doc / API consistency）；② "tech debt tag" 在 PR 显式标 + Jira link；③ 季度回顾累积 tag 数；④ Boy Scout Rule—— leave 比 found 更干净` },
+      ],
+    },
+
+    58: {
+      why_asked: `Legacy 演进必问。能讲<strong>Strangler Fig 模式</strong>+ Joel Spolsky 名言的人是真做过 migration。`,
+      answers: {
+        mid: `几乎总是<strong>渐进（Strangler Fig）</strong>。Joel Spolsky 名言："<strong>Rewriting from scratch is the single worst strategic mistake</strong>" (2000)。`,
+        senior: `<strong>Strangler Fig 模式</strong>（Martin Fowler 命名 from strangler vine 攀附老树）:<br>1. 老系统继续跑<br>2. 新 feature 写到<strong>新代码</strong>里<br>3. 老 feature <strong>逐个迁移</strong>到新代码<br>4. 老代码逐渐"被勒死"<br>5. 直到全部迁完关掉老系统<br><br><strong>关键技术</strong>: <strong>Anti-Corruption Layer</strong>—— 新老系统间放 translation layer，保证<strong>新代码不被老 schema 污染</strong>。<br><br><strong>大重写的真实代价</strong>: ① Netscape 6 大重写 → 2 年没新版本 → 市场份额 95% → 25%；② 99% "大重写" 项目延期 2x + 老 bug 重现 + 新 bug + 失去客户。`,
+        staff: `深一层：渐进 vs 大重写的<strong>本质判断</strong>是<strong>"老系统的隐含知识"成本</strong>。Joel Spolsky 原文洞察："code 是<strong>bug fix 多年沉淀的结果</strong>，每个奇怪的 if 都是某个 bug 的 fix。重写丢掉这些隐含 fix → 老 bug 全部重现"。<br><br><strong>渐进的 4 个关键技术</strong>：<br>1. <strong>Strangler Fig</strong>（见上）—— 入口路由 layer 决定走老还是新<br>2. <strong>Feature Toggle</strong>—— 同 codepath 同时跑新老，金丝雀切流量<br>3. <strong>Anti-Corruption Layer</strong>—— DDD 模式，新老 schema 翻译<br>4. <strong>Event Sourcing</strong>—— 用事件流让新老系统都消费同源数据<br><br><strong>真实案例</strong>: NETCONF agent v3 替代 v2（5 年老代码 + 8 个客户在用）。VP 一开始想"3 个月大重写 ship 全新版本"。我反对，提渐进：<br>1. <strong>v3 跟 v2 并行</strong> 跑（双 binary）；客户可选<br>2. <strong>新功能</strong> 只在 v3 实现<br>3. <strong>老功能逐模块</strong>迁（每月 1-2 个 module）<br>4. <strong>v2 维护降为 critical fix only</strong><br>5. <strong>客户逐个迁</strong>到 v3（不强制）<br>6. <strong>18 个月</strong>后 v2 client 数为 0 → 关停<br><br>结果：① 18 个月平稳过渡（vs 大重写预测 6 个月但 95% 概率延期到 12-24 月 + 中途客户流失）；② 期间 0 客户因 migration 流失；③ 团队<strong>持续 ship</strong> 不中断；④ 团队 morale 高（不是"被困在没 ship 的大重构里"）。<br><br><strong>什么时候大重写 OK？</strong>极少：① 老系统已死（用户极少 / 已 EOS）；② 技术栈彻底过时（如 Flash → modern web）；③ 不需要兼容（greenfield 新业务线）；④ 团队能力远超原作者—— 通常这 4 条全满足才考虑。`,
+      },
+      failure_modes: [
+        `直接大重写 → 99% 失败 case`,
+        `没 Anti-Corruption Layer → 新代码被老 schema 污染`,
+        `不双跑 → 切流量风险大`,
+        `Migration 不 incremental → 一刀切 fail`,
+        `不准备 rollback plan`,
+      ],
+      follow_ups: [
+        { q: `怎么决定哪个 module 先迁？`, hint: `① 业务价值 + 改动频率（hot module 先迁）；② 跟新需求重叠（顺便迁）；③ 解耦度高的（依赖少先迁）；④ Risk + ROI 矩阵` },
+        { q: `渐进时间太长团队 morale 怎么办？`, hint: `① 显式 milestone celebration；② 数据看板 progress（X% 迁完）；③ 短期 win 加快（小 module 优先）；④ 跟 leadership communicate ROI` },
+        { q: `什么时候应该承认渐进失败选择大重写？`, hint: `① 渐进 18+ 月仍 &lt; 30% 迁完；② 老系统持续产生 P0 事故；③ Anti-Corruption Layer 比新代码还复杂；④ 团队 90% 时间在 maintain 老代码—— 这时考虑切割老系统 + 大重写新模块` },
+      ],
+    },
+
+    59: {
+      why_asked: `Senior 架构师必备<strong>影响力</strong>题。能讲"权威/论证/共创 3 层"+ Sponsor 配合的人是真做过 cross-team。`,
+      answers: {
+        mid: `三个层次：<br>1. <strong>权威</strong>（凭借头衔，最弱）<br>2. <strong>论证</strong>（用数据、ADR、ATAM 矩阵——架构师常用）<br>3. <strong>共创</strong>（让团队参与设计，最强）`,
+        senior: `<strong>3 层详解</strong>：<br>· <strong>权威</strong>: "我是架构师所以这么定"——团队短期服从但内心不 buy in，长期反弹<br>· <strong>论证</strong>: 用 ADR 列方案 trade-off、用 ATAM 量化质量属性、用 prototype 验证—— Senior 主流方式<br>· <strong>共创</strong>: Design workshop / RFC 评审让团队提出方案，架构师做 facilitator + 收敛 → 团队 ownership 高，执行力强<br><br><strong>选择策略</strong>：① 紧急 P0 → 偏权威；② 中长期方向 → 偏论证；③ 战略级 + 跨多团队 → 必须共创。`,
+        staff: `深一层：作为 Principal 架构师，<strong>"被服从"vs"被信服"</strong>区别巨大。被服从可能是 fear，被信服是 belief。前者只在 you watch 时 work，后者团队自己 enforce。<br><br><strong>真实策略组合</strong>：<br>1. <strong>提前 1on1</strong>：跟关键 tech lead 个别聊，让他们提前 buy in / 提 concerns→ 公开 meeting 时已有 advocate<br>2. <strong>RFC + 评审周</strong>：草稿发出 → 1-2 周收 comments → 公开 review meeting—— 不是当场说服，是<strong>结构化 collect feedback</strong><br>3. <strong>ADR + 显式 trade-off</strong>：不藏短，把 alternative 也写下来——团队感觉"被尊重 + 我也想到了 X，被采纳"<br>4. <strong>Sponsor 配合</strong>：跟 VP / Skip-level pre-align → meeting 时 VP 不会突然推翻<br>5. <strong>Pilot + data</strong>：小范围试点 → 数据说话 → 全推时阻力小<br><br><strong>真实案例</strong>: 推一个"所有微服务统一用 OTel"决策（影响 8 个团队）：<br>1. RFC 草稿 → email list 1 周<br>2. 跟 8 个 tech lead 各 1on1（共 6 小时）<br>3. 公开 design review（2 小时，70% comments 已在 1on1 解决）<br>4. ADR 记录 + 加 phased rollout plan<br>5. Pilot 2 个团队 → 6 周后 share data<br>6. 全推时<strong>0 阻力</strong>，反而 4 个团队主动来加速接入<br><br><strong>陷阱</strong>：① 跳过 1on1 直接公开会议 → ego 阻力大；② 不写 ADR → 一个月后没人记得决定；③ 不 pilot → 全推时翻车；④ 没 Sponsor pre-align → VP 当场否决；⑤ "<strong>共创"流于形式</strong>—— 假装共创但已内定结果，团队识破后 trust 崩。`,
+      },
+      failure_modes: [
+        `凭权威推 → 短期服从长期反弹`,
+        `跳过 1on1 直接公开会议 → ego 阻力`,
+        `不写 ADR → 半年后没人记得`,
+        `不 pilot 直接全推 → 翻车`,
+        `假共创（已内定）→ trust 崩`,
+      ],
+      follow_ups: [
+        { q: `团队 vocal 反对你的方案怎么办？`, hint: `① 不 defend，先 "good point, walk me through"；② 看反对是否触及核心质量属性 → 真问题修改方案；③ 不触核心但仍反对 → ADR 记录他们的 concern + 决定理由` },
+        { q: `Sponsor 跟你 align 但实际推进时遇阻？`, hint: `① 跟 sponsor 1on1 update；② 让 sponsor 出场 reinforce（不能你自己 push）；③ 如果 sponsor 也退缩 → 重新评估决策；④ Senior 架构师重要技能：知道何时该 walk away` },
+        { q: `跨团队架构治理怎么 scale？`, hint: `① Architecture Review Board（季度评审 critical decisions）；② RFC process 标准化；③ Tech radar（推荐 / 容忍 / 拒绝 技术列表）；④ Tech strategy 文档每年 refresh` },
+      ],
+    },
   },
 
   em: {
@@ -1680,6 +1870,322 @@ const ENRICHMENT = {
         { q: `怎么向 leadership 解释 metric 改变？`, hint: `① 准备 before/after 数据；② Translate to business impact ("customer regression -50% = X saved revenue")；③ Acknowledge tradeoffs ("we 'lost' velocity perception but gained quality")；④ 渐进 over-quarter 不一夜替换` },
         { q: `Engineer NPS 怎么 actionable？`, hint: `① 月度 anonymous survey (15Five / Officevibe)；② Top 3 specific question (manageability / workload / autonomy)；③ Action on feedback within month (visible response)；④ Track trend not absolute score` },
         { q: `Junior 在 AI 时代怎么评估 effectiveness？`, hint: `① 不只看 output（容易 AI-augment）；② Track fundamental understanding（独立 debug 能力 / system design grasp）；③ Periodic no-AI exercise；④ Learning velocity (skill grow rate)` },
+      ],
+    },
+
+    // ============== Phase 2 续推 ==============
+    12: {
+      why_asked: `1on1 频次是 EM 第一个落地动作。能讲"每 2 周 vs 周 vs 月 + 灵活调整"的人是真做过 1on1。`,
+      answers: {
+        mid: `<strong>默认 30 min / 2 周</strong>（双周制）。情境调整：① 新人 / 紧密项目 → 周；② 已 senior 稳定 → 月。<strong>不能少于月</strong>—— 否则脱节。`,
+        senior: `<strong>3 档</strong>：<br>· <strong>Weekly 30 min</strong>: 新人头 3 月 / 在 PIP / 关键 transition / 创业团队<br>· <strong>Bi-weekly 30-45 min</strong>: 默认 / 大多数 senior IC<br>· <strong>Monthly 60 min</strong>: 已成熟独立、跨 timezone / 跨 location 难凑——但绝不"没 1on1"<br><br><strong>灵活原则</strong>: ① 让下属决定（"你希望多频次"）；② 紧急时主动加；③ 出差 / 休假明确补；④ 团队 &gt; 8 人 EM 时间不够，<strong>把部分人改月度</strong>。`,
+        staff: `深一层：1on1 频次<strong>不是 EM 决定的</strong>，是 EM/IC 协商的—— 这本身是<strong>给下属 ownership</strong>的第一个信号。<br><br><strong>真实经验</strong>：作为新 EM 接 8 人团队，初定 weekly 30 min × 8 = 4 小时/周。3 月后发现：① 4 个 senior 觉得 weekly 太频；② 3 个 mid 觉得正好；③ 1 个新人 weekly 不够（要 2x weekly）。<strong>调整后</strong>：4 senior bi-weekly + 3 mid weekly + 1 新人 weekly × 2 = 7 hr/2-week = 3.5 hr/week，<strong>同样满足但更精准</strong>。<br><br><strong>常见 trap</strong>：① 一刀切（不灵活）；② 取消 1on1 当 "<strong>没事不需要</strong>"（错—— 1on1 不只是 status update）；③ 频次太高没主题（变 status meeting）；④ 频次太低 trust 难建。<strong>30 min vs 60 min</strong>：默认 30 min；下属当面 negotiate 想 60 min 也 OK（特别 senior 战略对齐多）。<strong>取消政策</strong>：<strong>下属可取消，EM 尽量不取消</strong>（EM 取消 = 信号"你不重要"）。`,
+      },
+      failure_modes: [
+        `一刀切所有人同频次`,
+        `EM 频繁取消 1on1 → trust 崩`,
+        `频次太高没主题 → 变 status meeting`,
+        `没 1on1 cadence → 信息脱节 / 突发离职 surprise`,
+        `不让下属决定频次 → 失去 ownership 信号`,
+      ],
+      follow_ups: [
+        { q: `远程 / 跨时区团队 1on1 怎么做？`, hint: `① 固定时间避免每次重排；② Video on（不仅 audio）；③ 多用 async（Notion / Loom）补充；④ 出差时尽量面对面 reconnect；⑤ Quarterly in-person retreat 是远程团队 retention 关键` },
+        { q: `1on1 议程怎么准备？`, hint: `① 共享 Notion / doc 双方加 topics；② IC 议程优先（不是 EM status update）；③ 标准 4 段：career growth / current work / feedback both ways / blocker；④ 不要变 status meeting—— status 异步` },
+        { q: `Skip-level meeting 跟 1on1 区别？`, hint: `① Skip-level: VP 跟下属的下属 1on1，绕过中间 EM；② 频次低（quarterly）；③ 目的：① calibrate EM；② 收集 frontline feedback；③ 显示 leadership care；④ EM 应该 encourage 而非 threat by skip-level` },
+      ],
+    },
+
+    14: {
+      why_asked: `1on1 沉默是新 EM 最怕的尴尬。能讲"问对问题 + 心理安全 + 给时间"3 招的人是真做过 coaching。`,
+      answers: {
+        mid: `<strong>3 招</strong>：① <strong>问对问题</strong>（"过去 2 周让你 frustrated 的事是什么"比"工作怎么样"好 10×）；② <strong>建立心理安全</strong>（不当面 review；不立刻 fix）；③ <strong>给时间</strong>（沉默 30 秒不打断，让对方真思考）。`,
+        senior: `<strong>新人 / 沉默下属的 6 个 prompt</strong>：<br>1. "<strong>过去 2 周哪 1 件事让你 frustrated</strong>？"（具体 + 负面 → 易开口）<br>2. "<strong>如果你是我，你会改 team 哪 1 件事</strong>？"（赋权 + 假设）<br>3. "<strong>跟谁合作让你 energized / drained</strong>？"（人 dynamics）<br>4. "<strong>你最想发展的 skill 是什么</strong>？"（career growth）<br>5. "<strong>什么 noise 在分散你</strong>？"（block / distraction）<br>6. "<strong>你担心我不知道的事是什么</strong>？"（surface 隐藏 concerns）<br><br><strong>反例</strong>："工作怎么样？" → 99% 答 "还行"，毫无 signal。`,
+        staff: `深一层：沉默通常<strong>不是没话说</strong>，是"<strong>不信任 / 不知道说啥安全 / 文化差异</strong>"。EM 责任是 build psychological safety。<br><br><strong>真实经验</strong>: 一个新 hire 第一个 1on1 几乎沉默。我犯的错：① 持续问 yes/no 问题；② 自己 fill silence 讲了 20 分钟；③ 没问情感层（情绪 / 价值观）只问 task。结果他 3 周后离职。<br><br><strong>后来调整</strong>: 跟新人头 3 次 1on1：<br>1. <strong>第 1 次</strong>: 80% 听，问开放性问题（"What brought you here? What are you most excited about?"）<br>2. <strong>第 2 次</strong>: 给具体 problem 让他评论（"我考虑 X，你怎么看"）—— 让他 feel valued<br>3. <strong>第 3 次</strong>: 邀请 critical feedback（"如果你 own this team 你会改什么"）<br><br>3 月后这个 hire 成为 team 最 vocal、贡献最大的成员之一。<br><br><strong>额外技巧</strong>：① <strong>walking meeting</strong>（边走边聊降低压力）；② <strong>异步先 doc</strong>（让对方写下要讨论的 topics，避免冷启动）；③ <strong>EM 先 vulnerable</strong>（"我最近也 struggle X"）→ 对方更愿 share；④ <strong>跨文化敏感</strong>（亚洲文化默认 modest，EM 主动询问 + 不强 push）。<br><br><strong>持续沉默的 redflag</strong>：3 次 1on1 仍沉默 + 工作没 trust = 准备 transition out。但<strong>大多数</strong>沉默是 EM 没问对问题或 trust 没 build。`,
+      },
+      failure_modes: [
+        `问 "工作怎么样？" → 99% 收 "还行" 无 signal`,
+        `EM fill silence 自己讲太多 → 失去 collect feedback 机会`,
+        `沉默就立刻 fix（强行 push 话题）→ 反而加压`,
+        `不问情感层只问 task → 错过 retention 风险信号`,
+        `没识别文化 / introvert 差异 → 强 push 反伤 trust`,
+      ],
+      follow_ups: [
+        { q: `下属说"没什么要讨论的"怎么办？`, hint: `① 接受 + 缩短到 15 min（不浪费时间）；② 但 keep 频次（cadence 不变）；③ 偶尔异步 prompt（"在思考 X，下次想聊聊"）；④ Career growth topic 一定挖（短期 status 没有，长期 career 一定有）` },
+        { q: `怎么 build psychological safety？`, hint: `① EM 先 admit mistake（show vulnerability）；② 永远 attack idea 不 attack person；③ 隐私 feedback 不公开（特别批评类）；④ Action on feedback within month（让 IC 感觉 invest 有回报）` },
+        { q: `跨文化 1on1 注意什么？`, hint: `① 部分文化（亚洲 / 部分欧洲）默认 modest 不主动表达，EM 多主动询问；② 部分文化避免直接 disagree，EM 提供 anonymous channel；③ EM 主动 share own background → mutual cultural respect` },
+      ],
+    },
+
+    22: {
+      why_asked: `Hiring 标准化必备。能讲"4 维度 + 行为题 + score rubric"的人是真做过 hiring loop 设计。`,
+      answers: {
+        mid: `<strong>4 维度</strong>：① <strong>Technical depth</strong>（系统设计 + coding）；② <strong>Communication</strong>（讲思路清晰）；③ <strong>Collaboration</strong>（跨 team / mentorship 倾向）；④ <strong>Culture / Values fit</strong>（公司 value alignment）。每维度<strong>1-4 rubric</strong> + 具体 example。`,
+        senior: `<strong>详细 Scorecard 字段</strong>：<br>· <strong>Interview type</strong>: phone screen / coding / system design / behavioral / bar raiser<br>· <strong>Dimensions 评分</strong>: 每个 dimension 1-4 + textual evidence（不只数字）<br>· <strong>Strong yes / Yes / No / Strong no</strong>: 最终 verdict<br>· <strong>Areas of concern</strong>: 显式列 risks<br>· <strong>Comparison to existing team</strong>: "如果加入 raises / lowers bar"<br><br><strong>关键</strong>: ① <strong>独立填</strong>（避免 anchoring）；② <strong>debrief 时 share</strong>；③ <strong>不 average</strong>—— 任一 strong no = reject。`,
+        staff: `深一层：Hiring Scorecard 的<strong>真实价值</strong>不是当下 hire/no-hire 决定，是<strong>"团队 bar 校准 + 长期 calibration"</strong>。看 scorecard 6 月后比对实际 perf 能发现：① 哪些 signal 真预测高 perf；② 哪些面试官 bar 偏高 / 偏低；③ 哪些 dimension 我们过度 weight。<br><br><strong>Google / Amazon 风格 Scorecard</strong>: <br>· 每个 dimension 必须 evidence-based（不能 "I felt good"）<br>· "Lift the bar" question—— 这个候选人加入是否 raise team bar 在该 dimension<br>· Bar Raiser 角色（独立于 hiring manager 决定）<br><br><strong>真实经验</strong>: NETCONF agent team hiring 6 人过程：<br>1. 设计 4-dimension scorecard（technical / system design / communication / values）<br>2. 4 round interview（screen / coding / sys design / bar raiser）<br>3. Debrief 每次 1 hour，每人 share scorecard + 投票 strong yes / yes / no / strong no<br>4. <strong>1 strong no = reject</strong>（无论其他 yes）<br>5. <strong>6 月 calibration</strong>: 对比 hire 实际 perf，发现 "system design" score 跟 perf 相关性 0.7，"behavioral" 0.4——decide weight system design 高<br><br><strong>陷阱</strong>：① No structured scorecard → "感觉 good" 主观；② Debrief 前 anchoring（"我觉得他不错"先发言）→ 强 lead opinion；③ Hire bar 太低（"reach the quota"）→ 6 月后 PIP；④ 不 calibrate → scorecard 失效。<br><br><strong>红线</strong>：① values / culture 红线（如不诚信 / disrespect）= 立 reject 无论 technical；② 6 月 calibration 必做—— 没 cal 的 scorecard 等于不存在。`,
+      },
+      failure_modes: [
+        `Scorecard 太主观（"good fit"）`,
+        `Debrief 前 anchoring（先发言者主导）`,
+        `Hire 后不 6 月 calibrate → scorecard 失效`,
+        `用 average 而非 veto（应该 strong no = reject）`,
+        `Values 红线没明确 → marginal hire 进 team 拖累`,
+      ],
+      follow_ups: [
+        { q: `Bar Raiser 怎么 work？`, hint: `① 独立于 hiring manager（不能 own 该 team）；② 有 veto 权；③ 训练过 + 多次 interview 经验；④ Amazon 称 "Bar Raiser"，Google 称 "Hiring Committee"；目的：防 manager 急着填 headcount lower bar` },
+        { q: `Coding interview 该不该用？`, hint: `① 对 IC 仍主流；但 ② AI 时代  raw coding 速度 less differentiating；③ 改 emphasize debugging + system thinking + code review skill；④ Senior 减 coding 增 system design / behavior` },
+        { q: `Values fit 跟 culture fit 区别？`, hint: `① Culture fit 易变 bias（招"跟我们像的人" → diversity 低）；② Values fit 是 explicit principles（如 "customer obsession" / "ownership"）；③ Hire for values，build for culture` },
+      ],
+    },
+
+    24: {
+      why_asked: `行为题水平区分新 vs senior EM。能讲"具体行动 + 量化结果 + 反思"的人能精准筛"伪资深"。`,
+      answers: {
+        mid: `用 <strong>STAR + dig deeper</strong>。"伪资深"特点：<br>· 讲故事缺<strong>具体 action</strong>（只说 "我们做了 X"）<br>· R 段<strong>无量化</strong><br>· 不能讲<strong>替代方案 / trade-off</strong><br>· 遇追问就 vague / generic`,
+        senior: `<strong>5 个识别问题</strong>：<br>1. "<strong>具体讲一下 X 的关键决策</strong>" → 看是否能讲到 day-to-day detail<br>2. "<strong>什么是 alternative，为啥没选</strong>" → 看 trade-off 思维<br>3. "<strong>如果再做一遍，你会怎么改</strong>" → 看 reflection<br>4. "<strong>团队规模 / 预算 / timeline 多大</strong>" → 量化 scale，避免吹嘘<br>5. "<strong>当时遇到的最大障碍 + 怎么过的</strong>" → 看真实 struggle vs 顺利讲故事<br><br><strong>红旗</strong>: ① "I" 比例 &lt; 30%（满口 "we"）；② Vague metrics（"显著提升"）；③ 没 trade-off / failure；④ 故事过于"圆满"（不真实）；⑤ 追问技术细节 hand-wave。`,
+        staff: `深一层：识别伪资深的<strong>核心技能</strong>是<strong>"deep dive 到 layer 3+"</strong>。<br><br>· <strong>Layer 1 (表面)</strong>: "我做了一个 microservice migration 项目"<br>· <strong>Layer 2 (一层细节)</strong>: "我们拆了 monolith 成 8 个服务"<br>· <strong>Layer 3 (具体决策)</strong>: "<strong>我决定先拆 payment service 不是 user service</strong>，因为 X"<br>· <strong>Layer 4 (个人贡献 + trade-off)</strong>: "<strong>我推了用 Kafka 不是 RabbitMQ，因为我们已有 Spark 团队熟悉 Kafka，迁移成本低</strong>。当时 team 倾向 RabbitMQ 因为 X，我用 Y 数据说服。"<br>· <strong>Layer 5 (reflection)</strong>: "<strong>事后看 Kafka 维护成本 underestimate，如果再来我会选 managed Kafka SaaS</strong>"<br><br>真资深能讲到 layer 4-5，伪资深停在 layer 2。<br><br><strong>真实案例</strong>: 面 senior EM 候选 X，简历说"带 50 人，3 年 grew team to 50"。问：<br>· "<strong>具体 grow 50 人的过程？你 hire 几个？流失几个？</strong>"→ 答 vague<br>· "<strong>50 人怎么 org 结构？多少 sub-team？你 own 跨 team 还是 single team？</strong>"→ hesitate<br>· "<strong>你 fire 过几个 underperformer？记得最近一次的过程？</strong>"→ "没 fire 过"<br>→ 显然不是真 own 50 人的 EM，可能是 nominal title。Reject。<br><br><strong>另一案例</strong>: 候选 Y 简历看似不亮（"team of 12, 2 years EM"），但 deep dive 时：<br>· "<strong>2 年内 promote 3 个 IC 到 senior，过程？</strong>"→ 详细讲 calibration / mentorship<br>· "<strong>最难的一次 fire？</strong>"→ 讲 P0 incident 后 fire 过程 + 团队 morale recovery<br>· "<strong>跨 team 推动 OTel 接入</strong>"→ 讲 8 个 team 的 stakeholder map + influence strategy<br>→ 真 senior。Strong hire。<br><br><strong>建议</strong>：① 准备 5-10 个深度问题（不是 yes/no）；② 至少 30 min 一个 topic deep dive；③ Cross-check 不同问题 same theme 答案是否一致；④ 简历 vs 实际 deep dive 不一致 = redflag。`,
+      },
+      failure_modes: [
+        `Stop at Layer 2 surface answer 接受`,
+        `不 cross-check 不同问题答案一致性`,
+        `相信 fancy title / company name 不 deep dive`,
+        `不挖 trade-off / failure`,
+        `不识别 "we" overuse → 个体贡献模糊`,
+      ],
+      follow_ups: [
+        { q: `Senior EM 该问哪些深度问题？`, hint: `① 最难 hire / fire 决策 + 后果；② 你跟 boss disagree 怎么处理；③ 团队危机（事故 / 流失）怎么 recover；④ 跨 team / 跨 culture leadership；⑤ Career story（为啥 join 我们）` },
+        { q: `怎么避免自己 anchor 在简历？`, hint: `① 面试前不读 detail，只看 high-level；② 用 standard rubric 同样问题问所有候选；③ Bar Raiser cross-check；④ Debrief 强调 evidence not impression` },
+        { q: `候选人对追问反感怎么办？`, hint: `① 解释 "我想深入了解，不是 doubt"；② 切换 topic 给空间；③ 仍坚持核心追问—— senior 候选应能 deal with deep dive；④ 完全不能 deep dive = 大 redflag` },
+      ],
+    },
+
+    28: {
+      why_asked: `Senior hiring 高频场景。能讲"理性谈 + value beyond comp + escalate 边界"的人是真做过 hiring negotiation。`,
+      answers: {
+        mid: `<strong>4 步</strong>：① <strong>不情绪化</strong>—— 候选拿 competing offer 是市场行为，不是 personal；② <strong>理解他 value</strong>（comp / role / mission / team）；③ <strong>给 non-comp value</strong>（career growth / 团队 / 项目）；④ <strong>必要时 escalate</strong> 谈 comp 提升，但<strong>有上限</strong>。`,
+        senior: `<strong>对话框架</strong>：<br>1. <strong>Acknowledge</strong>: "Congrats on the X offer, that's a great company"（不贬低对方）<br>2. <strong>Understand</strong>: "What attracts you about X? What are you weighing?" → 了解他真正 care 什么（不一定是钱）<br>3. <strong>Match value</strong>: 如果他 care growth → 讲我们 growth path；如果 care impact → 讲项目重要性；如果 care comp → 看是否能 escalate<br>4. <strong>If comp gap large</strong>: 跟 hiring manager / recruiter / Director 谈 escalate budget；但要诚实评估"我们值这个 budget 吗"<br>5. <strong>Walk away ready</strong>: 如果 gap 超我们 ceiling，<strong>礼貌 walk away</strong>—— "<strong>祝好</strong>" 比"<strong>给个不可持续的 offer</strong>" 长期更好`,
+        staff: `深一层：Competing offer scenario 的<strong>3 个 trap</strong>：<br><br>① <strong>过度 chase</strong>：每个候选都 escalate → comp creep + 团队内不公平。如果 X 候选拿 50% premium，3 个月内同 level 老员工知道了 → morale 崩。<br><br>② <strong>价值低估</strong>：很多 senior candidate 真在意的是<strong>"impact / autonomy / culture"</strong> 不是 5% comp。问对问题（Q2）能避免不必要的 comp 谈判。<br><br>③ <strong>不诚实 sell</strong>：candidate 50% chance 接 → 你过度 oversell → 来了发现现实差 → 6 月离职。<br><br><strong>真实案例</strong>: NETCONF agent senior eng 候选 X 在 final stage 拿到 Big Tech offer，base salary 高 30%。我（hiring EM）跟他 1on1：<br>· 问 "<strong>What's pulling you toward Big Tech?</strong>" → 答："base 高，但实际工作可能就是大公司 cog"<br>· 我说："<strong>诚实跟你 share</strong>：我们 base 比 Big Tech 低 20-30%（公司阶段 startup），<strong>但</strong> ① 你 own 全栈 NETCONF 模块（impact）；② Year 1-2 可能升 staff；③ Equity 如果公司 well 长期可能 outpace Big Tech base。Trade-off：Big Tech 稳但慢晋升，我们 risk 但 grow 快。"<br>· 不 escalate comp—— 公司预算给到 ceiling 已经<br>· 给他 1 周 think + meet team + skip-level chat with VP<br>· 最终他 join → 18 个月后 promoted to staff，2 年后 lead 整个 team<br><br><strong>关键 lesson</strong>: ① 不 panic chase；② 真诚 share trade-off；③ Sell beyond comp；④ Walk away ready—— 如果他 ultimate care comp，他不是 fit。<br><br><strong>反例</strong>: 另一候选 Y 拿 competing offer，我 escalate comp 给 +20%。他来了 6 个月发现"<strong>项目跟 sales pitch 不一致</strong>"离职。Sunk cost = 6 个月 + recruiting fee + onboarding。<strong>本可避免</strong>: 不 escalate 让他选 competing offer 当时更好。`,
+      },
+      failure_modes: [
+        `每个候选都 escalate comp → comp creep + 内部 inequality`,
+        `没问 candidate 真 care 什么 → 错配 sell pitch`,
+        `Oversell 项目 → 6 月离职后悔`,
+        `Walk away 时态度差 → 失去 future re-hire 可能`,
+        `用现 employee comp 当上限 → 失去市场竞争力`,
+      ],
+      follow_ups: [
+        { q: `Comp 谈判到什么程度该 walk away？`, hint: `① 超过同 level 老员工 15-20% → 不公平；② 超过 hiring manager budget ceiling → 不可持续；③ Candidate ultimate care comp not mission → 不是文化 fit；④ Walk away 时保持 warm（future 可能 re-engage）` },
+        { q: `怎么避免 candidate 用 fake offer 抬价？`, hint: `① 让 candidate 转发 offer letter（professional）；② Cross-check 公司 hiring 状态（LinkedIn / 业界）；③ 直觉 + 多 datapoint；④ 一定程度信任—— 大多 candidate 不会 fake，少数会发现后 reject` },
+        { q: `Backfill candidate 跟 net-new 处理一样吗？`, hint: `① Backfill: 已有 budget，更 flexible；② Net-new: 需 justify ROI 给 VP；③ Senior backfill: 可适度 escalate；④ Net-new senior: 严格 budget control；情境化决策` },
+      ],
+    },
+
+    34: {
+      why_asked: `OKR 写作高频 EM 题。能讲"O 鼓舞人心 + KR 可测 + 50% confidence"的人是真做过 OKR 实操。`,
+      answers: {
+        mid: `<strong>O (Objective)</strong>: 鼓舞人心 + 定性 + 时间 bound（"Q3 让 NETCONF agent P99 latency 业界领先"）<br><strong>KR (Key Results)</strong>: 3-5 个，<strong>可量化 + 有挑战性</strong>（"P99 latency &lt; 5ms" "客户 P0 事故 -50%"）<br><strong>Confidence</strong>: 设定时 50% confidence（太高 = 不挑战；太低 = 不切实际）`,
+        senior: `<strong>好 OKR 的 5 个标准</strong>（Doerr "Measure What Matters"）:<br>1. <strong>Aspirational</strong>: O 听起来 exciting 不只是 task<br>2. <strong>Outcome &gt; Activity</strong>: KR 是 outcome（"客户满意度 +X%"）不是 activity（"完成 10 个 PR"）<br>3. <strong>Few</strong>: 3-5 个 KR；&gt; 5 → focus 散<br>4. <strong>Quantifiable</strong>: "更好" 不算；必须数字<br>5. <strong>Cascading</strong>: Team OKR derive from Company OKR；Individual OKR derive from Team<br><br><strong>反例</strong>:<br>· ❌ "改进系统" → vague<br>· ❌ "写 10 个 design doc" → activity<br>· ❌ "改进 latency 30%" → 没 base / 不够 ambitious<br>· ✅ "Q3 P99 latency &lt; 5ms（baseline 12ms）+ 客户 NPS &gt;= 60（baseline 45）+ 0 P0 incident"`,
+        staff: `深一层：OKR 失败 80% 是<strong>"把 KR 写成 task list"</strong>。Google 创始人原话："<strong>OKR 不是 task list</strong>—— 是<strong>结果承诺</strong>。"<br><br><strong>OKR vs KPI 区别</strong>：<br>· <strong>KPI</strong>: 持续度量的健康指标（如可用性 99.9% / churn rate）<br>· <strong>OKR</strong>: 季度 ambition（"<strong>提升</strong>" / "<strong>达到</strong>"），完成后 retire（不是永久跑）<br><br><strong>真实案例</strong>: 早期我作 EM 写过烂 OKR：<br>· O: "提升 NETCONF agent 质量"（vague）<br>· KR1: "完成 30 个 bug fix"（task / activity）<br>· KR2: "增加 unit test"（vague）<br>· KR3: "Code review 更严格"（不可测）<br>季度末完不成 / 没完成感 / 团队怀疑 OKR 价值。<br><br>下季度改：<br>· O: "<strong>Q4 NETCONF agent 达到生产级稳定</strong>"<br>· KR1: "P0 incident 数 = 0（Q3 是 3）"<br>· KR2: "P99 latency &lt; 8ms（Q3 是 15ms）"<br>· KR3: "Customer-reported bugs &lt; 5 / 月（Q3 是 12）"<br>· KR4: "Unit test coverage 80%（Q3 是 60%）"<br>—— 季度末实际：P0 = 1, P99 = 6ms, bugs = 7, coverage = 78%。<strong>3/4 KR hit + 1 close miss</strong>（OKR 设计就是 50-70% achievement = healthy aggressive）。团队感觉 ambitious 但 doable。<br><br><strong>陷阱</strong>：① KR 设太低（100% 完成不挑战）；② 太高（0% 完成 demotivating）；③ "<strong>committed</strong>" vs "<strong>aspirational</strong>" 区分—— Google 分两类：commit OKR 必须 100%，aspire OKR 70% 算成功；④ OKR 跟 perf review 强绑 → 团队 sandbag。<br><br><strong>Health 指标</strong>：team OKR 季度末平均 60-80% achievement（不是 100%）= ambitious 健康。`,
+      },
+      failure_modes: [
+        `KR 写成 task / activity（不是 outcome）`,
+        `没 base / 不量化 → 没 reference point`,
+        `太多 KR（&gt; 5）→ focus 散`,
+        `OKR 跟 perf review 强绑 → 团队 sandbag`,
+        `100% 完成不挑战 / 0% 完成 demotivating`,
+      ],
+      follow_ups: [
+        { q: `Aspirational vs Committed OKR 区别？`, hint: `① Committed: must-hit baseline（如 "保持 SLO 99.9%"），100% 完成；② Aspirational: stretch goal（如 "scale 3x"），70% 算成功；③ Google 分两类，避免 sandbag` },
+        { q: `Quarterly vs Annual OKR 怎么选？`, hint: `① Quarterly: 主流，3 个月 horizon 易 adjust；② Annual: 适合 strategic objective（如 platform migration）；③ 混合：Annual O + Quarterly KR refresh` },
+        { q: `OKR 跟 KPI / Roadmap 怎么协调？`, hint: `① KPI: 持续监控的 health；② OKR: 季度 push 的 change；③ Roadmap: feature delivery list；三者 align—— OKR 应该让 roadmap 优先级清晰，让 KPI 改善` },
+      ],
+    },
+
+    51: {
+      why_asked: `估算不准是几乎所有团队问题。能讲"Reference Class + 拆任务 + 实际 buffer"的人是真做过 estimation 改进。`,
+      answers: {
+        mid: `<strong>3 招</strong>：① <strong>Reference Class Forecasting</strong>—— 参考<strong>类似项目历史数据</strong>，不靠主观；② <strong>拆任务到 &lt; 3 day</strong>—— 大任务 always 低估；③ <strong>加 20-30% buffer</strong>—— 永远有 unknown unknowns。`,
+        senior: `<strong>系统改进 4 步</strong>：<br>1. <strong>历史回溯</strong>: 过去 3-6 个 sprint 实际耗时 vs 估算，画 ratio 分布（typical 1.5-2.5×）<br>2. <strong>分类 / 复杂度估算</strong>: 用 T-shirt size (S/M/L/XL) 或 fibonacci point（1/2/3/5/8/13），不是绝对 hour<br>3. <strong>多人盲估</strong>: Planning poker—— 减少 anchoring<br>4. <strong>事后 retrospective</strong>: 每 sprint 复盘 estimation 准度，让团队 calibrate<br><br><strong>关键</strong>: ① <strong>认知 unknown unknowns</strong> 占 30-50% 时间（debug / 跨 team blocker / spec change）；② 把 buffer 显式加（不是"<strong>偷偷 padding</strong>"）；③ team velocity stable 后 trust the average。`,
+        staff: `深一层：估算永远不准的<strong>根本原因</strong>是<strong>"我们不知道我们不知道什么"</strong>（Donald Rumsfeld unknown unknowns）。每个软件项目都有 30-50% 时间在解决"<strong>启动时根本想不到</strong>"的问题——dependency 升级 / 第三方 bug / spec 变 / 团队成员离职。<br><br><strong>Hofstadter's Law</strong>: "<strong>It always takes longer than you expect, even when you take into account Hofstadter's Law</strong>" —— recursive，永远低估。<br><br><strong>真实案例</strong>: NETCONF agent v3 项目初估 4 个月，实际 7 个月（1.75× ratio）。我作为 EM 的改进：<br>1. <strong>对比过去 6 sprint</strong>: 平均 estimation ratio 1.4-2.0×。Lesson: <strong>下次 estimate 必乘 1.5-1.8</strong><br>2. <strong>拆 epic 到 &lt; 3 day task</strong>: 大 epic（"build YANG parser"）拆成 12 个 small task → 估算总和更准<br>3. <strong>Planning poker 必做</strong>: 不是 EM 单方面定，team 盲估 → 触发 discussion when 估算差异大<br>4. <strong>Sprint retro 加 estimation review</strong>: 每 sprint 末 review 哪些任务超估 / 没估，calibrate next sprint<br>5. <strong>跟 leadership 沟通</strong>: 不 commit "4 个月"，commit "4-7 个月 range with 50% confidence at 5 月"<br><br>6 个 sprint 后 team estimation ratio 收敛到 1.15-1.3×（仍超但显著缩小），<strong>关键</strong> leadership 也接受了 range estimate 而非单点。<br><br><strong>陷阱</strong>：① "<strong>这次会更准</strong>" 直觉（不会，永远 1.5×）；② Pad 不告诉 leadership → 显得 estimation 不专业；③ 不 retrospect → 永远不改善；④ 单点 estimate 不 range → over-commit；⑤ 用 absolute hour 而非 relative size → 跨任务比较失意义。<br><br><strong>关键文化转变</strong>：从 "<strong>commitment</strong>" 估算（"承诺 4 月 ship"）→ "<strong>probability</strong>" 估算（"50% confidence ship by 5 月，90% by 7 月"）。<strong>VP 教育</strong>是 EM 重要工作。`,
+      },
+      failure_modes: [
+        `单点 estimate 不 range → over-commit`,
+        `Pad buffer 但不告诉 leadership → 显得 estimate 不专业`,
+        `不 retrospective estimation → 永远不改善`,
+        `EM 单方面 estimate 不让 team 参与 → team 不 buy in`,
+        `用 absolute hour 而非 relative point → calibration 难`,
+      ],
+      follow_ups: [
+        { q: `Planning Poker 怎么 facilitate？`, hint: `① 用 fibonacci card；② 每人盲选 → 同时翻 → 讨论 outliers；③ 高低差 &gt; 3 cards = 必讨论；④ 决策不是 average，是 consensus；⑤ 异步可用 Trello/Jira plugin` },
+        { q: `Big bang 项目 (6+ month) 怎么估？`, hint: `① 拆 milestone (每 2-4 weeks)；② 头 1-2 milestone 估准，远期 milestone broad range；③ Re-estimate every 2 sprints；④ Reference Class（类似过去项目实际耗时）` },
+        { q: `Leadership 不接受 range estimate 怎么办？`, hint: `① 显示 history data 证明 range 准过 single point；② 跟 finance/PM align "we'll plan with P50, communicate P90"；③ 用 Monte Carlo simulation visualize；④ 必要时 walk leadership through estimation training` },
+      ],
+    },
+
+    52: {
+      why_asked: `延期沟通考 EM 危机管理 + 向上汇报能力。能讲"BLUF + 3 options + ask"的人是真做过 P0 escalation。`,
+      answers: {
+        mid: `<strong>BLUF + 3 options + 明确 ask</strong>:<br>1. <strong>BLUF</strong>: "项目延期 X 周，需要你决策 by EOW"<br>2. <strong>Root cause</strong>: 量化 + 不甩锅<br>3. <strong>3 options</strong>: A 加资源 / B 减 scope / C 延 timeline<br>4. <strong>Recommendation + rationale</strong><br>5. <strong>Ask</strong>: 你需要 VP 做什么决策 + by when`,
+        senior: `<strong>详细 talk track</strong>（90s 版本）:<br>1. "<strong>项目 ship 日期从 X 推到 Y</strong>"（不绕弯，BLUF）<br>2. "<strong>SPI = 0.7（baseline 1.0），过去 2 sprint trend 下滑</strong>"（量化）<br>3. "<strong>Root cause: ① 一个 senior dev 离职；② vendor X API 兼容性问题占了 3 周</strong>"（具体 + 不甩锅）<br>4. "<strong>3 options</strong>:<br>· A: 加 contractor 2 人 6 周 = +$50k，保 ship Y<br>· B: cut feature Z（10% scope），保 ship X<br>· C: 不变 scope/resource，ship Z=X+4 weeks"<br>5. "<strong>我 recommend B</strong>—— feature Z 已经 deprioritized in roadmap，cutting 影响低"<br>6. "<strong>Ask</strong>: 需要你 approve B by EOW，sales team align customer expectation"`,
+        staff: `深一层：延期沟通的<strong>核心心态</strong>是<strong>"早 surface bad news + 给 VP 决策权"</strong>。<br><br><strong>3 个常见 anti-pattern</strong>:<br>① <strong>Hide and hope</strong>: "我们 push 一下应该能 ship"（不切实际 + 失去 trust 当真 ship 不出来）<br>② <strong>Surface 但无 option</strong>: "项目延期了，怎么办"（把问题甩给 VP，显得无能）<br>③ <strong>过度量化但无 recommendation</strong>: 给 5 个 option 让 VP 选 → VP 没 context，会问 "<strong>你认为呢</strong>"<br><br><strong>真实案例</strong>: NETCONF agent v3 项目 month 4 发现要延期 6 周。<br><br>VP 1on1（90s 完成）:<br>1. "<strong>Project 当前 status: red, 预计延期 6 weeks（原 Oct 1 → Nov 15）</strong>"<br>2. "<strong>SPI = 0.72, CPI = 0.85, trend 4 周下滑</strong>"<br>3. "<strong>Root cause</strong>:<br>· Senior eng X 离职（4 周影响）<br>· Vendor Y SDK 兼容性比预期复杂（2 周影响）<br>· Spec 中途增加客户 Z 定制需求（accept 的 scope creep，1 周影响）"<br>4. "<strong>3 options</strong>:<br>· A: 加 contractor 2 人 + ship Nov 15 (cost +$60k)<br>· B: cut customer Z 定制（scope -8%）+ ship Oct 15 (lose 1 customer's potential expansion)<br>· C: 不变 scope/resource + ship Nov 15 (现状继续)"<br>5. "<strong>Recommend A</strong>—— customer Z 是 strategic account，cut 风险大；contractor cost 可控；net ROI 正"<br>6. "<strong>Ask</strong>: budget approval +$60k by EOW，finance 准备 contractor onboarding"<br><br>VP 反应: "<strong>Appreciate the clarity, let's do A</strong>"。决策完成 5 分钟。<br><br><strong>对比 anti-pattern</strong>:<br>· "<strong>项目可能要晚一点</strong>" → 模糊，VP 无法决策<br>· "<strong>项目延期 6 周</strong>" → 完整但无 option，VP 问 "你建议怎么办"<br>· "<strong>项目延期 + 5 options 给你选</strong>" → 太多 option 失去 focus<br>· "<strong>项目延期 + recommend A 没 alternative</strong>" → 显得不全面 / 不开放<br><br><strong>关键</strong>: 早 surface（不是 ship 前一周）+ 量化（不是感觉）+ option（不是问题）+ recommendation（不是甩问题）。`,
+      },
+      failure_modes: [
+        `Hide and hope → 失去 VP trust`,
+        `Surface 但无 option → 甩问题给 VP`,
+        `太多 option → focus 散`,
+        `没明确 ask + timeline → next step 模糊`,
+        `Late surface（ship 前一周）→ 选项空间小`,
+      ],
+      follow_ups: [
+        { q: `VP 反应 angry 怎么办？`, hint: `① 不 defend，先 acknowledge "I understand frustration"；② 重申 commitment to resolve；③ 问 "what additional info do you need"；④ 24h 内 follow-up written summary；⑤ 不挂面子` },
+        { q: `延期影响客户怎么 communicate？`, hint: `① 不 surprise 客户，提前 sales / customer success 同步；② 提供 alternative（partial delivery / interim solution）；③ 量化 customer impact 给 leadership；④ 客户 directly impacted 要 EM/VP 出面，不只 sales` },
+        { q: `重复延期（第 3-4 次）怎么办？`, hint: `① 严肃 retrospective—— 是 estimation 烂还是 execution 烂；② 跟 leadership 重新 scope（可能需要 kill 项目）；③ Team 可能需要 reorg / new lead；④ 自我 reflect 作为 EM 有没 enable team failures` },
+      ],
+    },
+
+    53: {
+      why_asked: `项目三角是 PM/EM 经典框架。能讲"3 角 + customer view + 怎么沟通"的人是真做过 trade-off 决策。`,
+      answers: {
+        mid: `<strong>Triple Constraints / Iron Triangle</strong>: <strong>Scope / Time / Resource</strong>—— 三角形固定面积，<strong>选 2 个固定，第 3 个随动</strong>。Quality 是面积本身（不能 sacrifice）。`,
+        senior: `<strong>4 种 trade-off 场景</strong>:<br>1. <strong>Fix scope + time</strong> → resource 加（典型："hard deadline + must-have features，加 contractor"）<br>2. <strong>Fix scope + resource</strong> → time 延（典型："no extra budget but feature 不变，延期"）<br>3. <strong>Fix time + resource</strong> → scope 减（典型："hard deadline + budget cap，cut MVP features"）<br>4. <strong>Quality 不能动</strong>——典型新 EM 错把 quality 当 4th 维度。Quality issue 长期吃 team velocity（tech debt）+ customer trust。<br><br><strong>跟 stakeholder 沟通</strong>: <strong>"pick 2"</strong>—— 让 stakeholder 选哪两个 fix（typically scope / time），<strong>不让他们当 free lunch</strong>。`,
+        staff: `深一层：Iron Triangle 是<strong>初级框架</strong>—— senior PM/EM 用 <strong>Cost of Delay + Risk + Strategic Value</strong> 多维优化。<br><br><strong>真实案例</strong>: NETCONF agent v3 中期发现 scope 超 + senior eng 离职 + customer X 想要某 feature 必须 ship before competitor。这是<strong>三角 + 第 4 维度 cost of delay</strong> 问题。<br><br>分析:<br>· <strong>Fix time + resource → cut scope</strong>: cut feature Y 但 Y 是 customer X 必要 → 失去 customer<br>· <strong>Fix scope + time → add resource</strong>: contractor 2 人 6 周 +$60k，ship on time<br>· <strong>Fix scope + resource → delay</strong>: 推 6 周，竞品 ship before us → customer X 可能切到竞品<br><br>判断:<br>· Customer X ARR $500k/年 → 失去他 = -$500k/年<br>· Contractor cost $60k 一次 → ROI 8×<br>· 选 add resource。<br><br><strong>陷阱</strong>:<br>① <strong>新 EM 把 quality 当 4th 维度 sacrifice</strong>—— 拿"<strong>ship and fix later</strong>" 当 trade-off → 长期 tech debt + customer churn<br>② <strong>Stakeholder 想要"all 3 fixed"</strong>—— 这是不可能的，EM 要教育（不是迎合）<br>③ <strong>Add resource 不一定加速</strong>（Brooks' Law: "<strong>Adding manpower to late software project makes it later</strong>"）—— onboarding 成本 + coordination overhead，10 人项目加 5 人可能 first month 反而慢<br>④ <strong>Cut scope 不是放弃质量</strong>—— cut 是<strong>feature scope</strong>，留下的 features 仍 quality bar 保持<br><br><strong>跟 VP 沟通</strong>: "VP，我们三角失衡，你帮我选哪两个 fix——A. budget +$60k 加 contractor；B. 接受延期 6 周；C. cut 客户 X 定制（risk customer loss）。我 recommend A 因 ROI 8×。Ask: budget approval EOW。"<br><br><strong>关键</strong>：① 不 sacrifice quality；② 让 stakeholder 选；③ 量化 trade-off 数字；④ 给 recommendation + rationale。`,
+      },
+      failure_modes: [
+        `Sacrifice quality 当 4th 维度 → 长期吃 velocity`,
+        `不教育 stakeholder "<strong>pick 2</strong>" → 期待 all 3`,
+        `Add resource 不算 onboarding overhead (Brooks' Law)`,
+        `Cut scope 当放弃质量（应该 cut feature 不 cut bar）`,
+        `不量化 trade-off ROI`,
+      ],
+      follow_ups: [
+        { q: `Brooks' Law 是什么？`, hint: `"Adding manpower to a late software project makes it later"——新人 onboarding 占老人时间 + coordination cost 增加；不是 "永远不能加人"，是 "<strong>加人不是 free fix</strong>"` },
+        { q: `怎么跟 customer 沟通 cut scope？`, hint: `① 提前（不是 ship 前才说）；② 给 alternative / phased delivery；③ 强调 remaining features quality unchanged；④ 量化对他们的实际影响（"feature X 你 90% workload 不影响"）` },
+        { q: `Stakeholder 拒绝 trade-off 怎么办？`, hint: `① 不 force decision—— escalate 给 stakeholder's manager 或 VP；② 给 deadline ("by EOW I need decision")；③ Document inability to decide 作为 risk；④ Worst case execute least bad option + 标记给 leadership` },
+      ],
+    },
+
+    54: {
+      why_asked: `优先级 hell 是 EM 日常。能讲"force ranking + cost of delay + escalation"的人是真做过 portfolio 管理。`,
+      answers: {
+        mid: `<strong>3 招</strong>: ① <strong>Force ranking</strong>—— 不允许"all P0"，必须 1/2/3/4/5 排序；② <strong>Cost of Delay</strong>—— 量化每个项目延 1 月损失；③ <strong>Escalate to leadership</strong>—— 5 个 P0 是 leadership alignment failure，不是 EM 能独自解决。`,
+        senior: `<strong>详细方法</strong>:<br>1. <strong>列出全部 "P0"</strong>—— stakeholder 谁说的是 P0，rationale 是啥<br>2. <strong>Cost of Delay 量化</strong>: 每个项目"延 1 月损失多少"（revenue / risk / customer impact）<br>3. <strong>Force ranking</strong>: 跟 stakeholder 一起按 CoD 排序<br>4. <strong>识别真 P0 vs P1</strong>: 通常 5 个里 1-2 个真 P0，其他是 P1/P2 被 inflated<br>5. <strong>跟 leadership communicate</strong>: "<strong>我们 team capacity 是 X，5 个 P0 总 effort = 3X，必须选 top 2，剩下推 next quarter</strong>"<br>6. <strong>Document</strong> 决策给 stakeholder + leadership，避免 retro 时甩锅`,
+        staff: `深一层："5 个 P0" 是<strong>leadership alignment failure</strong>—— 不是 EM 能内部解决的。EM 责任是<strong>surface 这个问题 + 给 leadership 决策框架</strong>，不是<strong>"team 加班 ship 全部"</strong>。<br><br><strong>真实案例</strong>: 作为 EM Q4 接到 5 个"P0"项目:<br>1. Customer X 客户定制（sales push）<br>2. Compliance feature（legal push）<br>3. Performance optimization（架构师 push）<br>4. New feature Y（PM push）<br>5. Tech debt 大项（team push）<br><br>Step 1: <strong>每个 owner 1on1 ask</strong> "为什么 P0 + delay 1 月 cost 多少"<br>· Customer X: ARR $200k, churn if missed → real P0<br>· Compliance: regulatory deadline Q1，错过罚款 $100k → real P0<br>· Performance: P99 incidence 高 + lost deals, fuzzy → P1<br>· Feature Y: nice-to-have, no hard deadline → P2<br>· Tech debt: long-term ROI 但 fuzzy → P2<br><br>Step 2: <strong>跟 VP 1on1</strong>: "<strong>Q4 5 个号称 P0，实际只有 2 个真 P0（Customer X + Compliance）。Team capacity 不够 ship 全部。Options</strong>:<br>· A: Ship 真 P0 2 个，P1/P2 推 Q1<br>· B: 加 contractor 6 人 6 周 ship 4 个（cost $200k）<br>· C: Cut Customer X 定制（lose customer + sales 反弹）<br><strong>Recommend A</strong>—— 真 P0 都 hit，Q1 reset 优先级"<br><br>VP approve A。Step 3: <strong>所有 stakeholder + leadership write-up</strong> 决策 + rationale + Q1 plan，避免后期 surprise。<br><br>结果: 2 个真 P0 都 hit，team 不 burnout，Q1 平稳。Stakeholder 短期失望但长期 trust EM 不 over-promise。<br><br><strong>陷阱</strong>:<br>① <strong>EM 自己 fix all 5</strong>—— team burnout + quality 烂 + 真 P0 也 miss<br>② <strong>不让 leadership 决策</strong>—— 你的 boss 是付钱让你 surface alignment problem 的<br>③ <strong>偏袒某 stakeholder</strong>（loudest wins）—— 短期息事，长期失 fairness<br>④ <strong>不 document 决策</strong>—— retro 时 owner 不认账<br>⑤ <strong>不 reset Q1 expectation</strong>—— Q1 又来 5 个 P0<br><br><strong>关键</strong>: ① Quantify CoD（让 P0 inflation 透明）；② Force ranking（不允许多 P0）；③ Leadership decides（不是 EM）；④ Document（避免甩锅）；⑤ Reset Q+1 process。`,
+      },
+      failure_modes: [
+        `EM 自己 fix all → team burnout`,
+        `不让 leadership 决策（自己一肩扛）→ surface 不充分`,
+        `Loudest stakeholder 优先 → 不 fair`,
+        `不 document → retro 时甩锅`,
+        `不 reset 下季度 P0 inflation`,
+      ],
+      follow_ups: [
+        { q: `Cost of Delay 怎么量化？`, hint: `① Revenue impact / 月（lose customer / miss deadline）；② Risk impact（事故概率 × 成本）；③ Strategic value（market window / competitive）；④ 量化越具体 leadership 越容易决策` },
+        { q: `如果 leadership 也说 "all 5 are P0"？`, hint: `① 升级到 skip-level；② Show team capacity math（5 P0 × effort = 3× team capacity）；③ 给 hire / contractor option + cost；④ If unmovable, execute with explicit risk acknowledgement` },
+        { q: `Stakeholder 抱怨自己项目 deprioritized 怎么办？`, hint: `① 1on1 解释 ranking rationale + data；② 给 alternative timeline（Q1）；③ 邀请他们 challenge ranking（但用数据）；④ If 仍 unhappy, escalate but don't change decision unilaterally` },
+      ],
+    },
+
+    70: {
+      why_asked: `跨部门 EM 最重要技能。能讲"找 vested interest + give first + escalation"的人是真做过 cross-team。`,
+      answers: {
+        mid: `<strong>3 原则</strong>:① <strong>找对方的 vested interest</strong>（他们为什么要帮你 → 怎么对他们也 win）；② <strong>Give first</strong>（先帮他们的项目）；③ <strong>必要时 escalate</strong>（跟 boss / their boss 协调）。`,
+        senior: `<strong>"Influence without authority" 完整 toolkit</strong> (Cohen-Bradford):<br>1. <strong>Diagnose currencies</strong>: 对方在乎什么（status / task / inspiration / relationship / position）<br>2. <strong>Build the relationship first</strong>: 不是急用时才找<br>3. <strong>Bridge through trusted 3rd party</strong>: 找他们信任的人推介<br>4. <strong>Frame as win-win</strong>: 不是"你帮我"，是"我们一起 ship X"<br>5. <strong>Reciprocity</strong>: 先给（帮他们的事 / 推荐人 / share insight）<br>6. <strong>Escalation strategy</strong>: 跟 own boss align → 让 boss talk to their boss<br><br><strong>避免</strong>: 用 own title 强 push / playing politics / 没 explicit ask。`,
+        staff: `深一层：Influence without authority 是<strong>Senior EM/Director 跟 Junior EM 最大差距</strong>。Junior EM 在自己 team 范围内 OK，跨 team / 跨部门就卡。<br><br><strong>真实案例</strong>: 推 "所有微服务统一用 OTel" 决策（影响 8 个 team）。我作为<strong>没有跨 team 授权</strong>的 EM:<br><br>1. <strong>Diagnose currencies</strong>:<br>· Team A 的 EM: status currency（公司架构 lead 注意他）<br>· Team B 的 EM: task currency（OTel 让他们事故 root cause 快）<br>· Team C 的 EM: inspiration currency（"this is what 大厂都在做"）<br>· Team D 的 tech lead: knowledge currency（让他成为 OTel 内部专家）<br><br>2. <strong>Pre-1on1 each EM</strong>（共 6 hours）: <br>· 不是 "<strong>需要你接 OTel</strong>"<br>· 是 "<strong>我考虑 X 决策，对你 team 影响是 Y，你怎么看 + concern 是啥</strong>"<br>· 收集 concerns + 修改 plan based on real feedback<br><br>3. <strong>Bridge</strong>: 跟 VP（all EM 共同 boss）pre-align→ "<strong>VP 觉得这个方向对，但要 EM 们 collectively own</strong>"<br><br>4. <strong>Give first</strong>: <br>· 帮 Team A 写 OTel setup script（省他们 2 周）<br>· 帮 Team B 分析 1 个 incident 用 OTel trace（demo value）<br><br>5. <strong>Public design review</strong>: 之前 1on1 已 70% buy in，公开会议是 announce + alignment 不是 debate<br><br>6. <strong>Phased rollout</strong>: 2 个 team 先 pilot 6 周 + share data → 全推时阻力小<br><br>结果: 6 个月推到 8 个 team，0 阻力，反而 4 个 team 主动加速接入。<br><br><strong>反例</strong>: 早期我作为新 EM 跨 team 推 1 个 lint rule，直接发 email "<strong>following 公司架构 standard，请大家接入</strong>"。3 月没人理 + 1 个 EM 公开反对。教训: ① 没 pre-1on1；② 没 buy in；③ 用 authority 强 push；④ 没 give first；⑤ 没 escalation。<br><br><strong>陷阱</strong>:<br>① <strong>用 title push</strong>—— short-term compliance, long-term resistance<br>② <strong>找急时才找</strong>—— relationship 没 built<br>③ <strong>Single channel push</strong>—— email/Slack 没 1on1 跟进<br>④ <strong>没 give first</strong>—— 只索取不付出<br>⑤ <strong>过度 escalate</strong>—— 用 boss 频次太高显得无能<br><br><strong>关键</strong>: ① relationship 平时 build；② 用 currency framework diagnose；③ give first；④ 1on1 优先于公开；⑤ escalate 当 last resort 且 own boss 配合。`,
+      },
+      failure_modes: [
+        `用 title 强 push → resistance`,
+        `急时才找 → relationship 没 built`,
+        `Single channel（email 群发）→ 没 deep buy in`,
+        `没 give first 只索取`,
+        `过度 escalate → 显得无能`,
+      ],
+      follow_ups: [
+        { q: `Cohen-Bradford currencies 是哪 6 类？`, hint: `① Task currencies (resource / assistance)；② Position currencies (recognition / visibility)；③ Inspiration currencies (vision / morality)；④ Relationship currencies (acceptance / understanding)；⑤ Personal currencies (gratitude / ownership)；⑥ Power currencies (resources / authority)` },
+        { q: `Stakeholder map 怎么画？`, hint: `① 列所有 stakeholder + interest level + influence level；② Power × Interest 2x2 grid；③ High P + High I = Manage Closely；High P + Low I = Keep Satisfied；④ Quarterly refresh` },
+        { q: `跨 team conflict 怎么 resolve？`, hint: `① 1on1 跟两个 EM 各听 → 找 root（通常是误解 / priorities 冲突）；② Joint meeting facilitate；③ 找共同 stakeholder（VP）协调；④ Document agreement` },
+      ],
+    },
+
+    79: {
+      why_asked: `向上汇报是 senior EM 高频痛点。能讲"BLUF + tailor + ask"的人是真做过 VP/skip-level update。`,
+      answers: {
+        mid: `<strong>BLUF + Tailor + Ask</strong>:<br>1. <strong>BLUF</strong>: 30 秒内 VP 知道 status + 结论<br>2. <strong>Tailor to audience</strong>: VP 不需要 implementation detail，需要 business impact + risk + ask<br>3. <strong>Clear ask</strong>: 你要他做什么决策 / 资源 / unblock`,
+        senior: `<strong>VP/Skip 5 段式</strong> (90 秒-3 min):<br>1. <strong>Headline</strong>: "Q3 NETCONF v3 项目 status: <strong>Green</strong> on track"（或 Yellow / Red）<br>2. <strong>3 key metrics</strong>: SPI / customer NPS / P0 incidents<br>3. <strong>Top 2 risks</strong>: 量化 + mitigation<br>4. <strong>1 ask</strong>: 需要他做什么<br>5. <strong>FYI items</strong>: 1-2 个 brief update（不要 deep dive）<br><br><strong>反例</strong>:<br>· ❌ 一口气讲 10 min implementation detail（VP 走神）<br>· ❌ 没 status color（VP 不知道 healthy 不）<br>· ❌ 没 ask（VP 不知道你 need 什么）`,
+        staff: `深一层：VP 时间极贵，每次 1on1 你<strong>15-30 min</strong>。Senior EM vs Junior EM 区别是<strong>"信息密度"</strong>—— senior 90 秒给 VP 全部 critical info + clear ask，junior 15 min 还在讲 background。<br><br><strong>真实经验</strong>: 早期作为 EM 跟 VP biweekly:<br><br>· Junior version (失败):<br>"<strong>VP 我跟你 update 下 NETCONF agent 项目。我们这个项目背景是 ... 上 quarter 我们 ship 了 X feature... team 现在 8 人... 最近遇到 vendor issue... bla bla 5 分钟后 ...</strong>"<br>→ VP: "<strong>Sorry, what do you need from me?</strong>"<br><br>· Senior version (成功):<br>"<strong>VP 90 秒 update:<br>1. NETCONF v3 status: Yellow——SPI 0.85, on track to ship Oct 1 with 70% confidence<br>2. Top risks: ① senior eng离职可能延期 2 周；② vendor SDK 兼容性持续 issue<br>3. Asks: ① approve 1 contractor (~$30k) for next 6 weeks 替代 senior 离职；② intro 我 to vendor VP Eng to escalate SDK issue<br>4. FYI: customer X 上 quarter NPS +10, mostly attributed to v2 quality. We expect v3 to maintain.<br>Anything you want me to deep dive?</strong>"<br>→ VP: "<strong>Approve contractor. I'll intro vendor VP today. Continue.</strong>"<br>→ Done 90 sec. VP 满意。<br><br><strong>关键 hacks</strong>:<br>① <strong>Status color (R/Y/G)</strong>—— VP 一眼看清<br>② <strong>明确 ask</strong> + dollar amount + timeline<br>③ <strong>Anticipate VP question</strong>—— "anything to deep dive" 让他 directs<br>④ <strong>FYI 短</strong>—— 不喧宾夺主<br>⑤ <strong>Written follow-up email</strong>—— action items + 决策 in writing<br><br><strong>陷阱</strong>:<br>① <strong>Bury the lede</strong>—— 把重要事放最后（VP 已经走神）<br>② <strong>没 ask</strong>—— VP 不知道你要什么 → 没 actionable<br>③ <strong>Status 过度 green</strong>—— 当真 Red 时 VP shocked （永远 trustingly accurate, slightly conservative）<br>④ <strong>Too much detail</strong>—— VP 听不下去<br>⑤ <strong>没 written follow-up</strong>—— 一周后 VP 忘了答应啥<br><br><strong>Skip-level 跟 VP 区别</strong>:<br>· VP 听 implementation 多<br>· Skip-level（VP of VP）听 strategic / talent 多<br>· Skip-level 通常 quarterly，不像 VP biweekly<br>· Skip 想知道: team health / future direction / 他能帮你什么<br><br><strong>关键 lesson</strong>: VP 时间贵 → 信息密度高 → BLUF + clear ask + written follow-up。`,
+      },
+      failure_modes: [
+        `Bury the lede（最重要放最后）`,
+        `没 status color → VP 不知道 healthy 不`,
+        `没明确 ask`,
+        `Too much implementation detail`,
+        `没 written follow-up → VP 忘事`,
+      ],
+      follow_ups: [
+        { q: `Bad news 怎么 deliver？`, hint: `① Early surface（不 hide and hope）；② Own it（不甩锅 team / vendor）；③ Quantify damage + mitigation；④ Give 3 options + recommendation；⑤ Show learning + future prevention` },
+        { q: `跨 VP 的 update（multiple stakeholder）怎么做？`, hint: `① Common summary 给所有；② Tailored ask 给单 VP；③ CC 关键 stakeholder；④ Document decision after meeting；⑤ Avoid surprise—— pre-align 1on1 each stakeholder` },
+        { q: `Skip-level 频次 + 内容？`, hint: `① Frequency: quarterly default；② Content: team health (engagement / attrition) / strategic direction / your career / what's blocking / how can I help；③ Skip-level 不是 status update，是 trust / calibration / talent` },
+      ],
+    },
+
+    96: {
+      why_asked: `Senior EM / Manager-of-Managers 高频题。能讲"L3 onboarding + first 90 day + delegation"的人是真带过新 EM。`,
+      answers: {
+        mid: `<strong>3 阶段</strong>:① <strong>First 30 day onboard</strong>（明确 expectation + team intro + shadow）；② <strong>30-90 day support</strong>（weekly 1on1 + specific challenges + mentor pairing）；③ <strong>90+ day delegate</strong>（让他独立 + 你监督 outcome 不监督 process）。`,
+        senior: `<strong>具体 deliverables</strong>:<br>· <strong>Week 1</strong>: 1on1 with all reports, EM job description, team backlog overview<br>· <strong>Week 2-4</strong>: Shadow 你的 EM activities（1on1 / leadership meeting / hiring）<br>· <strong>Month 2</strong>: 独立做 1on1 + post-1on1 你 debrief<br>· <strong>Month 3</strong>: 独立做 perf review + 你 coach 风格<br>· <strong>Month 4+</strong>: Delegate 完整 ownership，weekly check-in，季度 calibrate<br><br><strong>关键</strong>: ① 不<strong>过度 micromanage</strong>（让他 own + 接受他犯错）；② 不<strong>过度 delegation</strong>（new EM 没经验自己 figure out 全部失败率高）；③ Show vulnerability—— 你自己 struggle 也 share。`,
+        staff: `深一层：辅导新 EM 跟自己当 EM 不同—— <strong>"通过他人达成结果"</strong> 的 meta-level skill。Senior EM /Director 80% 时间在 "scale through others"。<br><br><strong>真实经验</strong>: 我 promote IC X 当 first-time EM（带 6 人 team）。我作为他的 manager (manager-of-manager)：<br><br>· <strong>Pre-promotion 1 个月</strong>: 让 X shadow 我的 1on1 / hiring debrief / perf review process（让他看 EM job 真实样子，不只是 title upgrade）<br>· <strong>Day 1 (promotion day)</strong>: 1on1 with team announce, X 致辞，我退后<br>· <strong>Week 1-2</strong>: <br>· 每周 2x 1on1 (high cadence)<br>· 给 EM 资源（书 / 内部 doc / Slack channel）<br>· 跟他 1on1 review 他 team 6 人的 status（让他 know team）<br>· <strong>Month 1-3</strong>: <br>· 1on1 cadence 降到 weekly<br>· Topics: specific challenge (e.g., "Y team member is underperforming, how to handle")<br>· 我 mostly 问 ("what would you do?")，不直接 give answer<br>· <strong>Month 4-6</strong>:<br>· 1on1 bi-weekly<br>· Delegate increasingly：hiring decision / perf calibration / budget<br>· 我 review outcome 不 review process<br>· <strong>Month 6+</strong>: <br>· Monthly 1on1<br>· X 独立 manage<br>· 季度 perf calibration with VP<br><br><strong>典型 mistakes X 早期做</strong>:<br>① 第 1 个 1on1 自己讲 80% 时间（应该 listen 80%）→ 我下次 debrief 指出<br>② "你应该做 X" mode（应该 "have you considered X" coaching mode）<br>③ Try to be friend with all reports（应该 friendly not friend）<br>④ Avoiding hard conversation (PIP)→ 我 model 一次 PIP conversation 让他 shadow<br><br>每个 mistake 我:<br>· 1on1 1:1 frank feedback（私下）<br>· 给他 reading material<br>· 让他 retry + 我 coach<br><br>18 月后 X 成 senior EM，开始 mentor 下一个 first-time EM。<br><br><strong>陷阱</strong>:<br>① <strong>Too much hand-holding</strong>—— 他不 develop independent judgment<br>② <strong>Too much delegation</strong>—— first-time EM 自己 figure out 全部，失败率高<br>③ <strong>Promote without preparation</strong>—— 没 shadow / 没 reading / 没 mentor 直接 day 1 当 EM = 90% 6 月内回 IC track<br>④ <strong>Not modeling vulnerability</strong>—— 装"完美 EM" → new EM 觉得自己 struggle 是 weakness<br>⑤ <strong>Not creating safe failure space</strong>—— first-time EM 一定 mistake，关键是 learning fast<br><br><strong>关键</strong>: ① 渐进 delegation；② Coach 不 dictate；③ Model vulnerability；④ Safe failure space；⑤ Long-term horizon（18-24 个月才算成熟新 EM）。`,
+      },
+      failure_modes: [
+        `Promote 无 preparation → 90% 6 月回 IC`,
+        `Too much hand-holding → 不 develop judgment`,
+        `Too much delegation → first-time 自己 figure 失败率高`,
+        `Not modeling vulnerability → new EM 装 perfect`,
+        `Not safe failure space → 不敢 try`,
+      ],
+      follow_ups: [
+        { q: `什么样的 IC 适合 promote 当 EM？`, hint: `① 已经在 team 中 informal lead；② 喜欢 mentor / unblock 别人；③ 能 take ambiguous problem；④ Communication 强；⑤ 准备好 80% 时间不写 code` },
+        { q: `New EM 6 月内 underperform 怎么办？`, hint: `① Frank feedback + 具体 action items；② 给 6 月 PIP-like cadence；③ 仍 not work 时 → discuss IC track demotion (no shame)；④ 90% 是 expectation mismatch 或 wrong promotion timing` },
+        { q: `Manager-of-managers vs 单 EM 区别？`, hint: `① 80% scale through others 而非自己 do；② Skip-level cadence 重要；③ Calibration across team；④ Org design / hiring strategy；⑤ Career stays vs lateral move from senior EM (different track)` },
+      ],
+    },
+
+    109: {
+      why_asked: `2026 AI-EM 必考。能讲"hallucination / 安全 / over-trust 3 大风险 + mitigation"的人是真用过 GenAI 写代码。`,
+      answers: {
+        mid: `<strong>3 大风险</strong>:① <strong>Hallucination</strong>—— AI 编 API / library / 性能数字；② <strong>安全 / IP</strong>—— code leak 到 LLM training data + 引入 vulnerability；③ <strong>Over-trust</strong>—— team 不 review diff 直接 ship。`,
+        senior: `<strong>详细 + Mitigation</strong>:<br>1. <strong>Hallucination</strong>:<br>· AI 编不存在 API / function / library version<br>· Mitigation: ① 关键代码 mandatory code review；② Sanity check API 真存在；③ AI 输出过 linter / type check<br>2. <strong>安全 / IP</strong>:<br>· Sensitive code 喂 LLM → 进 training data → 竞品看见<br>· AI 生成 vulnerable code (SQL injection / XSS / hardcoded secret)<br>· Mitigation: ① 用 enterprise GPL/Copilot Business（no training）；② Sensitive prompt redact；③ AI code 跑 SAST / sanitizer<br>3. <strong>Over-trust</strong>:<br>· "AI 写完测试也跑过我就 ship" → 测试可能被 AI 改坏<br>· Junior 不 learn fundamentals<br>· Mitigation: ① 永远 review 完整 diff；② Mandatory test review；③ Junior weekly no-AI exercise`,
+        staff: `深一层：AI 写代码风险<strong>不是 fundamentally 新</strong>—— 跟外包 / contractor 写代码风险类似 (quality / 安全 / IP / ownership)。<strong>区别是 scale × speed</strong>—— AI 每天产出可能 10×, mistake 也 10× scale。<br><br><strong>真实事故 case</strong>:<br>1. <strong>Hallucinated API</strong>: 一个 team member 用 AI 写代码 "调 Stripe API v3 method foo()" —— v3 不存在 foo() 方法，AI 编的。代码 compile 过（dynamic typed lang），runtime 才崩。<br>· 教训: ① TypeScript / static type 防一部分；② 关键 SDK 调用 mandatory review；③ AI 输出 cross-check 官方 doc<br><br>2. <strong>IP leak</strong>: Junior 用 ChatGPT free tier debug 一个 algorithm，share 了 source code 一段。3 个月后<strong>同 algorithm 出现在竞品产品</strong>。可能巧合可能不是—— 但 risk 真实。<br>· Mitigation: 全公司只允许 Enterprise GPT / Copilot Business（no training on input）<br><br>3. <strong>Vulnerable AI code shipped</strong>: AI 生成的 SQL query 没 parameterize → injection vulnerability。Code review 没 catch（AI code looks "clean"）。<br>· Mitigation: ① 强制 SAST 在 CI；② AI code 跑 sanitizer；③ Code review 关注 security pattern<br><br>4. <strong>Junior regression</strong>: 一个 junior 6 个月全用 AI 写 code → 升 senior 时 system design 完全不会。<br>· Mitigation: junior weekly "no-AI Friday" + mentor 强制 deep dive "为什么这么写"<br><br><strong>EM 责任</strong>:<br>① <strong>Policy</strong>: ① Enterprise tier only；② Sensitive code restricted；③ AI code 必走 SAST/Sanitizer<br>② <strong>Review process</strong>: ① 永远 review diff；② Mandatory test review；③ AI-generated label 在 PR<br>③ <strong>Skill development</strong>: junior 不让 AI fully replace fundamental learning<br>④ <strong>Calibrate</strong>: 6 月看 AI usage 跟 bug rate / vulnerability rate 关系，调整 policy<br><br><strong>陷阱</strong>:<br>① <strong>Ban AI entirely</strong>—— team 失去 productivity 优势<br>② <strong>No policy at all</strong>—— random risk<br>③ <strong>Only worry about quality</strong> ignore IP / 安全<br>④ <strong>Junior 一直靠 AI</strong>—— 长期 ceiling 低<br>⑤ <strong>EM 自己不用 AI</strong>—— 不能 calibrate team usage<br><br><strong>关键</strong>: AI 是 productivity multiplier，但 multiplier 也 multiply mistake。EM 责任是<strong>setup safety net</strong> (policy / process / skill development) 让 multiplier 净正。`,
+      },
+      failure_modes: [
+        `Ban AI entirely → 失 productivity`,
+        `No policy → random risk`,
+        `Only quality concern → 忽略 IP / security`,
+        `Junior 一直靠 AI → fundamentals 不扎实`,
+        `EM 自己不用 AI → calibrate 不准`,
+      ],
+      follow_ups: [
+        { q: `Enterprise GPT / Copilot Business 跟 free tier 区别？`, hint: `① No training on input data；② SLA / security audit；③ Admin controls / DLP；④ Cost 5-10× higher 但 enterprise 必须；⑤ 2026 主流公司都用 Enterprise tier` },
+        { q: `怎么 detect AI-generated vulnerable code？`, hint: `① SAST (Semgrep / SonarQube)；② AI-aware reviewer training；③ Common patterns (string concat SQL / hardcoded secret) auto flag；④ Periodic pen test catch missed` },
+        { q: `Junior 在 AI 时代怎么 develop fundamentals？`, hint: `① Weekly no-AI exercise；② Mentor 强制 deep dive "why this works"；③ Algorithm / design 书还要读；④ Pair programming with senior；⑤ Periodic system design 练习` },
+      ],
+    },
+
+    115: {
+      why_asked: `EM Burnout 是 2024-2026 普遍问题。能讲"信号 + 系统改进 + 个人 limit"的人是真处理过 burnout（自己 / team）。`,
+      answers: {
+        mid: `<strong>3 招</strong>:① <strong>Identify early signal</strong>（情绪疲惫 / cynicism / sense of failure 3 个）；② <strong>System-level fix</strong>（process 改 / boundary set / 删 unimportant work），<strong>不是只休息</strong>；③ <strong>Hard limit</strong>（晚上 / 周末 / 假期 protect）。`,
+        senior: `<strong>EM Burnout 4 大 root cause</strong>:<br>1. <strong>Always-on 文化</strong>: Slack 24/7 / 周末 work / 假期 reply<br>2. <strong>Decision fatigue</strong>: 每天 50+ decision (1on1 / hiring / perf / fire)<br>3. <strong>Emotional load</strong>: 处理别人情绪 + 自己 hide own emotion<br>4. <strong>No peer support</strong>: EM 跟 IC 不能完全 share（manager loneliness）<br><br><strong>具体 mitigation</strong>:<br>· <strong>Calendar audit</strong>: 1 周 track time，砍 25% meeting<br>· <strong>"No meeting" block</strong>: 每天 90 min focus time<br>· <strong>Slack boundaries</strong>: 晚上 / 周末 disable notification<br>· <strong>EM peer network</strong>: 跟同 level EM monthly 1on1（vent + 学习）<br>· <strong>Sabbatical / 长假</strong>: 1 年 1 次 2-week 真断网`,
+        staff: `深一层：EM burnout 跟<strong>IC burnout 不同</strong>—— IC 通常 over-work caused，EM 是<strong>"emotional + decision load"</strong> caused。即便 50 hour/week 也可能 burnout（如果每个 hour 都是 emotional intense）。<br><br><strong>典型 EM burnout symptoms</strong>:<br>· 早上 dread 上班 (vs IC 时 excite)<br>· Cynicism (对 team / company purpose)<br>· 决策 fatigue ("don't ask me anymore")<br>· Sleep poor / eating poor<br>· Avoid hard conversation (PIP / fire)<br>· "I'm fine" 但 weekly 状态实际下滑<br><br><strong>真实经验</strong>: 我作为 EM 18 个月时进入 burnout。Symptoms: 周日 evening anxiety / 1on1 时 zoned out / hiring decision avoidance / 减肥 10 lb 没努力。我 took 2 weeks真断网 vacation + 跟 own EM peer 谈，识别：<br><br>1. <strong>Calendar audit</strong>: 70% 时间 in meeting，每个 meeting 都需要 active engage. Cut 25%（delegate 部分 1on1 / decline non-essential meeting / async 替代 status meeting）。<br>2. <strong>1on1 cadence</strong>: 12 人 weekly 1on1 = 6 hours/week + emotional load 高. 砍到 8 人 weekly + 4 人 biweekly。<br>3. <strong>"No-meeting Wednesday"</strong>: 强制 1 day/week focus / strategic thinking。<br>4. <strong>EM peer monthly</strong>: 跟 3 个同 level EM monthly group call，vent + 学习 + 不孤单。<br>5. <strong>Slack boundary</strong>: 18:00-09:00 + weekend disable notification (urgent 通过 phone)。<br>6. <strong>Hard mandatory vacation</strong>: 每年 minimum 3 weeks，2 weeks 真断网。<br><br>6 月后 burnout fully recovered + sustainable cadence。<br><br><strong>给 team 做什么</strong>（不只 self）:<br>① Model healthy boundaries（你不发 11pm email → team 跟随）<br>② 显式 "I'm taking 2 weeks vacation, X is acting EM, no Slack from me"<br>③ Quarterly check team burnout (anonymous survey)<br>④ Sponsor team vacation usage（team annual leave usage &gt; 80%）<br>⑤ Postmortem culture（事故不是 individual blame → 减 emotional load）<br><br><strong>陷阱</strong>:<br>① <strong>Just take vacation</strong>—— 不改 system，回来 same burnout<br>② <strong>"我必须 always available"</strong>—— team 实际不需要，是你 own anxiety<br>③ <strong>Hide burnout</strong>—— peer / own EM 不知不 help<br>④ <strong>EM 不 vacation</strong> → team 也不 → 全 burn<br>⑤ <strong>Confuse busy with productive</strong>—— meeting 70% 但产出 30%<br><br><strong>关键</strong>: ① Early signal 识别；② System (calendar / process) 改不只 individual；③ Peer support；④ Hard boundary；⑤ Model for team。`,
+      },
+      failure_modes: [
+        `Just take vacation 不改 system → 回来 same burnout`,
+        `"必须 always available" → 自 imposed anxiety`,
+        `Hide burnout → peer / own EM 不知`,
+        `EM 不 vacation → team 跟随`,
+        `Busy vs productive 混 → 不 prioritize`,
+      ],
+      follow_ups: [
+        { q: `Burnout 早期 signal 怎么识别？`, hint: `① 周日 dread 周一；② 1on1 zoned out；③ 决策 avoidance；④ Cynicism 跟 team 互动；⑤ Sleep / eating disrupted；⑥ Periodic self-survey (Maslach Burnout Inventory)` },
+        { q: `Team 中有人 burnout 怎么办？`, hint: `① 1on1 frank ask "are you okay"；② Reduce workload + remove blocker；③ Mandatory vacation (1-2 周)；④ Pair with peer support；⑤ Re-evaluate workload sustainability; ⑥ Not blame for burnout—— system issue` },
+        { q: `怎么 prevent team burnout？`, hint: `① Quarterly anonymous survey；② Track vacation usage (target &gt; 80%)；③ No 11pm email policy；④ Postmortem blameless culture；⑤ Tech debt / 工具改善（减 toil work）` },
       ],
     },
   },

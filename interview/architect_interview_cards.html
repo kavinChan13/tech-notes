@@ -2171,7 +2171,34 @@ const CARDS = [
     "ans": "<code>traceparent: 00-{traceId 32 hex}-{spanId 16 hex}-{flags 2 hex}</code>",
     "code": "<pre>00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01\n│   │                                │                │\n│   │                                │                └─ flags (01 = sampled)\n│   │                                └────────────────── span id\n│   └─────────────────────────────────────────────────── trace id\n└─────────────────────────────────────────────────────── version</pre>",
     "bonus": "<strong>2020 年 W3C Recommendation</strong>，跨服务传播的事实标准，所有现代追踪库默认实现。",
-    "ref": "../architect/observability_engineering"
+    "ref": "../architect/observability_engineering",
+    "why_asked": "分布式 trace 跨服务必备协议。能背 traceparent 4 字段的人是真做过 OTel 集成。",
+    "answers": {
+      "mid": "<code>traceparent: 00-{traceId 32 hex}-{spanId 16 hex}-{flags 2 hex}</code>。<strong>00</strong> = version，<strong>traceId</strong> = 128 bit 全局追踪 ID，<strong>spanId</strong> = 64 bit 当前 span，<strong>flags</strong> 含 sampled bit。",
+      "senior": "<strong>完整格式</strong>: <code>00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01</code>—— 4 段用 <code>-</code> 分隔，全部 hex lowercase。<strong>关键字段</strong>：<br>· <strong>version (00)</strong>: W3C 当前唯一版本<br>· <strong>traceId</strong>: 全 0 = invalid；跨服务保持不变<br>· <strong>spanId</strong>: 每段 RPC 重新生成<br>· <strong>flags</strong>: 最低位 = sampled（1 = 上报，0 = 不上报）<br><br><strong>配套 tracestate</strong>（可选）: 厂商扩展 KV（如 <code>tracestate: vendor1=value1,vendor2=value2</code>），跨 vendor 信息透传。",
+      "staff": "深一层：W3C TraceContext 是 2020 标准化的结果，<strong>取代</strong>各家自定义格式（B3 / X-Cloud-Trace-Context / Jaeger UBER-Trace-ID 等）。<strong>OTel SDK 默认</strong>注入 traceparent header，但部分老 vendor 仍只认 B3 → 配双 propagator（W3C + B3）兼容。<br><br><strong>实战陷阱</strong>：<br>① <strong>HTTP/2 / gRPC header 名大小写敏感</strong>—— traceparent 必须 lowercase；<br>② <strong>load balancer / proxy 不透传</strong>—— 早期 Nginx / Envoy 默认 strip 未知 header，需显式 forward；<br>③ <strong>跨 message broker</strong>（Kafka / RabbitMQ）—— message header 需手动注入 traceparent；<br>④ <strong>异步任务</strong>—— 入队时存 trace context，出队时 restore（OTel 提供 Context API）。<br><br><strong>真实案例</strong>：NETCONF agent 项目跨 5 个 microservice + 2 个 message queue。上线 W3C TraceContext 前事故排查靠 grep log 找请求 ID，~30 min 拼一个 trace。上线后 Jaeger UI 30s 看完整调用链 + 时延 breakdown，<strong>P0 事故 MTTR 从 45 min 降到 12 min</strong>。"
+    },
+    "failure_modes": [
+      "不区分 traceId / spanId（一个是全局，一个是单段）",
+      "B3 / W3C 混用导致 trace 断链",
+      "不知道 sampled bit，下游 sampler 错过关键 trace",
+      "跨 message broker 不传 traceparent → async 链路断",
+      "Header 名大小写错（W3C 强制 lowercase）"
+    ],
+    "follow_ups": [
+      {
+        "q": "B3 跟 W3C TraceContext 区别？",
+        "hint": "B3 (Zipkin) 用多个 header（X-B3-TraceId / X-B3-SpanId / X-B3-Sampled）；W3C 单个 traceparent header；2026 W3C 是主流，B3 仍兼容"
+      },
+      {
+        "q": "怎么自定义 sampler？",
+        "hint": "① 实现 Sampler interface 返回 RECORD_AND_SAMPLE / DROP；② 常见：always-on / always-off / ratio / parent-based / rate-limited；③ Tail sampling 在 collector 端做（见 #50）"
+      },
+      {
+        "q": "tracestate 用来做什么？",
+        "hint": "vendor-specific 扩展信息；典型用法：DataDog / NewRelic 传内部 ID + 采样决策；W3C 限制 32 KB / 32 entries"
+      }
+    ]
   },
   {
     "id": 52,
@@ -2183,7 +2210,34 @@ const CARDS = [
     "q": "告警阈值怎么定？SLO 和 Error Budget 是什么？",
     "ans": "不要凭感觉定 P99 阈值——基于 <strong>SLO</strong>（如可用性 99.9%）反推。<strong>Error Budget</strong> = 1 - SLO（如 0.1% 允许失败）。",
     "bonus": "<strong>当 Error Budget 消耗速率超预期</strong>（如 7 天用了 30%）触发告警。这比硬阈值更合理，避免告警疲劳。",
-    "ref": "../architect/observability_engineering"
+    "ref": "../architect/observability_engineering",
+    "why_asked": "SLO / Error Budget 是<strong>SRE 文化</strong>核心概念。能讲\"基于 SLO 反推告警阈值 + 错误预算耗尽流程\"的人是真做过 on-call 改进。",
+    "answers": {
+      "mid": "不要凭感觉定 P99 阈值——基于 <strong>SLO</strong>（如可用性 99.9%）反推。<strong>Error Budget</strong> = 1 - SLO（如 0.1% 允许失败）。月度 budget 用完 → 冻结发布 / 全力修可靠性。",
+      "senior": "<strong>SLI / SLO / SLA 三层</strong>：<br>· <strong>SLI (Service Level Indicator)</strong>: 实际度量（成功率 / P99 latency / 数据 freshness）<br>· <strong>SLO (Objective)</strong>: 内部目标（99.9% / 200ms）<br>· <strong>SLA (Agreement)</strong>: 对客户的合同承诺（通常宽于 SLO，违约赔钱）<br><strong>告警阈值</strong>: 不要\"P99 &gt; 200ms 立刻 page\"——基于 <strong>burn rate</strong>。如 30 天 budget 1 小时内烧掉 10% → fast burn alert（P0）；3 天烧掉 10% → slow burn（P1）。",
+      "staff": "深一层：Error Budget 的<strong>真实价值</strong>不是告警阈值，是<strong>\"平衡 reliability vs feature velocity\"的契约</strong>。SRE 团队 + Dev 团队 share budget：① 系统稳 → 多 budget → dev 可以激进发布；② budget 用完 → 冻结发布 + SRE / Dev 一起修。<br><br><strong>多 SLO 实战</strong>：典型服务 3-5 个 SLO：<br>· 可用性 (success rate &gt; 99.9%)<br>· latency (P99 &lt; 200ms)<br>· 数据 freshness (P99 &lt; 5 min)<br>· 吞吐 / 容量<br>每个 SLO 独立 budget + alert + ownership。<br><br><strong>Burn rate alert 公式</strong>：<code>alert if (1h_error_rate &gt; 14.4 × SLO_budget) AND (5m_error_rate &gt; 14.4 × budget)</code>—— 双窗口避免误报（1h 抓真问题，5m 防止已恢复仍报警）。<br><br><strong>真实经验</strong>：NETCONF agent 项目早期 P99 alert 5 分钟一次（午夜误报 + 周末 burnout）。改用 SLO + multi-window burn rate：alert 数 -85%，但<strong>真问题 catch rate 反而 +30%</strong>（之前误报多导致团队 alert fatigue 忽视真告警）。On-call 满意度从 4/10 → 8/10。<strong>工具</strong>：① Google SRE Workbook 提供完整 burn rate 算法；② Prometheus + Alertmanager 实现 multi-window；③ Datadog / NewRelic 内置 SLO dashboard。"
+    },
+    "failure_modes": [
+      "把 SLO 当 SLA 用（内部目标 ≠ 客户承诺）",
+      "定 P99 &gt; X 立刻 page → alert fatigue",
+      "单窗口 burn rate（5 min）→ 大量误报",
+      "不跟 dev share budget → SRE/Dev 对立",
+      "没 process budget 耗尽 → 冻结发布只是嘴上说"
+    ],
+    "follow_ups": [
+      {
+        "q": "Multi-window burn rate 怎么算？",
+        "hint": "典型 4 个组合：1h&5m / 6h&30m / 1d&3h / 3d&12h，各对应不同 page 优先级；Google SRE Workbook Chapter 5 有详细公式"
+      },
+      {
+        "q": "SLI 怎么选？",
+        "hint": "① 用户视角的\"成功\"（不是内部 RPC 成功率，是端到端用户成功率）；② 可量化 + 持续测；③ 反映 user-facing latency 而非 server 内部 timing；④ 标准模板：availability / latency / freshness / correctness / throughput"
+      },
+      {
+        "q": "Error budget 耗尽怎么办？",
+        "hint": "① 冻结非必要发布；② Postmortem + action items；③ 调整 SLO（如果总耗尽说明 SLO 不现实）；④ 投资 reliability work（buffer / circuit breaker / 降级）"
+      }
+    ]
   },
   {
     "id": 53,
@@ -2195,7 +2249,34 @@ const CARDS = [
     "q": "架构师和 Tech Lead 的区别？",
     "ans": "用<strong>决策影响半径 + 时间尺度</strong>区分：<ul><li>Tech Lead：影响一个服务/产品功能，时间尺度 1 季度</li><li>架构师：影响多个服务/产品线，时间尺度 1-3 年</li></ul>",
     "bonus": "<strong>都需要技术深度，但架构师额外需要沟通和战略能力</strong>。",
-    "ref": "../architect/architecture_methodology"
+    "ref": "../architect/architecture_methodology",
+    "why_asked": "初级 EM 必问角色区分。能讲\"决策半径 + 时间尺度\"维度的人是真做过架构师工作。",
+    "answers": {
+      "mid": "用决策<strong>影响半径</strong> + <strong>时间尺度</strong>区分：<br>· <strong>Tech Lead</strong>: 影响<strong>一个服务 / 产品功能</strong>，时间尺度 <strong>1 季度</strong><br>· <strong>架构师</strong>: 影响<strong>多个服务 / 产品线</strong>，时间尺度 <strong>1-3 年</strong>",
+      "senior": "<strong>详细对比</strong>：<br><table style=\"border-collapse:collapse\"><tr><th>维度</th><th>Tech Lead</th><th>架构师</th></tr><tr><td>团队大小</td><td>5-10 人</td><td>横跨多团队</td></tr><tr><td>决策粒度</td><td>API 设计 / 模块拆分 / 选型</td><td>系统拆分 / 跨服务通信 / 演进策略</td></tr><tr><td>时间</td><td>季度 / 半年</td><td>1-3 年</td></tr><tr><td>code 比例</td><td>50-80%</td><td>10-30%</td></tr><tr><td>文档</td><td>设计文档 / PR review</td><td>ADR / RFC / 架构图 / 蓝图</td></tr></table>",
+      "staff": "深一层：两个角色<strong>不是 hierarchy</strong>（架构师不一定比 TL 高）—— 是<strong>不同 track</strong>。Google 的 Staff/Senior Staff Engineer 经常做架构师的事但保留 IC title。<br><br><strong>真实经验</strong>：作为某产品 TL 3 年，发现自己 80% 时间在<strong>一个服务内</strong>做选型 + 教 team。后期晋升 Principal/Architect，时间分配反转：<br>· 跨 3-5 团队对齐架构方向（30%）<br>· 写 ADR / Tech Strategy 文档（25%）<br>· Tech debt 战略规划（15%）<br>· 跨团队 design review（15%）<br>· 自己写代码（&lt; 10%）<br><br>转型最难的不是技术深度，是<strong>\"接受 80% 时间不写代码\"</strong>+ <strong>\"靠影响力而非权威推动\"</strong>。<br><br><strong>陷阱</strong>：① TL 升架构师后还想\"动手做\"—— 时间不够；② 架构师不下来跟 team 写代码 → 架构空中楼阁 / 失去 calibration；③ 把\"做架构师\"等同于\"画图\"—— 80% 价值在<strong>判断 + 沟通 + 写决策文档</strong>。"
+    },
+    "failure_modes": [
+      "认为架构师 = TL 升级版（实际是不同 track）",
+      "把 \"架构\" 等同于 \"画图\"",
+      "升架构师后不再下沉团队 → 失去现实 feedback",
+      "不用 ADR 记录决策 → 半年后没人记得为什么这么定",
+      "不区分 1-2 年 vs 5-10 年时间尺度的决策"
+    ],
+    "follow_ups": [
+      {
+        "q": "怎么从 TL 转架构师？",
+        "hint": "① 主动 take 跨团队 design review；② 写 1-2 个 long-term tech strategy 文档；③ Show influence beyond own team；④ Volunteer 当公司架构委员会成员 / RFC author"
+      },
+      {
+        "q": "Senior 架构师 vs Principal 架构师区别？",
+        "hint": "① Senior：单产品线 / business unit；② Principal：跨业务线 / 整个公司 tech direction；③ 影响力 + 复杂度差一个 order of magnitude"
+      },
+      {
+        "q": "架构师该做多少 coding？",
+        "hint": "① 0% 危险（失 calibration）；② 50%+ 也危险（没时间影响）；③ 健康 10-25%——保持手感 + 关键模块 prototype + 帮 team unblock"
+      }
+    ]
   },
   {
     "id": 54,
@@ -2207,7 +2288,34 @@ const CARDS = [
     "q": "面试官问\"讲一个你做过的架构决策\"，怎么答？",
     "ans": "用 <strong>STAR + ADR 结构</strong>：<ol><li><strong>Situation</strong>：当时业务背景</li><li><strong>Task</strong>：要解决的问题（量化质量属性）</li><li><strong>Action</strong>：列出 2-3 个候选方案 + 取舍</li><li><strong>Result</strong>：选了哪个 + 实际效果</li></ol>",
     "bonus": "<strong>关键：讲清为什么\"否决\"其他选项</strong>——展示思考深度，比讲\"选了什么\"更重要。",
-    "ref": "../architect/architecture_methodology"
+    "ref": "../architect/architecture_methodology",
+    "why_asked": "行为题模板，几乎每个架构师 / Staff 面试必出。能用 STAR + ADR 结构的人通过；散讲故事的人 fail。",
+    "answers": {
+      "mid": "用 <strong>STAR + ADR</strong> 结构：<br>· <strong>S</strong>itutation：当时业务背景<br>· <strong>T</strong>ask：要解决的问题（<strong>量化质量属性</strong>—— 性能 / 可用性 / 成本）<br>· <strong>A</strong>ction：列出 <strong>2-3 个候选方案</strong> + 取舍<br>· <strong>R</strong>esult：选了哪个 + 实际效果（量化）",
+      "senior": "<strong>详细 talk track（4-5 min 版本）</strong>：<br>1. <strong>S (30 sec)</strong>: \"项目背景 X，团队 Y 人，预算 Z 万，时间 N 个月\"<br>2. <strong>T (45 sec)</strong>: \"关键约束：P99 &lt; 100ms / 可用性 99.95% / 月成本 &lt; $50k\"<br>3. <strong>A (2.5 min)</strong>: \"我考虑了 3 方案：① A 方案 优势 X 劣势 Y；② B 方案 ...；③ C 方案 ...\"—— 显示 trade-off 思维<br>4. <strong>选了 B</strong>（明确表态 + 理由）<br>5. <strong>R (45 sec)</strong>: \"结果 P99 = 80ms，可用性 99.97%，成本 $42k / 月。事后回顾 X 没考虑到 Y，但整体决策对。\"",
+      "staff": "深一层：这道题考<strong>3 个信号</strong>：① 真做过<strong>架构级</strong>决策（不是 module 选型）；② <strong>结构化思考</strong>（不只一个方案）；③ <strong>事后 calibrate</strong>（敢承认哪部分判断错）。<br><br><strong>真实例子 talk track</strong>：\"NETCONF agent v3 替代 vendor proprietary agent。S: 8 个 enterprise 客户用旧 vendor agent 但反馈性能差，公司想自研。T: 3 大约束：① P99 RPC latency &lt; 5ms（vendor ~50ms）；② 兼容 8 个客户 device firmware；③ 6 个月内 ship + 在 EOS 前完成 customer migration。A: 我列了 3 方案：① fork 开源 sysrepo + 改造（短期快，长期 maintenance 重）；② 完全自研（控制全 + 周期长）；③ 跟 vendor X 合作 OEM（费用高 + 失去 differentiation）。我选了 ②自研——原因是 customer 需要 30% 定制 + competitive moat 重要。R: 6 个月 ship + P99 = 4ms（超 SLO）+ 7/8 客户成功 migrate。事后看 customer firmware 兼容性 underestimate，多投入 2 工程师月。<strong>整体决策对</strong>—— 4 年后这块代码仍在用，竞品没赶上。\"<br><br><strong>陷阱</strong>：① 故事散没结构；② 只讲选了什么，不讲<strong>没选什么 + 为什么</strong>（缺 trade-off 思维）；③ R 没量化；④ 不承认任何错误判断 → 显得不 calibrated。"
+    },
+    "failure_modes": [
+      "故事散乱无 STAR 骨架",
+      "只讲选了什么不讲 alternatives → trade-off 思维缺失",
+      "R 段无量化",
+      "不承认 calibration miss → 不 honest",
+      "选的\"决策\"太小（属于 TL 级，不是架构级）"
+    ],
+    "follow_ups": [
+      {
+        "q": "什么样的决策算\"架构级\"？",
+        "hint": "① 影响半径跨多服务 / 多团队；② 时间尺度 &gt; 1 年；③ 回滚成本月级；④ 影响系统的核心质量属性（性能 / 可扩展 / 可演进）"
+      },
+      {
+        "q": "如果选错了怎么办？",
+        "hint": "① 用相同 ADR 框架记新决策；② Postmortem 不 blame 个人；③ 显示 learning + 后续改进；④ 大多数错决策可分阶段 walk-back（feature flag / 渐进迁移）"
+      },
+      {
+        "q": "怎么准备这道题？",
+        "hint": "① 准备 2-3 个 ADR 故事（不同维度：性能 / 可用性 / 成本）；② 4 min + 90 sec 两版本；③ 故意留钩子让面试官追问；④ 跟 mentor mock 录音听结构"
+      }
+    ]
   },
   {
     "id": 55,
@@ -2218,7 +2326,34 @@ const CARDS = [
     "diff": "high",
     "q": "怎么向业务方解释技术决策？",
     "ans": "<strong>翻译成业务语言</strong>：<ol><li>用<strong>业务影响</strong>（用户体验、营收、风险）</li><li>用<strong>类比</strong>（\"分布式锁就像图书馆的借阅卡\"）</li><li>用<strong>数字</strong>（\"P99 从 200ms 降到 50ms = 转化率提升 X%\"）</li></ol>",
-    "trap": "<strong>避免</strong>：技术黑话、过度细节、emotional debate（\"这个设计就是错的\"）。"
+    "trap": "<strong>避免</strong>：技术黑话、过度细节、emotional debate（\"这个设计就是错的\"）。",
+    "why_asked": "架构师常被吐槽\"太技术\"。能把决策<strong>翻译成业务语言</strong>的人能晋升到 Principal。",
+    "answers": {
+      "mid": "翻译成业务语言：<br>· 用<strong>业务影响</strong>（用户体验 / 营收 / 风险）<br>· 用<strong>类比</strong>（\"分布式锁就像图书馆的借阅卡\"）<br>· 用<strong>数字</strong>（\"P99 从 200ms 降到 50ms = 转化率提升 X%\"）",
+      "senior": "<strong>4 个翻译技巧</strong>：<br>1. <strong>性能 → 转化 / 留存</strong>：Amazon 数据 \"100ms 延迟降低 1% 销售\"<br>2. <strong>可用性 → 客户信任 + SLA 赔款</strong>：99.9% → 99.95% 等于\"每月减少 22 min 不可用\"<br>3. <strong>技术债 → 速度 + 风险</strong>：\"这块代码每个 feature 多花 50% 时间，且 P0 事故概率 +30%\"<br>4. <strong>架构演进 → 长期战略 + ROI</strong>：\"今年投 3 工程师月，未来 3 年节省 20 工程师月\"",
+      "staff": "深一层：能向业务沟通是<strong>Senior → Principal</strong> 的关键跃迁。Principal 不只是技术好，是\"<strong>能把技术决策跟商业目标对齐</strong>\"。<br><br><strong>实战示例</strong>：要从单体 → 微服务迁移，工程团队想做但 VP 不批。<br>· <strong>技术语言</strong>（差）：\"我们想拆 microservice，更解耦、scale 好、技术栈灵活\"<br>· <strong>业务语言</strong>（好）：\"过去 6 个月 90% 的事故都源于<strong>单体内部模块互相影响</strong>。每次 deploy 风险高 → 团队不敢发布 → 平均 ship cadence 从 weekly 退化到 monthly → 我们丢了 3 个 customer feature competitive opportunity。投资 6 个月做微服务拆分，估算可恢复 weekly deploy，同时降低 P0 事故概率 60%。\"<br><br><strong>关键</strong>：<br>① 用<strong>VP 听得懂的指标</strong>（事故数 / ship cadence / customer impact）<br>② <strong>量化</strong>（\"60%\" 不是\"提升很多\"）<br>③ <strong>类比</strong>（如对非技术 VP：\"微服务就像把一栋楼拆成 30 间公寓——每间装修不影响其他\"）<br>④ <strong>明确 ask</strong>（不是讲完了，是要 \"approve 6 个月投入 5 人\"）<br><br><strong>陷阱</strong>：① 技术细节给非技术听 → 失去注意力；② \"我们 engineer 觉得...\" 弱论证（用数据）；③ 不给业务方 trade-off → 显得只索取不付出；④ 没 follow up 量化结果 → 下次他们不再 trust。"
+    },
+    "failure_modes": [
+      "技术语言 vs 业务方 → 听不懂或不感兴趣",
+      "没量化（\"提升很多\"）",
+      "没类比 → 抽象",
+      "没明确 ask（要钱要人要时间）",
+      "没 follow up 量化实际结果"
+    ],
+    "follow_ups": [
+      {
+        "q": "VP 反复问 \"ROI 在哪\" 怎么办？",
+        "hint": "① 给具体数字（人月 vs 节省人月）；② 类似过去 case study；③ Phased plan + 阶段 milestone；④ 接受 \"VP 没 buy in\" 可能要 walk away 不强推"
+      },
+      {
+        "q": "怎么获取非技术领域的业务直觉？",
+        "hint": "① 听几次 Sales call；② Skip-level meet customer-facing role；③ 每 quarter 读公司 OKR + 财报；④ 跟 PM / 销售 1on1 学习他们关注什么"
+      },
+      {
+        "q": "决策失败怎么向业务方解释？",
+        "hint": "① 直接 own（不甩 engineer）；② 量化损失；③ 列学到什么；④ 重建 credibility 靠下一个决策的成功"
+      }
+    ]
   },
   {
     "id": 56,
@@ -2229,7 +2364,34 @@ const CARDS = [
     "diff": "mid",
     "q": "Build vs Buy 怎么决策？",
     "ans": "看四个维度：<ol><li><strong>核心竞争力</strong>？（Core Domain → 自研）</li><li><strong>团队能力</strong>？（不擅长 → 买）</li><li><strong>成本</strong>？（人力 + 维护 vs 订阅）</li><li><strong>定制需求</strong>？（标准化 → 买；定制重 → 自研）</li></ol>",
-    "trap": "<strong>陷阱</strong>：低估自研的长期维护成本（通常是开发成本的 3-5 倍）。"
+    "trap": "<strong>陷阱</strong>：低估自研的长期维护成本（通常是开发成本的 3-5 倍）。",
+    "why_asked": "Build vs Buy 是 EM/架构师常见题。能讲<strong>4 维度框架 + 真案例</strong>的人是真做过 SaaS 选型。",
+    "answers": {
+      "mid": "看四个维度：<br>· <strong>核心竞争力？</strong>（Core Domain → 自研）<br>· <strong>团队能力？</strong>（不擅长 → 买）<br>· <strong>成本？</strong>（人力 + 维护 vs 订阅）<br>· <strong>定制需求？</strong>（标准化 → 买；定制重 → 自研）",
+      "senior": "<strong>详细评估</strong>：<br>1. <strong>战略 (DDD Core/Supporting/Generic)</strong>: <br>· Core Domain（差异化能力）→ <strong>必须自研</strong><br>· Supporting Domain → flexible<br>· Generic Domain（如认证 / 日志 / monitoring）→ <strong>必须买</strong><br>2. <strong>TCO (3 year)</strong>:<br>· Build: 工程师 × 月 × 薪资 + 后续维护人月（通常被低估 3×）<br>· Buy: 订阅费 + 集成成本 + vendor lock-in 风险<br>3. <strong>Time-to-Market</strong>: Buy 通常 2-3× faster<br>4. <strong>Risk</strong>:<br>· Build: schedule slip / quality issue<br>· Buy: vendor 跑路 / 涨价 / 不满足需求",
+      "staff": "深一层：90% 的 Build vs Buy 错误是<strong>\"高估自研价值 + 低估 maintenance 成本\"</strong>。<br><br><strong>真实案例 1 (Buy 决策正确)</strong>: 我作为架构师建议<strong>买 Auth0</strong> 而不是自研 OAuth/SSO。Engineering 抵触：\"这有什么难？我们 1 个月写完。\" → 我用 TCO 算：\"1 个月写 + 3 年维护（密码 rotation / SAML / SCIM / 客户 IT 兼容）= 24 工程师月 = $400k。Auth0 是 $50k/年 = $150k 3 年。Buy 节省 $250k + 团队精力 focus 在 core domain。\"<br><br><strong>真实案例 2 (Build 决策正确)</strong>: NETCONF agent vendor product 想\"<strong>买 cisco SDN 然后包装</strong>\"，我反对。理由：① NETCONF agent 是<strong>Core Domain</strong>（公司差异化在这），不能依赖竞争对手；② vendor lock-in 致命；③ 定制需求 vendor 不会满足。最终自研，成为公司 moat。<br><br><strong>陷阱</strong>：① <strong>NIH（Not Invented Here）综合症</strong>—— engineer 倾向自研，需要 EM/架构师推 buy；② <strong>低估 maintenance</strong>—— \"build it & forget it\" 不存在；③ <strong>过分依赖 vendor</strong>—— 关键 core domain 买 → 失去 differentiation；④ <strong>没 exit strategy</strong>—— buy 了但不准备 vendor lock-in escape plan。"
+    },
+    "failure_modes": [
+      "NIH 直觉自研所有 → 团队精力分散",
+      "低估 maintenance 成本（典型 underestimate 3×）",
+      "Core Domain 买 → 失去 differentiation",
+      "Generic Domain 自研 → 浪费资源",
+      "没 exit strategy 应对 vendor lock-in"
+    ],
+    "follow_ups": [
+      {
+        "q": "怎么评估 vendor lock-in 风险？",
+        "hint": "① Switching cost（API / data export / 培训）；② Vendor 财务健康度（现金流 / 增长 / acquisition risk）；③ 替代方案存在？；④ 标准协议 vs proprietary"
+      },
+      {
+        "q": "Hybrid 方案怎么做？",
+        "hint": "① Build 核心 + Buy 非核心组件（如自研 NETCONF + 买 Auth）；② Buy + 包装自己 API（hide vendor lock-in）；③ 双 vendor（Multi-cloud / 双 DB）；④ 渐进 build out（先 buy 后逐步替换核心）"
+      },
+      {
+        "q": "已经买了发现不合适怎么办？",
+        "hint": "① 评估 switching cost vs 继续容忍；② Build 一个轻量替代 layer；③ 跟 vendor 谈定制 / 影响 roadmap；④ Walk away（要写好 exit plan + 数据迁移）"
+      }
+    ]
   },
   {
     "id": 57,
@@ -2240,7 +2402,34 @@ const CARDS = [
     "diff": "high",
     "q": "怎么向产品/老板争取偿还技术债？",
     "ans": "<strong>把技术债翻译成业务影响</strong>：<ol><li><strong>量化</strong>：\"这块代码每次改动 5 人天，重构后 1 人天\"</li><li><strong>风险化</strong>：\"这个 bug 每月发生 1 次，重构后归零\"</li><li><strong>速度化</strong>：\"修了之后新功能开发提速 30%\"</li></ol>",
-    "bonus": "<strong>20% 法则</strong>：每个 sprint 预留 20% 容量做技术债（参考 Google 的 20% 自由时间制度）。"
+    "bonus": "<strong>20% 法则</strong>：每个 sprint 预留 20% 容量做技术债（参考 Google 的 20% 自由时间制度）。",
+    "why_asked": "技术债是 EM/架构师永恒话题。能<strong>翻译成业务语言 + 量化</strong>的人能成功争取到资源。",
+    "answers": {
+      "mid": "把技术债翻译成<strong>业务影响</strong>：<br>· <strong>量化</strong>：\"这块代码每次改动 5 人天，重构后 1 人天\"<br>· <strong>风险化</strong>：\"这个 bug 每月发生 1 次，重构后归零\"<br>· <strong>速度化</strong>：\"修了之后新功能开发提速 30%\"",
+      "senior": "<strong>4 类技术债 + 各自论证</strong>：<br>1. <strong>代码债</strong>（重复 / 死代码 / 复杂度高）→ 量化\"每个 feature 多花 X 时间\"<br>2. <strong>架构债</strong>（耦合 / 拆分不合理）→ 风险化\"每个 deploy P0 风险 X%\"<br>3. <strong>测试债</strong>（覆盖率低 / E2E 缺失）→ 风险化\"production bug 数 / 月\"<br>4. <strong>工具债</strong>（CI 慢 / 部署手动）→ 速度化\"build time / deploy time\"<br><br><strong>策略</strong>：① <strong>不一次性还清</strong>—— 每 sprint 20% capacity；② <strong>跟 feature 绑定</strong>—— \"做 X feature 时顺便重构 Y\"；③ <strong>tracked Jira backlog</strong> 不只是嘴上说",
+      "staff": "深一层：技术债跟金融债一样—— <strong>不全是坏</strong>。Martin Fowler 把技术债分 <strong>4 象限</strong>（Reckless / Prudent × Deliberate / Inadvertent）：<br>· Prudent Deliberate（\"我们知道是 quick fix，下季度重构\"）—— <strong>健康</strong><br>· Prudent Inadvertent（\"做完才发现有更好方法\"）—— 正常学习<br>· Reckless Deliberate（\"<strong>我们不在乎 best practice 直接 ship</strong>\"）—— 致命<br>· Reckless Inadvertent（\"我们也不知道 best practice\"）—— 团队成熟度不够<br><br><strong>真实案例</strong>: NETCONF agent v2 累积 18 个月技术债，团队抱怨但 VP \"为啥要花时间重构？\"。我做了 3 步：<br>1. <strong>量化</strong>: 对比新 feature 在 v1（无债）vs v2 的开发时间，发现 v2 平均 2× 慢。<br>2. <strong>风险化</strong>: 列出过去 6 个月 P0 事故，<strong>75% 直接关联到 3 个技术债区域</strong>。<br>3. <strong>提案</strong>: 不是 \"停所有 feature 重构 3 个月\"，是 <strong>每 quarter dedicate 20% capacity（2 工程师）</strong> 攻 top 3 债区，2 个 quarter 完成。<br>VP 同意。Quarter 1 后 P0 事故 -50%，feature ship 速度 +30%。Quarter 2 后 v2 重构完成，团队 satisfaction +35%。<br><br><strong>陷阱</strong>：① 用技术语言（\"代码不干净\"）VP 不 care；② 要\"<strong>全部停止 feature 3 个月</strong>\"—— 不现实；③ 不 tracked → 团队私下做 → 没 credit；④ \"<strong>tech debt 永远还不清</strong>\"心态 → 不投入。"
+    },
+    "failure_modes": [
+      "用 \"代码不干净\" 这种纯技术语言",
+      "要求 100% capacity 停 feature 还债（不现实）",
+      "不量化（\"我感觉很慢\"）",
+      "不 tracked Jira → 没 credit + 易回潮",
+      "认为技术债不能还（应有 plan）"
+    ],
+    "follow_ups": [
+      {
+        "q": "Reckless 技术债怎么处理？",
+        "hint": "① 公开 calibrate—— 老板团队都知道；② Postmortem 找 process gap；③ 改 dev process（如 mandatory design review / pair）；④ 严重时换流程 / 换 lead"
+      },
+      {
+        "q": "怎么决定哪个债先还？",
+        "hint": "① Cost-of-Delay（如不还每月损失 X）；② Risk × Probability；③ 跟 hot feature 区域重叠；④ Engineer 满意度（影响 retention）"
+      },
+      {
+        "q": "Code review 时怎么 prevent new 技术债？",
+        "hint": "① Checklist（包括 test coverage / doc / API consistency）；② \"tech debt tag\" 在 PR 显式标 + Jira link；③ 季度回顾累积 tag 数；④ Boy Scout Rule—— leave 比 found 更干净"
+      }
+    ]
   },
   {
     "id": 58,
@@ -2253,7 +2442,34 @@ const CARDS = [
     "ans": "<strong>几乎总是渐进</strong>（Strangler Fig）。Joel Spolsky 名言：\"Rewriting from scratch is the single worst strategic mistake.\"",
     "bonus": "<strong>例外</strong>：技术栈已死、必须迁移（如 Flash → HTML5；32 位 → 64 位）。",
     "trap": "大重写的真实风险：<ol><li>期间业务停滞</li><li>新系统重复老 bug</li><li>三年才能赶上现有功能</li><li>团队大幅流失</li></ol>",
-    "ref": "../architect/architecture_methodology"
+    "ref": "../architect/architecture_methodology",
+    "why_asked": "Legacy 演进必问。能讲<strong>Strangler Fig 模式</strong>+ Joel Spolsky 名言的人是真做过 migration。",
+    "answers": {
+      "mid": "几乎总是<strong>渐进（Strangler Fig）</strong>。Joel Spolsky 名言：\"<strong>Rewriting from scratch is the single worst strategic mistake</strong>\" (2000)。",
+      "senior": "<strong>Strangler Fig 模式</strong>（Martin Fowler 命名 from strangler vine 攀附老树）:<br>1. 老系统继续跑<br>2. 新 feature 写到<strong>新代码</strong>里<br>3. 老 feature <strong>逐个迁移</strong>到新代码<br>4. 老代码逐渐\"被勒死\"<br>5. 直到全部迁完关掉老系统<br><br><strong>关键技术</strong>: <strong>Anti-Corruption Layer</strong>—— 新老系统间放 translation layer，保证<strong>新代码不被老 schema 污染</strong>。<br><br><strong>大重写的真实代价</strong>: ① Netscape 6 大重写 → 2 年没新版本 → 市场份额 95% → 25%；② 99% \"大重写\" 项目延期 2x + 老 bug 重现 + 新 bug + 失去客户。",
+      "staff": "深一层：渐进 vs 大重写的<strong>本质判断</strong>是<strong>\"老系统的隐含知识\"成本</strong>。Joel Spolsky 原文洞察：\"code 是<strong>bug fix 多年沉淀的结果</strong>，每个奇怪的 if 都是某个 bug 的 fix。重写丢掉这些隐含 fix → 老 bug 全部重现\"。<br><br><strong>渐进的 4 个关键技术</strong>：<br>1. <strong>Strangler Fig</strong>（见上）—— 入口路由 layer 决定走老还是新<br>2. <strong>Feature Toggle</strong>—— 同 codepath 同时跑新老，金丝雀切流量<br>3. <strong>Anti-Corruption Layer</strong>—— DDD 模式，新老 schema 翻译<br>4. <strong>Event Sourcing</strong>—— 用事件流让新老系统都消费同源数据<br><br><strong>真实案例</strong>: NETCONF agent v3 替代 v2（5 年老代码 + 8 个客户在用）。VP 一开始想\"3 个月大重写 ship 全新版本\"。我反对，提渐进：<br>1. <strong>v3 跟 v2 并行</strong> 跑（双 binary）；客户可选<br>2. <strong>新功能</strong> 只在 v3 实现<br>3. <strong>老功能逐模块</strong>迁（每月 1-2 个 module）<br>4. <strong>v2 维护降为 critical fix only</strong><br>5. <strong>客户逐个迁</strong>到 v3（不强制）<br>6. <strong>18 个月</strong>后 v2 client 数为 0 → 关停<br><br>结果：① 18 个月平稳过渡（vs 大重写预测 6 个月但 95% 概率延期到 12-24 月 + 中途客户流失）；② 期间 0 客户因 migration 流失；③ 团队<strong>持续 ship</strong> 不中断；④ 团队 morale 高（不是\"被困在没 ship 的大重构里\"）。<br><br><strong>什么时候大重写 OK？</strong>极少：① 老系统已死（用户极少 / 已 EOS）；② 技术栈彻底过时（如 Flash → modern web）；③ 不需要兼容（greenfield 新业务线）；④ 团队能力远超原作者—— 通常这 4 条全满足才考虑。"
+    },
+    "failure_modes": [
+      "直接大重写 → 99% 失败 case",
+      "没 Anti-Corruption Layer → 新代码被老 schema 污染",
+      "不双跑 → 切流量风险大",
+      "Migration 不 incremental → 一刀切 fail",
+      "不准备 rollback plan"
+    ],
+    "follow_ups": [
+      {
+        "q": "怎么决定哪个 module 先迁？",
+        "hint": "① 业务价值 + 改动频率（hot module 先迁）；② 跟新需求重叠（顺便迁）；③ 解耦度高的（依赖少先迁）；④ Risk + ROI 矩阵"
+      },
+      {
+        "q": "渐进时间太长团队 morale 怎么办？",
+        "hint": "① 显式 milestone celebration；② 数据看板 progress（X% 迁完）；③ 短期 win 加快（小 module 优先）；④ 跟 leadership communicate ROI"
+      },
+      {
+        "q": "什么时候应该承认渐进失败选择大重写？",
+        "hint": "① 渐进 18+ 月仍 &lt; 30% 迁完；② 老系统持续产生 P0 事故；③ Anti-Corruption Layer 比新代码还复杂；④ 团队 90% 时间在 maintain 老代码—— 这时考虑切割老系统 + 大重写新模块"
+      }
+    ]
   },
   {
     "id": 59,
@@ -2264,7 +2480,34 @@ const CARDS = [
     "diff": "high",
     "q": "怎么让团队接受你的架构决策？",
     "ans": "三个层次：<ol><li><strong>权威</strong>（凭借头衔，最弱）</li><li><strong>论证</strong>（用数据、ADR、ATAM 矩阵——架构师常用）</li><li><strong>共创</strong>（让团队参与设计，最强）</li></ol>",
-    "bonus": "<em>Staff Engineer</em>（Will Larson）：好架构师是\"<strong>影响力放大器</strong>\"，不是\"决策机器\"。"
+    "bonus": "<em>Staff Engineer</em>（Will Larson）：好架构师是\"<strong>影响力放大器</strong>\"，不是\"决策机器\"。",
+    "why_asked": "Senior 架构师必备<strong>影响力</strong>题。能讲\"权威/论证/共创 3 层\"+ Sponsor 配合的人是真做过 cross-team。",
+    "answers": {
+      "mid": "三个层次：<br>1. <strong>权威</strong>（凭借头衔，最弱）<br>2. <strong>论证</strong>（用数据、ADR、ATAM 矩阵——架构师常用）<br>3. <strong>共创</strong>（让团队参与设计，最强）",
+      "senior": "<strong>3 层详解</strong>：<br>· <strong>权威</strong>: \"我是架构师所以这么定\"——团队短期服从但内心不 buy in，长期反弹<br>· <strong>论证</strong>: 用 ADR 列方案 trade-off、用 ATAM 量化质量属性、用 prototype 验证—— Senior 主流方式<br>· <strong>共创</strong>: Design workshop / RFC 评审让团队提出方案，架构师做 facilitator + 收敛 → 团队 ownership 高，执行力强<br><br><strong>选择策略</strong>：① 紧急 P0 → 偏权威；② 中长期方向 → 偏论证；③ 战略级 + 跨多团队 → 必须共创。",
+      "staff": "深一层：作为 Principal 架构师，<strong>\"被服从\"vs\"被信服\"</strong>区别巨大。被服从可能是 fear，被信服是 belief。前者只在 you watch 时 work，后者团队自己 enforce。<br><br><strong>真实策略组合</strong>：<br>1. <strong>提前 1on1</strong>：跟关键 tech lead 个别聊，让他们提前 buy in / 提 concerns→ 公开 meeting 时已有 advocate<br>2. <strong>RFC + 评审周</strong>：草稿发出 → 1-2 周收 comments → 公开 review meeting—— 不是当场说服，是<strong>结构化 collect feedback</strong><br>3. <strong>ADR + 显式 trade-off</strong>：不藏短，把 alternative 也写下来——团队感觉\"被尊重 + 我也想到了 X，被采纳\"<br>4. <strong>Sponsor 配合</strong>：跟 VP / Skip-level pre-align → meeting 时 VP 不会突然推翻<br>5. <strong>Pilot + data</strong>：小范围试点 → 数据说话 → 全推时阻力小<br><br><strong>真实案例</strong>: 推一个\"所有微服务统一用 OTel\"决策（影响 8 个团队）：<br>1. RFC 草稿 → email list 1 周<br>2. 跟 8 个 tech lead 各 1on1（共 6 小时）<br>3. 公开 design review（2 小时，70% comments 已在 1on1 解决）<br>4. ADR 记录 + 加 phased rollout plan<br>5. Pilot 2 个团队 → 6 周后 share data<br>6. 全推时<strong>0 阻力</strong>，反而 4 个团队主动来加速接入<br><br><strong>陷阱</strong>：① 跳过 1on1 直接公开会议 → ego 阻力大；② 不写 ADR → 一个月后没人记得决定；③ 不 pilot → 全推时翻车；④ 没 Sponsor pre-align → VP 当场否决；⑤ \"<strong>共创\"流于形式</strong>—— 假装共创但已内定结果，团队识破后 trust 崩。"
+    },
+    "failure_modes": [
+      "凭权威推 → 短期服从长期反弹",
+      "跳过 1on1 直接公开会议 → ego 阻力",
+      "不写 ADR → 半年后没人记得",
+      "不 pilot 直接全推 → 翻车",
+      "假共创（已内定）→ trust 崩"
+    ],
+    "follow_ups": [
+      {
+        "q": "团队 vocal 反对你的方案怎么办？",
+        "hint": "① 不 defend，先 \"good point, walk me through\"；② 看反对是否触及核心质量属性 → 真问题修改方案；③ 不触核心但仍反对 → ADR 记录他们的 concern + 决定理由"
+      },
+      {
+        "q": "Sponsor 跟你 align 但实际推进时遇阻？",
+        "hint": "① 跟 sponsor 1on1 update；② 让 sponsor 出场 reinforce（不能你自己 push）；③ 如果 sponsor 也退缩 → 重新评估决策；④ Senior 架构师重要技能：知道何时该 walk away"
+      },
+      {
+        "q": "跨团队架构治理怎么 scale？",
+        "hint": "① Architecture Review Board（季度评审 critical decisions）；② RFC process 标准化；③ Tech radar（推荐 / 容忍 / 拒绝 技术列表）；④ Tech strategy 文档每年 refresh"
+      }
+    ]
   }
 ];
 
