@@ -39,7 +39,7 @@
 | 14 | 深度：[Linux Kernel I/O](../system/io_linux_kernel_guide.html) + [Async Networking](../system/async_networking_guide.html) | 5 h |
 | 15 | 🎯 [类型擦除 / 异常 / 性能 5 题](./cpp_interview_cards.html?cats=性能) #64 #94 #106 #108 #110 | 3 h |
 | 16 | 深度：[Performance](../perf-debug/performance_guide.html) + [Low-Latency](../perf-debug/low_latency_guide.html) | 5 h |
-| 17 | 🎯 [系统设计 3 题](./cpp_interview_cards.html?cats=系统设计) #148 LRU / #149 限流 / #152 NETCONF | 2 h |
+| 17 | 🎯 [系统设计 3 题](./cpp_interview_cards.html?cats=系统设计) #148 LRU / #149 限流 / #152 RPC | 2 h |
 | 18 | 🎯 [工程思维 4 题](./cpp_interview_cards.html?cats=思维) #173 #174 #191 #198 | 2 h |
 | 19 | Mock 实战：随机抽 20 题用模拟面试模式跑 30 min | 1 h |
 
