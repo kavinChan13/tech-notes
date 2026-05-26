@@ -1,0 +1,815 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LLVM IR 深入 · SSA / Pass / Pipeline / 写自己的 Pass</title>
+<link rel="stylesheet" href="../assets/site-theme.css">
+<style>
+  :root {
+    --bg: #0d1117; --surface: #161b22; --surface2: #1c2333; --border: #30363d;
+    --text: #e6edf3; --text-muted: #8b949e;
+    --accent-blue: #58a6ff; --accent-green: #3fb950; --accent-orange: #d29922;
+    --accent-purple: #bc8cff; --accent-red: #f85149; --accent-cyan: #39d2c0;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    background: var(--bg); color: var(--text); line-height: 1.7; }
+  .container { max-width: 1024px; margin: 0 auto; padding: 40px 24px 80px; }
+  h1 { font-size: 2.4em; font-weight: 700; margin-bottom: 8px;
+    background: linear-gradient(135deg, var(--accent-cyan), var(--accent-blue));
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+  .subtitle { color: var(--text-muted); font-size: 1.05em; margin-bottom: 32px;
+    padding-bottom: 20px; border-bottom: 1px solid var(--border); }
+  h2 { font-size: 1.6em; font-weight: 600; margin-top: 56px; margin-bottom: 16px;
+    padding-bottom: 8px; border-bottom: 2px solid var(--border); scroll-margin-top: 20px; }
+  h3 { font-size: 1.2em; font-weight: 600; margin-top: 28px; margin-bottom: 10px; color: var(--accent-blue); }
+  h4 { font-size: 1.02em; font-weight: 600; margin-top: 20px; margin-bottom: 6px; color: var(--accent-purple); }
+  p { margin-bottom: 14px; }
+  a { color: var(--accent-blue); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  strong { color: #fff; }
+  ul, ol { margin: 8px 0 16px 22px; }
+  li { margin-bottom: 6px; }
+  code { font-family: 'Cascadia Code', 'Fira Code', Consolas, monospace;
+    background: var(--surface2); padding: 2px 6px; border-radius: 4px;
+    font-size: 0.88em; color: var(--accent-cyan); }
+  pre { background: #0d1117; border: 1px solid var(--border); border-radius: 8px;
+    padding: 16px 20px; overflow-x: auto; margin: 12px 0 20px;
+    font-size: 0.86em; line-height: 1.55;
+    font-family: 'Cascadia Code', 'Fira Code', Consolas, monospace; }
+  pre code { background: none; padding: 0; color: var(--text); }
+  .cm { color: #8b949e; } .kw { color: #ff7b72; } .str { color: #a5d6ff; }
+  .num { color: #d2a8ff; } .label { color: #79c0ff; }
+
+  .toc { background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    padding: 18px 22px; margin: 24px 0 40px; }
+  .toc-title { font-weight: 600; margin-bottom: 8px; color: var(--accent-cyan); }
+  .toc ol { margin-left: 22px; }
+  .toc a { color: var(--text); }
+  .toc a:hover { color: var(--accent-blue); }
+
+  table { width: 100%; border-collapse: collapse; margin: 14px 0 22px; font-size: 0.92em; }
+  th, td { padding: 9px 12px; text-align: left; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { background: var(--surface2); color: var(--accent-blue); font-weight: 600; }
+  tr:hover td { background: rgba(56,139,253,.05); }
+
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 18px 22px; margin: 16px 0; }
+  .card-title { font-weight: 600; margin-bottom: 8px; color: var(--accent-cyan); }
+
+  .note, .warn, .tip {
+    border-left: 4px solid var(--accent-blue);
+    background: rgba(88,166,255,.06);
+    padding: 12px 16px; margin: 14px 0; border-radius: 0 8px 8px 0;
+  }
+  .warn { border-color: var(--accent-orange); background: rgba(210,153,34,.06); }
+  .tip  { border-color: var(--accent-green); background: rgba(63,185,80,.06); }
+
+  /* CFG diagram */
+  .cfg { font-family: 'Cascadia Code', monospace; font-size: 0.85em; line-height: 1.45;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    padding: 16px 20px; margin: 14px 0; white-space: pre; overflow-x: auto; }
+
+  .footer-nav { margin-top: 60px; padding: 24px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    display: flex; gap: 16px; flex-wrap: wrap; justify-content: space-between; }
+  .footer-nav a { padding: 10px 16px; background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 8px; color: var(--text); transition: all .15s; }
+  .footer-nav a:hover { border-color: var(--accent-cyan); color: var(--accent-cyan); text-decoration: none; }
+</style>
+</head>
+<body>
+
+<!-- tn-nav:v1 -->
+<style>
+#tn-nav{position:fixed;top:14px;right:14px;z-index:99999;display:flex;gap:6px;align-items:center;
+  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;
+  font-size:12px;line-height:1;font-weight:500;}
+#tn-nav a,#tn-nav .tn-meta{display:inline-flex;align-items:center;gap:4px;
+  background:rgba(20,20,30,.85);color:#fff !important;text-decoration:none !important;
+  padding:7px 11px;border-radius:999px;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+  border:1px solid rgba(255,255,255,.10);box-shadow:0 2px 8px rgba(0,0,0,.18);}
+#tn-nav a:hover{background:rgba(57,210,192,.92);}
+#tn-nav .tn-meta{background:rgba(20,20,30,.55);cursor:default;}
+@media (max-width:640px){#tn-nav{top:8px;right:8px;font-size:11px;gap:4px;}#tn-nav a,#tn-nav .tn-meta{padding:5px 9px;}}
+</style>
+<div id="tn-nav">
+  <a href="../index.html">← 主页</a>
+  <a href="./toolchain_landscape.html">⚙️ 工具链全景</a>
+  <a href="./sanitizer_internals.html">🔬 Sanitizer 内部</a>
+  <span class="tn-meta">⏱ 50 min</span>
+</div>
+
+<div class="container">
+
+<h1>LLVM IR 深入</h1>
+<p class="subtitle">SSA / phi / 类型系统 / Pass 流水线 / 写自己的 Pass · 从 godbolt 看 IR 到 contribute LLVM</p>
+
+<div class="toc">
+  <div class="toc-title">📚 内容地图</div>
+  <ol>
+    <li><a href="#why">为什么是 LLVM IR · 跨语言 + 跨平台 + SSA</a></li>
+    <li><a href="#anatomy">IR 解剖学</a> —— Module / Function / BasicBlock / Instruction</li>
+    <li><a href="#ssa">SSA 与 Phi 节点</a> —— mem2reg 的灵魂</li>
+    <li><a href="#types">类型系统</a> —— 基础 + 聚合 + 指针 + opaque pointers (LLVM 16+)</li>
+    <li><a href="#metadata">Metadata + Attribute</a> —— 优化提示 / debug info / TBAA</li>
+    <li><a href="#passes">Pass 流水线深入</a> —— Analysis vs Transform / NewPM</li>
+    <li><a href="#opt-detail">7 个关键优化 Pass 内部</a> —— inline / mem2reg / GVN / LICM / SROA / loop vectorize / instcombine</li>
+    <li><a href="#write-pass">写自己的 Pass</a> —— 完整 example + 注册到 pipeline</li>
+    <li><a href="#debug-pass">调试 Pass</a> —— print-after-all / opt-bisect / FileCheck</li>
+    <li><a href="#contribute">Contribute LLVM</a> —— 从 first patch 到 commit access</li>
+  </ol>
+</div>
+
+<h2 id="why">① 为什么是 LLVM IR</h2>
+
+<p>LLVM IR（Intermediate Representation）是<strong>编译器内部表示</strong>—— 介于高级语言和机器代码之间的<strong>类汇编 + 类型化 + SSA</strong> 语言。它的设计目标：</p>
+
+<ol>
+  <li><strong>跨语言</strong>—— C / C++ / Swift / Rust / Julia / Zig / Crystal 等都编到同一 IR</li>
+  <li><strong>跨平台</strong>—— x86 / ARM / RISC-V / WebAssembly / NVPTX (GPU) / AMDGPU 等 backend 共享一个 IR</li>
+  <li><strong>跨用途</strong>—— 同一 IR 既用于 AOT 编译，也用于 JIT、static analysis、obfuscation、sanitizer 插桩</li>
+  <li><strong>外部可读写</strong>—— 不像 GCC GIMPLE 那么内部，外部工具能 emit / parse / transform IR</li>
+</ol>
+
+<h3>三种形态</h3>
+
+<table>
+  <thead><tr><th>形态</th><th>扩展名</th><th>用途</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Textual IR</strong></td><td><code>.ll</code></td><td>人读 + godbolt + 调试</td></tr>
+    <tr><td><strong>Bitcode</strong></td><td><code>.bc</code></td><td>二进制，紧凑，LTO 时存到 .o 里</td></tr>
+    <tr><td><strong>In-memory</strong></td><td>—</td><td><code>llvm::Module</code> C++ 对象，跑 pass 时</td></tr>
+  </tbody>
+</table>
+
+<p>三者<strong>语义完全等价</strong>，可互转：<code>llvm-dis</code> (bc → ll) / <code>llvm-as</code> (ll → bc)。</p>
+
+<h2 id="anatomy">② IR 解剖学</h2>
+
+<p>IR 是<strong>嵌套</strong>结构：</p>
+
+<pre><code>Module          <span class="cm">; 一个 .cpp 翻译单元 → 一个 Module</span>
+└── Function    <span class="cm">; 每个 C++ function → 一个 Function</span>
+    └── BasicBlock     <span class="cm">; 顺序执行的指令序列 (基本块)</span>
+        └── Instruction   <span class="cm">; load / store / add / br / call / ret 等</span></code></pre>
+
+<h3>最小完整 example</h3>
+
+<pre><code><span class="cm">// hello.cpp</span>
+<span class="kw">int</span> add(<span class="kw">int</span> a, <span class="kw">int</span> b) {
+  <span class="kw">if</span> (a &gt; b) <span class="kw">return</span> a;
+  <span class="kw">return</span> b;
+}</code></pre>
+
+<p>编译 <code>clang -S -emit-llvm -O0 hello.cpp -o hello.ll</code>（O0 保留所有细节）：</p>
+
+<pre><code><span class="label">; ModuleID = 'hello.cpp'</span>
+<span class="label">source_filename = "hello.cpp"</span>
+<span class="label">target datalayout = "e-m:e-p270:32:32-..."</span>
+<span class="label">target triple = "x86_64-pc-linux-gnu"</span>
+
+<span class="cm">; Function Attrs: noinline nounwind optnone uwtable</span>
+define dso_local noundef i32 @_Z3addii(i32 noundef %0, i32 noundef %1) #0 {
+  %3 = alloca i32, align 4              <span class="cm">; 局部 var a (栈)</span>
+  %4 = alloca i32, align 4              <span class="cm">; 局部 var b</span>
+  %5 = alloca i32, align 4              <span class="cm">; 返回值 slot</span>
+  store i32 %0, ptr %3, align 4         <span class="cm">; a = arg0</span>
+  store i32 %1, ptr %4, align 4         <span class="cm">; b = arg1</span>
+  %6 = load i32, ptr %3, align 4
+  %7 = load i32, ptr %4, align 4
+  %8 = icmp sgt i32 %6, %7              <span class="cm">; a &gt; b</span>
+  br i1 %8, label %9, label %11         <span class="cm">; 条件分支</span>
+
+9:                                       <span class="cm">; preds = %2</span>
+  %10 = load i32, ptr %3, align 4
+  store i32 %10, ptr %5, align 4
+  br label %13                          <span class="cm">; 无条件跳转到 exit</span>
+
+11:                                      <span class="cm">; preds = %2</span>
+  %12 = load i32, ptr %4, align 4
+  store i32 %12, ptr %5, align 4
+  br label %13
+
+13:                                      <span class="cm">; preds = %11, %9</span>
+  %14 = load i32, ptr %5, align 4
+  ret i32 %14
+}</code></pre>
+
+<p>跑 <code>-O1</code> 优化后 IR 截然不同：</p>
+
+<pre><code>define noundef i32 @_Z3addii(i32 noundef %a, i32 noundef %b) {
+entry:
+  %cmp = icmp sgt i32 %a, %b
+  %r = select i1 %cmp, i32 %a, i32 %b     <span class="cm">; select 替代 branch</span>
+  ret i32 %r
+}</code></pre>
+
+<p>Optimizer 把 5 个 basic block + 多次 load/store 压缩成 3 行 + 1 个 <code>select</code>。这就是<strong>SSA 优化的威力</strong>—— 见下节。</p>
+
+<h3>CFG（控制流图）</h3>
+
+<p>每个 Function 的 basic block 之间通过 <code>br</code> 指令连成 <strong>CFG</strong>（Control Flow Graph）：</p>
+
+<div class="cfg">      entry
+        │
+        ▼
+    ┌───────┐
+    │  %2   │  (icmp + br)
+    └─┬───┬─┘
+      │true │false
+      ▼    ▼
+    ┌───┐ ┌───┐
+    │ %9│ │%11│
+    └─┬─┘ └─┬─┘
+      │     │
+      └──┬──┘
+         ▼
+       %13 (ret)</div>
+
+<p>大多数优化 pass 都在<strong>CFG 上工作</strong>—— 分析 reachability / dominator / loop / def-use。</p>
+
+<h2 id="ssa">③ SSA 与 Phi 节点</h2>
+
+<p><strong>SSA (Static Single Assignment)</strong>—— 每个变量<strong>只赋值一次</strong>。听起来限制大，但实际让 def-use 分析 trivial—— 每个 use 只能对应一个 def。</p>
+
+<h3>问题：if-else 怎么 SSA？</h3>
+
+<pre><code><span class="kw">int</span> x;
+<span class="kw">if</span> (cond) x = 1;
+<span class="kw">else</span>    x = 2;
+use(x);    <span class="cm">// x 有 2 个 def，违反 SSA</span></code></pre>
+
+<p>解：<strong>phi 节点</strong>—— "根据走的哪条分支挑选合适的 def"：</p>
+
+<pre><code><span class="kw">entry</span>:
+  %cond = ...
+  br i1 %cond, label %if_true, label %if_false
+
+<span class="kw">if_true</span>:
+  %x1 = i32 1
+  br label %merge
+
+<span class="kw">if_false</span>:
+  %x2 = i32 2
+  br label %merge
+
+<span class="kw">merge</span>:
+  %x = phi i32 [ %x1, %if_true ], [ %x2, %if_false ]
+  call void @use(i32 %x)</code></pre>
+
+<p>phi 节点在 basic block <strong>顶部</strong>，根据"从哪条 incoming edge 来"选不同 def。这是 SSA 的核心创新。</p>
+
+<h3>mem2reg —— 把栈变量提升到 SSA</h3>
+
+<p>看上面 <code>-O0</code> IR：所有 local var 用 alloca + load/store 操作（即"<strong>内存 form</strong>"）。<code>-O1</code> 后这些 alloca 消失，变量直接在 register（SSA value）—— 这就是 <strong>mem2reg pass</strong> 做的。</p>
+
+<table>
+  <thead><tr><th>O0 (内存 form)</th><th>O1 (SSA form)</th></tr></thead>
+  <tbody>
+    <tr><td><code>%a = alloca i32<br>store i32 %0, ptr %a<br>%t = load i32, ptr %a<br>%t2 = add i32 %t, 1<br>store i32 %t2, ptr %a</code></td><td><code>%a1 = add i32 %0, 1<br><br>(no load/store!)</code></td></tr>
+  </tbody>
+</table>
+
+<p>mem2reg 让所有后续 pass（GVN / inline / LICM 等）能直接看 def-use chain，效率 ×100。<strong>没 mem2reg 就没现代 LLVM 优化</strong>。</p>
+
+<h3>SSA 不能完全表达什么</h3>
+
+<ul>
+  <li><strong>逃逸到内存的对象</strong>—— 还是 alloca + load/store（不能 mem2reg）</li>
+  <li><strong>非局部跨函数 def</strong>—— global 变量 / heap 对象</li>
+  <li><strong>循环归纳变量</strong>—— 需要 phi 节点配 induction variable analysis</li>
+</ul>
+
+<p>所以 SSA 是<strong>函数内</strong> 的，跨函数仍需 inter-procedural analysis。</p>
+
+<h2 id="types">④ 类型系统</h2>
+
+<p>LLVM IR 是<strong>强类型</strong>—— 不像传统汇编。每个 value 都有 type，operation 必须 type-compatible。</p>
+
+<h3>基础类型</h3>
+
+<table>
+  <thead><tr><th>类型</th><th>含义</th><th>例</th></tr></thead>
+  <tbody>
+    <tr><td><code>i1, i8, i16, i32, i64, i128</code></td><td>固定 width 整数（无符号性由 op 决定）</td><td><code>i32 42</code></td></tr>
+    <tr><td><code>iN</code>（任意 N）</td><td>任意 bit width（如 <code>i7</code>）</td><td>偶尔用于 bit-packed 数据</td></tr>
+    <tr><td><code>half, float, double, fp128</code></td><td>浮点</td><td><code>double 3.14</code></td></tr>
+    <tr><td><code>void</code></td><td>无返回值（仅函数返回 / 无 phi）</td><td><code>ret void</code></td></tr>
+    <tr><td><code>label</code></td><td>basic block 标签</td><td><code>label %entry</code></td></tr>
+    <tr><td><code>token</code></td><td>不透明（用于 coroutine / exception）</td><td><code>token none</code></td></tr>
+  </tbody>
+</table>
+
+<h3>聚合类型</h3>
+
+<pre><code><span class="cm">; struct (literal)</span>
+{ i32, double, ptr }
+
+<span class="cm">; array</span>
+[10 x i32]              <span class="cm">; 10 个 int</span>
+
+<span class="cm">; named struct</span>
+%struct.MyClass = type { i32, ptr, [4 x i8] }
+
+<span class="cm">; vector (SIMD)</span>
+&lt;4 x float&gt;             <span class="cm">; 4-lane SSE</span>
+&lt;8 x i32&gt;               <span class="cm">; 8-lane AVX</span>
+
+<span class="cm">; function type</span>
+i32 (i32, ptr)          <span class="cm">; takes (i32, ptr), returns i32</span></code></pre>
+
+<h3>Opaque Pointers (LLVM 16+)</h3>
+
+<p>2022 年起 LLVM <strong>全部 pointer 类型 typeless</strong>—— 之前是 <code>i32*</code> / <code>%struct.X*</code> / <code>ptr</code>，现在统一<strong>只 <code>ptr</code></strong>。原因：</p>
+
+<ul>
+  <li>历史 typed pointer 是 design mistake（type 跟 pointer 强绑导致 bitcast 满天飞）</li>
+  <li>实际指针的 "type" 应该在 <strong>load/store/GEP 指令</strong>上显式标</li>
+  <li>简化 IR + 减少冗余信息</li>
+</ul>
+
+<pre><code><span class="cm">; 老式 (LLVM &lt; 15):</span>
+%1 = load i32, i32* %ptr_to_int
+%2 = load %struct.X, %struct.X* %ptr_to_struct
+
+<span class="cm">; Opaque pointers (LLVM 16+):</span>
+%1 = load i32, ptr %ptr_any
+%2 = load %struct.X, ptr %ptr_any
+                  <span class="cm">// ↑ 类型信息在 load 指令本身</span></code></pre>
+
+<p>影响：写 LLVM pass 不能再依赖 pointer's "pointee type"，必须看 use site。</p>
+
+<h2 id="metadata">⑤ Metadata + Attribute</h2>
+
+<p>除了 instruction 本身，LLVM IR 还有<strong>大量 metadata</strong>：</p>
+
+<h3>常见 metadata</h3>
+
+<table>
+  <thead><tr><th>Metadata</th><th>用途</th></tr></thead>
+  <tbody>
+    <tr><td><code>!dbg !N</code></td><td>Debug info（源代码 line / column / file）</td></tr>
+    <tr><td><code>!tbaa !N</code></td><td>Type-Based Alias Analysis（指针不会 alias 不同 type）</td></tr>
+    <tr><td><code>!range !N</code></td><td>值范围（如"<code>this load 一定 ≥ 0</code>"）</td></tr>
+    <tr><td><code>!llvm.loop !N</code></td><td>循环属性（vectorize / unroll hint）</td></tr>
+    <tr><td><code>!nonnull</code></td><td>load 出来的指针非 null</td></tr>
+    <tr><td><code>!nontemporal</code></td><td>nontemporal load/store (绕过 cache)</td></tr>
+    <tr><td><code>!align</code></td><td>load 出来的指针对齐保证</td></tr>
+  </tbody>
+</table>
+
+<h3>Attribute</h3>
+
+<p>函数 / 参数级的属性：</p>
+
+<table>
+  <thead><tr><th>Attribute</th><th>含义</th></tr></thead>
+  <tbody>
+    <tr><td><code>noinline</code> / <code>alwaysinline</code></td><td>inline 控制</td></tr>
+    <tr><td><code>readnone</code> / <code>readonly</code> / <code>writeonly</code></td><td>memory effect（让 optimizer 知道函数是不是纯）</td></tr>
+    <tr><td><code>nounwind</code></td><td>不抛异常（C++ noexcept 翻译来）</td></tr>
+    <tr><td><code>willreturn</code></td><td>保证 return（不 infinite loop / abort）</td></tr>
+    <tr><td><code>noundef</code></td><td>参数 / 返回值不能是 undef / poison</td></tr>
+    <tr><td><code>nonnull</code></td><td>指针参数非 null（caller / callee 保证）</td></tr>
+    <tr><td><code>noalias</code></td><td>指针参数不 alias 其他参数（C 的 <code>restrict</code> 翻译）</td></tr>
+  </tbody>
+</table>
+
+<p>这些属性<strong>让 optimizer 更激进</strong>。如 <code>readonly</code> 函数的多次调用可以被 CSE 合并；<code>noalias</code> 让 loop vectorizer 可以并行化原本被 alias 阻止的 loop。</p>
+
+<h2 id="passes">⑥ Pass 流水线深入</h2>
+
+<p>LLVM 的所有优化 / 分析 / transform 都组织成 <strong>Pass</strong>。一个 pass 干一件事。<code>-O2</code> 跑约 150 个 pass，<code>-O3</code> 多 20-30 个。</p>
+
+<h3>两大类</h3>
+
+<table>
+  <thead><tr><th>类型</th><th>做什么</th><th>例</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Analysis Pass</strong></td><td><strong>不修改</strong> IR，只产出信息</td><td>DominatorTree / LoopInfo / AliasAnalysis</td></tr>
+    <tr><td><strong>Transform Pass</strong></td><td><strong>修改</strong> IR</td><td>InstCombine / GVN / LoopUnroll</td></tr>
+  </tbody>
+</table>
+
+<p>Transform Pass 通常 <strong>依赖</strong> Analysis Pass 的结果。如 LICM (Loop Invariant Code Motion) 依赖 LoopInfo + AliasAnalysis。</p>
+
+<h3>Pass 的粒度</h3>
+
+<table>
+  <thead><tr><th>粒度</th><th>作用范围</th><th>例</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Module Pass</strong></td><td>整个 Module（如跨函数）</td><td>Inliner / GlobalOpt</td></tr>
+    <tr><td><strong>Function Pass</strong></td><td>单个 Function</td><td>InstCombine / GVN</td></tr>
+    <tr><td><strong>Loop Pass</strong></td><td>单个 Loop</td><td>LoopUnroll / LICM</td></tr>
+    <tr><td><strong>CGSCC Pass</strong></td><td>Call Graph Strongly-Connected Component</td><td>Inliner (新版)</td></tr>
+  </tbody>
+</table>
+
+<h3>New PassManager (NewPM)</h3>
+
+<p>LLVM 13+ 默认用 NewPM（新 pass manager），替代了 2003 年的 legacy PM。差异：</p>
+
+<ul>
+  <li>NewPM <strong>编译时多态</strong>（CRTP），legacy 是 runtime virtual call —— NewPM 快 ~20%</li>
+  <li>NewPM 允许 <strong>nested pipelines</strong>—— Module → Function → Loop 嵌套调度更灵活</li>
+  <li>NewPM 写法不同（继承 <code>PassInfoMixin&lt;MyPass&gt;</code> + 实现 <code>run()</code>）</li>
+  <li>Legacy PM 仍可用但 deprecated</li>
+</ul>
+
+<h3>看完整 pipeline</h3>
+
+<pre><code><span class="cm"># 列 -O2 时跑了哪些 pass:</span>
+clang -O2 -mllvm -print-pipeline-passes \
+  -x c++ /dev/null -c -o /dev/null
+
+<span class="cm"># 输出（截选）:</span>
+verify,
+forceattrs,
+inferattrs,
+coro-early,
+function&lt;eager-inv&gt;(
+  ee-instr,
+  lower-expect,
+  simplifycfg&lt;...&gt;,
+  sroa&lt;modify-cfg&gt;,
+  early-cse&lt;memssa&gt;,
+  ...
+),
+require&lt;globals-aa&gt;,
+function(invalidate&lt;aa&gt;),
+require&lt;profile-summary&gt;,
+cgscc(inline,
+      function-attrs&lt;skip-non-recursive-function-attrs&gt;,
+      function&lt;eager-inv&gt;(
+        sroa&lt;modify-cfg&gt;,
+        early-cse&lt;memssa&gt;,
+        speculative-execution&lt;only-if-divergent-target&gt;,
+        jump-threading,
+        correlated-propagation,
+        simplifycfg&lt;...&gt;,
+        instcombine&lt;max-iterations=1...&gt;,
+        ...
+      )
+),
+...</code></pre>
+
+<h2 id="opt-detail">⑦ 7 个关键优化 Pass 内部</h2>
+
+<h3>7.1 Inliner —— 函数体替代 call</h3>
+
+<ul>
+  <li><strong>核心算法</strong>：cost-benefit。Cost = inlined 后的代码 size 增长；Benefit = 消除 call overhead + 暴露后续优化机会</li>
+  <li><strong>调用图自底向上</strong>—— 先 inline leaf function，再 inline 调用它们的</li>
+  <li><strong>启发式</strong>：函数小（≤ ~ 15 IR instr）/ caller 内的 constant arg / hot call site → inline</li>
+  <li><strong>典型收益</strong>: 5-20%。也是<strong>所有后续优化的前提</strong>—— 跨函数边界不能 inline 就不能 CSE / GVN</li>
+</ul>
+
+<h3>7.2 mem2reg —— 见 §3</h3>
+
+<p>把 alloca/load/store 提升到 SSA value。<strong>每个现代优化的前置 pass</strong>。</p>
+
+<h3>7.3 GVN (Global Value Numbering) —— 识别等价表达式</h3>
+
+<pre><code><span class="cm">; Before GVN:</span>
+%a = add i32 %x, %y
+%b = add i32 %x, %y      <span class="cm">; 等价表达式</span>
+%c = mul i32 %a, %b
+
+<span class="cm">; After GVN:</span>
+%a = add i32 %x, %y
+%c = mul i32 %a, %a      <span class="cm">; %b 被消除，直接用 %a</span></code></pre>
+
+<ul>
+  <li>不仅看<strong>结构等价</strong>（同样 op + 同样 operand），还做 <strong>partial redundancy elimination</strong></li>
+  <li>结合 MemorySSA + AliasAnalysis 做 <strong>load elimination</strong>（"已经 load 过的值不用重 load"）</li>
+  <li>收益：典型 hot path 1-5%</li>
+</ul>
+
+<h3>7.4 LICM (Loop Invariant Code Motion)</h3>
+
+<pre><code><span class="cm">; Before:</span>
+<span class="kw">for</span> (i = 0; i &lt; n; i++) {
+  x = a * b;          <span class="cm">// invariant in loop</span>
+  arr[i] = x + i;
+}
+
+<span class="cm">; After LICM:</span>
+x = a * b;            <span class="cm">// hoisted out of loop</span>
+<span class="kw">for</span> (i = 0; i &lt; n; i++) {
+  arr[i] = x + i;
+}</code></pre>
+
+<ul>
+  <li>"<strong>循环不变量</strong>" 移出 loop —— 只算一次</li>
+  <li>需要 <strong>LoopInfo</strong>（哪些 BB 在 loop 里）+ <strong>AliasAnalysis</strong>（move 不影响 memory state）</li>
+  <li>收益：循环密集代码 10-30%</li>
+</ul>
+
+<h3>7.5 SROA (Scalar Replacement of Aggregates)</h3>
+
+<pre><code><span class="cm">; Before SROA:</span>
+%pair = alloca { i32, i32 }
+%p1 = getelementptr { i32, i32 }, ptr %pair, i32 0, i32 0
+store i32 %x, ptr %p1
+%p2 = getelementptr { i32, i32 }, ptr %pair, i32 0, i32 1
+store i32 %y, ptr %p2
+
+<span class="cm">; After SROA:</span>
+<span class="cm">; (struct 被拆，没有 alloca，每个 field 是独立 SSA value)</span>
+<span class="cm">; %x 和 %y 直接用</span></code></pre>
+
+<p>把<strong>聚合（struct/array）</strong>拆成单独 scalar。配合 mem2reg 让 struct field 也能进 register。极重要 pass —— 没 SROA 现代 C++ 性能崩。</p>
+
+<h3>7.6 Loop Vectorizer —— SIMD 自动并行化</h3>
+
+<pre><code><span class="cm">; Before:</span>
+<span class="kw">for</span> (i = 0; i &lt; 1000; i++)
+  c[i] = a[i] + b[i];
+
+<span class="cm">; After vectorize (AVX2):</span>
+<span class="kw">for</span> (i = 0; i &lt; 1000; i += 8) {           <span class="cm">// 8 个一组</span>
+  &lt;8 x float&gt; va = load &lt;8 x float&gt;, a+i
+  &lt;8 x float&gt; vb = load &lt;8 x float&gt;, b+i
+  &lt;8 x float&gt; vc = fadd va, vb
+  store &lt;8 x float&gt; vc, c+i
+}</code></pre>
+
+<ul>
+  <li>需要 <strong>iteration count 已知</strong> / <strong>无 dependency between iterations</strong> / <strong>对齐 OK</strong></li>
+  <li><strong>noalias</strong> 让 vectorize 更激进（之前 alias 阻止 vectorize 的 loop 现在可以）</li>
+  <li>收益：数据密集 loop 2-8×</li>
+</ul>
+
+<h3>7.7 InstCombine —— 局部模式重写</h3>
+
+<p>大量小规则把"<strong>显式</strong>" pattern 改成"<strong>更优</strong>" pattern：</p>
+
+<pre><code>%t = mul i32 %x, 2          ; → %t = shl i32 %x, 1
+%t = mul i32 %x, 8          ; → %t = shl i32 %x, 3
+%t = mul i32 %x, 7          ; → 也可能用 shift + sub
+%t = and i32 %x, 0xffff     ; bit mask 优化
+%t = sub i32 %x, %x         ; → 0
+%t = add i32 %x, 0          ; → %x
+%t = sext i8 %x to i32      ; sign-ext patterns</code></pre>
+
+<p>InstCombine 跑很多次（每个 transform pass 之后），持续清理 IR。<strong>累计收益</strong>不大但 ubiquitous。</p>
+
+<h2 id="write-pass">⑧ 写自己的 Pass</h2>
+
+<p>动手写一个 LLVM pass 是<strong>真正理解 LLVM 的 fastest way</strong>。下面是完整的 "<strong>统计函数中的 call 指令数量</strong>" pass。</p>
+
+<h3>项目结构</h3>
+
+<pre><code>my-llvm-pass/
+├── CMakeLists.txt
+├── MyPass.cpp
+└── test.cpp</code></pre>
+
+<h3>CMakeLists.txt</h3>
+
+<pre><code>cmake_minimum_required(VERSION 3.20)
+project(MyLLVMPass)
+
+find_package(LLVM REQUIRED CONFIG)
+include_directories(${LLVM_INCLUDE_DIRS})
+add_definitions(${LLVM_DEFINITIONS})
+
+add_library(MyPass SHARED MyPass.cpp)
+target_compile_features(MyPass PRIVATE cxx_std_17)
+target_link_libraries(MyPass PRIVATE
+  LLVMCore LLVMSupport LLVMPasses)</code></pre>
+
+<h3>MyPass.cpp</h3>
+
+<pre><code><span class="cm">#include "llvm/IR/Function.h"</span>
+<span class="cm">#include "llvm/IR/Instructions.h"</span>
+<span class="cm">#include "llvm/IR/PassManager.h"</span>
+<span class="cm">#include "llvm/Passes/PassBuilder.h"</span>
+<span class="cm">#include "llvm/Passes/PassPlugin.h"</span>
+<span class="cm">#include "llvm/Support/raw_ostream.h"</span>
+
+<span class="kw">using namespace</span> llvm;
+
+<span class="cm">// 1. 实现 pass</span>
+<span class="kw">namespace</span> {
+<span class="kw">struct</span> CallCounterPass : <span class="kw">public</span> PassInfoMixin&lt;CallCounterPass&gt; {
+  PreservedAnalyses run(Function &amp;F, FunctionAnalysisManager &amp;) {
+    <span class="kw">unsigned</span> count = 0;
+    <span class="kw">for</span> (BasicBlock &amp;BB : F)
+      <span class="kw">for</span> (Instruction &amp;I : BB)
+        <span class="kw">if</span> (isa&lt;CallInst&gt;(&amp;I))
+          ++count;
+
+    errs() &lt;&lt; <span class="str">"Function "</span> &lt;&lt; F.getName()
+           &lt;&lt; <span class="str">" has "</span> &lt;&lt; count &lt;&lt; <span class="str">" call instructions\n"</span>;
+
+    <span class="kw">return</span> PreservedAnalyses::all();  <span class="cm">// 没修改 IR</span>
+  }
+};
+}  <span class="cm">// namespace</span>
+
+<span class="cm">// 2. 注册 pass to PassBuilder</span>
+<span class="kw">extern</span> <span class="str">"C"</span> ::llvm::PassPluginLibraryInfo LLVM_ATTRIBUTE_WEAK
+llvmGetPassPluginInfo() {
+  <span class="kw">return</span> {
+    LLVM_PLUGIN_API_VERSION, <span class="str">"CallCounter"</span>, <span class="str">"1.0"</span>,
+    [](PassBuilder &amp;PB) {
+      PB.registerPipelineParsingCallback(
+        [](StringRef Name, FunctionPassManager &amp;FPM,
+           ArrayRef&lt;PassBuilder::PipelineElement&gt;) {
+          <span class="kw">if</span> (Name == <span class="str">"call-counter"</span>) {
+            FPM.addPass(CallCounterPass());
+            <span class="kw">return</span> <span class="kw">true</span>;
+          }
+          <span class="kw">return</span> <span class="kw">false</span>;
+        });
+    }
+  };
+}</code></pre>
+
+<h3>编译 + 运行</h3>
+
+<pre><code><span class="cm"># Build</span>
+cmake -B build -G Ninja
+cmake --build build
+
+<span class="cm"># Run 通过 opt</span>
+opt -load-pass-plugin=./build/libMyPass.so \
+    -passes="call-counter" \
+    -disable-output \
+    test.ll
+
+<span class="cm"># 输出:</span>
+<span class="cm"># Function main has 3 call instructions</span>
+<span class="cm"># Function helper has 1 call instructions</span></code></pre>
+
+<h3>插桩（modifying IR）的 pass</h3>
+
+<p>上面是 read-only。如果要<strong>插桩</strong>（如在每个 call 前加 log）：</p>
+
+<pre><code>PreservedAnalyses run(Function &amp;F, FunctionAnalysisManager &amp;) {
+  <span class="kw">auto</span> *M = F.getParent();
+  <span class="kw">auto</span> &amp;Ctx = F.getContext();
+
+  <span class="cm">// 声明 extern void __my_log(const char*);</span>
+  FunctionCallee LogFn = M-&gt;getOrInsertFunction(
+    <span class="str">"__my_log"</span>,
+    FunctionType::get(Type::getVoidTy(Ctx),
+                       {PointerType::get(Ctx, 0)}, <span class="kw">false</span>));
+
+  <span class="kw">for</span> (<span class="kw">auto</span> &amp;BB : F)
+    <span class="kw">for</span> (<span class="kw">auto</span> &amp;I : BB)
+      <span class="kw">if</span> (<span class="kw">auto</span> *CI = dyn_cast&lt;CallInst&gt;(&amp;I)) {
+        IRBuilder&lt;&gt; B(CI);
+        Value *Name = B.CreateGlobalStringPtr(
+          CI-&gt;getCalledFunction()-&gt;getName());
+        B.CreateCall(LogFn, {Name});  <span class="cm">// log 在 call 之前</span>
+      }
+
+  <span class="kw">return</span> PreservedAnalyses::none();  <span class="cm">// 修改了 IR</span>
+}</code></pre>
+
+<p>这就是 sanitizer / coverage tool / profiler 的<strong>核心机制</strong>—— 在 LLVM IR 上插桩。</p>
+
+<h2 id="debug-pass">⑨ 调试 Pass</h2>
+
+<h3>看每个 pass 前后的 IR</h3>
+
+<pre><code><span class="cm"># 看所有 pass 输出（巨多，建议 stderr 重定向）:</span>
+opt -O2 -print-after-all input.ll -o /dev/null 2&gt; passes.txt
+
+<span class="cm"># 只看特定 pass 后:</span>
+opt -O2 -print-after=gvn input.ll -o /dev/null 2&gt; gvn.txt
+
+<span class="cm"># 看 pass 之前的 IR:</span>
+opt -O2 -print-before=loop-vectorize input.ll -o /dev/null
+
+<span class="cm"># 时间：哪个 pass 慢:</span>
+opt -O2 -time-passes input.ll -o /dev/null 2&gt; timing.txt</code></pre>
+
+<h3>opt-bisect（二分定位 bug pass）</h3>
+
+<p>怀疑某个优化 pass 引入了 bug：</p>
+
+<pre><code><span class="cm"># 列所有 pass 的编号:</span>
+opt -O2 -opt-bisect-limit=-1 input.ll -o /dev/null
+
+<span class="cm"># 输出:</span>
+<span class="cm"># BISECT: running pass (1) ForceFunctionAttrsPass on [module]</span>
+<span class="cm"># BISECT: running pass (2) PassManager&lt;Module&gt; on [module]</span>
+<span class="cm"># BISECT: running pass (3) Annotation2MetadataPass on [module]</span>
+<span class="cm"># ...</span>
+
+<span class="cm"># 二分：跑前 N 个 pass</span>
+opt -O2 -opt-bisect-limit=50 input.ll -o out.ll
+<span class="cm"># 编译 + 测：bug 还在？降 limit，bug 没了？升 limit。</span>
+<span class="cm"># 直到锁定 bug pass。</span></code></pre>
+
+<h3>FileCheck（pass 单测）</h3>
+
+<p>LLVM 自带 <code>llvm-lit</code> + <code>FileCheck</code> 测试 framework。你写一个 .ll，跑 pass 后用 pattern 检查输出：</p>
+
+<pre><code>; RUN: opt -passes=instcombine -S %s | FileCheck %s
+
+define i32 @test(i32 %x) {
+; CHECK-LABEL: @test
+; CHECK-NEXT: %r = mul i32 %x, 4
+; CHECK-NEXT: ret i32 %r
+  %a = add i32 %x, %x
+  %r = add i32 %a, %a
+  ret i32 %r
+}
+; 这测的是 instcombine 把 (x+x)+(x+x) 改成 x*4</code></pre>
+
+<h2 id="contribute">⑩ Contribute LLVM · 从 First Patch 到 Commit Access</h2>
+
+<p>LLVM 是<strong>世界上最大开源 C++ 项目之一</strong>（~10M LOC，1500+ active contributors）。Contribute 流程：</p>
+
+<h3>第 1 步：Clone + Build</h3>
+
+<pre><code>git clone https://github.com/llvm/llvm-project.git
+cd llvm-project
+cmake -S llvm -B build -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DLLVM_ENABLE_PROJECTS="clang;lld" \
+  -DLLVM_TARGETS_TO_BUILD="X86;AArch64"
+cmake --build build -j
+<span class="cm"># 首次 build 30-60 min on modern hardware</span></code></pre>
+
+<h3>第 2 步：找 first issue</h3>
+
+<ul>
+  <li><a href="https://github.com/llvm/llvm-project/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22" target="_blank">GitHub label "good first issue"</a>—— 适合新人</li>
+  <li><strong>typo / 文档</strong>—— 最简单的入门 patch</li>
+  <li><strong>测试 case 缺失</strong>—— 写一个 .ll regression test</li>
+  <li><strong>InstCombine 缺失模式</strong>—— 加一个 simple peephole 优化</li>
+</ul>
+
+<h3>第 3 步：写 patch + 测试</h3>
+
+<ul>
+  <li>跟着 LLVM Style Guide（基于 Google C++ Style）</li>
+  <li>每个 functional change 必须配 test case（llvm/test/ 下加 .ll + FileCheck）</li>
+  <li>跑 <code>ninja check-llvm</code> 确保没 regress</li>
+</ul>
+
+<h3>第 4 步：Submit via GitHub PR</h3>
+
+<p>2024 起 LLVM 从 Phabricator 完全迁到 GitHub。流程：</p>
+
+<ol>
+  <li>Fork llvm/llvm-project to your GitHub</li>
+  <li>Push branch + open PR</li>
+  <li>Reviewers ping 通常 1-3 天回复</li>
+  <li>Review iterations（typical 2-5 轮）</li>
+  <li>Approved 后 merge</li>
+</ol>
+
+<h3>Commit access</h3>
+
+<ul>
+  <li>~3-5 个 merged PRs 后可申请 commit access（直 push 权限）</li>
+  <li>Apply 给 community（mailing list / Discord）</li>
+  <li><strong>Commit access ≠ 不需 review</strong>—— 仍需 PR + approve，只是 self-merge 可</li>
+</ul>
+
+<h3>社区资源</h3>
+
+<ul>
+  <li><strong>Discord</strong>: discord.gg/llvm —— 实时 Q&amp;A</li>
+  <li><strong>Discourse</strong>: discourse.llvm.org —— 长讨论 / RFC</li>
+  <li><strong>LLVM Dev Meeting</strong>: 每年 10 月，全球 conference</li>
+  <li><strong>LLVM Weekly</strong>: weekly newsletter</li>
+  <li>书：<strong>《Getting Started with LLVM Core Libraries》</strong>—— Bruno Lopes 2014（老但仍 relevant）</li>
+  <li>Tutorial：<strong>Kaleidoscope</strong>—— LLVM 官方 tutorial，写一个 toy language compiler</li>
+</ul>
+
+<div class="card">
+  <div class="card-title">🎯 关键 take-aways</div>
+  <ul>
+    <li>LLVM IR 是<strong>类汇编 + 类型化 + SSA</strong>—— 跨语言 / 跨平台 / 跨用途的统一中间表示</li>
+    <li><strong>SSA + phi node</strong> 是现代优化的基础——每个 use 单一 def 让 def-use 分析 trivial</li>
+    <li><strong>mem2reg</strong> 把 alloca/load/store 提升到 SSA value——前置 pass，没它没现代优化</li>
+    <li><strong>Opaque pointers (LLVM 16+)</strong> 让 pointer 不带 pointee type，类型信息在 instruction 上</li>
+    <li><strong>Metadata + Attribute</strong> 提供优化 hint（TBAA / noalias / readonly），让 optimizer 更激进</li>
+    <li><strong>NewPM</strong>（Pass Manager）默认，比 legacy 快 ~20% + 支持 nested pipelines</li>
+    <li>7 个关键 pass: inline / mem2reg / GVN / LICM / SROA / loop vectorize / instcombine 提供 80% 优化收益</li>
+    <li><strong>写自己的 Pass</strong> ~80 行代码 + plugin 模式注册，用于 sanitizer / profiler / domain-specific 优化</li>
+    <li><strong>opt-bisect</strong> 是 LLVM 调试 pass 的核武器——二分定位 bug pass</li>
+    <li>Contribute LLVM 入门：good first issue → PR → 3-5 merged → commit access</li>
+  </ul>
+</div>
+
+<div class="footer-nav">
+  <a href="./toolchain_landscape.html">⚙️ 工具链全景</a>
+  <a href="./sanitizer_internals.html">🔬 Sanitizer 内部</a>
+  <a href="./compilation_guide.html">📄 编译步骤</a>
+  <a href="https://godbolt.org" target="_blank">🌐 godbolt.org</a>
+  <a href="../interview/STUDY_PATH.html">🗺 学习路径</a>
+  <a href="../index.html">🏠 主页</a>
+</div>
+
+</div>
+</body>
+</html>
