@@ -266,11 +266,16 @@
 
   <h3>本章与已有资料的关系</h3>
   <ul>
+    <li><b><a href="../cpp/sanitizer_internals.html">cpp/sanitizer_internals.html</a></b> 讲 Sanitizer 的<em>编译器 / runtime 内部实现</em>（shadow layout、FastTrack 算法、LLVM Pass、各 sanitizer 完整局限表）—— 本文重原理深度</li>
     <li><b>cpp_memory_leak_guide.html</b> 讲泄漏的<em>排查方法论</em></li>
     <li><b>cpp_crash_debugging_guide.html</b> 讲已经崩溃后的 GDB 分析</li>
     <li><b>cpp_deadlock_debugging_guide.html</b> 讲死锁分析</li>
-    <li><b>本章</b>讲在 bug 触发崩溃<strong>之前</strong>用 Sanitizer 主动暴露</li>
+    <li><b>本章</b>讲<em>怎么用</em> Sanitizer：从安装、CI 集成、抑制规则到生产部署 —— 实战导向</li>
   </ul>
+
+  <div class="box tip">
+    <strong>分工约定</strong>：本指南遇到"shadow memory 怎么算地址 / vector clock 怎么传播 / 局限的具体根因"这类<strong>内部机制</strong>问题，会给出简要速览并跳转到 <a href="../cpp/sanitizer_internals.html">sanitizer_internals.html</a> 对应章节，避免重复。
+  </div>
 </section>
 
 <!-- ================================================================
@@ -480,41 +485,19 @@ ASAN_OPTIONS="detect_leaks=1:abort_on_error=1:halt_on_error=1:print_stats=1:chec
      §4 ASan 原理
      ================================================================ -->
 <section class="chapter" id="s4">
-  <h2>4. ASan 内部原理 (shadow memory) ⭐</h2>
+  <h2>4. ASan 原理速览 ⭐</h2>
 
-  <h3>4.1 基本思路</h3>
+  <div class="box tip">
+    本节是<strong>面试速答级</strong>原理摘要。完整的 shadow encoding 表、fake stack、quarantine 算法、10 条插桩汇编、详细局限根因表见 <a href="../cpp/sanitizer_internals.html#s2">sanitizer_internals.html §2 ASan 实现深入</a>。
+  </div>
 
-  <p>ASan 通过两个机制工作：</p>
+  <h3>4.1 三件套</h3>
+
   <ol>
-    <li><b>每次内存访问插桩</b>：编译器在 load/store 前插入检查代码</li>
-    <li><b>shadow memory</b>：用 1/8 的内存影子标记每个字节是否"可用"</li>
+    <li><b>编译期插桩</b>：编译器在每条 load/store 前插 ~7-10 条 shadow 检查指令</li>
+    <li><b>Shadow memory</b>：1 字节 shadow 编码 8 字节真实内存的可访问性（<code>shadow = (real &gt;&gt; 3) + offset</code>）</li>
+    <li><b>Redzone + Quarantine</b>：每次 alloc 前后填 128B 红区 shadow poison；free 不立即归还，放进 256MB FIFO 隔离队列 → UAF 在 quarantine 期能 catch</li>
   </ol>
-
-  <h3>4.2 Shadow Memory 映射</h3>
-
-  <p>每 8 字节真实内存对应 <strong>1 字节</strong>影子内存。地址映射：<code>shadow = (real &gt;&gt; 3) + offset</code>。</p>
-
-  <p>影子值的含义：</p>
-  <ul>
-    <li><b>0</b> — 8 字节全部可用</li>
-    <li><b>1-7</b> — 前 N 字节可用，后 (8-N) 字节不可用</li>
-    <li><b>负值 (各种)</b> — 不同含义的"红区" (heap free / stack 已退出 / 全局右侧)</li>
-  </ul>
-
-<pre><span class="cm">// 简化的检查代码 (编译器插桩)</span>
-<span class="kw">void</span> <span class="fn">check_load</span>(<span class="kw">void</span>* addr, <span class="type">size_t</span> size) {
-    <span class="type">uintptr_t</span> shadow_addr = ((<span class="type">uintptr_t</span>)addr &gt;&gt; 3) + SHADOW_OFFSET;
-    <span class="type">int8_t</span> shadow = *(<span class="type">int8_t</span>*)shadow_addr;
-    <span class="kw">if</span> (shadow != 0) {
-        <span class="cm">// 进一步精确检查</span>
-        <span class="type">int8_t</span> last_byte = ((<span class="type">uintptr_t</span>)addr &amp; 7) + size - 1;
-        <span class="kw">if</span> (last_byte &gt;= shadow) <span class="fn">__asan_report_error</span>(addr);
-    }
-}</pre>
-
-  <h3>4.3 红区 (red zone) 机制</h3>
-
-  <p>每次 malloc/new 时，ASan 在<strong>对象前后</strong>留出一段"红区"：</p>
 
   <div class="diag">
     <svg viewBox="0 0 700 180" width="700" height="180">
@@ -538,28 +521,21 @@ ASAN_OPTIONS="detect_leaks=1:abort_on_error=1:halt_on_error=1:print_stats=1:chec
     </svg>
   </div>
 
-  <p><b>UAF 检测</b>：free 时不立即归还内存，而是放入<strong>"隔离队列"</strong> (quarantine)，并把整个区域 shadow 标为 "freed" → 后续访问立刻报错。</p>
-
-  <h3>4.4 性能开销</h3>
+  <h3>4.2 性能与基本局限（实战视角）</h3>
 
   <ul>
-    <li><b>CPU</b>：~ 2× (每次内存访问加 ~7 条插桩指令)</li>
-    <li><b>内存</b>：~ 3-4× (shadow + quarantine + redzone)</li>
-    <li>不能上 production (开销 + 内存 + 行为差异)</li>
+    <li><b>CPU</b> ~2× &nbsp;|&nbsp; <b>内存</b> ~3-4× &nbsp;|&nbsp; 不上 production（用 HWASan / GWP-ASan 替代，见 §14b）</li>
+    <li>跨红区距离的越界（如 <code>arr[i+1000]</code>）漏检 —— 落入合法 alloc 的 shadow</li>
+    <li>同一 struct 内字段间越界（intra-object overflow）漏检 —— redzone 只在 alloc 边界</li>
+    <li>UAF 超过 quarantine 容量后漏检</li>
+    <li>不查<u>未初始化读</u>（→ MSan）/ 不查 race（→ TSan）</li>
   </ul>
 
   <div class="box star">
-    "ASan 怎么发现 UAF?" — 答：① free 时不立即释放，把内存放入 <strong>quarantine 隔离队列</strong>；② 把这块区域的 shadow 字节标为 "已释放" (-1 等负值)；③ 任何后续访问触发 shadow 检查 → 立即报告。
+    <strong>面试速答</strong>："ASan 怎么发现 UAF?" — ① free 不立即释放、放进 quarantine FIFO；② 整块 shadow 标 0xFD（freed）；③ 后续访问触发 shadow check 立即报告 + 给出 alloc/free/use 三处栈。
   </div>
 
-  <h3>4.5 局限</h3>
-
-  <ul>
-    <li>检测不到<strong>所有</strong>越界 — 红区有限，跨过红区到下一个对象的越界检测不到</li>
-    <li>不检测<strong>栈上局部变量越界写到栈相邻局部变量</strong>（除非启用 fsanitize-address-use-after-scope）</li>
-    <li>误报极少，但有 (低层 hacks 类代码可能触发)</li>
-    <li>不能查类型错误 / 未初始化读 (需要 UBSan / MSan)</li>
-  </ul>
+  <p>完整局限根因表（10 条带原因 + 缓解方法）见 <a href="../cpp/sanitizer_internals.html#s2">internals §2 ASan 的局限性与根因</a>。</p>
 </section>
 
 <!-- ================================================================
@@ -772,61 +748,36 @@ TSAN_OPTIONS="halt_on_error=1:second_deadlock_stack=1" ./myapp_tsan</pre>
      §7 TSan 原理
      ================================================================ -->
 <section class="chapter" id="s7">
-  <h2>7. TSan 内部原理 (happens-before vector clock) ⭐</h2>
+  <h2>7. TSan 原理速览 ⭐</h2>
 
-  <h3>7.1 核心思想</h3>
+  <div class="box tip">
+    本节是面试速答级摘要。<strong>FastTrack 算法</strong>（read epoch / write VC 的优化）、shadow word 编码、为何 5-10×、10 条局限根因 见 <a href="../cpp/sanitizer_internals.html#s3">sanitizer_internals.html §3 TSan FastTrack 算法</a>。
+  </div>
 
-  <p>TSan 维护每个内存位置的<strong>访问历史</strong> + 每个线程的<strong>vector clock</strong>，用 <em>happens-before</em> 关系判定 race。</p>
+  <h3>7.1 核心：vector clock + happens-before</h3>
 
-  <h3>7.2 happens-before</h3>
+  <p>每个线程维护一份 <strong>vector clock</strong>（N 元 timestamp 数组）。同步操作（mutex unlock/lock、atomic release/acquire、cv notify/wait、thread join）<strong>合并</strong>双方 VC，建立 happens-before 边。</p>
 
-  <p>(详细见 <code>cpp_memory_model.html § happens-before</code>。)</p>
-
-  <p>TSan 在以下操作建立 hb 边：</p>
-  <ul>
-    <li>同一线程内的语句先后</li>
-    <li>mutex.unlock() → 下一个 mutex.lock()</li>
-    <li>thread.start → 子线程的所有操作</li>
-    <li>子线程结束 → thread.join() 之后</li>
-    <li>condition_variable notify → 下一次 wait 返回</li>
-    <li>atomic release → 对应 acquire</li>
-    <li>future set_value → get</li>
-  </ul>
-
-  <h3>7.3 Race 判定</h3>
-
-  <p>对每个内存位置维护：</p>
-  <ul>
-    <li>"上次写它的线程 + 时刻"</li>
-    <li>"上次读它的线程 + 时刻"</li>
-  </ul>
-
-  <p>当线程 T1 访问 X 时：</p>
+  <p>每个内存位置的 shadow 记录"上次访问者 + 当时的 VC"。新访问到来时：</p>
   <ol>
-    <li>检查 X 的上次访问者 T2 是否 happens-before T1</li>
-    <li>没有 hb → 这是 race，报警</li>
-    <li>有 hb → 安全，更新 X 的访问记录</li>
+    <li>上次访问者的 VC ≤ 当前 VC → 有 hb，安全</li>
+    <li>否则 → race，报警 + dump 两侧栈</li>
   </ol>
 
-  <h3>7.4 Shadow memory</h3>
+  <h3>7.2 FastTrack 的关键优化</h3>
 
-  <p>类似 ASan 但记录的是<strong>访问历史</strong>而不是有效性：</p>
-  <ul>
-    <li>每 8 字节真实内存对应 N 个 shadow word (默认 4，可配)</li>
-    <li>每个 shadow word 记录: 线程 ID + 访问时刻 (vector clock) + 读/写</li>
-    <li>新访问到来时与 shadow 中的历史比对</li>
-  </ul>
+  <p>朴素实现每次访问存/比完整 N 元 VC → 100× slowdown。FastTrack 的洞察：<strong>多读不构成 race</strong>，read 只需 1 个 epoch（tid + clock），write 才存完整 VC → 降到 5-10×。</p>
 
-  <h3>7.5 性能爆炸的来源</h3>
+  <h3>7.3 性能开销来源（实战视角）</h3>
 
   <ul>
-    <li>每次内存访问都要更新 shadow + 检查历史 → ~10× CPU</li>
-    <li>vector clock 随线程数增长 → 每线程 N 个 timestamp</li>
-    <li>访问历史不能太短 (漏报) 也不能太长 (内存爆) → 默认 4 项</li>
+    <li>每次内存访问都要更新 + 比对 shadow → 5-15× CPU</li>
+    <li>VC 随线程数线性增长 → 内存 5-10×</li>
+    <li>访问历史窗口默认 4，可调（长 → 漏报少但内存爆）</li>
   </ul>
 
   <div class="box star">
-    "TSan 怎么知道两个访问之间有没有 happens-before?" — 答：每个线程维护 <strong>vector clock</strong> (本线程 + 其他线程的"已知最新时刻"). 同步操作 (mutex unlock/lock, atomic release/acquire) 时<strong>合并</strong>双方 vector clock. 访问内存时检查 shadow 中"上次访问"的 vector clock 是否 ≤ 当前 vector clock — 是则有 hb，安全；否则是 race。
+    <strong>面试速答</strong>："TSan 怎么知道两个访问之间有没有 happens-before?" — 每线程一份 vector clock；同步原语合并 VC；访问内存时把 shadow 中上次访问的 VC 跟当前比，<u>不可比较或更小则有 hb，更大则是 race</u>。
   </div>
 </section>
 
@@ -865,26 +816,20 @@ clang++ -O1 -g -fsanitize=memory -fno-omit-frame-pointer myapp.cpp -o myapp_msan
 
 SUMMARY: MemorySanitizer: use-of-uninitialized-value bug.cpp:6 in f()</pre>
 
-  <h3>8.4 原理</h3>
+  <h3>8.4 原理速览</h3>
 
-  <p>MSan 也用 shadow memory，但记录的是<strong>每个 bit 是否初始化</strong>：</p>
-  <ul>
-    <li>1:1 shadow（每个真实 byte 对应 1 个 shadow byte）</li>
-    <li>shadow 0 = 已初始化；非 0 = 未初始化的 bit mask</li>
-    <li>赋值 / memset / read from initialized region → 标 shadow 为 0</li>
-    <li>读取时检查 shadow，全 0 就 OK</li>
-  </ul>
+  <p>Bit-level shadow（每 bit 1 shadow bit）+ <strong>延迟报告</strong>：读未初始化值不立刻报，而是污染派生值，直到流入<u>分支 / syscall / 输出</u>才报警 → 能定位到 alloc 源头。Origin tracking 进一步保留传播链。</p>
 
-  <p>更巧妙：MSan 实现 <strong>"延迟报告"</strong> — 读未初始化值不立刻报警，而是<em>污染</em>派生值。直到这个污染值被实际使用 (分支条件 / 系统调用参数) 才报告。这样能定位<strong>初始值的源头</strong>而不是中间传递处。</p>
+  <p>编码原理、延迟报告 trade-off、10 条局限根因（整链路 build / inline asm / JIT / padding 假阳…）见 <a href="../cpp/sanitizer_internals.html#s4">internals §4 MSan 实现深入</a>。</p>
 
-  <h3>8.5 MSan 难用的原因</h3>
+  <h3>8.5 MSan 难用的原因（实战视角）</h3>
 
   <div class="box danger">
     <ol>
       <li><b>只支持 clang</b>（gcc 不支持）</li>
       <li>整个程序<strong>所有依赖都要用 MSan 重编</strong>，包括 libc / libstdc++ / 第三方库 — 否则误报漫天</li>
       <li>实践上：要用 <code>-stdlib=libc++ -L/path/to/msan/libs</code> 链接 MSan-instrumented 标准库</li>
-      <li>大型项目集成成本高</li>
+      <li>大型项目集成成本高 —— Google monorepo 能做，普通团队代价高</li>
     </ol>
   </div>
 
@@ -985,13 +930,16 @@ leak:libfoo.so</pre>
   <h3>10.1 兼容性矩阵</h3>
 
   <table>
-    <tr><th></th><th>ASan</th><th>UBSan</th><th>TSan</th><th>MSan</th><th>LSan</th></tr>
-    <tr><td><b>ASan</b></td><td>—</td><td>✅</td><td>❌</td><td>❌</td><td>含在 ASan</td></tr>
-    <tr><td><b>UBSan</b></td><td>✅</td><td>—</td><td>✅</td><td>✅</td><td>✅</td></tr>
-    <tr><td><b>TSan</b></td><td>❌</td><td>✅</td><td>—</td><td>❌</td><td>含在 TSan</td></tr>
-    <tr><td><b>MSan</b></td><td>❌</td><td>✅</td><td>❌</td><td>—</td><td>否</td></tr>
-    <tr><td><b>LSan</b></td><td>含 LSan</td><td>✅</td><td>含 LSan</td><td>否</td><td>—</td></tr>
+    <tr><th></th><th>ASan</th><th>UBSan</th><th>TSan</th><th>MSan</th><th>HWASan</th><th>LSan</th></tr>
+    <tr><td><b>ASan</b></td><td>—</td><td>✅</td><td>❌</td><td>❌</td><td>❌</td><td>含在 ASan</td></tr>
+    <tr><td><b>UBSan</b></td><td>✅</td><td>—</td><td>✅</td><td>✅</td><td>✅</td><td>✅</td></tr>
+    <tr><td><b>TSan</b></td><td>❌</td><td>✅</td><td>—</td><td>❌</td><td>❌</td><td>⚠️ 部分</td></tr>
+    <tr><td><b>MSan</b></td><td>❌</td><td>✅</td><td>❌</td><td>—</td><td>❌</td><td>⚠️ 部分</td></tr>
+    <tr><td><b>HWASan</b></td><td>❌</td><td>✅</td><td>❌</td><td>❌</td><td>—</td><td>✅</td></tr>
+    <tr><td><b>LSan</b></td><td>含 LSan</td><td>✅</td><td>⚠️ 部分</td><td>⚠️ 部分</td><td>✅</td><td>—</td></tr>
   </table>
+
+  <p><strong>不能同跑的根因</strong>（shadow layout 互斥 / allocator 互斥 / signal handler 抢占）见 <a href="../cpp/sanitizer_internals.html#s9">internals §9.1 互斥矩阵根因</a>。</p>
 
   <h3>10.2 推荐组合</h3>
 
@@ -1433,13 +1381,14 @@ cp -r testdata/seeds $OUT/my_parser_fuzz_seed_corpus</pre>
   </table>
 
   <h3>14b.2 HWASan — 硬件辅助的轻量 ASan</h3>
-  <p><strong>HWASan</strong>（Hardware-assisted AddressSanitizer）利用 ARMv8.5 的 <strong>Top-Byte Ignore (TBI)</strong> 特性 —— 64 位指针的高 8 位被 CPU 忽略，可拿来放 tag。每次 alloc 给指针 + 内存打同样 tag，访问时硬件比较 tag 一致 → 失败即报错。</p>
+  <p><strong>HWASan</strong>（Hardware-assisted AddressSanitizer）利用 ARM 的 <strong>Top-Byte Ignore (TBI)</strong> ——64 位指针高 8 位被 CPU 忽略可放 tag；或 ARMv8.5+ 的 <strong>MTE</strong>（硬件比对 tag）。每次 alloc 给指针 + 该 16B 内存区域打同样 4-bit tag，访问时比对失败即报错。</p>
 
-  <h4>原理对比</h4>
+  <h4>原理对比（数据以 internals §6 为准）</h4>
   <table>
-    <tr><th>Sanitizer</th><th>每次访问做什么</th><th>shadow 大小</th></tr>
-    <tr><td>ASan</td><td>查 shadow（每 8 字节 → 1 字节）</td><td><strong>1/8 of mem</strong> (~12.5%)</td></tr>
-    <tr><td>HWASan</td><td>比较指针 tag 与 shadow tag（每 16 字节 → 1 字节）</td><td><strong>1/32 of mem</strong> (~3%)</td></tr>
+    <tr><th>Sanitizer</th><th>每次访问做什么</th><th>shadow / tag 比例</th><th>误报率</th></tr>
+    <tr><td>ASan</td><td>查 shadow（每 8 字节 → 1 字节）</td><td><strong>1/8</strong> (~12.5%)</td><td>≈ 0（红区精确）</td></tr>
+    <tr><td>HWASan (TBI/软件)</td><td>软件比对 ptr tag 与 shadow tag（每 16 字节 → 1 字节 4-bit tag）</td><td><strong>1/16</strong> (~6%)</td><td>~6.25%（1/16 tag 撞）</td></tr>
+    <tr><td>HWASan (MTE/硬件)</td><td>CPU 自动比对 tag，零软件开销</td><td>0（硬件存储）</td><td>~6.25%</td></tr>
   </table>
 
 <pre><span class="cm"># 启用 HWASan（需 ARMv8.5+ 硬件）</span>
@@ -1504,6 +1453,8 @@ SCUDO_OPTIONS=<span class="str">"GWP_ASAN_Enabled=true:GWP_ASAN_SampleRate=5000"
     <li><strong>Linux Kernel</strong>：syzkaller + kASan/kHWASan 持续 fuzz，自 2018 起找到 5000+ 内核 bug</li>
   </ul>
 
+  <p><strong>HWASan / GWP-ASan 各自局限</strong>（1/16 漏检概率、x86 无 TBI、PAC 抢位、采样率 vs catch time 等）见 <a href="../cpp/sanitizer_internals.html#s6">internals §6 HWASan 局限</a>、<a href="../cpp/sanitizer_internals.html#s7">§7 GWP-ASan 局限</a>。</p>
+
   <div class="box ok">
     <strong>结论</strong>：Sanitizer 不止是"开发工具"。HWASan + GWP-ASan 改变了"<em>线上内存 bug 不可见</em>"的现实，让 C++ 的"内存安全劣势"在工程实践中收敛到接近 Rust 的可调试水平。但前提是<strong>你的团队真的把它部署上线</strong>——绝大多数公司只用 ASan 在 CI，是巨大浪费。
   </div>
@@ -1513,16 +1464,22 @@ SCUDO_OPTIONS=<span class="str">"GWP_ASAN_Enabled=true:GWP_ASAN_SampleRate=5000"
      §15 局限与陷阱
      ================================================================ -->
 <section class="chapter" id="s15">
-  <h2>15. 局限与陷阱</h2>
+  <h2>15. 局限与陷阱（工程视角）</h2>
 
-  <h3>15.1 不能 100% 保证</h3>
+  <div class="box tip">
+    本节聚焦<strong>工程实战中容易踩的坑</strong>。每个 Sanitizer 的<u>逐条根因表</u>（约 50 条限制 + 根本原因 + 缓解）见 <a href="../cpp/sanitizer_internals.html">internals §2-§7 各自局限性与根因</a>，跨家族通用结构性限制见 <a href="../cpp/sanitizer_internals.html#s9">internals §9</a>。
+  </div>
+
+  <h3>15.1 一句话局限速记</h3>
 
   <ul>
-    <li><b>ASan</b>：红区有限，能跨过红区的越界检测不到</li>
-    <li><b>TSan</b>：只能发现实际发生的 race，依赖调度顺序 — 多次跑 + 不同负载</li>
+    <li><b>ASan</b>：红区/quarantine 有容量，远距离越界 & 老 UAF 漏</li>
+    <li><b>TSan</b>：只能发现<em>本次执行真发生</em>的 race —— 多次跑 + 不同负载</li>
     <li><b>MSan</b>：要求所有依赖都 instrumented，否则误报</li>
-    <li><b>UBSan</b>：只检测约 30 种 UB，C++ 标准列了 200+ 种</li>
+    <li><b>UBSan</b>：只检测约 30 种 UB（C++ 标准列了 200+ 种）</li>
     <li><b>LSan</b>：进程退出时检测，常驻服务要主动 <code>__lsan_do_recoverable_leak_check()</code></li>
+    <li><b>HWASan</b>：1/16 概率漏（4-bit tag），x86 无 TBI 几乎不可用</li>
+    <li><b>GWP-ASan</b>：单实例几乎不 catch，依赖 fleet + 后台聚合</li>
   </ul>
 
   <h3>15.2 行为差异</h3>

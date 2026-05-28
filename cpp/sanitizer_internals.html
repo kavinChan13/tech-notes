@@ -229,6 +229,68 @@ shadow_val = load_byte(shadow);
   <div class="warn">
     <strong>性能代价</strong>：use-after-return 默认 disabled，需 <code>ASAN_OPTIONS=detect_stack_use_after_return=1</code> 显式开启，可使 ASan 慢额外 30-50%。
   </div>
+
+  <h3>ASan 的局限性与根因</h3>
+
+  <table>
+    <thead><tr><th>限制</th><th>根本原因</th><th>缓解 / 替代</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><strong>越界 ≥ redzone 距离才漏</strong>（典型 <code>arr[i+1000]</code> 落进下一个合法 alloc）</td>
+        <td>Redzone 固定 128B；远距离跳越 redzone 后落入<strong>合法但错误</strong>的 shadow（0x00），无法区分</td>
+        <td>调大 <code>ASAN_OPTIONS=redzone=512</code>（代价：内存放大）；或换 HWASan（tag 不连续，远距离也能 catch）</td>
+      </tr>
+      <tr>
+        <td><strong>Use-after-free 超过 quarantine 期漏</strong></td>
+        <td>Quarantine 是 FIFO 有限队列（默认 256 MB），老 chunk 被真实 free 后 shadow 复位</td>
+        <td><code>quarantine_size_mb=4096</code>（牺牲峰值内存）</td>
+      </tr>
+      <tr>
+        <td><strong>Intra-object overflow 不检测</strong>（同一 struct 内 <code>field_a</code> 写越界踩 <code>field_b</code>）</td>
+        <td>Redzone 只放在<strong>整个 alloc 的前后</strong>，struct 内字段间共享一段合法 shadow (0x00)</td>
+        <td>编译加 <code>-fsanitize-address-field-padding=1</code>（ABI break，谨慎用）</td>
+      </tr>
+      <tr>
+        <td><strong>Memory exhaustion 风险</strong>（容器内 ASan 进程被 OOM kill）</td>
+        <td>3× 内存放大：shadow 1/8 + redzone + quarantine + fake stack</td>
+        <td>K8s limits ≥ 3× 正常；或用 HWASan / GWP-ASan</td>
+      </tr>
+      <tr>
+        <td><strong>自定义 allocator (jemalloc/tcmalloc/对象池) 不被监控</strong></td>
+        <td>ASan 通过<strong>拦截 malloc/free</strong>插 redzone；用户级 arena 内 sub-alloc 对 ASan 透明</td>
+        <td>对象池调用 <code>__asan_poison_memory_region()</code> 手动标 poison；或换成 malloc/free</td>
+      </tr>
+      <tr>
+        <td><strong>ASan-instrumented 跟非 instrumented 混链危险</strong></td>
+        <td>未插桩 code 写入 redzone 不报，下次读时假阳/假阴；跨 .so 调用栈帧布局错乱</td>
+        <td>全 binary 统一 build；动态库要 ASan-built 版本</td>
+      </tr>
+      <tr>
+        <td><strong>不检测<u>读取未初始化</u>内存</strong></td>
+        <td>ASan shadow 只编码"可访问 / 不可访问"，无"已写入"位</td>
+        <td>这是 MSan 的工作</td>
+      </tr>
+      <tr>
+        <td><strong>不检测 data race</strong></td>
+        <td>没有 vector clock / happens-before 追踪</td>
+        <td>TSan</td>
+      </tr>
+      <tr>
+        <td><strong>对 mmap / 大块 syscall 缓冲弱</strong></td>
+        <td>Kernel 路径不经 ASan allocator → 无 redzone</td>
+        <td>对 syscall 边界手动 <code>__asan_poison_memory_region</code></td>
+      </tr>
+      <tr>
+        <td><strong>SIGSEGV handler 行为变了</strong></td>
+        <td>ASan 自己装 signal handler 报 stack trace，跟应用自有 crash handler 冲突</td>
+        <td><code>ASAN_OPTIONS=handle_segv=0</code> 让出</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="danger">
+    <strong>本质局限</strong>：ASan 抓的是<strong>空间错误</strong>（越界 / UAF / 类型错配），靠 shadow 的"<u>每 8 字节是否合法</u>"。对<strong>语义错误</strong>（初始化遗漏、race、UB 算术）完全无感。这也是为什么 sanitizer 家族会分裂成 5+ 个工具。
+  </div>
 </section>
 
 <section class="chapter" id="s3">
@@ -307,6 +369,68 @@ shadow_val = load_byte(shadow);
   <div class="warn">
     <strong>陷阱</strong>：TSan 不识别<strong>用户自定义同步</strong>（手写 lock-free / 自己的 ring buffer）。需手动 annotate：<code>__tsan_acquire(addr)</code> / <code>__tsan_release(addr)</code>，否则 TSan 会报大量 false positive race。
   </div>
+
+  <h3>TSan 的局限性与根因</h3>
+
+  <table>
+    <thead><tr><th>限制</th><th>根本原因</th><th>缓解 / 替代</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><strong>只能 catch "实际跑到了"的 race</strong>（动态检测，非静态证明）</td>
+        <td>FastTrack 只在 access 真正发生时比 vector clock；没跑到的代码路径不分析</td>
+        <td>结合 fuzzing / stress test 提升覆盖；静态扫用 RacerD / Coverity</td>
+      </tr>
+      <tr>
+        <td><strong>对用户态自旋锁 / lock-free 数据结构假阳性</strong></td>
+        <td>TSan 只识别 pthread / std::mutex / std::atomic 等已知原语；手写 CAS 循环没 happens-before record</td>
+        <td><code>__tsan_acquire/release</code> annotate；或用 <code>std::atomic</code> 代替手写 CAS</td>
+      </tr>
+      <tr>
+        <td><strong>Vector clock 内存占用爆炸</strong>（N thread × M 内存位置）</td>
+        <td>每写一次都要存 N-元 VC；线程多时 shadow 内存放大 5-10×</td>
+        <td>限制线程数；分片测试</td>
+      </tr>
+      <tr>
+        <td><strong>不能跟 ASan / MSan 同跑</strong></td>
+        <td>都要独占 shadow 内存区域且 layout 不兼容；runtime allocator 冲突</td>
+        <td>分 build 分别跑</td>
+      </tr>
+      <tr>
+        <td><strong>对 signal handler 内 race 检测弱</strong></td>
+        <td>Signal 异步打断，VC 更新不在 handler 中插桩</td>
+        <td>慎在 handler 里改 shared state（也是好实践）</td>
+      </tr>
+      <tr>
+        <td><strong>动态加载 .so 时漏检</strong></td>
+        <td>非 TSan-built .so 的 mutex 操作不 update VC，跨 .so 同步看不到 happens-before</td>
+        <td>所有 .so 统一 TSan-built</td>
+      </tr>
+      <tr>
+        <td><strong>memory_order_relaxed 的真 race 可能漏</strong></td>
+        <td>relaxed 不建立 happens-before，但 TSan 当 sync 点（避免假阳）→ 反而<strong>掩盖</strong>真 race</td>
+        <td>仔细审 relaxed 用法；用 acquire/release 表达意图</td>
+      </tr>
+      <tr>
+        <td><strong>Fork 后 child 进程 VC 状态不一致</strong></td>
+        <td>Fork 复制 VC 但 thread 关系断裂，runtime 不重置</td>
+        <td><code>TSAN_OPTIONS=die_after_fork=0</code> + 手动 reset；或 fork 后立即 exec</td>
+      </tr>
+      <tr>
+        <td><strong>5-15× slowdown 让 stress test 难现实化</strong></td>
+        <td>每次 access 都比 VC + shadow 写入；atomic 越多越慢</td>
+        <td>分片跑：staging 上低 QPS / 长时间</td>
+      </tr>
+      <tr>
+        <td><strong>不检测 deadlock</strong>（只 catch race）</td>
+        <td>TSan 算法专设计 race，没建 lock graph</td>
+        <td>用 Clang ThreadSafety 静态分析；或 deadlock detector（Helgrind/glibc）</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="danger">
+    <strong>本质局限</strong>：TSan 是<strong>动态 happens-before 检测器</strong>——只能看到「这次执行真发生的」race。Race 跟时序强相关，单次跑可能 0 race、再跑出 100 个。所以 TSan 必须长时间 stress + 多种 schedule（thread sanitizer + fuzzer 组合）才有意义。
+  </div>
 </section>
 
 <section class="chapter" id="s4">
@@ -348,6 +472,68 @@ shadow_val = load_byte(shadow);
   <div class="danger">
     <strong>MSan 的痛点</strong>：MSan 比 ASan / TSan 难<strong>采用</strong>——<strong>整个 binary 必须 MSan-instrumented</strong>，包括 libstdc++ / glibc / 第三方 lib。Untrumented code 写入的内存 MSan 不知道 → 大量 false positive。需要 <strong>MSan-built libcxx + libstdc++</strong>（耗时建）。实战部署 rare，多数项目用 ASan + valgrind memcheck 替代。
   </div>
+
+  <h3>MSan 的局限性与根因</h3>
+
+  <table>
+    <thead><tr><th>限制</th><th>根本原因</th><th>缓解 / 替代</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><strong>整链路必须 MSan-built（最大痛点）</strong></td>
+        <td>Shadow 是<strong>每 bit 一位</strong>，未插桩代码写内存不会清 shadow → MSan 仍认为 poisoned → 假阳</td>
+        <td>用 libcxx-msan + 重 build 全部依赖；或对未插桩边界手动 <code>__msan_unpoison()</code></td>
+      </tr>
+      <tr>
+        <td><strong>syscall 返回数据需手动 unpoison</strong></td>
+        <td>Kernel 写 userspace buffer 不经 MSan 插桩</td>
+        <td>MSan runtime 对常见 syscall (read/recv/...) 有 wrapper；冷门 ioctl 自己写</td>
+      </tr>
+      <tr>
+        <td><strong>跟 inline asm 不兼容</strong></td>
+        <td>插桩在 LLVM IR 层；inline asm 是 opaque blob，无法分析其内存读写</td>
+        <td>asm 后手动 <code>__msan_unpoison(buf, len)</code></td>
+      </tr>
+      <tr>
+        <td><strong>JIT-generated / 自修改代码不监控</strong></td>
+        <td>插桩在 AOT 编译期；运行期生成的代码无 shadow 更新</td>
+        <td>对 JIT 输出 buffer 手动 unpoison</td>
+      </tr>
+      <tr>
+        <td><strong>"延迟报警"让根因难定位</strong></td>
+        <td>设计上 propagate-without-report：bug 在 alloc 处，报警在百行外分支处</td>
+        <td><code>MSAN_OPTIONS=origin_history_size=...</code> 开 origin tracking</td>
+      </tr>
+      <tr>
+        <td><strong>memcpy 把 poisoned bytes 复制到新位置（不报，污染扩散）</strong></td>
+        <td>memcpy bit-wise copy 时 shadow 也 bit-wise copy；不"读"poisoned data 所以不报</td>
+        <td>By design；触发分支时才报</td>
+      </tr>
+      <tr>
+        <td><strong>Struct padding 默认 poisoned → memcpy / 比 struct 假阳</strong></td>
+        <td>编译器不主动写 padding，MSan 视其为未初始化</td>
+        <td>显式 <code>memset(0)</code> 整 struct；或 <code>__msan_unpoison()</code></td>
+      </tr>
+      <tr>
+        <td><strong>不检测<u>越界</u> / UAF / leak</strong></td>
+        <td>Shadow 只编码"<strong>已初始化</strong>"，不编码"<strong>合法访问</strong>"</td>
+        <td>这是 ASan / LSan 的工作；分开 build 跑</td>
+      </tr>
+      <tr>
+        <td><strong>不能跟 ASan / TSan 同跑</strong></td>
+        <td>Shadow layout 互斥</td>
+        <td>分 build</td>
+      </tr>
+      <tr>
+        <td><strong>性能 + 内存放大让 CI 慢 5×</strong></td>
+        <td>每 bit 1 shadow bit + origin tracking 让 cache miss 翻倍</td>
+        <td>仅在专门 job 跑</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="danger">
+    <strong>本质局限</strong>：MSan 是<strong>整链路 taint tracking</strong>——一个环节不插桩，整个 chain 失效。这跟 ASan（只看 alloc 边界）/ TSan（只看 sync 原语）不同，让 MSan 在<strong>多语言混合项目</strong>（C++/Rust/CUDA/汇编）几乎不可用。Google 内部能跑是因为<strong>monorepo 全 MSan-built libc++</strong>，普通团队代价过高。
+  </div>
 </section>
 
 <section class="chapter" id="s5">
@@ -381,6 +567,63 @@ g++ -fsanitize=undefined ...
 
 <span class="cm"># Prod: trap-only (无 report, crash on UB)</span>
 g++ -fsanitize=undefined -fsanitize-trap=undefined ...</pre>
+
+  <h3>UBSan 的局限性与根因</h3>
+
+  <table>
+    <thead><tr><th>限制</th><th>根本原因</th><th>缓解 / 替代</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><strong>只 catch "标准列举"的 UB</strong>（约 20 类）</td>
+        <td>UBSan 是 check per-UB-kind 手写实现；C++ UB 上百种（aliasing / lifetime / 比较未关联指针…）很多没插桩</td>
+        <td>需求驱动：profile 关心的 UB；CFI / shadow call stack 等 sibling sanitizer 补充</td>
+      </tr>
+      <tr>
+        <td><strong>Strict aliasing UB 几乎不报</strong></td>
+        <td>需要类型流追踪，编译期信息已被优化丢弃；插桩成本极高</td>
+        <td><code>-fno-strict-aliasing</code>；或 TBAA-aware 静态分析</td>
+      </tr>
+      <tr>
+        <td><strong>Lifetime UB（dangling reference）不查</strong></td>
+        <td>需要 escape analysis + lifetime tracking，等价于半个 borrow checker</td>
+        <td>静态：clang lifetime attrs；动态：ASan 抓 UAF/UAR</td>
+      </tr>
+      <tr>
+        <td><strong>vptr check 假阳常见</strong></td>
+        <td><code>-fsanitize=vptr</code> 依赖 typeinfo 比较；动态库跨 RTTI 边界、多继承 ambiguous 时误报</td>
+        <td>白名单 / 关 vptr 子检查</td>
+      </tr>
+      <tr>
+        <td><strong>unsigned-integer-overflow 默认不算 UB</strong>（C/C++ 标准定义为 wrap）</td>
+        <td>非 UB；仅 <code>-fsanitize=unsigned-integer-overflow</code> 显式开时才报（属"unwanted behavior"非"undefined"）</td>
+        <td>需要时显式打开</td>
+      </tr>
+      <tr>
+        <td><strong>signed overflow 在已优化 release 下可能"消失"</strong></td>
+        <td>编译器假设 signed 不 overflow → 死代码消除把 check 删了</td>
+        <td>用 <code>-O1</code> + UBSan；或 <code>-fwrapv</code></td>
+      </tr>
+      <tr>
+        <td><strong>UBSan-trap 模式 crash 无信息</strong></td>
+        <td>Trap = <code>ud2</code> 指令，runtime library 不链接 → SIGILL 无 stack 解释</td>
+        <td>用 <code>-fsanitize-minimal-runtime</code> 折中（少量 binary 增大）</td>
+      </tr>
+      <tr>
+        <td><strong>不查内存安全 / race / 初始化</strong></td>
+        <td>UBSan 在 instruction level 插独立 check，不维护 shadow / VC 状态</td>
+        <td>组合 ASan / TSan / MSan</td>
+      </tr>
+      <tr>
+        <td><strong>对模板大量实例化的 binary size 膨胀显著</strong></td>
+        <td>每个 check site 生成独立 fail handler symbol；C++ template-heavy 项目 +20-30% binary</td>
+        <td><code>-fsanitize-minimal-runtime</code> 或精选子集</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="tip">
+    <strong>本质局限</strong>：UBSan 是<strong>"枚举式" UB 检测</strong>——标准列了 UB 它才查。所以它<strong>性能极低</strong>（可生产），但<strong>覆盖窄</strong>。把它当 production safety net，不是 dev 主力 bug-catcher。
+  </div>
 </section>
 
 <section class="chapter" id="s6">
@@ -424,6 +667,63 @@ g++ -fsanitize=undefined -fsanitize-trap=undefined ...</pre>
   <div class="tip">
     <strong>HWASan 的真正意义</strong>：让 sanitizer 进<strong>生产 fleet</strong>。开销 5-15% 意味着可以全量部署，捕获之前 dev 阶段漏掉的 1 in 1000 corner case bug。
   </div>
+
+  <h3>HWASan / MTE 的局限性与根因</h3>
+
+  <table>
+    <thead><tr><th>限制</th><th>根本原因</th><th>缓解 / 替代</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><strong>误报率 ~6.25% (1/16)</strong>——bug 有 1/16 概率随机漏</td>
+        <td>Tag 只有 4 bit；新 alloc tag 跟相邻 free chunk 撞概率 1/16</td>
+        <td>多次跑提升 cumulative catch；或加宽 tag（需硬件改）</td>
+      </tr>
+      <tr>
+        <td><strong>仅 ARMv8.5+ 才有 MTE</strong>（Pixel 8+ / Apple M4 等）</td>
+        <td>需 ISA 扩展支持 LDG/STG tag 指令；x86 无对应</td>
+        <td>x86 用 ASan / GWP-ASan；TBI-only 模式无 MTE 也能跑（开销 1.3-1.5×）</td>
+      </tr>
+      <tr>
+        <td><strong>x86 无 TBI</strong>——HWASan 在 x86 几乎无用</td>
+        <td>x86_64 不忽略高字节（Intel LAM 5-level 之后部分支持，但生态未跟）</td>
+        <td>x86 等 LAM 普及；或继续 ASan</td>
+      </tr>
+      <tr>
+        <td><strong>Pointer arithmetic 跨 tag boundary 假阳</strong></td>
+        <td>不同 alloc tag 不同；正常 ptr 加减跨 alloc 时 tag 不变 → 比 memory tag 失败</td>
+        <td>避免 inter-object pointer arithmetic（本来也是 UB）</td>
+      </tr>
+      <tr>
+        <td><strong>对 stack 越界粒度粗（16 字节 granule）</strong></td>
+        <td>MTE tag 1 个/16 字节，小于此的 overflow 漏</td>
+        <td>关键 hot 函数 disable HWASan 改 ASan</td>
+      </tr>
+      <tr>
+        <td><strong>跟 PAC (pointer authentication) 共享 high bits</strong></td>
+        <td>ARM PAC 也用高字节签名 → 跟 HWASan tag 抢位</td>
+        <td>编译器协调；MTE + PAC 同开时 PAC 用更少 bit</td>
+      </tr>
+      <tr>
+        <td><strong>所有动态库需 HWASan-built</strong></td>
+        <td>非插桩 .so 设置/读 ptr 时高字节随机 → tag 比对全失败</td>
+        <td>系统 lib 提供 HWASan 版本（Android NDK）</td>
+      </tr>
+      <tr>
+        <td><strong>MTE async 模式延迟报警</strong></td>
+        <td>Async 模式由 CPU 累积报告（非每条指令），bug site 跟 trap site 不同</td>
+        <td>Dev 用 sync 模式；prod 用 async（性能 vs 精度权衡）</td>
+      </tr>
+      <tr>
+        <td><strong>kernel 支持需特定版本</strong></td>
+        <td>需 Linux 5.10+ ARM64 MTE patch；userspace 库需 prctl 配合</td>
+        <td>Android 14+ / Pixel 8+ 默认就绪</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="warn">
+    <strong>本质局限</strong>：HWASan 用<strong>概率换性能</strong>——4-bit tag 决定它<strong>不能像 ASan 那样确定性 catch</strong>。但在<strong>fleet-scale</strong>这是优势：100k 设备每个有 15/16 概率 catch，整体 catch 率趋近 1。HWASan 不是 ASan 的替代，是 ASan 的 production sibling。
+  </div>
 </section>
 
 <section class="chapter" id="s7">
@@ -457,6 +757,58 @@ g++ -fsanitize=undefined -fsanitize-trap=undefined ...</pre>
   </ul>
 
   <p>GWP 风格 sanitizer 是"<strong>find rare bugs at scale</strong>"的最佳方案——单实例不能保证 catch 你的 bug，但 100k production users 累积起来 catch 罕见 bug 的概率非常高。</p>
+
+  <h3>GWP-ASan 的局限性与根因</h3>
+
+  <table>
+    <thead><tr><th>限制</th><th>根本原因</th><th>缓解 / 替代</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><strong>单实例几乎不 catch 任何 bug</strong></td>
+        <td>采样率 1/10000 → 期望要跑 10000 次 alloc 才碰一个 guarded</td>
+        <td>仅在 fleet-scale 才有意义；dev 阶段用 ASan</td>
+      </tr>
+      <tr>
+        <td><strong>只检 heap，不检 stack / global</strong></td>
+        <td>原理是替换 <code>malloc</code> 把采样 alloc 放 mmap 守护区；stack 不经 malloc</td>
+        <td>Stack overflow 用 stack canary / shadow stack</td>
+      </tr>
+      <tr>
+        <td><strong>只 catch 越界 + UAF，对 intra-object 错配无能</strong></td>
+        <td>整 page 当 redzone，相对 byte 级 redzone 粒度粗</td>
+        <td>ASan 做精确检查</td>
+      </tr>
+      <tr>
+        <td><strong>~100MB 内存预留</strong></td>
+        <td>Guarded slot 各占 2 page（前后 guard page）；slot 数固定（~4k）</td>
+        <td>调小 slot 数（采样率不变，命中率降）</td>
+      </tr>
+      <tr>
+        <td><strong>Slot 满后停止采样</strong></td>
+        <td>Pool 是固定大小；用完不复用直到老 alloc 真 free</td>
+        <td>调大 slot；或缩短 sample lifetime</td>
+      </tr>
+      <tr>
+        <td><strong>Bug repro 需要服务端聚合</strong></td>
+        <td>单 crash 不一定有 actionable info；需 stack trace 聚合 + 去重</td>
+        <td>Crashpad / Sentry / Crashlytics 后台收集</td>
+      </tr>
+      <tr>
+        <td><strong>对低 QPS 程序无效</strong></td>
+        <td>采样需要量级；每天几千 alloc 的 daemon 几乎 catch 不到</td>
+        <td>这类程序 dev 阶段 ASan + fuzzing</td>
+      </tr>
+      <tr>
+        <td><strong>跟某些 jemalloc/tcmalloc 实现配合需 patch</strong></td>
+        <td>GWP-ASan 要 hook allocator 入口；tcmalloc 内部直接 mmap path 绕过</td>
+        <td>tcmalloc 已内置 GWP-ASan 集成（Google fork）</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="tip">
+    <strong>本质局限</strong>：GWP-ASan 是<strong>概率工程</strong>——对单 bug 期望 catch time = (1 / 采样率) × access frequency。它跟 telemetry 后台是<strong>一体的</strong>，不是孤立工具。Chrome / Android / iOS 这类有 fleet 的产品才能受益。
+  </div>
 </section>
 
 <section class="chapter" id="s8">
@@ -492,25 +844,84 @@ g++ -fsanitize=undefined -fsanitize-trap=undefined ...</pre>
 </section>
 
 <section class="chapter" id="s9">
-  <h2>9. 已知 Limitation + 互动陷阱</h2>
+  <h2>9. 跨 Sanitizer 通用局限 + 互动陷阱</h2>
 
-  <h3>不能跟其他 sanitizer 同跑</h3>
+  <p>除了各 sanitizer 自身的限制（见 §2-§7 各自的"局限性与根因"小节），整个 sanitizer 家族还有<strong>共同的结构性限制</strong>。</p>
+
+  <h3>9.1 互斥矩阵——不能同跑</h3>
+
+  <table>
+    <thead><tr><th></th><th>ASan</th><th>TSan</th><th>MSan</th><th>HWASan</th><th>UBSan</th><th>LSan</th></tr></thead>
+    <tbody>
+      <tr><td><strong>ASan</strong></td><td>—</td><td>❌</td><td>❌</td><td>❌</td><td>✅</td><td>✅ (内置)</td></tr>
+      <tr><td><strong>TSan</strong></td><td>❌</td><td>—</td><td>❌</td><td>❌</td><td>✅</td><td>⚠️ 部分</td></tr>
+      <tr><td><strong>MSan</strong></td><td>❌</td><td>❌</td><td>—</td><td>❌</td><td>✅</td><td>⚠️ 部分</td></tr>
+      <tr><td><strong>HWASan</strong></td><td>❌</td><td>❌</td><td>❌</td><td>—</td><td>✅</td><td>✅</td></tr>
+      <tr><td><strong>UBSan</strong></td><td>✅</td><td>✅</td><td>✅</td><td>✅</td><td>—</td><td>✅</td></tr>
+    </tbody>
+  </table>
+
+  <p><strong>根因</strong>：</p>
   <ul>
-    <li><strong>ASan + TSan</strong>：shadow memory layout 冲突 → 必须分开 build</li>
-    <li><strong>ASan + MSan</strong>：同上</li>
-    <li><strong>UBSan + ASan / TSan</strong>：✅ 可以同跑（UBSan 不用 shadow）</li>
-    <li><strong>HWASan + ASan</strong>：互斥</li>
+    <li><strong>Shadow 内存 layout 冲突</strong>——ASan/MSan/TSan/HWASan 都把虚拟地址空间的特定段独占当 shadow。两两 layout 不兼容。</li>
+    <li><strong>Allocator 冲突</strong>——每个 sanitizer 替换 malloc/free 实现自己的 redzone / quarantine / tag。两个同时 hook 一个 malloc 会破坏 ABI。</li>
+    <li><strong>Signal handler 冲突</strong>——多 sanitizer 都装 SIGSEGV/SIGBUS handler 处理 shadow trap。</li>
+    <li><strong>UBSan 是例外</strong>：它在 instruction level 插 in-place check，不用 shadow / 不替 allocator → 跟所有 sanitizer 同跑。</li>
   </ul>
 
-  <h3>跟 jemalloc / tcmalloc 兼容性</h3>
-  <p>Sanitizer 替换 malloc/free 实现 → 跟自定义 allocator 冲突。ASan 用自己的 ASan allocator（基于 LLVM scudo），不兼容 jemalloc。</p>
+  <h3>9.2 跟 Allocator 生态的张力</h3>
 
-  <h3>容易被 mistake 当 sanitizer bug 的真 UB</h3>
   <ul>
-    <li><strong>placement new 没初始化某 field</strong>（C++ 故意）→ MSan 报，是真 bug</li>
+    <li><strong>jemalloc / tcmalloc</strong>：sanitizer allocator 直接替换 → 失去 jemalloc 的 arena / size class 调优，<strong>性能特性不同</strong>。Sanitizer build 的 latency profile 不能代表生产。</li>
+    <li><strong>用户对象池 / arena</strong>：sub-allocation 对 sanitizer <strong>不可见</strong>。Arena 内部一片 alloc 越界踩另一片，ASan 看到的还是 "整个 arena 合法"。</li>
+    <li><strong>mmap / shm 共享内存</strong>：跨进程 sanitizer 状态不共享，跨进程越界检测失效。</li>
+  </ul>
+
+  <h3>9.3 构建复杂度</h3>
+
+  <ul>
+    <li>每种 sanitizer 一份独立 build → CI 资源 ×N</li>
+    <li>第三方 .so 必须用对应 sanitizer build 否则假阳/假阴（尤其 MSan / HWASan）</li>
+    <li>Cross-language（C++/Rust/Go/CUDA）只有 C/C++/部分 Rust 支持 → 跨边界假阳</li>
+  </ul>
+
+  <h3>9.4 优化级别相互作用</h3>
+
+  <ul>
+    <li><strong><code>-O0</code> 跑 sanitizer</strong>：stack 布局 / inline 行为跟生产差异大，可能漏 prod-only bug</li>
+    <li><strong><code>-O2</code> 跑 sanitizer</strong>：编译器把死代码消除（包括"反正 signed 不 overflow"），可能<strong>消除掉 sanitizer check 本身</strong></li>
+    <li>推荐 <code>-O1 -g</code> 平衡</li>
+  </ul>
+
+  <h3>9.5 真 bug 容易被误当 sanitizer bug</h3>
+
+  <ul>
+    <li><strong>placement new 没初始化某 field</strong>（C++ 故意）→ MSan 报，是真 UB</li>
     <li><strong>读已构造对象的某 padding byte</strong> → ASan / MSan 报，标准 UB</li>
     <li><strong>用自己的 atomic primitive</strong> → TSan 报 race，因为没 annotation</li>
+    <li><strong>memcpy(struct)</strong> 触发 MSan padding 警告</li>
+    <li><strong>std::vector::data() + 越界 1 byte 写</strong> → ASan 在 capacity 边界报，看似"应该合法"的 bug</li>
   </ul>
+
+  <h3>9.6 不能查的 bug 类别（全家桶都搞不定）</h3>
+
+  <table>
+    <thead><tr><th>Bug 类</th><th>原因</th><th>替代手段</th></tr></thead>
+    <tbody>
+      <tr><td><strong>逻辑 bug</strong>（算错答案但不 crash）</td><td>Sanitizer 只查 UB / memory error，不懂"对的算法"</td><td>单元测试 / property-based test</td></tr>
+      <tr><td><strong>死锁</strong></td><td>TSan 抓 race 不抓 deadlock</td><td>静态 lock-graph analysis / Helgrind</td></tr>
+      <tr><td><strong>livelock / 优先级反转</strong></td><td>非 UB，运行能继续</td><td>压测 + tracing</td></tr>
+      <tr><td><strong>性能退化</strong>（如假共享）</td><td>非正确性问题</td><td>perf / pmu-tools</td></tr>
+      <tr><td><strong>跨进程数据竞争</strong>（共享内存）</td><td>TSan 单进程视角</td><td>专用 IPC race detector / 设计审查</td></tr>
+      <tr><td><strong>Spectre / Meltdown 类 side channel</strong></td><td>非架构层 UB</td><td>编译期 mitigations (-mretpoline 等)</td></tr>
+      <tr><td><strong>Cryptographic timing leak</strong></td><td>正确执行但泄漏</td><td>ctgrind / 专用工具</td></tr>
+      <tr><td><strong>Hardware bug</strong>（cache coherence / TLB）</td><td>软件视角看是正确的</td><td>架构级 stress + 厂商 erratum</td></tr>
+    </tbody>
+  </table>
+
+  <div class="danger">
+    <strong>总结哲学</strong>：Sanitizer 不是<strong>"开了就安全"</strong>。它是一组<strong>互补</strong>的动态检测工具，每个 catch 一类特定 bug，每个有结构性盲区。生产质量靠<strong>组合</strong>：dev 阶段 ASan+UBSan 抓 80%、CI 加 TSan 抓 race、production 用 HWASan / GWP-ASan 抓长尾 + 静态分析 + fuzzing 补盲区。
+  </div>
 </section>
 
 <section class="chapter" id="s10">
