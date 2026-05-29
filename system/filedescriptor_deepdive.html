@@ -4,7 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>File Descriptor 与三级表模型 · 深度解析</title>
-<link rel="stylesheet" href="./assets/site-theme.css">
+<link rel="stylesheet" href="../assets/site-theme.css">
+<link rel="stylesheet" href="../assets/guide-theme.css">
 <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
 <style>
   :root {
@@ -453,7 +454,7 @@
   }
 </style>
 </head>
-<body>
+<body class="tn-shell-overlay">
 <!-- tn-nav:v1 -->
 <style>
 #tn-nav{position:fixed;top:14px;right:14px;z-index:99999;display:flex;gap:6px;align-items:center;
@@ -477,21 +478,47 @@
   <span class="tn-meta" title="&#x9884;&#x8BA1;&#x9605;&#x8BFB;&#x65F6;&#x957F;">&#x23F1; 75 min</span>
 </div>
 <!-- /tn-nav:v1 -->
+<div class="progress" id="progress"></div>
 <!-- ═══════════════════════ HERO ═══════════════════════ -->
-<div class="hero">
-  <div class="hero-content">
+<div class="layout">
+  <aside class="toc">
+    <h2>File Descriptor · Roadmap</h2>
+    <nav>
+      <ol>
+        <li><a href="#s1">&#9776; 目录导航</a></li>
+        <li><a href="#s2">fd 的本质：为什么是一个 int</a></li>
+        <li><a href="#s3">三级表详解</a></li>
+        <li><a href="#s4">内核数据结构源码</a></li>
+        <li><a href="#s5">dup/dup2/dup3 语义</a></li>
+        <li><a href="#s6">fork 后的 fd 共享</a></li>
+        <li><a href="#s7">exec 与 FD_CLOEXEC</a></li>
+        <li><a href="#s8">Shell Pipe 原理</a></li>
+        <li><a href="#s9">文件偏移共享语义</a></li>
+        <li><a href="#s10">一切皆 fd：扩展族</a></li>
+        <li><a href="#s11">fd 传递 (SCM_RIGHTS)</a></li>
+        <li><a href="#s12">fd 限制与泄漏</a></li>
+        <li><a href="#s13">/proc/PID/fd 观察</a></li>
+        <li><a href="#s14">高频面试题</a></li>
+      </ol>
+    </nav>
+  </aside>
+  <main>
+<header class="hero">
+
     <span class="tag">KERNEL INTERNALS · DEEP DIVE</span>
     <h1>File Descriptor 与三级表模型</h1>
     <p class="subtitle">一个整数背后的世界——从 <code>int fd = 3</code> 到磁盘上的一块数据，中间经过怎样的三层映射？fork/dup/exec 如何改变这张表？为什么 socket、管道、epoll、timerfd 都是 fd？</p>
-    <div class="hero-hint">int fd = open("/etc/hosts", O_RDONLY);  &nbsp;<span style="color:var(--text-muted);">// fd = 3，但它到底是什么？</span></div>
+    <div class="hero-hint">int fd = open("/etc/hosts", O_RDONLY);  &nbsp;<span style="color:var(--text-muted);">// fd = 3，但它到底是什么？</span>
+    </div>
+  </header>
+<section class="chapter" id="s1">
+  <div class="ch-head">
+    <div class="num">01</div>
+    <div class="t">
+      <h2>&#9776; 目录导航</h2>
+    </div>
   </div>
-</div>
 
-<div class="container">
-
-<!-- ═══════════════════════ TOC ═══════════════════════ -->
-<div class="toc">
-  <h2>&#9776; 目录导航</h2>
   <div class="toc-grid">
     <a href="#s1"><span class="num">01</span>fd 的本质：为什么是一个 int</a>
     <a href="#s2"><span class="num">02</span>三级表详解</a>
@@ -507,16 +534,18 @@
     <a href="#s12"><span class="num">12</span>/proc/PID/fd 观察</a>
     <a href="#s13"><span class="num">13</span>高频面试题</a>
   </div>
-</div>
+</section>
 
-<!-- ═══════════════════════ Section 1 ═══════════════════════ -->
-<section id="s1">
-  <div class="section-header">
-    <span class="section-num">01</span>
-    <h2>fd 的本质：为什么是一个 int</h2>
+<section class="chapter" id="s2">
+  <div class="ch-head">
+    <div class="num">02</div>
+    <div class="t">
+      <h2>fd 的本质：为什么是一个 int</h2>
+      <p class="sub">1.1 从用户视角看 fd · 1.2 为什么内核不直接返回指针？</p>
+    </div>
   </div>
 
-  <h3>1.1 从用户视角看 fd</h3>
+  <h3 id="s2-1">1.1 从用户视角看 fd</h3>
   <p>在用户空间，<code>fd</code> 就是一个 <strong>非负小整数</strong>，遵循三条铁律：</p>
   <ul>
     <li><strong>0, 1, 2 预留</strong>：stdin / stdout / stderr</li>
@@ -529,7 +558,7 @@
 <span class="fn">close</span>(fd1);                                 <span class="com">// 3 被释放</span>
 <span class="kw">int</span> fd3 = <span class="fn">open</span>(<span class="str">"/etc/group"</span>, O_RDONLY);      <span class="com">// 3 (复用！)</span></code></pre>
 
-  <h3>1.2 为什么内核不直接返回指针？</h3>
+  <h3 id="s2-2">1.2 为什么内核不直接返回指针？</h3>
   <div class="grid-2">
     <div class="card">
       <div class="card-title"><span class="card-icon" style="background:rgba(16,185,129,0.2);color:var(--accent-emerald);">✓</span>安全隔离</div>
@@ -550,14 +579,16 @@
   </div>
 </section>
 
-<!-- ═══════════════════════ Section 2 ═══════════════════════ -->
-<section id="s2">
-  <div class="section-header">
-    <span class="section-num">02</span>
-    <h2>三级表详解</h2>
+<section class="chapter" id="s3">
+  <div class="ch-head">
+    <div class="num">03</div>
+    <div class="t">
+      <h2>三级表详解</h2>
+      <p class="sub">2.1 三层映射全景 · 2.2 三层职责划分 · 2.3 为什么是三层而不是两层？</p>
+    </div>
   </div>
 
-  <h3>2.1 三层映射全景</h3>
+  <h3 id="s3-1">2.1 三层映射全景</h3>
   <div class="mermaid-wrapper">
     <div class="mermaid">
 graph TB
@@ -604,7 +635,7 @@ graph TB
     </div>
   </div>
 
-  <h3>2.2 三层职责划分</h3>
+  <h3 id="s3-2">2.2 三层职责划分</h3>
   <table>
     <thead><tr><th>层级</th><th>作用域</th><th>关键数据</th><th>回答什么问题</th></tr></thead>
     <tbody>
@@ -629,7 +660,7 @@ graph TB
     </tbody>
   </table>
 
-  <h3>2.3 为什么是三层而不是两层？</h3>
+  <h3 id="s3-3">2.3 为什么是三层而不是两层？</h3>
   <div class="callout info">
     <div class="callout-title">▶ 设计动机</div>
     <p><strong>第一层（FD Table）</strong>是进程私有的，保证进程隔离；<strong>第三层（Inode）</strong>是文件实体，必须是系统唯一的（否则硬链接无法共享元数据）。</p>
@@ -642,14 +673,16 @@ graph TB
   </div>
 </section>
 
-<!-- ═══════════════════════ Section 3 ═══════════════════════ -->
-<section id="s3">
-  <div class="section-header">
-    <span class="section-num">03</span>
-    <h2>内核数据结构源码</h2>
+<section class="chapter" id="s4">
+  <div class="ch-head">
+    <div class="num">04</div>
+    <div class="t">
+      <h2>内核数据结构源码</h2>
+      <p class="sub">3.1 task_struct → files_struct · 3.2 files_struct 与 fdtable · 3.3 struct file —— 第二层的核心 · 3.4 struct inode —— 第三层</p>
+    </div>
   </div>
 
-  <h3>3.1 task_struct → files_struct</h3>
+  <h3 id="s4-1">3.1 task_struct → files_struct</h3>
   <p>进程控制块 <code>task_struct</code> 通过 <code>files_struct*</code> 指向 FD 表：</p>
 
   <pre data-lang="C"><code><span class="com">// include/linux/sched.h (简化)</span>
@@ -661,7 +694,7 @@ graph TB
     <span class="com">// ...</span>
 };</code></pre>
 
-  <h3>3.2 files_struct 与 fdtable</h3>
+  <h3 id="s4-2">3.2 files_struct 与 fdtable</h3>
   <pre data-lang="C"><code><span class="com">// include/linux/fdtable.h (简化)</span>
 <span class="kw">struct</span> <span class="ty">files_struct</span> {
     <span class="ty">atomic_t</span>       count;              <span class="com">// 引用计数 (线程共享时增加)</span>
@@ -691,7 +724,7 @@ graph TB
     </ul>
   </div>
 
-  <h3>3.3 struct file —— 第二层的核心</h3>
+  <h3 id="s4-3">3.3 struct file —— 第二层的核心</h3>
   <pre data-lang="C"><code><span class="com">// include/linux/fs.h (简化)</span>
 <span class="kw">struct</span> <span class="ty">file</span> {
     <span class="kw">struct</span> <span class="ty">path</span>               f_path;        <span class="com">// dentry + vfsmount</span>
@@ -725,7 +758,7 @@ graph TB
     <p>每种文件类型（ext4 / socket / pipe / procfs / tmpfs）都提供自己的 <code>file_operations</code> 实现。<code>sys_read</code> 最终调用的是 <code>file->f_op->read()</code>——一个函数指针。这就是"一切皆文件"的本质：统一的 vtable。</p>
   </div>
 
-  <h3>3.4 struct inode —— 第三层</h3>
+  <h3 id="s4-4">3.4 struct inode —— 第三层</h3>
   <pre data-lang="C"><code><span class="kw">struct</span> <span class="ty">inode</span> {
     <span class="ty">umode_t</span>                  i_mode;       <span class="com">// 类型 + 权限 (S_IFREG/S_IFDIR...)</span>
     <span class="ty">kuid_t</span>                   i_uid;
@@ -744,14 +777,16 @@ graph TB
 };</code></pre>
 </section>
 
-<!-- ═══════════════════════ Section 4 ═══════════════════════ -->
-<section id="s4">
-  <div class="section-header">
-    <span class="section-num">04</span>
-    <h2>dup/dup2/dup3 语义</h2>
+<section class="chapter" id="s5">
+  <div class="ch-head">
+    <div class="num">05</div>
+    <div class="t">
+      <h2>dup/dup2/dup3 语义</h2>
+      <p class="sub">4.1 三个 API 的差异 · 4.2 dup 的三级表变化 · 4.3 dup2 实现 Shell 重定向</p>
+    </div>
   </div>
 
-  <h3>4.1 三个 API 的差异</h3>
+  <h3 id="s5-1">4.1 三个 API 的差异</h3>
   <table>
     <thead><tr><th>API</th><th>行为</th><th>典型用法</th></tr></thead>
     <tbody>
@@ -761,7 +796,7 @@ graph TB
     </tbody>
   </table>
 
-  <h3>4.2 dup 的三级表变化</h3>
+  <h3 id="s5-2">4.2 dup 的三级表变化</h3>
   <div class="mermaid-wrapper">
     <div class="mermaid">
 graph LR
@@ -792,7 +827,7 @@ graph LR
     <p><code>dup</code> 创建的是 FD Table 的新条目，指向<strong>同一个 struct file</strong>。所以 <code>pos</code> 共享——两个 fd 写入会累加到同一个位置。这与"两次 open 同一文件"是完全不同的！</p>
   </div>
 
-  <h3>4.3 dup2 实现 Shell 重定向</h3>
+  <h3 id="s5-3">4.3 dup2 实现 Shell 重定向</h3>
   <pre data-lang="C"><code><span class="com">// 实现 `ls > output.txt`</span>
 <span class="kw">int</span> fd = <span class="fn">open</span>(<span class="str">"output.txt"</span>, O_WRONLY | O_CREAT | O_TRUNC, <span class="num">0644</span>);
 <span class="fn">dup2</span>(fd, STDOUT_FILENO);   <span class="com">// fd=1 (stdout) 现在指向 output.txt</span>
@@ -816,14 +851,16 @@ graph TB
   </div>
 </section>
 
-<!-- ═══════════════════════ Section 5 ═══════════════════════ -->
-<section id="s5">
-  <div class="section-header">
-    <span class="section-num">05</span>
-    <h2>fork 后的 fd 共享</h2>
+<section class="chapter" id="s6">
+  <div class="ch-head">
+    <div class="num">06</div>
+    <div class="t">
+      <h2>fork 后的 fd 共享</h2>
+      <p class="sub">5.1 fork 如何复制 FD Table · 5.2 关键规则 · 5.3 验证实验</p>
+    </div>
   </div>
 
-  <h3>5.1 fork 如何复制 FD Table</h3>
+  <h3 id="s6-1">5.1 fork 如何复制 FD Table</h3>
   <div class="mermaid-wrapper">
     <div class="mermaid">
 graph TB
@@ -852,7 +889,7 @@ graph TB
     </div>
   </div>
 
-  <h3>5.2 关键规则</h3>
+  <h3 id="s6-2">5.2 关键规则</h3>
   <ul>
     <li><code>fork()</code> 复制 FD Table 本身（子进程有独立的 <code>files_struct</code>）</li>
     <li>但 FD Table 里每个指针指向的 struct file <strong>不复制</strong>，只是 <code>refcount++</code></li>
@@ -860,7 +897,7 @@ graph TB
     <li>子进程的 <code>close(fd)</code> 只减少 FD Table 条目，<code>refcount--</code>；只有 refcount 归零时 struct file 才真正释放</li>
   </ul>
 
-  <h3>5.3 验证实验</h3>
+  <h3 id="s6-3">5.3 验证实验</h3>
   <pre data-lang="C"><code><span class="kw">int</span> fd = <span class="fn">open</span>(<span class="str">"/tmp/test.txt"</span>, O_WRONLY | O_CREAT | O_TRUNC, <span class="num">0644</span>);
 <span class="kw">if</span> (<span class="fn">fork</span>() == <span class="num">0</span>) {
     <span class="com">// 子进程</span>
@@ -880,17 +917,19 @@ graph TB
   </div>
 </section>
 
-<!-- ═══════════════════════ Section 6 ═══════════════════════ -->
-<section id="s6">
-  <div class="section-header">
-    <span class="section-num">06</span>
-    <h2>exec 与 FD_CLOEXEC</h2>
+<section class="chapter" id="s7">
+  <div class="ch-head">
+    <div class="num">07</div>
+    <div class="t">
+      <h2>exec 与 FD_CLOEXEC</h2>
+      <p class="sub">6.1 exec 默认行为：fd 保留 · 6.2 FD_CLOEXEC 标志 · 6.3 close_on_exec 位图在内核的位置</p>
+    </div>
   </div>
 
-  <h3>6.1 exec 默认行为：fd 保留</h3>
+  <h3 id="s7-1">6.1 exec 默认行为：fd 保留</h3>
   <p>与直觉相反，<code>execve()</code> 默认<strong>不会关闭</strong>进程的 fd——这是 Shell 重定向能工作的前提（先 fork+dup2 再 exec）。</p>
 
-  <h3>6.2 FD_CLOEXEC 标志</h3>
+  <h3 id="s7-2">6.2 FD_CLOEXEC 标志</h3>
   <p>某些 fd（如密钥、日志）不应该被子进程继承，这时需要设置 close-on-exec：</p>
 
   <pre data-lang="C"><code><span class="com">// 方式 1: fcntl 设置 (非原子)</span>
@@ -912,25 +951,27 @@ graph TB
     <p>在线程 A 执行 <code>open</code> + <code>fcntl(F_SETFD)</code> 两步之间，线程 B 可能调用 <code>fork+exec</code>，导致 fd 被泄漏到子进程。只有 <code>O_CLOEXEC</code>（open 时原子设置）能完全避免这个窗口。这也是 C++17 <code>std::filesystem</code> 内部始终使用 O_CLOEXEC 的原因。</p>
   </div>
 
-  <h3>6.3 close_on_exec 位图在内核的位置</h3>
+  <h3 id="s7-3">6.3 close_on_exec 位图在内核的位置</h3>
   <p>每个 <code>fdtable</code> 有一个 <code>close_on_exec</code> 位图（每 bit 对应一个 fd）。<code>execve()</code> 的最后阶段调用 <code>do_close_on_exec()</code> 遍历位图关闭对应 fd。</p>
 </section>
 
-<!-- ═══════════════════════ Section 7 ═══════════════════════ -->
-<section id="s7">
-  <div class="section-header">
-    <span class="section-num">07</span>
-    <h2>Shell Pipe 原理</h2>
+<section class="chapter" id="s8">
+  <div class="ch-head">
+    <div class="num">08</div>
+    <div class="t">
+      <h2>Shell Pipe 原理</h2>
+      <p class="sub">7.1 创建匿名管道 · 7.2 fork + dup2 编排 · 7.3 最小实现</p>
+    </div>
   </div>
 
   <p>Shell 中 <code>ls | grep foo</code> 是 fd 操作的教科书示例。下面逐步演示内核视图：</p>
 
-  <h3>7.1 创建匿名管道</h3>
+  <h3 id="s8-1">7.1 创建匿名管道</h3>
   <pre data-lang="C"><code><span class="kw">int</span> pfd[<span class="num">2</span>];
 <span class="fn">pipe</span>(pfd);   <span class="com">// pfd[0] = 读端, pfd[1] = 写端</span>
 <span class="com">// 内核分配了一个 struct file (管道缓冲区 64KB)，两个 fd 分别以读/写方式指向它</span></code></pre>
 
-  <h3>7.2 fork + dup2 编排</h3>
+  <h3 id="s8-2">7.2 fork + dup2 编排</h3>
   <div class="mermaid-wrapper">
     <div class="mermaid">
 sequenceDiagram
@@ -962,7 +1003,7 @@ sequenceDiagram
     </div>
   </div>
 
-  <h3>7.3 最小实现</h3>
+  <h3 id="s8-3">7.3 最小实现</h3>
   <pre data-lang="C"><code><span class="com">// 实现: ls | grep foo</span>
 <span class="kw">int</span> pfd[<span class="num">2</span>];
 <span class="fn">pipe</span>(pfd);
@@ -988,14 +1029,16 @@ sequenceDiagram
   </div>
 </section>
 
-<!-- ═══════════════════════ Section 8 ═══════════════════════ -->
-<section id="s8">
-  <div class="section-header">
-    <span class="section-num">08</span>
-    <h2>文件偏移共享语义</h2>
+<section class="chapter" id="s9">
+  <div class="ch-head">
+    <div class="num">09</div>
+    <div class="t">
+      <h2>文件偏移共享语义</h2>
+      <p class="sub">8.1 三种"同一文件"的打开方式对比 · 8.2 对比总结</p>
+    </div>
   </div>
 
-  <h3>8.1 三种"同一文件"的打开方式对比</h3>
+  <h3 id="s9-1">8.1 三种"同一文件"的打开方式对比</h3>
   <div class="mermaid-wrapper">
     <div class="mermaid">
 graph TB
@@ -1030,7 +1073,7 @@ graph TB
     </div>
   </div>
 
-  <h3>8.2 对比总结</h3>
+  <h3 id="s9-2">8.2 对比总结</h3>
   <table>
     <thead><tr><th>方式</th><th>struct file</th><th>pos 共享</th><th>flags 共享</th></tr></thead>
     <tbody>
@@ -1047,16 +1090,18 @@ graph TB
   </div>
 </section>
 
-<!-- ═══════════════════════ Section 9 ═══════════════════════ -->
-<section id="s9">
-  <div class="section-header">
-    <span class="section-num">09</span>
-    <h2>一切皆 fd：扩展族</h2>
+<section class="chapter" id="s10">
+  <div class="ch-head">
+    <div class="num">10</div>
+    <div class="t">
+      <h2>一切皆 fd：扩展族</h2>
+      <p class="sub">9.1 fd 家族全图 · 9.2 经典组合：eventfd + epoll 实现唤醒 · 9.3 经典组合：timerfd 取代 setitimer · 9.4 signalfd —— 让信号「排队」并进入 epoll · 9.5 p…</p>
+    </div>
   </div>
 
   <p>Linux 把很多本不是"文件"的东西都封装成了 fd，因为这样可以统一用 <code>read/write/close/epoll</code> 管理。这是 Unix 哲学"万物皆文件"的体现。</p>
 
-  <h3>9.1 fd 家族全图</h3>
+  <h3 id="s10-1">9.1 fd 家族全图</h3>
   <table>
     <thead><tr><th>fd 类型</th><th>创建 API</th><th>作用</th><th>epoll 可用</th></tr></thead>
     <tbody>
@@ -1079,7 +1124,7 @@ graph TB
     </tbody>
   </table>
 
-  <h3>9.2 经典组合：eventfd + epoll 实现唤醒</h3>
+  <h3 id="s10-2">9.2 经典组合：eventfd + epoll 实现唤醒</h3>
   <pre data-lang="C++"><code><span class="com">// 线程 A 阻塞在 epoll_wait，线程 B 如何唤醒它？答：eventfd</span>
 <span class="kw">int</span> efd = <span class="fn">eventfd</span>(<span class="num">0</span>, EFD_NONBLOCK | EFD_CLOEXEC);
 <span class="kw">int</span> ep = <span class="fn">epoll_create1</span>(EPOLL_CLOEXEC);
@@ -1102,7 +1147,7 @@ graph TB
 <span class="ty">uint64_t</span> one = <span class="num">1</span>;
 <span class="fn">write</span>(efd, &one, <span class="kw">sizeof</span>(one));       <span class="com">// 唤醒 epoll_wait</span></code></pre>
 
-  <h3>9.3 经典组合：timerfd 取代 setitimer</h3>
+  <h3 id="s10-3">9.3 经典组合：timerfd 取代 setitimer</h3>
   <pre data-lang="C"><code><span class="com">// 传统 setitimer: 信号处理器有严格限制</span>
 <span class="com">// timerfd: 定时到期时 fd 变可读，统一用 epoll 处理</span>
 <span class="kw">int</span> tfd = <span class="fn">timerfd_create</span>(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
@@ -1114,7 +1159,7 @@ graph TB
 <span class="fn">epoll_ctl</span>(ep, EPOLL_CTL_ADD, tfd, &(<span class="ty">epoll_event</span>){.events=EPOLLIN, .data.fd=tfd});
 <span class="com">// epoll_wait 会在每秒唤醒，read(tfd) 获取到期次数</span></code></pre>
 
-  <h3>9.4 signalfd —— 让信号「排队」并进入 epoll</h3>
+  <h3 id="s10-4">9.4 signalfd —— 让信号「排队」并进入 epoll</h3>
   <p>传统 <code>signal()</code>/<code>sigaction()</code> 的最大痛点：信号处理函数<strong>只能调 async-signal-safe 的函数</strong>（<code>printf</code>、<code>malloc</code>、几乎所有 STL 都不行）。<code>signalfd</code> 把信号变成一个 fd 上的"可读事件"，主循环用普通函数处理。</p>
 
   <pre data-lang="C++"><code><span class="com">// 1. 先 block 想接管的信号（必须！否则默认 handler 仍会跑）</span>
@@ -1149,7 +1194,7 @@ graph TB
     </ul>
   </div>
 
-  <h3>9.5 pidfd —— 进程的「稳定句柄」，告别 PID 重用 race</h3>
+  <h3 id="s10-5">9.5 pidfd —— 进程的「稳定句柄」，告别 PID 重用 race</h3>
   <p>Linux 5.3 引入 <code>pidfd</code> 解决了一个困扰几十年的问题：<strong>PID 会重用</strong>。当你 <code>kill(pid, SIGTERM)</code> 时，目标进程可能已经死了，PID 被别的进程占用，你<em>误杀</em>了无辜者。pidfd 通过持有内核 task 引用确保句柄"指向同一个进程"。</p>
 
   <div class="grid-2">
@@ -1191,7 +1236,7 @@ graph TB
     </ul>
   </div>
 
-  <h3>9.6 memfd_create —— 匿名共享内存的现代姿势</h3>
+  <h3 id="s10-6">9.6 memfd_create —— 匿名共享内存的现代姿势</h3>
   <p>传统跨进程共享内存有 3 条路：① <code>shm_open</code>（POSIX，在 <code>/dev/shm</code> 留名字）；② <code>shmget</code>（SysV，全局 key 命名空间难管理）；③ <code>mmap(MAP_ANONYMOUS|MAP_SHARED)</code> + fork。三种各有缺陷。<code>memfd_create</code> 是<strong>无名字、可传递、可"封印"</strong>的新方案。</p>
 
   <pre data-lang="C++"><code><span class="com">// 1. 创建匿名 memfd（没有路径，不污染 /dev/shm）</span>
@@ -1229,7 +1274,7 @@ graph TB
     </ul>
   </div>
 
-  <h3>9.7 inotify / fanotify / userfaultfd —— 三种「事件 fd」</h3>
+  <h3 id="s10-7">9.7 inotify / fanotify / userfaultfd —— 三种「事件 fd」</h3>
   <div class="grid-3">
     <div class="card">
       <div class="card-title"><span class="card-icon" style="background:rgba(6,182,212,0.2);color:var(--accent-cyan);">i</span>inotify</div>
@@ -1257,7 +1302,7 @@ graph TB
     </div>
   </div>
 
-  <h3>9.8 「一切皆 fd」的选型决策表</h3>
+  <h3 id="s10-8">9.8 「一切皆 fd」的选型决策表</h3>
   <table>
     <thead><tr><th>需求</th><th>首选 fd 类型</th><th>关键理由</th></tr></thead>
     <tbody>
@@ -1279,11 +1324,13 @@ graph TB
   </div>
 </section>
 
-<!-- ═══════════════════════ Section 10 ═══════════════════════ -->
-<section id="s10">
-  <div class="section-header">
-    <span class="section-num">10</span>
-    <h2>fd 传递 (SCM_RIGHTS)</h2>
+<section class="chapter" id="s11">
+  <div class="ch-head">
+    <div class="num">11</div>
+    <div class="t">
+      <h2>fd 传递 (SCM_RIGHTS)</h2>
+      <p class="sub">Unix Domain Socket 可以在进程间传递 fd——不是复制数字 3</p>
+    </div>
   </div>
 
   <p>Unix Domain Socket 可以在进程间传递 fd——不是复制数字 3，而是让另一进程获得一个<strong>指向同一 struct file</strong> 的 fd。这是 systemd socket activation、Chrome 多进程架构、Docker containerd 的基础。</p>
@@ -1353,14 +1400,16 @@ graph LR
   </div>
 </section>
 
-<!-- ═══════════════════════ Section 11 ═══════════════════════ -->
-<section id="s11">
-  <div class="section-header">
-    <span class="section-num">11</span>
-    <h2>fd 限制与泄漏</h2>
+<section class="chapter" id="s12">
+  <div class="ch-head">
+    <div class="num">12</div>
+    <div class="t">
+      <h2>fd 限制与泄漏</h2>
+      <p class="sub">11.1 限制层级 · 11.2 fd 泄漏检测 · 11.3 检测工具</p>
+    </div>
   </div>
 
-  <h3>11.1 限制层级</h3>
+  <h3 id="s12-1">11.1 限制层级</h3>
   <table>
     <thead><tr><th>层级</th><th>限制项</th><th>查看命令</th><th>调整</th></tr></thead>
     <tbody>
@@ -1383,7 +1432,7 @@ ls /proc/&lt;pid&gt;/fd | wc -l
 <span class="com"># 查看进程的 fd 限制</span>
 cat /proc/&lt;pid&gt;/limits | grep files</code></pre>
 
-  <h3>11.2 fd 泄漏检测</h3>
+  <h3 id="s12-2">11.2 fd 泄漏检测</h3>
   <pre data-lang="C++"><code><span class="com">// RAII 包装避免泄漏</span>
 <span class="kw">class</span> <span class="ty">FdGuard</span> {
     <span class="kw">int</span> fd_;
@@ -1412,7 +1461,7 @@ cat /proc/&lt;pid&gt;/limits | grep files</code></pre>
     </ul>
   </div>
 
-  <h3>11.3 检测工具</h3>
+  <h3 id="s12-3">11.3 检测工具</h3>
   <pre data-lang="bash"><code><span class="com"># 1. lsof 列出进程打开的所有 fd</span>
 lsof -p &lt;pid&gt;
 
@@ -1430,11 +1479,13 @@ bpftrace -e <span class="str">'tracepoint:syscalls:sys_enter_openat /comm=="myap
   { @opens[comm] = count(); }'</span></code></pre>
 </section>
 
-<!-- ═══════════════════════ Section 12 ═══════════════════════ -->
-<section id="s12">
-  <div class="section-header">
-    <span class="section-num">12</span>
-    <h2>/proc/PID/fd 观察</h2>
+<section class="chapter" id="s13">
+  <div class="ch-head">
+    <div class="num">13</div>
+    <div class="t">
+      <h2>/proc/PID/fd 观察</h2>
+      <p class="sub">12.1 实战：排查"Too many open files" · /proc/&amp;lt</p>
+    </div>
   </div>
 
   <p><code>/proc/&lt;pid&gt;/fd/</code> 是最直观的 fd 可视化工具——每个 fd 都以符号链接方式呈现，指向实际对象。</p>
@@ -1465,7 +1516,7 @@ flags:  02000002
 tfd:    6 events:       1 data:            6 pos:0 ino:12345 sdev:8    <span class="com"># 监听的 fd=6</span>
 tfd:    5 events:   80000001 data:            5 pos:0 ino:67890 sdev:8 <span class="com"># EPOLLET | EPOLLIN</span></code></pre>
 
-  <h3>12.1 实战：排查"Too many open files"</h3>
+  <h3 id="s13-1">12.1 实战：排查"Too many open files"</h3>
   <pre data-lang="bash"><code><span class="com"># 场景: 服务报错 EMFILE (Too many open files)</span>
 <span class="com"># 1. 确认限制</span>
 cat /proc/&lt;pid&gt;/limits | grep <span class="str">"Max open files"</span>
@@ -1485,11 +1536,12 @@ ss -tnp | grep &lt;pid&gt; | awk <span class="str">'{print $5}'</span> | awk -F:
 prlimit --pid &lt;pid&gt; --nofile=65536</code></pre>
 </section>
 
-<!-- ═══════════════════════ Section 13 ═══════════════════════ -->
-<section id="s13">
-  <div class="section-header">
-    <span class="section-num">13</span>
-    <h2>高频面试题</h2>
+<section class="chapter" id="s14">
+  <div class="ch-head">
+    <div class="num">14</div>
+    <div class="t">
+      <h2>高频面试题</h2>
+    </div>
   </div>
 
   <div class="qa-item">
@@ -1603,9 +1655,6 @@ prlimit --pid &lt;pid&gt; --nofile=65536</code></pre>
     </div>
   </div>
 </section>
-
-</div>
-
 <footer>
   <p>File Descriptor &amp; Three-Level Table Model &mdash; A Deep Dive from Integer to Disk</p>
   <p>Covering task_struct, files_struct, struct file, inode, fork/dup/exec semantics, SCM_RIGHTS, and more</p>
@@ -1637,6 +1686,21 @@ prlimit --pid &lt;pid&gt; --nofile=65536</code></pre>
     sequence: { actorMargin: 50, messageFontSize: 12 }
   });
 </script>
-<script src="./assets/site-theme.js" defer></script>
+<script src="../assets/site-theme.js" defer></script>
+
+<style>.back-top{position:fixed;bottom:1.5rem;right:1.5rem;width:44px;height:44px;border-radius:50%;background:#111c33;color:#e2e8f0;border:1px solid #243352;cursor:pointer;font-size:18px;display:none;z-index:100;align-items:center;justify-content:center}.back-top:hover{color:#38bdf8}.back-top.show{display:flex}</style>
+<button class="back-top" id="backTop" onclick="window.scrollTo({top:0,behavior:'smooth'})">↑</button>
+
+<script>
+  (function(){
+    var btn = document.getElementById('backTop');
+    if (!btn) return;
+    function tg(){ btn.classList.toggle('show', window.scrollY > 400); }
+    window.addEventListener('scroll', tg, { passive: true });
+    tg();
+  })();
+</script>
+  </main>
+</div>
 </body>
 </html>
