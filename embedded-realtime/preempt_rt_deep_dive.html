@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>PREEMPT_RT 深入 · Linux 准实时化内核机制 — Tech Notes</title>
 <link rel="stylesheet" href="../assets/site-theme.css">
+<link rel="stylesheet" href="../assets/guide-theme.css">
 <link rel="stylesheet" href="../assets/page-shell.css">
 <style>
   /* histogram (latency distribution visualization) */
@@ -19,7 +20,7 @@
   .ps .histogram .label    { color: var(--ps-text-dim); display: inline-block; width: 110px; }
 </style>
 </head>
-<body class="ps">
+<body class="ps tn-shell-overlay">
 
 <!-- tn-nav:v1 -->
 <style>
@@ -42,21 +43,12 @@
 </div>
 <!-- /tn-nav:v1 -->
 
-<div class="hero h-rt">
-  <h1>PREEMPT_RT 深入</h1>
-  <p class="sub">Linux 准实时化的内核机制 · sleeping spinlock / threaded IRQ / priority inheritance · 调优 + 测量 + 真实案例</p>
-  <div class="meta-row">
-    <span class="pill r">深度: ★★★★</span>
-    <span class="pill o">嵌入式 / 实时</span>
-    <span class="pill g">阅读时长: ~45 min</span>
-    <span class="pill b">2026 mainline 6.12+</span>
-  </div>
-</div>
-
+<div class="progress" id="progress"></div>
 <div class="layout">
-  <aside class="sidebar">
-    <h3>目录</h3>
-    <ol>
+  <aside class="toc">
+    <h2>PREEMPT_RT 深入 · Roadmap</h2>
+    <nav>
+      <ol>
       <li><a href="#s1">为什么 mainline Linux 不能硬实时</a></li>
       <li><a href="#s2">RT patch 的 5 大核心改动</a></li>
       <li><a href="#s3">配置 + 启用</a></li>
@@ -68,15 +60,29 @@
       <li><a href="#s9">2026 现状</a></li>
       <li><a href="#s10">资源 + 进一步阅读</a></li>
     </ol>
+    </nav>
   </aside>
 
   <main>
+
+    <header class="hero">
+      <div class="badge">Embedded · Real-Time · 2026</div>
+      <h1>PREEMPT_RT 深入</h1>
+      <p class="sub">Linux 准实时化的内核机制 · sleeping spinlock / threaded IRQ / priority inheritance · 调优 + 测量 + 真实案例</p>
+    </header>
+
 
 <!-- ================================================================
      §1 为什么 mainline Linux 不能硬实时
      ================================================================ -->
 <section class="chapter" id="s1">
-  <h2>1. 为什么 mainline Linux 不能硬实时</h2>
+  <div class="ch-head">
+    <div class="num">01</div>
+    <div class="t">
+      <h2>为什么 mainline Linux 不能硬实时</h2>
+      <p class="sub">个 unpreemptible 段 · 典型 worst-case latency 来源</p>
+    </div>
+  </div>
 
   <p>普通 Linux 内核默认 <strong>preempt 在多处被 disable</strong>—— 高优先级任务<strong>必须等</strong>这些 section 完成才能跑。这个 "<strong>等待时间的上界</strong>" 是<strong>worst-case latency</strong>，普通 Linux 可达 <strong>100+ ms</strong>。</p>
 
@@ -147,7 +153,7 @@
     </svg>
   </div>
 
-  <h3>3 个 unpreemptible 段</h3>
+  <h3 id="s1-1">3 个 unpreemptible 段</h3>
 
   <ol>
     <li><strong>Spin locks</strong>—— 持锁期间禁 preempt（避免死锁）。Critical section 长度 = preempt 延迟下界。</li>
@@ -155,7 +161,7 @@
     <li><strong>Softirq / tasklet</strong>—— 中断 bottom-half，跑在<strong>当前 CPU 的 softirq daemon</strong>，可累积大量 work。</li>
   </ol>
 
-  <h3>典型 worst-case latency 来源</h3>
+  <h3 id="s1-2">典型 worst-case latency 来源</h3>
 
   <table>
     <thead><tr><th>来源</th><th>典型 worst-case</th><th>RT 解决方案</th></tr></thead>
@@ -190,11 +196,17 @@
      §2 RT patch 的 5 大核心改动
      ================================================================ -->
 <section class="chapter" id="s2">
-  <h2>2. RT patch 的 5 大核心改动</h2>
+  <div class="ch-head">
+    <div class="num">02</div>
+    <div class="t">
+      <h2>RT patch 的 5 大核心改动</h2>
+      <p class="sub">Sleeping Spinlocks · Threaded Interrupt Handlers · Priority Inheritance · High-Resolution Timers · RCU 改造</p>
+    </div>
+  </div>
 
   <p><strong>PREEMPT_RT patch</strong>（Ingo Molnar / Thomas Gleixner 主导，2004 起，2024 mainlined in 6.12）做了 5 件事：</p>
 
-  <h3>2.1 Sleeping Spinlocks</h3>
+  <h3 id="s2-1">2.1 Sleeping Spinlocks</h3>
 
   <p>原本 <code>spin_lock_t</code> 是 busy-wait + 禁 preempt。RT 把<strong>大多数</strong> spin lock 转 <code>rt_mutex</code>—— 持锁 thread 可被 preempt，等锁 thread 进 sleep wait queue（不 busy-wait）。</p>
 
@@ -214,7 +226,7 @@ spin_unlock(&amp;lock);     <span class="cm">// rt_mutex_unlock</span></pre>
     <strong>例外</strong>：少数<strong>真 spin lock</strong> 保留（<code>raw_spinlock_t</code>），用在 scheduler / IRQ 进入等无 sleep 的 critical path。Driver 不应该用 raw_spinlock_t。
   </div>
 
-  <h3>2.2 Threaded Interrupt Handlers</h3>
+  <h3 id="s2-2">2.2 Threaded Interrupt Handlers</h3>
 
   <p>RT 把<strong>大多数</strong> IRQ handler 改为<strong>kernel thread</strong>。</p>
 
@@ -228,7 +240,7 @@ spin_unlock(&amp;lock);     <span class="cm">// rt_mutex_unlock</span></pre>
 
   <p>结果：硬件中断 latency 跟<strong>调度延迟</strong>解耦。可以给关键 IRQ thread 设 SCHED_FIFO 高优先级。</p>
 
-  <h3>2.3 Priority Inheritance</h3>
+  <h3 id="s2-3">2.3 Priority Inheritance</h3>
 
   <p>经典问题 <strong>priority inversion</strong>：低优先级 thread A 持锁 → 高优先级 thread B 等锁 → 中优先级 thread C 抢 CPU → A 不跑 → B 永远等。著名事故：<strong>Mars Pathfinder 1997</strong> 系统重启。</p>
 
@@ -242,7 +254,7 @@ spin_unlock(&amp;lock);     <span class="cm">// rt_mutex_unlock</span></pre>
 
   <p>这样 C（中优先级）不能抢 A → B 等待有上界。</p>
 
-  <h3>2.4 High-Resolution Timers</h3>
+  <h3 id="s2-4">2.4 High-Resolution Timers</h3>
 
   <p>普通 Linux 默认 timer 精度 <strong>jiffies</strong>（1-10 ms）。RT 用 <strong>hrtimer</strong>（ns 级精度），调度 / sleep / timeout 都精确。</p>
 
@@ -252,7 +264,7 @@ clock_nanosleep(CLOCK_MONOTONIC, 0, &amp;ts, NULL);
 <span class="cm">// 普通 kernel: 醒来时间 = 50µs 到 10ms</span>
 <span class="cm">// RT kernel: 醒来时间 = 50 µs ± 5 µs</span></pre>
 
-  <h3>2.5 RCU 改造</h3>
+  <h3 id="s2-5">2.5 RCU 改造</h3>
 
   <p>RCU (Read-Copy-Update) 是 Linux 高性能并发原语，但 grace period 处理在 softirq → 长 grace period 影响 RT。</p>
 
@@ -263,9 +275,15 @@ clock_nanosleep(CLOCK_MONOTONIC, 0, &amp;ts, NULL);
      §3 配置 + 启用
      ================================================================ -->
 <section class="chapter" id="s3">
-  <h2>3. 配置 + 启用</h2>
+  <div class="ch-head">
+    <div class="num">03</div>
+    <div class="t">
+      <h2>配置 + 启用</h2>
+      <p class="sub">检查是否 RT 内核 · 编译 RT 内核（Linux 6.12+） · 预编译发行版</p>
+    </div>
+  </div>
 
-  <h3>检查是否 RT 内核</h3>
+  <h3 id="s3-1">检查是否 RT 内核</h3>
 
 <pre>$ uname -a
 Linux host 6.12.0-rt5 ...        <span class="cm"># -rt 后缀</span>
@@ -276,7 +294,7 @@ $ uname -v | grep PREEMPT_RT
 $ cat /sys/kernel/realtime         <span class="cm"># 1 = RT enabled</span>
 1</pre>
 
-  <h3>编译 RT 内核（Linux 6.12+）</h3>
+  <h3 id="s3-2">编译 RT 内核（Linux 6.12+）</h3>
 
 <pre><span class="cm"># Linux 6.12 (2024 LTS) 起 RT 已 mainlined</span>
 <span class="cm"># Kernel config:</span>
@@ -291,7 +309,7 @@ make menuconfig
 
 make -j$(nproc) &amp;&amp; sudo make modules_install install</pre>
 
-  <h3>预编译发行版</h3>
+  <h3 id="s3-3">预编译发行版</h3>
 
   <table>
     <thead><tr><th>发行版</th><th>RT 包</th></tr></thead>
@@ -308,11 +326,17 @@ make -j$(nproc) &amp;&amp; sudo make modules_install install</pre>
      §4 系统级 + 应用级调优
      ================================================================ -->
 <section class="chapter" id="s4">
-  <h2>4. 系统级 + 应用级调优</h2>
+  <div class="ch-head">
+    <div class="num">04</div>
+    <div class="t">
+      <h2>系统级 + 应用级调优</h2>
+      <p class="sub">内核启动参数（GRUB） · 运行时 sysctl · IRQ Affinity 手动绑定 · 应用层准备（C++ 程序） · 启动命令（taskset / chrt / numactl）</p>
+    </div>
+  </div>
 
   <p>RT kernel 只是<strong>基础</strong>。要达到 µs 级 worst-case latency，还需<strong>系统配置</strong> + <strong>应用配合</strong>。</p>
 
-  <h3>4.1 内核启动参数（GRUB）</h3>
+  <h3 id="s4-1">4.1 内核启动参数（GRUB）</h3>
 
 <pre><span class="cm"># /etc/default/grub: GRUB_CMDLINE_LINUX</span>
 
@@ -341,7 +365,7 @@ transparent_hugepage=never
 <span class="cm"># 极端: spin 不 enter idle</span>
 idle=poll                 <span class="cm"># 警告: 占核 100% CPU</span></pre>
 
-  <h3>4.2 运行时 sysctl</h3>
+  <h3 id="s4-2">4.2 运行时 sysctl</h3>
 
 <pre><span class="cm"># /etc/sysctl.d/99-rt.conf</span>
 
@@ -355,7 +379,7 @@ vm.swappiness = 0
 vm.dirty_ratio = 5
 vm.dirty_background_ratio = 2</pre>
 
-  <h3>4.3 IRQ Affinity 手动绑定</h3>
+  <h3 id="s4-3">4.3 IRQ Affinity 手动绑定</h3>
 
 <pre><span class="cm"># 把网卡 IRQ 绑到核 0/1, 不打扰 RT 核 2-7</span>
 $ cat /proc/interrupts | grep eth0
@@ -371,7 +395,7 @@ $ for irq in $(grep eth0 /proc/interrupts | awk '{print $1}' | tr -d ':'); do
     echo 3 &gt; /proc/irq/$irq/smp_affinity   <span class="cm"># cores 0+1</span>
   done</pre>
 
-  <h3>4.4 应用层准备（C++ 程序）</h3>
+  <h3 id="s4-4">4.4 应用层准备（C++ 程序）</h3>
 
 <pre><span class="cm">// 启动时一次性 setup</span>
 <span class="cm">#include &lt;sys/mman.h&gt;</span>
@@ -418,7 +442,7 @@ $ for irq in $(grep eth0 /proc/interrupts | awk '{print $1}' | tr -d ':'); do
   }
 }</pre>
 
-  <h3>4.5 启动命令（taskset / chrt / numactl）</h3>
+  <h3 id="s4-5">4.5 启动命令（taskset / chrt / numactl）</h3>
 
 <pre><span class="cm"># 跑应用 with RT priority + CPU pinning + NUMA local</span>
 sudo chrt -f 80 taskset -c 2 numactl --membind=0 ./my_rt_app
@@ -432,9 +456,15 @@ sudo chrt -f 80 taskset -c 2 numactl --membind=0 ./my_rt_app
      §5 延迟测量
      ================================================================ -->
 <section class="chapter" id="s5">
-  <h2>5. 延迟测量</h2>
+  <div class="ch-head">
+    <div class="num">05</div>
+    <div class="t">
+      <h2>延迟测量</h2>
+      <p class="sub">cyclictest（黄金标准） · rtla（Real-Time Linux Analysis） · ftrace（定位 spike 来源） · perf record（应用 + kernel profile）</p>
+    </div>
+  </div>
 
-  <h3>5.1 cyclictest（黄金标准）</h3>
+  <h3 id="s5-1">5.1 cyclictest（黄金标准）</h3>
 
 <pre><span class="cm"># 安装 (Debian/Ubuntu)</span>
 sudo apt install rt-tests
@@ -452,7 +482,7 @@ T: 3 ( 4426) P:80 I:1000 C:3600000 Min:   2 Act:    4 Avg:   5 Max:    71
 
 <span class="cm"># Min/Avg/Max in µs. Max 78 µs 就是 worst-case latency.</span></pre>
 
-  <h3>5.2 rtla（Real-Time Linux Analysis）</h3>
+  <h3 id="s5-2">5.2 rtla（Real-Time Linux Analysis）</h3>
 
   <p>Linux 6.x 引入的高级 RT 分析工具：</p>
 
@@ -465,7 +495,7 @@ sudo rtla timerlat top -P f:80 -c 2
 <span class="cm"># Osnoise: OS noise (跟踪谁打断 RT thread)</span>
 sudo rtla osnoise top -c 2</pre>
 
-  <h3>5.3 ftrace（定位 spike 来源）</h3>
+  <h3 id="s5-3">5.3 ftrace（定位 spike 来源）</h3>
 
   <p>cyclictest 看到 max latency 异常时，用 ftrace 找<strong>谁</strong>造成的。</p>
 
@@ -482,7 +512,7 @@ cat /sys/kernel/debug/tracing/trace
 <span class="cm"># 例: kworker/2:0 woke up cyclictest after 78 µs delay</span>
 <span class="cm">#     causing irq: nvme0_q3</span></pre>
 
-  <h3>5.4 perf record（应用 + kernel profile）</h3>
+  <h3 id="s5-4">5.4 perf record（应用 + kernel profile）</h3>
 
 <pre><span class="cm"># 在 RT app 跑时 profile</span>
 sudo perf record -e sched:* -p $(pgrep my_rt_app) sleep 60
@@ -493,7 +523,12 @@ sudo perf report</pre>
      §6 10 个调优陷阱
      ================================================================ -->
 <section class="chapter" id="s6">
-  <h2>6. 10 个调优陷阱</h2>
+  <div class="ch-head">
+    <div class="num">06</div>
+    <div class="t">
+      <h2>个调优陷阱</h2>
+    </div>
+  </div>
 
   <table>
     <thead><tr><th>#</th><th>陷阱</th><th>症状</th><th>修复</th></tr></thead>
@@ -520,7 +555,13 @@ sudo perf report</pre>
      §7 PREEMPT_RT vs Xenomai vs RTOS
      ================================================================ -->
 <section class="chapter" id="s7">
-  <h2>7. PREEMPT_RT vs Xenomai vs RTOS</h2>
+  <div class="ch-head">
+    <div class="num">07</div>
+    <div class="t">
+      <h2>PREEMPT_RT vs Xenomai vs RTOS</h2>
+      <p class="sub">PREEMPT_RT 选择 fit</p>
+    </div>
+  </div>
 
   <table>
     <thead><tr><th>方案</th><th>架构</th><th>Worst-case latency</th><th>API</th><th>适合</th></tr></thead>
@@ -533,7 +574,7 @@ sudo perf report</pre>
     </tbody>
   </table>
 
-  <h3>PREEMPT_RT 选择 fit</h3>
+  <h3 id="s7-1">PREEMPT_RT 选择 fit</h3>
 
   <ul>
     <li>✅ 需要 Linux 生态（网络 / 文件系统 / 容器 / SDK）</li>
@@ -548,11 +589,17 @@ sudo perf report</pre>
      §8 真实生产案例
      ================================================================ -->
 <section class="chapter" id="s8">
-  <h2>8. 真实生产案例 · Telemetry 硬延时</h2>
+  <div class="ch-head">
+    <div class="num">08</div>
+    <div class="t">
+      <h2>真实生产案例</h2>
+      <p class="sub">Telemetry 硬延时</p>
+    </div>
+  </div>
 
   <p>platform agent 部分客户用我们处理<strong>车端 telemetry</strong>—— ECU 采集 sensor / CAN 数据 + 实时上传 OEM cloud。<strong>每条数据带 timestamp，硬性要求 ≤ 1 ms 端到端 latency</strong>。</p>
 
-  <h3>初始状态</h3>
+  <h3 id="s8-1">初始状态</h3>
 
   <ul>
     <li>普通 Ubuntu 20.04 + standard kernel</li>
@@ -560,7 +607,7 @@ sudo perf report</pre>
     <li>P99.99 latency 约 8 ms—— hard miss</li>
   </ul>
 
-  <h3>调优过程</h3>
+  <h3 id="s8-2">调优过程</h3>
 
   <h4>Phase 1: RT kernel + 基础 tune</h4>
   <ul>
@@ -598,7 +645,7 @@ sudo perf report</pre>
     <li>App P99.99 ~ 35 µs</li>
   </ul>
 
-  <h3>最终结果</h3>
+  <h3 id="s8-3">最终结果</h3>
 
   <table>
     <thead><tr><th>阶段</th><th>cyclictest Max (1h)</th><th>App P99.99</th></tr></thead>
@@ -613,7 +660,7 @@ sudo perf report</pre>
 
   <p>1 ms hard latency requirement 有<strong>~ 28× 安全 margin</strong>。客户满意 + 通过 OEM 验证。</p>
 
-  <h3>Lesson learned</h3>
+  <h3 id="s8-4">Lesson learned</h3>
 
   <ul>
     <li>RT kernel 是<strong>必要但不充分</strong>——还要 app / BIOS / HW 全栈调</li>
@@ -628,9 +675,15 @@ sudo perf report</pre>
      §9 2026 现状
      ================================================================ -->
 <section class="chapter" id="s9">
-  <h2>9. 2026 现状</h2>
+  <div class="ch-head">
+    <div class="num">09</div>
+    <div class="t">
+      <h2>6 现状</h2>
+      <p class="sub">Mainline 化 · 数据 · 未来 1-2 年</p>
+    </div>
+  </div>
 
-  <h3>Mainline 化</h3>
+  <h3 id="s9-1">Mainline 化</h3>
 
   <p>PREEMPT_RT 是 <strong>20 年的 out-of-tree patch</strong>。2024 年 Linux <strong>6.12 LTS</strong> 终于把核心 RT 改动 merge 进 mainline。这是 Linux 史上最长 patch series（数十次 review iteration）。</p>
 
@@ -642,7 +695,7 @@ sudo perf report</pre>
     <li>Long-term: RT 跟 mainline 同步演进</li>
   </ul>
 
-  <h3>2026 数据</h3>
+  <h3 id="s9-2">2026 数据</h3>
 
   <table>
     <thead><tr><th>领域</th><th>采用</th></tr></thead>
@@ -655,7 +708,7 @@ sudo perf report</pre>
     </tbody>
   </table>
 
-  <h3>未来 1-2 年</h3>
+  <h3 id="s9-3">未来 1-2 年</h3>
 
   <ul>
     <li>Kernel 6.x 持续 refine RT—— 更好 RCU、io_uring + RT 集成、KASAN-HW 兼容 RT</li>
@@ -669,9 +722,15 @@ sudo perf report</pre>
      §10 资源 + 进一步阅读
      ================================================================ -->
 <section class="chapter" id="s10">
-  <h2>10. 资源 + 进一步阅读</h2>
+  <div class="ch-head">
+    <div class="num">10</div>
+    <div class="t">
+      <h2>资源 + 进一步阅读</h2>
+      <p class="sub">必读 · 实战工具 · 社区 · 跟车端 / 工业相关</p>
+    </div>
+  </div>
 
-  <h3>必读</h3>
+  <h3 id="s10-1">必读</h3>
 
   <ul>
     <li><a href="https://wiki.linuxfoundation.org/realtime/start" target="_blank" rel="noopener">Linux Foundation RT Wiki</a> —— 官方文档</li>
@@ -681,7 +740,7 @@ sudo perf report</pre>
     <li>论文：<strong>Priority Inheritance Protocols</strong>（Sha et al., 1990）</li>
   </ul>
 
-  <h3>实战工具</h3>
+  <h3 id="s10-2">实战工具</h3>
 
   <ul>
     <li><code>rt-tests</code>—— cyclictest / hackbench / pi_stress 等基础测量</li>
@@ -692,7 +751,7 @@ sudo perf report</pre>
     <li><code>numastat</code>—— NUMA stats</li>
   </ul>
 
-  <h3>社区</h3>
+  <h3 id="s10-3">社区</h3>
 
   <ul>
     <li>linux-rt-users mailing list</li>
@@ -700,7 +759,7 @@ sudo perf report</pre>
     <li>Real-Time Linux Foundation</li>
   </ul>
 
-  <h3>跟车端 / 工业相关</h3>
+  <h3 id="s10-4">跟车端 / 工业相关</h3>
 
   <ul>
     <li><a href="./landscape.html">嵌入式 / 实时全景</a>—— PREEMPT_RT 跟其他方案对比</li>
@@ -741,5 +800,17 @@ sudo perf report</pre>
 
 <script src="../assets/site-theme.js" defer></script>
 <script src="../assets/page-shell.js" defer></script>
+
+<button class="back-top" id="backTop" onclick="window.scrollTo({top:0,behavior:'smooth'})">↑</button>
+
+<script>
+  (function(){
+    var btn = document.getElementById('backTop');
+    if (!btn) return;
+    function tg(){ btn.classList.toggle('show', window.scrollY > 400); }
+    window.addEventListener('scroll', tg, { passive: true });
+    tg();
+  })();
+</script>
 </body>
 </html>
