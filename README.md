@@ -90,8 +90,11 @@ npx serve .
 
 - [C++ 对象模型](https://kavinchan13.github.io/tech-notes/cpp/object_model.html) —— vtable、多继承、EBO，那些容易忘记的细节
 - [低延迟编程](https://kavinchan13.github.io/tech-notes/perf-debug/low_latency_guide.html) —— 无锁、内核旁路、硬件时间戳
-- [架构师 Capstone](https://kavinchan13.github.io/tech-notes/architect/architect_capstone.html) —— 一个端到端的设计走查：需求 → ADR → 存储 → 可观测性
-- [AI-Native 工程实践](https://kavinchan13.github.io/tech-notes/ai-native/engineering_practice.html) —— IC 与 EM 工作流中真正改变的部分
+- [架构师 Capstone (C++)](https://kavinchan13.github.io/tech-notes/architect/architect_capstone.html) —— 一个端到端的设计走查：需求 → ADR → 存储 → 可观测性
+- [AI Agent Capstone · 端到端 case study](https://kavinchan13.github.io/tech-notes/ai-native/ai_agent_capstone.html) —— 通用 AI Agent 系统设计 case study · 5 ADR + 4 层 RAG + hypothesis-driven 范式 · 把 X06/X08/X09/X11/X12 串成一个端到端实战
+- [Transformer 与现代 LLM 架构](https://kavinchan13.github.io/tech-notes/ai-native/transformer_llm_architecture.html) —— Attention/KV-Cache/RoPE/GQA→MLA/MoE，生活类比 + 交互演示
+- [vLLM 推理深潜](https://kavinchan13.github.io/tech-notes/ai-infra/inference_serving.html) —— PagedAttention、Continuous Batching、源码导览（C++ 老兵转 AI Infra 的最大杠杆点）
+- [AI 工程师 30/60/90 学习路径](https://kavinchan13.github.io/tech-notes/interview/ai_study_path.html) —— 周-by-周计划，3 轨可选（AI Infra / LLM App / ML Research）
 - [EM 模板库](https://kavinchan13.github.io/tech-notes/management/em-templates/) —— 1on1、周报、Postmortem、招聘 Scorecard 等可直接复用的模板
 
 ## 🚀 部署
