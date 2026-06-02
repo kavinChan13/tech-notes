@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI 编译器 · torch.compile / XLA / TVM / Triton / MLIR — Tech Notes</title>
+<link rel="stylesheet" href="../assets/site-theme.css">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<style>
+.analogy{background:linear-gradient(135deg,#1a1f3a 0%,#1f2842 100%);
+  border:1px solid rgba(125,211,252,.25);border-radius:14px;padding:18px 22px;margin:18px 0;
+  position:relative;overflow:hidden;}
+.analogy::before{content:"";position:absolute;top:0;left:0;right:0;height:3px;
+  background:linear-gradient(90deg,#7dd3fc,#a78bfa,#34d399);}
+.analogy .a-head{display:flex;align-items:center;gap:10px;font-size:13px;font-weight:700;color:#7dd3fc;
+  text-transform:uppercase;letter-spacing:1.5px;margin-bottom:10px}
+.analogy .a-body{font-size:14px;line-height:1.8;color:#e4e9f5}
+.analogy .a-body strong{color:#fbbf24}
+.intuition{background:rgba(251,191,36,.05);border-left:4px solid #fbbf24;
+  padding:12px 16px;border-radius:0 10px 10px 0;margin:12px 0;font-size:13.5px;line-height:1.7}
+.intuition::before{content:"🎯 直觉 · ";color:#fbbf24;font-weight:700;font-size:12px}
+</style>
+</head>
+<body>
+
+<style>#tn-nav{position:fixed;top:14px;right:14px;z-index:99999;display:flex;gap:6px;font-size:12px}
+#tn-nav a,#tn-nav span{background:rgba(20,20,30,.85);color:#fff!important;text-decoration:none;
+  padding:7px 11px;border-radius:999px;font-family:-apple-system,'Segoe UI','Microsoft YaHei',sans-serif}</style>
+<div id="tn-nav">
+  <a href="../index.html">← 主页</a>
+  <a href="./cuda_for_cpp.html">⚡ Y01</a>
+  <a href="../cpp/llvm_ir_deep_dive.html">🧬 C12 LLVM</a>
+  <span>⏱ 35 min</span>
+</div>
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc"><h2>Y05 · AI Compilers</h2><nav><ol>
+    <li><a href="#ch1" class="active">为什么需要 AI 编译器</a></li>
+    <li><a href="#ch2">torch.compile · 默认胜出</a></li>
+    <li><a href="#ch3">XLA · Google 体系</a></li>
+    <li><a href="#ch4">TVM · 跨硬件</a></li>
+    <li><a href="#ch5">Triton lang · 写 kernel</a></li>
+    <li><a href="#ch6">MLIR · 编译器基建</a></li>
+    <li><a href="#ch7">C++ 编译器人的友好入口</a></li>
+    <li><a href="#ch8">10 面试题</a></li>
+  </ol></nav></aside>
+
+  <main>
+    <header class="hero">
+      <div class="badge">Y05 · AI Compilers · 通俗版</div>
+      <h1>AI 编译器与图优化</h1>
+      <p class="sub">8 章 · torch.compile / XLA / TVM / Triton / MLIR 全景。<strong>对位读者</strong>：C++ 编译器人想转 AI / PyTorch 进阶 / 推理性能极致优化。</p>
+      <div class="meta"><span>8 章</span><span>~35 min</span><span>10 面试题</span></div>
+    </header>
+
+    <section class="chapter" id="ch1">
+      <div class="ch-head"><div class="num">01</div><div class="t">
+        <h2>为什么需要 AI 编译器</h2></div></div>
+
+      <div class="analogy">
+        <div class="a-head"><span>🎬</span>生活类比 · 写代码 vs 优化后的产品代码</div>
+        <div class="a-body">
+          你写 PyTorch 代码：<code>y = torch.relu(x @ W + b)</code><br>
+          直接跑 = 3 个独立 GPU kernel：<u>matmul → add → relu</u>。每步都要把中间结果写到 HBM 再读回来。<br><br>
+          AI 编译器：<u>把这 3 个 op 融合成 1 个 kernel</u>（fused_linear_relu），中间结果不进 HBM，性能 +30-50%。<br><br>
+          <strong>AI 编译器</strong> = "把易写的高层代码"自动转成"高性能的低层 kernel"。
+        </div>
+      </div>
+
+      <h3>1.1 优化空间</h3>
+
+      <ul>
+        <li><strong>Kernel Fusion</strong>：多个 op 合成 1 个（减 HBM 读写）</li>
+        <li><strong>Memory layout 优化</strong>：避免冗余 transpose / reshape</li>
+        <li><strong>Constant folding</strong>：编译期算出常量</li>
+        <li><strong>Dead code elimination</strong>：删没用的 op</li>
+        <li><strong>Auto tiling / vectorization</strong>：自动生成 GPU kernel</li>
+        <li><strong>Operator scheduling</strong>：调度 op 执行顺序减依赖</li>
+      </ul>
+
+      <h3>1.2 跟传统 C++ 编译器对比</h3>
+
+      <table>
+        <thead><tr><th>维度</th><th>C++ Compiler (LLVM)</th><th>AI Compiler</th></tr></thead>
+        <tbody>
+          <tr><td>输入</td><td>C++ AST → LLVM IR</td><td>计算图 (graph)</td></tr>
+          <tr><td>优化粒度</td><td>指令级（low-level）</td><td>op 级（high-level）</td></tr>
+          <tr><td>目标</td><td>CPU x86/ARM 等</td><td>GPU / TPU / NPU 多种 backend</td></tr>
+          <tr><td>核心难点</td><td>register allocation / inlining</td><td>kernel fusion / tiling / autotuning</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="chapter" id="ch2">
+      <div class="ch-head"><div class="num">02</div><div class="t">
+        <h2>torch.compile · 默认胜出（2024+）</h2></div></div>
+
+      <p>PyTorch 2.0 引入。2025 已成为 AI 编译器主流。两大引擎：</p>
+
+      <h3>2.1 Dynamo · 抓取计算图</h3>
+
+      <p>Python 字节码层面 hook，<u>动态把 Python 代码转成 FX graph</u>。优势：<strong>支持 dynamic shape + Python control flow</strong>（传统 trace 类做不到）。</p>
+
+      <h3>2.2 Inductor · 生成代码</h3>
+
+      <p>把 FX graph 编译成 Triton kernel（GPU）或 C++ kernel（CPU）。<strong>用 Triton 自动生成 kernel</strong> 是 Inductor 的杀手锏 — 跟手写 CUDA 性能接近。</p>
+
+      <h3>2.3 简单使用</h3>
+
+      <pre><code><span class="k">import</span> torch
+model = MyModel()
+model = torch.<span class="f">compile</span>(model)         <span class="c"># 一行加速</span>
+
+<span class="c"># 第一次跑会编译（慢），之后 cache 跑</span>
+output = <span class="f">model</span>(input)</code></pre>
+
+      <p>典型加速 1.3-2x（推理），<u>训练 1.5-3x</u>。</p>
+    </section>
+
+    <section class="chapter" id="ch3">
+      <div class="ch-head"><div class="num">03</div><div class="t">
+        <h2>XLA · Google 体系</h2></div></div>
+
+      <p>XLA (Accelerated Linear Algebra) 是 Google 的 AI 编译器。<u>JAX / TPU 全靠 XLA</u>。TensorFlow 也用。</p>
+
+      <ul>
+        <li><strong>JIT 模式</strong>：第一次跑编译，之后 cache</li>
+        <li><strong>AOT 模式</strong>：提前编译保存（部署用）</li>
+        <li><strong>多 backend</strong>：CPU / GPU / TPU 都支持</li>
+        <li><strong>HLO IR</strong>：XLA 自己的 IR，类似 MLIR linalg dialect</li>
+      </ul>
+
+      <div class="intuition">
+        XLA 在 TPU 上跑 LLM 训练效率极高（Google Gemini 训练用），但<u>在 GPU 上 PyTorch + torch.compile 已经胜出</u>。2026 多数公司选 PyTorch ecosystem。
+      </div>
+    </section>
+
+    <section class="chapter" id="ch4">
+      <div class="ch-head"><div class="num">04</div><div class="t">
+        <h2>TVM · 跨硬件后端</h2></div></div>
+
+      <p>TVM 来自 UW + 陈天奇。设计哲学：<strong>1 个 IR + N 个 backend</strong>（NVIDIA GPU / AMD GPU / ARM CPU / RISC-V / 各种 NPU / FPGA）。</p>
+
+      <h3>4.1 适合场景</h3>
+
+      <ul>
+        <li><strong>边缘 / 嵌入式</strong>：模型部署到 ARM CPU / 各种小型 NPU</li>
+        <li><strong>多硬件支持</strong>：一份模型部署到 10 种硬件</li>
+        <li><strong>极致优化</strong>：AutoTVM / Ansor 自动 tuning kernel</li>
+      </ul>
+
+      <h3>4.2 局限</h3>
+
+      <p>开发速度比 torch.compile 慢，<u>NVIDIA GPU 上不如 cuBLAS + cuDNN 手调</u>。所以现在 TVM 主战场是<u>非 NVIDIA 硬件 + 边缘</u>。</p>
+    </section>
+
+    <section class="chapter" id="ch5">
+      <div class="ch-head"><div class="num">05</div><div class="t">
+        <h2>Triton lang · 写 GPU Kernel 的新方式</h2></div></div>
+
+      <p>OpenAI 主推。Python DSL，编译时自动生成 PTX。<u>是 torch.compile Inductor 的 backend</u>。</p>
+
+      <h3>5.1 跟 CUDA 对比</h3>
+
+      <table>
+        <thead><tr><th>维度</th><th>CUDA C++</th><th>Triton</th></tr></thead>
+        <tbody>
+          <tr><td>语言</td><td>C++</td><td>Python DSL</td></tr>
+          <tr><td>抽象层级</td><td>底层（thread 级）</td><td>中层（block 级，自动 tile）</td></tr>
+          <tr><td>典型 kernel 代码量</td><td>500-2000 行</td><td>50-200 行</td></tr>
+          <tr><td>性能</td><td>100%（baseline）</td><td>80-95%</td></tr>
+          <tr><td>调试难度</td><td>高</td><td>中</td></tr>
+          <tr><td>2026 主流</td><td>NVIDIA 自己（cuBLAS）</td><td>PyTorch / vLLM / 学术界</td></tr>
+        </tbody>
+      </table>
+
+      <h3>5.2 简单例子</h3>
+
+      <pre><code><span class="k">import</span> triton
+<span class="k">import</span> triton.language <span class="k">as</span> tl
+
+@triton.jit
+<span class="k">def</span> <span class="f">add_kernel</span>(a_ptr, b_ptr, c_ptr, N, BLOCK_SIZE: tl.constexpr):
+    pid = tl.<span class="f">program_id</span>(<span class="n">0</span>)
+    offsets = pid * BLOCK_SIZE + tl.<span class="f">arange</span>(<span class="n">0</span>, BLOCK_SIZE)
+    mask = offsets &lt; N
+    a = tl.<span class="f">load</span>(a_ptr + offsets, mask=mask)
+    b = tl.<span class="f">load</span>(b_ptr + offsets, mask=mask)
+    tl.<span class="f">store</span>(c_ptr + offsets, a + b, mask=mask)</code></pre>
+
+      <p>同样的 kernel 用 CUDA 写要 100+ 行 + 处理 grid/block/thread。Triton 30 行搞定。</p>
+    </section>
+
+    <section class="chapter" id="ch6">
+      <div class="ch-head"><div class="num">06</div><div class="t">
+        <h2>MLIR · 编译器的"基础设施"</h2></div></div>
+
+      <p>MLIR (Multi-Level IR) 来自 LLVM 团队（Chris Lattner 主导）。<strong>不是一个编译器，是"做编译器的工具"</strong>。</p>
+
+      <h3>6.1 核心思想</h3>
+
+      <p>传统编译器：<strong>1 个 IR</strong>（如 LLVM IR）。MLIR：<strong>多层 IR + 可定义 dialect</strong>。每个层级表达不同抽象。</p>
+
+      <p><strong>例子</strong>：TensorFlow → tf dialect → linalg dialect → affine dialect → LLVM IR → GPU。每一层都能做适合该层的优化。</p>
+
+      <h3>6.2 主流采用</h3>
+
+      <ul>
+        <li><strong>TensorFlow / TFLite</strong>：底层用 MLIR</li>
+        <li><strong>IREE</strong>（Google）：MLIR-based ML runtime</li>
+        <li><strong>Triton</strong>：MLIR-based</li>
+        <li><strong>XLA</strong>：正逐步迁移到 MLIR</li>
+        <li><strong>Mojo</strong>（Modular）：MLIR 主导，专为 AI 设计的新语言</li>
+      </ul>
+
+      <div class="intuition">
+        MLIR 是<u>AI 编译器领域的"标准基础设施"</u>。2026 任何新 AI 硬件 / 新编译器都基于 MLIR。如果你做编译器，MLIR 是必修。
+      </div>
+    </section>
+
+    <section class="chapter" id="ch7">
+      <div class="ch-head"><div class="num">07</div><div class="t">
+        <h2>C++ 编译器人的友好入口</h2></div></div>
+
+      <p>已经懂 LLVM / 写过编译器的 C++ 工程师 → AI 编译器是最直接的 cross-over：</p>
+
+      <h3>7.1 复用率高</h3>
+
+      <ul>
+        <li>LLVM IR 知识 → MLIR 几乎平移</li>
+        <li>SSA / dataflow analysis → AI graph 优化一样适用</li>
+        <li>register allocation / scheduling → kernel fusion 思想类似</li>
+        <li>backend code gen → GPU kernel 生成</li>
+      </ul>
+
+      <h3>7.2 推荐学习路径</h3>
+
+      <ol>
+        <li><strong>Week 1</strong>：读 torch.compile blog + 跑 simple example 体验 graph capture</li>
+        <li><strong>Week 2</strong>：学 Triton（OpenAI 官方 tutorial），写 vector add + GEMM</li>
+        <li><strong>Week 3</strong>：读 MLIR tutorial（toy language compiler）</li>
+        <li><strong>Week 4</strong>：贡献：给 torch.inductor 或 IREE 提一个小 PR</li>
+      </ol>
+
+      <h3>7.3 招聘 hot spots</h3>
+
+      <ul>
+        <li><strong>NVIDIA</strong>：cuBLAS / cuDNN / TensorRT 开发</li>
+        <li><strong>OpenAI Triton 团队</strong></li>
+        <li><strong>Modular (Mojo)</strong></li>
+        <li><strong>国内</strong>：华为 MindSpore / 阿里 PAI / 百度 PaddlePaddle 编译器团队</li>
+        <li><strong>智驾</strong>：地平线 / 黑芝麻 / Mobileye 自研编译器（NPU 上跑）</li>
+      </ul>
+    </section>
+
+    <section class="chapter" id="ch8">
+      <div class="ch-head"><div class="num">08</div><div class="t">
+        <h2>10 面试题</h2></div></div>
+
+      <details class="qa"><summary><span class="lvl pill cyan">Q1</span>为什么需要 AI 编译器？跟传统 C++ 编译器区别？</summary>
+        <div class="a"><div class="point">AI 编译器把"易写的高层代码（PyTorch）"转成"高性能 GPU kernel"。<br>vs C++ 编译器：① 输入是计算图 vs AST ② 优化粒度 op 级 vs 指令级 ③ 目标多 backend（GPU/TPU/NPU）</div></div></details>
+
+      <details class="qa"><summary><span class="lvl pill cyan">Q2</span>Kernel Fusion 为什么重要？</summary>
+        <div class="a"><div class="point">把 3 个 op (matmul → add → relu) 合成 1 个 kernel，<em>中间结果不进 HBM</em>，减少 HBM↔SRAM 数据搬运。LLM 推理这种 memory-bound 场景提升 30-50%。</div></div></details>
+
+      <details class="qa"><summary><span class="lvl pill amber">Q3</span>torch.compile 跟 jit.trace / jit.script 区别？</summary>
+        <div class="a"><div class="point">jit.trace 只 trace 一次执行路径，不能处理 control flow。<br>jit.script 解析 Python 子集，限制大。<br><strong>torch.compile (Dynamo)</strong> 在字节码层 hook，<u>支持 dynamic shape + Python control flow</u>，可用性大幅提升。</div></div></details>
+
+      <details class="qa"><summary><span class="lvl pill amber">Q4</span>Triton 跟 CUDA 怎么选？</summary>
+        <div class="a"><div class="point">CUDA：极致性能（cuBLAS / FlashAttention） + 复杂。<br>Triton：性能 80-95% + 简单 10x。<br>2026：<u>NVIDIA 自己 + cuBLAS/cuDNN 仍用 CUDA</u>；<u>PyTorch / vLLM / 学术界主要用 Triton</u>。</div></div></details>
+
+      <details class="qa"><summary><span class="lvl pill cyan">Q5</span>XLA 跟 torch.compile 怎么选？</summary>
+        <div class="a"><div class="point">XLA：JAX / TPU 必用 / TensorFlow / Google ecosystem。<br>torch.compile：PyTorch 必用，GPU 主流。<br>2026 PyTorch 生态胜出，<u>多数公司选 torch.compile</u>。</div></div></details>
+
+      <details class="qa"><summary><span class="lvl pill amber">Q6</span>MLIR 跟 LLVM 区别？为什么需要 MLIR？</summary>
+        <div class="a"><div class="point">LLVM：1 个 IR（低层）。<br>MLIR：<em>多层 IR + 可定义 dialect</em>。每层表达不同抽象（tensor → linalg → affine → llvm → gpu）。<br>需要 MLIR：AI 计算图有多个 abstraction level（数学 op → 低层指令），单层 IR 表达不了。</div></div></details>
+
+      <details class="qa"><summary><span class="lvl pill amber">Q7</span>TVM 适合什么场景？为什么 NVIDIA GPU 上不如 PyTorch？</summary>
+        <div class="a"><div class="point">适合：<u>非 NVIDIA 硬件</u>（ARM / 各种 NPU / FPGA）+ 边缘部署 + 跨硬件场景。<br>NVIDIA GPU 上不如：因为 NVIDIA 自家 cuBLAS / cuDNN 手调极致，TVM AutoTVM 难赢。</div></div></details>
+
+      <details class="qa"><summary><span class="lvl pill cyan">Q8</span>AOT vs JIT 编译怎么选？</summary>
+        <div class="a"><div class="point">JIT：第一次跑慢（编译），之后 cache。<u>开发 + 服务端推理</u>主流。<br>AOT：提前编译保存 binary。<u>边缘部署 + 启动敏感场景</u>（如自动驾驶）。</div></div></details>
+
+      <details class="qa"><summary><span class="lvl pill amber">Q9</span>给一个 PyTorch 模型加速，你会先做什么？</summary>
+        <div class="a"><div class="point">5 步：① <strong>profile</strong>（torch.profiler 找瓶颈 op）② <strong>torch.compile</strong>（1 行加速 1.5-3x）③ <strong>量化</strong>（INT8/FP8 ÷ 2 显存 × 2 速度）④ <strong>FlashAttention</strong>（如果有 attention）⑤ <strong>自定义 kernel</strong>（最后兜底，写 Triton）</div></div></details>
+
+      <details class="qa"><summary><span class="lvl pill red">Q10</span>C++ 编译器人转 AI 编译器，最大杠杆点？</summary>
+        <div class="a"><div class="point">复用率高：LLVM/MLIR IR / SSA / dataflow analysis 几乎平移。学习路径：torch.compile blog → Triton tutorial → MLIR toy compiler → 给 IREE/Inductor 提 PR。<br><strong>招聘 hot spots</strong>：NVIDIA / OpenAI Triton / Modular Mojo / 国内华为 MindSpore / 智驾 NPU 团队。</div></div></details>
+    </section>
+
+  <footer><p>上一篇 <a href="./quantization.html">Y04 量化</a> · LLVM 基础 <a href="../cpp/llvm_ir_deep_dive.html">C12</a> · CUDA <a href="./cuda_for_cpp.html">Y01</a></p></footer>
+  </main>
+</div>
+
+<script>
+(function(){var b=document.getElementById('progress');function u(){var h=document.documentElement;b.style.width=(h.scrollTop/(h.scrollHeight-h.clientHeight)*100)+'%'}window.addEventListener('scroll',u,{passive:true});u();})();
+(function(){var l=document.querySelectorAll('aside.toc nav>ol>li>a');var s=Array.from(document.querySelectorAll('section.chapter'));function u(){var y=window.scrollY+100;var c=s[0];for(var i=0;i<s.length;i++)if(s[i].offsetTop<=y)c=s[i];l.forEach(function(a){a.classList.toggle('active',a.getAttribute('href')==='#'+c.id)})}window.addEventListener('scroll',u,{passive:true});u();})();
+</script>
+</body>
+</html>

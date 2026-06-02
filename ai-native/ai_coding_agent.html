@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI Coding Agent 拆解 · Cursor / Cline / Devin / Claude Code — Tech Notes</title>
+<link rel="stylesheet" href="../assets/site-theme.css">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<style>
+.analogy{background:linear-gradient(135deg,#1a1f3a 0%,#1f2842 100%);
+  border:1px solid rgba(125,211,252,.25);border-radius:14px;padding:18px 22px;margin:18px 0;
+  position:relative;overflow:hidden;box-shadow:0 8px 28px -10px rgba(125,211,252,.25);}
+.analogy::before{content:"";position:absolute;top:0;left:0;right:0;height:3px;
+  background:linear-gradient(90deg,#7dd3fc,#a78bfa,#34d399);}
+.analogy .a-head{display:flex;align-items:center;gap:10px;font-size:13px;font-weight:700;color:#7dd3fc;
+  text-transform:uppercase;letter-spacing:1.5px;margin-bottom:10px}
+.analogy .a-body{font-size:14px;line-height:1.8;color:#e4e9f5}
+.analogy .a-body strong{color:#fbbf24}
+.intuition{background:rgba(251,191,36,.05);border-left:4px solid #fbbf24;
+  padding:12px 16px;border-radius:0 10px 10px 0;margin:12px 0;font-size:13.5px;line-height:1.7}
+.intuition::before{content:"🎯 直觉 · ";color:#fbbf24;font-weight:700;font-size:12px}
+</style>
+</head>
+<body>
+
+<style>#tn-nav{position:fixed;top:14px;right:14px;z-index:99999;display:flex;gap:6px;font-size:12px}
+#tn-nav a,#tn-nav span{background:rgba(20,20,30,.85);color:#fff!important;text-decoration:none;
+  padding:7px 11px;border-radius:999px;font-family:-apple-system,'Segoe UI','Microsoft YaHei',sans-serif}</style>
+<div id="tn-nav">
+  <a href="../index.html">← 主页</a>
+  <a href="./agent_protocols_and_skills.html">🔌 X09</a>
+  <a href="./engineering_practice.html">🤖 X01</a>
+  <span>⏱ 45 min</span>
+</div>
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc"><h2>X13 · AI Coding Agent</h2><nav><ol>
+    <li><a href="#ch1" class="active">3 种形态</a></li>
+    <li><a href="#ch2">核心组件</a></li>
+    <li><a href="#ch3">Cursor 内部拆解</a></li>
+    <li><a href="#ch4">Devin / SWE Agent</a></li>
+    <li><a href="#ch5">Claude Code · CLI</a></li>
+    <li><a href="#ch6">Skills 实现机制</a></li>
+    <li><a href="#ch7">自己设计 Coding Agent</a></li>
+    <li><a href="#ch8">10 道面试题</a></li>
+  </ol></nav></aside>
+
+  <main>
+    <header class="hero">
+      <div class="badge">X13 · AI Coding Agent 拆解</div>
+      <h1>AI Coding Agent 内部机制<br>Cursor / Cline / Devin / Claude Code</h1>
+      <p class="sub">8 章 · 拆解 4 家 coding agent 内部 · Codebase indexing / Agent loop / Sandboxing。<strong>对位读者</strong>：每天用 Cursor 但好奇内部 / 想自研团队 coding agent / 面试 AI Tooling 岗。</p>
+      <div class="meta"><span>8 章</span><span>~45 min</span><span>10 面试题</span></div>
+    </header>
+
+    <section class="chapter" id="ch1">
+      <div class="ch-head"><div class="num">01</div><div class="t">
+        <h2>3 种 Coding Agent 形态</h2></div></div>
+
+      <div class="analogy">
+        <div class="a-head"><span>🎬</span>生活类比 · 3 种助理</div>
+        <div class="a-body">
+          <strong>Tab 补全</strong>（Copilot 经典模式）= <u>边写边给你递词</u>，像有人在你旁边轻声提示。<br>
+          <strong>Chat / Edit</strong>（Cursor / Continue）= <u>你告诉它"做 X"，它帮你改文件</u>，像跟同事远程协作。<br>
+          <strong>Autonomous Agent</strong>（Devin / Claude Code）= <u>给一个 high-level 任务，它自己规划+执行</u>，像派一个实习生跑去干一周。
+        </div>
+      </div>
+
+      <table>
+        <thead><tr><th>形态</th><th>典型</th><th>用户参与</th><th>任务粒度</th></tr></thead>
+        <tbody>
+          <tr><td>Tab 补全</td><td>GitHub Copilot / Tabnine</td><td>每秒</td><td>1-3 行</td></tr>
+          <tr><td>Chat / Edit</td><td>Cursor / Cline / Continue / Aider</td><td>每分钟</td><td>10-100 行</td></tr>
+          <tr><td>Autonomous</td><td>Devin / OpenAI Codex / Claude Code</td><td>每小时-每天</td><td>整 feature / bug fix</td></tr>
+        </tbody>
+      </table>
+
+      <div class="intuition">
+        2026 趋势：3 种<u>同一产品融合</u>。Cursor 既有 Tab 补全又有 Chat 又有 Agent 模式。<u>用户根据任务复杂度自由切换</u>。
+      </div>
+    </section>
+
+    <section class="chapter" id="ch2">
+      <div class="ch-head"><div class="num">02</div><div class="t">
+        <h2>核心组件（每个 Coding Agent 都有）</h2></div></div>
+
+      <div class="grid cols-2">
+        <div class="card"><h4>① Codebase Indexing</h4>
+          <p style="font-size:13px">把整个 repo embedding 进向量库。Cursor 用 ast-grep 拆函数级 + bge-code embedding；本地存（不上传完整代码）。<u>查询时把相关函数拉进 context</u>。</p></div>
+        <div class="card violet"><h4>② Context Builder</h4>
+          <p style="font-size:13px">动态组装 prompt：当前文件 + 光标位置周围 + 相关函数（vector search）+ LSP 信息（type / definition）+ 最近 edit 历史。<u>这是 Cursor 跟 Copilot 准确率差异的关键</u>。</p></div>
+        <div class="card amber"><h4>③ Model Router</h4>
+          <p style="font-size:13px">不同任务路由不同模型：Tab 补全用 1B 快模型，Chat 用 GPT-4 / Claude / DeepSeek，复杂 reasoning 用 o1/R1。<u>Cost 跟 latency 优化的关键</u>。</p></div>
+        <div class="card green"><h4>④ Tools</h4>
+          <p style="font-size:13px">read/write file, run terminal, git diff, web search, run test, debug。Cursor / Cline / Claude Code 内置一套；Devin 额外有 browser。</p></div>
+        <div class="card"><h4>⑤ Sandboxing</h4>
+          <p style="font-size:13px">所有代码改动跑在隔离环境（container / VM），<u>失败可 rollback</u>。Devin 跑独立 VM；Cursor agent mode 用临时 git branch。</p></div>
+        <div class="card violet"><h4>⑥ Agent Loop</h4>
+          <p style="font-size:13px">Plan → Action → Observation → Loop。带 reflection（失败反思）+ termination（成功/失败/超时）。</p></div>
+        <div class="card amber"><h4>⑦ Memory</h4>
+          <p style="font-size:13px">长期记忆（用户偏好 / 之前 session）+ 短期（当前对话 + recent edits）。<u>Cursor 的 .cursorrules / memory feature 就是这个</u>。</p></div>
+        <div class="card green"><h4>⑧ UI / Streaming</h4>
+          <p style="font-size:13px">streaming token 显示 + 可中断 + diff 预览 + 接受/拒绝按钮。<u>UX 是 coding agent 用户体验的命门</u>。</p></div>
+      </div>
+    </section>
+
+    <section class="chapter" id="ch3">
+      <div class="ch-head"><div class="num">03</div><div class="t">
+        <h2>Cursor 内部拆解</h2></div></div>
+
+      <h3>3.1 Cursor 跟 VSCode 的关系</h3>
+
+      <p>Cursor 是 <strong>VSCode fork</strong>（直接 fork 源码改），不是插件。这给了它 3 个优势：① 深度集成 UI（chat 嵌入 IDE）② 控制 LSP / 文件系统 / git 集成 ③ 不被 Microsoft 限制 API。</p>
+
+      <h3>3.2 Cursor Tab（补全）的快速秘密</h3>
+
+      <ul>
+        <li><strong>自研小模型</strong>：Cursor 训练了自己的 1-2B 模型用于 Tab 补全，<u>比直接调 OpenAI API 快 10x，cost 低 50x</u></li>
+        <li><strong>Context-aware</strong>：不只看当前行，看光标前后 + recent edits（你刚改了什么）</li>
+        <li><strong>Multi-line</strong>：能补全整段，不只一行</li>
+        <li><strong>Speculative</strong>：用户停顿前就开始算，<u>显示时已经准备好</u></li>
+      </ul>
+
+      <h3>3.3 Cursor Composer / Agent 模式</h3>
+
+      <p>Composer = 多文件 edit。用户描述需求 → Cursor 自动改多个文件 + 显示 diff + 用户接受/拒绝。<br>Agent mode = 完全 autonomous（planning + tool use + iteration）。</p>
+
+      <div class="intuition">
+        <strong>Cursor 价值的本质</strong>：不是"用了 GPT-4"（大家都能用），是 <u>context engineering</u>（找到当前任务最相关的 100-1000 行代码塞进 prompt）+ <u>UX engineering</u>（diff 预览 / accept-reject / 流畅切换）+ <u>自研小模型</u>（Tab 补全的速度 + cost 优势）。
+      </div>
+    </section>
+
+    <section class="chapter" id="ch4">
+      <div class="ch-head"><div class="num">04</div><div class="t">
+        <h2>Devin / SWE Agent · 完全自主</h2></div></div>
+
+      <h3>4.1 Devin 关键架构</h3>
+
+      <ol>
+        <li><strong>独立 VM</strong>：每个任务起一个 isolated VM（不污染本地）</li>
+        <li><strong>Tool 套件</strong>：终端 / 浏览器 / 代码编辑器 / git / web search</li>
+        <li><strong>长程 planning</strong>：能跑 hours / days 级任务</li>
+        <li><strong>UI 重构</strong>：不是 IDE 插件，是 web 仪表盘，可以放着不管</li>
+      </ol>
+
+      <h3>4.2 真实表现 vs 营销</h3>
+
+      <div class="grid cols-2">
+        <div class="card amber"><h4>⚠ 营销 demo 跟现实</h4>
+          <p style="font-size:13px">Demo 里 "Devin 自动修复 Bug + 提 PR" 看起来很美。<u>实际 SWE-bench 准确率 ~30-50%</u>（2025 数据），即<strong>一半以上任务失败</strong>。</p></div>
+        <div class="card green"><h4>✓ 真实有用的场景</h4>
+          <p style="font-size:13px">① 简单的 bump deps 类 chore ② 高度结构化的 lint fix ③ 重复性 boilerplate 生成。<u>复杂 feature 当下 autonomy 还不够</u>。</p></div>
+      </div>
+
+      <h3>4.3 同类项目</h3>
+
+      <ul>
+        <li><strong>OpenAI Codex CLI</strong>：CLI 风 agent，开源</li>
+        <li><strong>SWE-agent</strong>（学术）：princeton 出，SWE-bench 测试用</li>
+        <li><strong>OpenHands</strong>（前 OpenDevin）：开源 Devin 替代</li>
+        <li><strong>Aider</strong>：CLI 多文件 edit，git native</li>
+      </ul>
+    </section>
+
+    <section class="chapter" id="ch5">
+      <div class="ch-head"><div class="num">05</div><div class="t">
+        <h2>Claude Code · Anthropic CLI Agent</h2></div></div>
+
+      <p>Claude Code（2025）是 Anthropic 推出的 CLI coding agent。设计哲学跟 Devin 完全不同：</p>
+
+      <div class="grid cols-2">
+        <div class="card violet"><h4>🎯 设计哲学</h4>
+          <ul style="font-size:13px">
+            <li>"打开一个 terminal 就能用"，不需要 IDE</li>
+            <li>跟你<u>对话式</u>而非 hands-off</li>
+            <li>每个改动都展示 diff，需要你确认</li>
+            <li>支持 git / tools / web search</li>
+            <li>原生支持 Anthropic Skills</li>
+          </ul></div>
+        <div class="card green"><h4>📦 跟 Cursor / Devin 互补</h4>
+          <ul style="font-size:13px">
+            <li>Cursor: IDE 内 edit，<u>visual</u></li>
+            <li>Devin: 完全 autonomous，<u>放着跑</u></li>
+            <li>Claude Code: CLI + 对话，<u>chatops 风格</u></li>
+            <li>选择取决于工作流</li>
+          </ul></div>
+      </div>
+    </section>
+
+    <section class="chapter" id="ch6">
+      <div class="ch-head"><div class="num">06</div><div class="t">
+        <h2>Skills 实现机制</h2></div></div>
+
+      <p>详见 <a href="./agent_protocols_and_skills.html#ch6">X09 Ch6</a>。这里拆解<u>Cursor 怎么实现 Skills</u>。</p>
+
+      <h3>6.1 Cursor Skills 加载流程</h3>
+
+      <ol>
+        <li>启动时扫描 <code>~/.cursor/skills</code> 和项目 <code>.cursor/skills</code></li>
+        <li>解析每个 <code>SKILL.md</code>：提取 name / description / 使用条件</li>
+        <li>把 skill 描述加入 system prompt（让 LLM 知道有这些可选）</li>
+        <li>用户请求时 LLM 自行判断"这个任务适合哪个 skill"</li>
+        <li>选定后把对应 SKILL.md 完整内容加入 prompt</li>
+        <li>按 SKILL.md 描述的工作流执行（调 MCP tools 等）</li>
+      </ol>
+
+      <h3>6.2 Skills 的工程含义</h3>
+
+      <div class="intuition">
+        Skills 把"<strong>工作流知识</strong>"从模型权重移到<strong>可加载文件</strong>。优势：① 更新 skill 不用重训模型 ② 团队定制不影响 base 模型 ③ 可 review / version / 共享。<u>是 2026 agent 工程的关键范式</u>。
+      </div>
+
+      <h3>6.3 写一个好 Skill 的原则</h3>
+
+      <ol>
+        <li><strong>description 写好</strong> — LLM 据此判断何时激活</li>
+        <li><strong>工作流明确</strong> — 步骤化（1, 2, 3...）</li>
+        <li><strong>声明依赖的 tools</strong></li>
+        <li><strong>给 examples</strong>（few-shot 极大提升准确率）</li>
+        <li><strong>限制 scope</strong>（1 skill 1 个明确任务，避免 catch-all）</li>
+      </ol>
+    </section>
+
+    <section class="chapter" id="ch7">
+      <div class="ch-head"><div class="num">07</div><div class="t">
+        <h2>自己设计一个 Coding Agent · 关键决策</h2></div></div>
+
+      <h3>7.1 5 个关键决策</h3>
+
+      <table>
+        <thead><tr><th>决策</th><th>选项</th><th>推荐</th></tr></thead>
+        <tbody>
+          <tr><td>载体</td><td>IDE 插件 / IDE fork / CLI / Web</td><td>视团队 stack 选；新项目用 CLI 起步</td></tr>
+          <tr><td>autonomy</td><td>完全人工 review / 部分 / 全自动</td><td>从"部分"开始，渐进加 autonomy</td></tr>
+          <tr><td>模型</td><td>OpenAI / Claude / 开源</td><td>多模型 router；Tab 用小模型</td></tr>
+          <tr><td>Codebase 上传</td><td>本地 / 云端</td><td>合规优先 local（用本地 embedding）</td></tr>
+          <tr><td>Eval</td><td>SWE-bench / 内部 / 用户反馈</td><td>3 个都要：bench 找 SOTA / 内部 set 找业务匹配 / 用户反馈是金标准</td></tr>
+        </tbody>
+      </table>
+
+      <h3>7.2 Minimum Viable Agent (~500 行代码)</h3>
+
+      <pre><code><span class="c"># Pseudo Python</span>
+<span class="k">class</span> <span class="t">CodingAgent</span>:
+    <span class="k">def</span> <span class="f">__init__</span>(self, llm, tools, codebase_index):
+        self.llm = llm
+        self.tools = tools  <span class="c"># dict: name → function</span>
+        self.codebase = codebase_index  <span class="c"># vector search</span>
+
+    <span class="k">def</span> <span class="f">run</span>(self, task: str, max_iters=<span class="n">15</span>):
+        history = [<span class="f">system_prompt</span>()]
+        history.<span class="f">append</span>({<span class="s">"user"</span>: task})
+
+        <span class="k">for</span> i <span class="k">in</span> <span class="f">range</span>(max_iters):
+            <span class="c"># 1. Build context: 检索相关代码</span>
+            relevant_code = self.codebase.<span class="f">search</span>(task, k=<span class="n">10</span>)
+            <span class="c"># 2. 调 LLM 决定下一步动作</span>
+            response = self.llm.<span class="f">complete</span>(history + relevant_code)
+            <span class="c"># 3. Parse tool call</span>
+            tool_call = <span class="f">parse</span>(response)
+            <span class="k">if</span> tool_call.name == <span class="s">"DONE"</span>: <span class="k">break</span>
+            <span class="c"># 4. Execute</span>
+            result = self.tools[tool_call.name](**tool_call.args)
+            history.<span class="f">append</span>({<span class="s">"assistant"</span>: response,
+                            <span class="s">"observation"</span>: result})
+        <span class="k">return</span> history</code></pre>
+
+      <p>500 行就能跑一个基础 coding agent。<u>真正难的是后面的 99% 工程</u>：context 选择 / 错误恢复 / 多轮 streaming / diff UI / sandbox / cost 控制 / eval。</p>
+    </section>
+
+    <section class="chapter" id="ch8">
+      <div class="ch-head"><div class="num">08</div><div class="t">
+        <h2>10 道 Coding Agent 面试题</h2></div></div>
+
+      <details class="qa"><summary><span class="lvl pill cyan">Q1</span>Cursor / Copilot / Devin 3 种形态区别？</summary>
+        <div class="a"><div class="point">Tab 补全（用户每秒互动 / 1-3 行）/ Chat-Edit（每分钟互动 / 10-100 行）/ Autonomous（每小时互动 / 整 feature）。3 种 2026 在 Cursor 等产品里融合。</div></div></details>
+
+      <details class="qa"><summary><span class="lvl pill amber">Q2</span>Cursor 比直接调 GPT-4 API 快 / 准在哪？</summary>
+        <div class="a"><div class="point">① <strong>Context engineering</strong>：codebase indexing + 智能选相关函数塞 prompt ② <strong>自研小模型 Tab 补全</strong>（1-2B，快 10x cost -50x）③ <strong>UX 工程</strong>（streaming / diff / accept-reject）④ <strong>Multi-model routing</strong>（小问题用小模型）</div></div></details>
+
+      <details class="qa"><summary><span class="lvl pill amber">Q3</span>Devin 为什么 demo 牛但实际效果一般？</summary>
+        <div class="a"><div class="point">SWE-bench 准确率 ~30-50%（2025），<u>一半以上任务失败</u>。真正有用场景：bump deps / lint fix / boilerplate 生成。<em>复杂 feature 当下 autonomy 不够</em>，需要人工 review。</div></div></details>
+
+      <details class="qa"><summary><span class="lvl pill cyan">Q4</span>Codebase Indexing 怎么做？</summary>
+        <div class="a"><div class="point">① 用 ast-grep 按函数/类拆 chunk（不是固定字符）② Embedding（如 bge-code）③ 存 Qdrant / 本地 sqlite-vec ④ 增量更新（监听文件变化）⑤ 查询时用 query embedding 找 top-K 相关函数。</div></div></details>
+
+      <details class="qa"><summary><span class="lvl pill amber">Q5</span>Multi-model routing 怎么决定用哪个模型？</summary>
+        <div class="a"><div class="point">① <strong>任务类型分类器</strong>：Tab 补全 → 1B；简单 chat → 7B；复杂 reasoning → o1/R1 ② <strong>用户 tier</strong>：免费用户小模型，付费用户大模型 ③ <strong>cost budget</strong>：超出 quota 降级 ④ <strong>fallback</strong>：模型 down 切备用</div></div></details>
+
+      <details class="qa"><summary><span class="lvl pill red">Q6</span>Agent Loop 怎么避免无限循环？</summary>
+        <div class="a"><div class="point">① max_iters（典型 15-30）② cost budget（超 $X 停）③ <strong>无进展检测</strong>（连续 3 次相同 action 停）④ time budget（超 N min 停）⑤ 用户中断按钮</div></div></details>
+
+      <details class="qa"><summary><span class="lvl pill amber">Q7</span>Sandbox 怎么设计？为什么必须？</summary>
+        <div class="a"><div class="point">所有 agent 改动跑在隔离环境（container / 临时 git branch / VM）。<em>必须</em>原因：① agent 可能写错代码破坏 main ② 跑测试不污染本地 env ③ 失败时一键 rollback ④ 安全（防 agent 意外删文件）</div></div></details>
+
+      <details class="qa"><summary><span class="lvl pill cyan">Q8</span>Coding Agent eval 怎么做？SWE-bench 局限？</summary>
+        <div class="a"><div class="point">3 层 eval：① SWE-bench（学术标准，但 hard，跟生产场景未必匹配）② 内部 eval（自己业务 repo + 自己 task）③ 用户反馈（接受率 / 撤销率 / NPS）<br><strong>SWE-bench 局限</strong>：题集偏 Python OSS / 单 PR fix / 不涉及多服务 / 时间敏感性差</div></div></details>
+
+      <details class="qa"><summary><span class="lvl pill amber">Q9</span>给团队选 Cursor / Cline / Claude Code 怎么选？</summary>
+        <div class="a"><div class="point">① <strong>主力开发用 Cursor</strong>（IDE 集成最好）② <strong>privacy 严格用 Cline + 本地模型</strong>（开源 VSCode 插件）③ <strong>CLI 工作流用 Claude Code / Aider</strong>（ChatOps）。多个并用是正常的。</div></div></details>
+
+      <details class="qa"><summary><span class="lvl pill red">Q10</span>2026 Coding Agent 趋势？</summary>
+        <div class="a"><div class="point">① <strong>融合</strong>：Tab / Chat / Autonomous 3 模式同产品 ② <strong>Skills 范式</strong>：领域工作流封装 ③ <strong>autonomy 提升</strong>（但需要 review/sandbox）④ <strong>多 agent 协作</strong>（reviewer + coder + tester）⑤ <strong>本地小模型</strong>（隐私 + cost + offline）⑥ <strong>codebase scale 升级</strong>（百万行 repo 也能用）</div></div></details>
+    </section>
+
+  <footer><p>上一篇 <a href="./agent_protocols_and_skills.html">X09</a> · 下一篇 <a href="./ai_eval.html">X12</a> · 工程实践 <a href="./engineering_practice.html">X01</a></p></footer>
+  </main>
+</div>
+
+<script>
+(function(){var b=document.getElementById('progress');function u(){var h=document.documentElement;b.style.width=(h.scrollTop/(h.scrollHeight-h.clientHeight)*100)+'%'}window.addEventListener('scroll',u,{passive:true});u();})();
+(function(){var l=document.querySelectorAll('aside.toc nav>ol>li>a');var s=Array.from(document.querySelectorAll('section.chapter'));function u(){var y=window.scrollY+100;var c=s[0];for(var i=0;i<s.length;i++)if(s[i].offsetTop<=y)c=s[i];l.forEach(function(a){a.classList.toggle('active',a.getAttribute('href')==='#'+c.id)})}window.addEventListener('scroll',u,{passive:true});u();})();
+</script>
+</body>
+</html>

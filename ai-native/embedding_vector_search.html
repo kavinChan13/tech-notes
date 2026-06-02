@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Embedding & 向量检索 · HNSW / IVF / PQ / Milvus / Qdrant — Tech Notes</title>
+<link rel="stylesheet" href="../assets/site-theme.css">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<style>
+.analogy{background:linear-gradient(135deg,#1a1f3a 0%,#1f2842 100%);
+  border:1px solid rgba(125,211,252,.25);border-radius:14px;padding:18px 22px;margin:18px 0;
+  position:relative;overflow:hidden;box-shadow:0 8px 28px -10px rgba(125,211,252,.25);}
+.analogy::before{content:"";position:absolute;top:0;left:0;right:0;height:3px;
+  background:linear-gradient(90deg,#7dd3fc,#a78bfa,#34d399);}
+.analogy .a-head{display:flex;align-items:center;gap:10px;font-size:13px;font-weight:700;color:#7dd3fc;
+  text-transform:uppercase;letter-spacing:1.5px;margin-bottom:10px}
+.analogy .a-head .icon{font-size:22px}
+.analogy .a-body{font-size:14px;line-height:1.8;color:#e4e9f5}
+.analogy .a-body strong{color:#fbbf24}
+.intuition{background:rgba(251,191,36,.05);border-left:4px solid #fbbf24;
+  padding:12px 16px;border-radius:0 10px 10px 0;margin:12px 0;font-size:13.5px;line-height:1.7}
+.intuition::before{content:"🎯 直觉 · ";color:#fbbf24;font-weight:700;font-size:12px}
+</style>
+</head>
+<body>
+
+<style>#tn-nav{position:fixed;top:14px;right:14px;z-index:99999;display:flex;gap:6px;font-size:12px}
+#tn-nav a,#tn-nav span{background:rgba(20,20,30,.85);color:#fff!important;text-decoration:none;
+  padding:7px 11px;border-radius:999px;font-family:-apple-system,'Segoe UI','Microsoft YaHei',sans-serif}</style>
+<div id="tn-nav">
+  <a href="../index.html">← 主页</a>
+  <a href="./rag_deep_dive.html">🔍 X08</a>
+  <span>⏱ 35 min</span>
+</div>
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc"><h2>X11 · Embedding & Vector Search</h2><nav><ol>
+    <li><a href="#ch1" class="active">Embedding 本质</a></li>
+    <li><a href="#ch2">2026 模型选型</a></li>
+    <li><a href="#ch3">ANN 算法 · HNSW/IVF/PQ</a></li>
+    <li><a href="#ch4">向量数据库对比</a></li>
+    <li><a href="#ch5">Hybrid Search 工程</a></li>
+    <li><a href="#ch6">10 面试题</a></li>
+  </ol></nav></aside>
+
+  <main>
+    <header class="hero">
+      <div class="badge">X11 · Embedding & Vector Search</div>
+      <h1>Embedding & 向量检索</h1>
+      <p class="sub">6 章 · ANN 算法原理 · 向量库选型 · 100M+ 规模实战。<strong>对位读者</strong>：RAG 工程师 / 搜索 / 推荐相关。</p>
+      <div class="meta"><span>6 章</span><span>~35 min</span><span>10 题</span></div>
+    </header>
+
+    <section class="chapter" id="ch1">
+      <div class="ch-head"><div class="num">01</div><div class="t">
+        <h2>Embedding 本质 · 把万物变向量</h2></div></div>
+
+      <div class="analogy">
+        <div class="a-head"><span class="icon">🎬</span>生活类比 · 把每首歌画一个"坐标"</div>
+        <div class="a-body">
+          想象世界上每首歌都被映射到 768 维空间里的一个"坐标"。<u>风格相似的歌坐标接近</u>（如周杰伦的所有歌聚成一片）。<br><br>
+          这样找"跟这首歌相似的"就是<u>找空间里距离最近的 K 个坐标</u>。<br><br>
+          <strong>Embedding 就是这个映射函数</strong>：训练好的神经网络把任意输入（文本/图/音频）映射到 N 维向量，让"语义相近"对应"距离近"。
+        </div>
+      </div>
+
+      <h3>1.1 为什么要 embedding</h3>
+
+      <table>
+        <thead><tr><th>问题</th><th>传统方法</th><th>Embedding 方法</th></tr></thead>
+        <tbody>
+          <tr><td>搜"跟这段相似的"</td><td>关键字匹配（漏掉同义词）</td><td>向量近邻（捕获语义）</td></tr>
+          <tr><td>跨语言查询</td><td>需要翻译</td><td>同一向量空间天然跨语言</td></tr>
+          <tr><td>"模糊查询"</td><td>正则 / Levenshtein</td><td>向量距离自然容忍模糊</td></tr>
+          <tr><td>个性化</td><td>规则 / 协同过滤</td><td>用户兴趣 = 向量</td></tr>
+        </tbody>
+      </table>
+
+      <h3>1.2 距离度量</h3>
+
+      <ul>
+        <li><strong>Cosine</strong>（最常用）：关心方向不关心长度。Embedding 主流。</li>
+        <li><strong>Dot Product</strong>：考虑长度。某些模型需要（如 ColBERT）。</li>
+        <li><strong>Euclidean (L2)</strong>：欧氏距离。CV 偶尔用。</li>
+      </ul>
+    </section>
+
+    <section class="chapter" id="ch2">
+      <div class="ch-head"><div class="num">02</div><div class="t">
+        <h2>2026 Embedding 模型选型</h2></div></div>
+
+      <table>
+        <thead><tr><th>模型</th><th>维度</th><th>语言</th><th>MTEB</th><th>特点</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Qwen3-Embedding</strong></td><td>1024/4096</td><td>多语言</td><td>~70</td><td>2025 开源 SOTA，中文 #1</td></tr>
+          <tr><td>BGE-Large-zh</td><td>1024</td><td>中</td><td>~64</td><td>中文场景免费可靠</td></tr>
+          <tr><td>BGE-M3</td><td>1024</td><td>多语言</td><td>~66</td><td>同时支持 dense+sparse+multi-vec</td></tr>
+          <tr><td>OpenAI text-embedding-3-large</td><td>3072</td><td>多语言</td><td>~64</td><td>商业，稳但贵</td></tr>
+          <tr><td>NV-Embed-v2</td><td>4096</td><td>英文</td><td>~72</td><td>纯英文场景最强</td></tr>
+          <tr><td>Cohere embed-v3</td><td>1024</td><td>多语言</td><td>~64</td><td>商业，压缩感知</td></tr>
+        </tbody>
+      </table>
+
+      <div class="intuition">
+        <strong>选型 3 准则</strong>：① 看场景（中文/多语言/英文）② 看是否合规（国内必开源）③ <strong>在你的业务 eval set 上实测</strong> — MTEB 排名跟你场景未必匹配。
+      </div>
+
+      <h3>2.2 Matryoshka Embedding（俄罗斯套娃）</h3>
+
+      <p>新趋势（2024+）：训练时让模型<u>同时学多个维度的好 embedding</u>（512 / 1024 / 4096）。用户根据 cost/quality trade-off 截取前 N 维。<u>OpenAI text-embedding-3 / Qwen3-Embedding 都支持</u>。</p>
+    </section>
+
+    <section class="chapter" id="ch3">
+      <div class="ch-head"><div class="num">03</div><div class="t">
+        <h2>ANN 算法 · 怎么在亿级向量里快速找近邻</h2>
+        <div class="sub">HNSW / IVF / PQ 三大主流</div></div></div>
+
+      <div class="analogy">
+        <div class="a-head"><span class="icon">🎬</span>生活类比 · 在 1 亿本书里找相似的</div>
+        <div class="a-body">
+          1 亿本书，每本被映射到 768 维向量。给你一个 query，找最相似的 10 本。<br><br>
+          <strong>暴力法</strong>：跟每本算距离，1 亿次。要几分钟。<br>
+          <strong>ANN（Approximate Nearest Neighbor）</strong>：<u>用索引结构提前组织数据</u>，查询时只看少数候选 — 速度 100-1000x，<u>但牺牲一点点准确</u>（99% recall）。
+        </div>
+      </div>
+
+      <h3>3.1 HNSW · 分层图导航</h3>
+
+      <div class="intuition">
+        HNSW 思路：建一个<strong>分层小世界图</strong>。上层稀疏（远距跳跃），底层密集（精确）。查询时从顶层开始贪心导航到目标。<u>类似导航软件先看高速路再看小路</u>。
+      </div>
+
+      <ul>
+        <li><strong>优势</strong>：查询极快（亿级 1-10ms），高 recall（99%+）</li>
+        <li><strong>劣势</strong>：内存占用大（每向量 ~1KB 图结构），更新慢</li>
+        <li><strong>主流库</strong>：FAISS HNSW / Qdrant 默认 / Milvus 支持</li>
+      </ul>
+
+      <h3>3.2 IVF · 倒排索引</h3>
+
+      <ul>
+        <li><strong>原理</strong>：把所有向量 K-means 聚成 N 个 cluster（如 1024 个）。查询时先找最近 cluster，只在 cluster 内搜。</li>
+        <li><strong>优势</strong>：内存小，更新快</li>
+        <li><strong>劣势</strong>：边界 case 漏召（向量恰好在 cluster 边界附近）</li>
+        <li><strong>调参</strong>：nlist（cluster 数）和 nprobe（查多少个 cluster）trade-off speed vs recall</li>
+      </ul>
+
+      <h3>3.3 PQ · Product Quantization 量化压缩</h3>
+
+      <p>把 768 维向量切成 M 段（每段 96 维），每段用 256 个 codebook 中的 ID 表示。<u>1 个向量从 768×4=3072 字节压到 8 字节</u>，<strong>压缩 384x</strong>。常跟 IVF 组合用：<strong>IVF-PQ</strong>。</p>
+
+      <h3>3.4 选型决策</h3>
+
+      <table>
+        <thead><tr><th>规模</th><th>推荐</th></tr></thead>
+        <tbody>
+          <tr><td>&lt; 1M 向量</td><td>HNSW（内存能装下，速度快 recall 高）</td></tr>
+          <tr><td>1M-100M</td><td>HNSW 或 IVF-PQ（看预算）</td></tr>
+          <tr><td>100M-1B</td><td>IVF-PQ 必须（HNSW 内存炸）</td></tr>
+          <tr><td>1B+</td><td>分布式 IVF-PQ（多机分片）</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="chapter" id="ch4">
+      <div class="ch-head"><div class="num">04</div><div class="t">
+        <h2>向量数据库对比</h2></div></div>
+
+      <table>
+        <thead><tr><th>方案</th><th>开源</th><th>分布式</th><th>特点</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Qdrant</strong></td><td>✅ Rust</td><td>✅</td><td>2026 推荐默认。性能好，API 友好，filter 强</td></tr>
+          <tr><td><strong>Milvus</strong></td><td>✅</td><td>✅</td><td>国内最常用，云原生，规模大</td></tr>
+          <tr><td>Weaviate</td><td>✅</td><td>✅</td><td>带 GraphQL API，hybrid 内置</td></tr>
+          <tr><td>pgvector</td><td>✅ Postgres 扩展</td><td>有限</td><td>已有 Postgres 直接加，小规模够用</td></tr>
+          <tr><td>Pinecone</td><td>❌ SaaS</td><td>✅</td><td>易用但贵，海外用</td></tr>
+          <tr><td>ChromaDB</td><td>✅</td><td>有限</td><td>local-first，原型快</td></tr>
+          <tr><td>FAISS (lib)</td><td>✅ 库</td><td>❌</td><td>底层算法库，自己集成</td></tr>
+        </tbody>
+      </table>
+
+      <h3>4.2 关键 feature 对比</h3>
+
+      <table>
+        <thead><tr><th>Feature</th><th>是否必要</th></tr></thead>
+        <tbody>
+          <tr><td>Metadata filter</td><td>✅ 必要（按 user_id / version 过滤）</td></tr>
+          <tr><td>Hybrid Search (dense + sparse)</td><td>✅ 必要（生产 RAG 标配）</td></tr>
+          <tr><td>多向量 per doc</td><td>⚠ ColBERT 等高级用</td></tr>
+          <tr><td>Multi-tenant</td><td>✅ SaaS 必要</td></tr>
+          <tr><td>实时更新</td><td>⚠ 看场景</td></tr>
+          <tr><td>backup / snapshot</td><td>✅ 必要</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="chapter" id="ch5">
+      <div class="ch-head"><div class="num">05</div><div class="t">
+        <h2>Hybrid Search 工程实战</h2></div></div>
+
+      <p>详见 <a href="./rag_deep_dive.html#ch5">X08 Ch5</a>。这里补充工程实践。</p>
+
+      <h3>5.1 部署架构</h3>
+
+      <ol>
+        <li><strong>Dense</strong>：Qdrant cluster（3 副本）</li>
+        <li><strong>Sparse / BM25</strong>：OpenSearch / Elasticsearch（同样 3 副本）</li>
+        <li><strong>Coordinator</strong>：API server 并发查 2 路 + RRF 融合</li>
+        <li><strong>Rerank</strong>：Cross-Encoder service（独立部署，GPU）</li>
+        <li><strong>Cache</strong>：Redis 缓存热门 query embedding + 结果</li>
+      </ol>
+
+      <h3>5.2 性能优化 tip</h3>
+
+      <ul>
+        <li><strong>Embedding 服务批处理</strong>：collect 100 query 一起算（throughput +20x）</li>
+        <li><strong>预计算 BM25 倒排</strong>：写入时建索引避免实时计算</li>
+        <li><strong>Cache 命中策略</strong>：热门 query 缓存结果 24h；用户独享 query 缓存 1h</li>
+        <li><strong>Rerank 限 top-K</strong>：rerank 50 个就够，再多 latency 涨</li>
+      </ul>
+
+      <h3>5.3 增量更新策略</h3>
+
+      <div class="grid cols-2">
+        <div class="card"><h4>批量重建（夜间）</h4>
+          <p style="font-size:13px">每天凌晨重新算所有 embedding 重建索引。<u>简单但延迟高（D+1 才能搜到新内容）</u>。</p></div>
+        <div class="card violet"><h4>流式增量</h4>
+          <p style="font-size:13px">新文档实时 embedding + insert。<u>HNSW 支持但慢，IVF 需要 periodic rebuild</u>。</p></div>
+      </div>
+    </section>
+
+    <section class="chapter" id="ch6">
+      <div class="ch-head"><div class="num">06</div><div class="t">
+        <h2>10 道高频面试题</h2></div></div>
+
+      <details class="qa"><summary><span class="lvl pill cyan">基础</span>Q1. Embedding 是什么？为什么 RAG 需要？</summary>
+        <div class="a"><div class="point">把文本/图/音频映射到 N 维向量，<em>语义相近对应距离近</em>。RAG 用它做"语义搜索"，超越关键字匹配。</div></div></details>
+
+      <details class="qa"><summary><span class="lvl pill cyan">基础</span>Q2. Cosine vs Dot Product vs L2 怎么选？</summary>
+        <div class="a"><div class="point">Cosine 主流（embedding 长度不重要，只看方向）。Dot Product 某些 ColBERT 类模型用。L2 偶尔 CV 用。</div></div></details>
+
+      <details class="qa"><summary><span class="lvl pill amber">进阶</span>Q3. HNSW 算法原理？</summary>
+        <div class="a"><div class="point">分层图：上层稀疏（远距跳跃）下层密集（精确）。查询时从顶层贪心导航。<em>类似导航软件先看高速再看小路</em>。优势：查询极快+高 recall。劣势：内存大、更新慢。</div></div></details>
+
+      <details class="qa"><summary><span class="lvl pill amber">进阶</span>Q4. IVF-PQ 是什么？跟 HNSW 怎么选？</summary>
+        <div class="a">
+          <div class="point"><div class="label">IVF</div><div>K-means 聚 cluster，查询时先找最近 cluster 只在内搜。</div></div>
+          <div class="point"><div class="label">PQ</div><div>向量分段量化，768×4 字节 → 8 字节，压缩 384x。常跟 IVF 组合。</div></div>
+          <div class="point deep"><div class="label">选型</div><div>&lt; 100M 用 HNSW（recall 高）；&gt; 100M 用 IVF-PQ（内存装得下）。</div></div>
+        </div></details>
+
+      <details class="qa"><summary><span class="lvl pill mid">进阶</span>Q5. Embedding 模型怎么选？BGE vs OpenAI vs Qwen3？</summary>
+        <div class="a"><div class="point">看场景：中文 → Qwen3 / BGE-zh；多语言 → BGE-M3；英文 → NV-Embed-v2；商业 → OpenAI/Cohere。<em>实测在自己 eval set 上才数，MTEB 排名跟业务未必匹配</em>。</div></div></details>
+
+      <details class="qa"><summary><span class="lvl pill cyan">基础</span>Q6. Matryoshka Embedding 是什么？解决什么问题？</summary>
+        <div class="a"><div class="point">训练时同时学多个维度的好 embedding（512/1024/4096）。用户根据 cost/quality 截取前 N 维。<em>不用为每个 dim 训一个模型</em>。OpenAI text-embedding-3 / Qwen3-Embedding 支持。</div></div></details>
+
+      <details class="qa"><summary><span class="lvl pill amber">进阶</span>Q7. 1 亿向量做向量搜索 latency 目标 &lt; 50ms，怎么做？</summary>
+        <div class="a"><div class="point">① IVF-PQ 索引（HNSW 1 亿内存爆）② 分片到 5-10 个 node 并行 ③ nprobe 调到 64（recall ≥ 95%）④ embedding 服务批量化预 cache 热 query。</div></div></details>
+
+      <details class="qa"><summary><span class="lvl pill cyan">基础</span>Q8. Qdrant / Milvus / pgvector 怎么选？</summary>
+        <div class="a"><div class="point">小规模（&lt; 10M）+ 已有 Postgres → pgvector。中等规模 (10M-100M) → Qdrant（开源/Rust/性能好）。大规模/云原生 → Milvus（国内常用）。</div></div></details>
+
+      <details class="qa"><summary><span class="lvl pill amber">进阶</span>Q9. 向量库的 Metadata Filter 为什么重要？</summary>
+        <div class="a"><div class="point">业务总要 "用户 X 的私有文档" / "v2.5 版本" / "上月新增" 这种过滤。<em>filter + vector search 同时做才能生产可用</em>。Qdrant / Milvus 都内置高效 filter 索引。</div></div></details>
+
+      <details class="qa"><summary><span class="lvl pill red">高频</span>Q10. 为什么纯 Dense 不够要 Hybrid (BM25+Dense)？</summary>
+        <div class="a"><div class="point">Dense 擅长语义但<em>差在精确匹配</em>（版本号 / ID / 专有名词 embedding 太近分不清）。BM25 关键字精确但漏近义词。Hybrid RRF 融合：Recall@10 从 55%/70% → 85%。<u>生产 RAG 标配</u>。</div></div></details>
+    </section>
+
+  <footer><p>上一篇 <a href="./multimodal.html">X10</a> · 下一篇 <a href="./ai_eval.html">X12 →</a> · RAG: <a href="./rag_deep_dive.html">X08</a></p></footer>
+  </main>
+</div>
+
+<script>
+(function(){var b=document.getElementById('progress');function u(){var h=document.documentElement;b.style.width=(h.scrollTop/(h.scrollHeight-h.clientHeight)*100)+'%'}window.addEventListener('scroll',u,{passive:true});u();})();
+(function(){var l=document.querySelectorAll('aside.toc nav>ol>li>a');var s=Array.from(document.querySelectorAll('section.chapter'));function u(){var y=window.scrollY+100;var c=s[0];for(var i=0;i<s.length;i++)if(s[i].offsetTop<=y)c=s[i];l.forEach(function(a){a.classList.toggle('active',a.getAttribute('href')==='#'+c.id)})}window.addEventListener('scroll',u,{passive:true});u();})();
+</script>
+</body>
+</html>
