@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>多模态与生成模型 · CLIP / ViT / VLM / Whisper / Diffusion — Tech Notes</title>
+<link rel="stylesheet" href="../assets/site-theme.css">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<style>
+.analogy{background:linear-gradient(135deg,#1a1f3a 0%,#1f2842 100%);
+  border:1px solid rgba(125,211,252,.25);border-radius:14px;padding:18px 22px;margin:18px 0;
+  position:relative;overflow:hidden;box-shadow:0 8px 28px -10px rgba(125,211,252,.25);}
+.analogy::before{content:"";position:absolute;top:0;left:0;right:0;height:3px;
+  background:linear-gradient(90deg,#7dd3fc,#a78bfa,#34d399);}
+.analogy .a-head{display:flex;align-items:center;gap:10px;font-size:13px;font-weight:700;color:#7dd3fc;
+  text-transform:uppercase;letter-spacing:1.5px;margin-bottom:10px}
+.analogy .a-head .icon{font-size:22px}
+.analogy .a-body{font-size:14px;line-height:1.8;color:#e4e9f5}
+.analogy .a-body strong{color:#fbbf24}
+.intuition{background:rgba(251,191,36,.05);border-left:4px solid #fbbf24;
+  padding:12px 16px;border-radius:0 10px 10px 0;margin:12px 0;font-size:13.5px;line-height:1.7}
+.intuition::before{content:"🎯 直觉 · ";color:#fbbf24;font-weight:700;font-size:12px}
+</style>
+</head>
+<body>
+
+<style>#tn-nav{position:fixed;top:14px;right:14px;z-index:99999;display:flex;gap:6px;font-size:12px}
+#tn-nav a,#tn-nav span{background:rgba(20,20,30,.85);color:#fff!important;text-decoration:none;
+  padding:7px 11px;border-radius:999px;font-family:-apple-system,'Segoe UI','Microsoft YaHei',sans-serif}</style>
+<div id="tn-nav">
+  <a href="../index.html">← 主页</a>
+  <a href="./rag_deep_dive.html">🔍 X08</a>
+  <a href="./agent_protocols_and_skills.html">🔌 X09</a>
+  <span>⏱ 40 min</span>
+</div>
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc"><h2>X10 · Multimodal</h2><nav><ol>
+    <li><a href="#ch1" class="active">视觉理解 · CLIP/ViT</a></li>
+    <li><a href="#ch2">VLM · Qwen-VL/LLaVA</a></li>
+    <li><a href="#ch3">语音 · Whisper/TTS</a></li>
+    <li><a href="#ch4">Diffusion 生成模型</a></li>
+    <li><a href="#ch5">Sora · 视频生成</a></li>
+    <li><a href="#ch6">智驾多模态融合</a></li>
+    <li><a href="#ch7">10 道面试题</a></li>
+  </ol></nav></aside>
+
+  <main>
+    <header class="hero">
+      <div class="badge">X10 · Multimodal · 通俗版</div>
+      <h1>多模态与生成模型</h1>
+      <p class="sub">7 章 · 让 LLM 不只看文字 · 看图、听声音、生成图像/视频。<strong>对位读者</strong>：B 轨 LLM App / 想搞懂"VLM 怎么工作"/ 智驾 + 具身相关。</p>
+      <div class="meta"><span>7 章节</span><span>~40 min</span><span>10 面试题</span></div>
+    </header>
+
+    <section class="chapter" id="ch1">
+      <div class="ch-head"><div class="num">01</div><div class="t">
+        <h2>视觉理解 · CLIP / ViT · 让模型看懂图</h2>
+        <div class="sub">现代多模态的地基</div>
+      </div></div>
+
+      <div class="analogy">
+        <div class="a-head"><span class="icon">🎬</span>生活类比 · 教小孩认猫</div>
+        <div class="a-body">
+          想象教小孩认"猫"。<br>
+          ① 你给他看 1000 张图片 + 配文字"这是猫"<br>
+          ② 看多了他形成"猫的概念" — 看图能立刻说出"猫"<br><br>
+          <strong>CLIP</strong> 就是这么训的：从互联网搜 4 亿张 (图片, 描述) 对，用 contrastive learning 让模型学会"图跟文字对得上"。训完后<u>图片和文字都被映射到同一个向量空间</u> — 语义相近的图和文字向量距离近。
+        </div>
+      </div>
+
+      <h3>1.1 ViT · Vision Transformer</h3>
+
+      <p>ViT 把图片切成 16×16 patches，每个 patch flatten 成 token，<u>跟文本 token 一样喂给 Transformer</u>。这是统一架构的关键。</p>
+
+      <pre><code><span class="c"># ViT 流程</span>
+image = <span class="f">load</span>(<span class="s">"cat.jpg"</span>)              <span class="c"># 224x224x3</span>
+patches = <span class="f">split_to_patches</span>(image, <span class="n">16</span>)  <span class="c"># 14×14 = 196 patches</span>
+patch_embeds = <span class="f">linear</span>(patches.<span class="f">flatten</span>())  <span class="c"># 每 patch → token</span>
+patch_embeds = patch_embeds + position_embed
+output = <span class="f">transformer</span>(patch_embeds)        <span class="c"># 跟文本一样的 attention</span></code></pre>
+
+      <h3>1.2 CLIP · 对比学习的革命</h3>
+
+      <div class="intuition">
+        CLIP 的核心：训练时<strong>同 batch 内 N 张图 × N 个描述</strong>，正确对（图 i 跟描述 i）相似度最大，错误对最小。本质是"<u>把图和文字拉到同一个语义空间</u>"。
+      </div>
+
+      <h3>1.3 应用</h3>
+
+      <div class="grid cols-2">
+        <div class="card"><h4>🔍 零样本图像分类</h4>
+          <p style="font-size:13px">给图片 + N 个候选类别文字 → 算图跟每个文字的相似度 → 最像的就是分类。<u>不需要为每个新类别重新训</u>。</p></div>
+        <div class="card violet"><h4>🎨 图文检索</h4>
+          <p style="font-size:13px">用文字搜图（"穿红衣的女孩骑自行车"）或反向。<u>电商图搜核心</u>。</p></div>
+        <div class="card amber"><h4>🤖 多模态 LLM 的基础</h4>
+          <p style="font-size:13px">CLIP image encoder 是 LLaVA / Qwen-VL 等 VLM 的标准组件之一。</p></div>
+        <div class="card green"><h4>🎬 Diffusion 的引导</h4>
+          <p style="font-size:13px">CLIP 给 text-to-image 模型（DALL-E / Stable Diffusion）当"评判器"。</p></div>
+      </div>
+    </section>
+
+    <section class="chapter" id="ch2">
+      <div class="ch-head"><div class="num">02</div><div class="t">
+        <h2>VLM · Vision-Language Model</h2>
+        <div class="sub">让 LLM 能看图说话</div>
+      </div></div>
+
+      <div class="analogy">
+        <div class="a-head"><span class="icon">🎬</span>生活类比 · 给 LLM 装眼睛</div>
+        <div class="a-body">
+          普通 LLM = <u>只能读文字的人</u>。<br>
+          <strong>VLM</strong> = 这个人<u>装上一双能"翻译"图像的眼睛</u>（vision encoder），把看到的图<u>翻译成 LLM 能懂的 token</u> 喂进去。然后 LLM 像处理文字一样处理这些"图像 token"，输出文字。
+        </div>
+      </div>
+
+      <h3>2.1 标准架构</h3>
+
+      <ol>
+        <li><strong>Vision Encoder</strong>（如 ViT / SigLIP）：图 → 视觉 features</li>
+        <li><strong>Projector / Adapter</strong>（如 MLP / Q-Former）：视觉 features → LLM token 空间</li>
+        <li><strong>LLM Decoder</strong>（如 Qwen / Llama）：把"图像 token"跟文字 token 拼在一起做 next-token prediction</li>
+      </ol>
+
+      <h3>2.2 主流 VLM 对比（2026）</h3>
+
+      <table>
+        <thead><tr><th>模型</th><th>开源</th><th>特点</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Qwen2.5-VL</strong></td><td>✅</td><td>中文 OCR + 长视频理解 · 国内 SOTA</td></tr>
+          <tr><td><strong>InternVL 2.5</strong></td><td>✅</td><td>上海 AI Lab · 通用能力强</td></tr>
+          <tr><td>LLaVA-OneVision</td><td>✅</td><td>学术界经典 · 训练范式公开</td></tr>
+          <tr><td>GPT-4o / Claude 3.5 Sonnet</td><td>❌</td><td>商业 SOTA · 综合能力顶级</td></tr>
+          <tr><td>Gemini 2.0</td><td>❌</td><td>原生多模态 · 视频长上下文优势</td></tr>
+        </tbody>
+      </table>
+
+      <h3>2.3 VLM 的局限</h3>
+
+      <div class="grid cols-2">
+        <div class="card amber"><h4>⚠ 计数 / 空间推理</h4>
+          <p style="font-size:13px">"图中有几个苹果" — 当下 VLM 经常错 1-2 个。OCR 数字识别准但概念性计数差。</p></div>
+        <div class="card amber"><h4>⚠ 高分辨率细节</h4>
+          <p style="font-size:13px">默认 224×224 输入丢细节。需 dynamic resolution（如 Qwen-VL）。</p></div>
+        <div class="card amber"><h4>⚠ 视频时序</h4>
+          <p style="font-size:13px">长视频每帧独立看，缺时间连贯性。最新模型加 temporal attention 改善。</p></div>
+        <div class="card amber"><h4>⚠ 幻觉更严重</h4>
+          <p style="font-size:13px">看不清的部分容易瞎猜（"图里有什么" → 编造对象）。</p></div>
+      </div>
+    </section>
+
+    <section class="chapter" id="ch3">
+      <div class="ch-head"><div class="num">03</div><div class="t">
+        <h2>语音 · Whisper / TTS</h2>
+        <div class="sub">让 AI 听说</div>
+      </div></div>
+
+      <h3>3.1 ASR (语音识别) · Whisper</h3>
+
+      <p>OpenAI Whisper（2022）是 ASR 的革命：<u>在 68 万小时多语言数据上训练</u>，对噪声 / 口音 / 多语言极鲁棒。开源后席卷工业界。</p>
+
+      <ul>
+        <li><strong>架构</strong>：Encoder-Decoder Transformer。音频 → mel-spectrogram → encoder → decoder 输出文字 token</li>
+        <li><strong>多任务</strong>：transcribe (识别) / translate (翻译到英文) / detect language / timestamp</li>
+        <li><strong>大小</strong>：tiny / base / small / medium / large（39M - 1.5B 参数）</li>
+        <li><strong>2026</strong>：Whisper Large v3 是开源 ASR 主流</li>
+      </ul>
+
+      <h3>3.2 TTS · 文字转语音</h3>
+
+      <table>
+        <thead><tr><th>方案</th><th>特点</th></tr></thead>
+        <tbody>
+          <tr><td>传统 (Tacotron / FastSpeech)</td><td>2 阶段：text → mel-spec → vocoder → wave。质量好但慢</td></tr>
+          <tr><td><strong>VALL-E / NaturalSpeech</strong></td><td>用 LLM 风格生成 audio token，<u>能 zero-shot 克隆声音</u>（3 秒样本就够）</td></tr>
+          <tr><td><strong>CosyVoice / GPT-SoVITS</strong></td><td>开源 zero-shot 克隆，中文 SOTA</td></tr>
+          <tr><td>ElevenLabs / OpenAI TTS</td><td>商业 SOTA</td></tr>
+        </tbody>
+      </table>
+
+      <div class="intuition">
+        2026 趋势：<strong>统一的 "speech LLM"</strong>。GPT-4o realtime / Qwen2-Audio / Gemini Live 是<u>原生 audio token 处理</u> — 不再 ASR → LLM → TTS 三段式，<u>延迟从 1-2s 降到 200ms</u>，能真正自然对话。
+      </div>
+    </section>
+
+    <section class="chapter" id="ch4">
+      <div class="ch-head"><div class="num">04</div><div class="t">
+        <h2>Diffusion 生成模型</h2>
+        <div class="sub">Stable Diffusion / DALL-E / Flux 的核心</div>
+      </div></div>
+
+      <div class="analogy">
+        <div class="a-head"><span class="icon">🎬</span>生活类比 · 从沙子里"擦"出图</div>
+        <div class="a-body">
+          想象你想画一只猫。<br>
+          <strong>Diffusion 不是"从空白开始画"</strong>，而是<u>从随机噪声开始</u>（一张完全的"雪花屏"），<u>一步步把噪声"擦掉"，最后浮现出猫</u>。<br><br>
+          训练时：拿真实图片<u>加 T 步噪声变成纯噪声</u>，让模型学"反向去噪"。推理时：从纯噪声开始，按训过的反向步骤一步步去噪。
+        </div>
+      </div>
+
+      <h3>4.1 主流架构演进</h3>
+
+      <ul>
+        <li><strong>DDPM</strong>（2020）：原始 diffusion，1000 步 denoise，慢</li>
+        <li><strong>Stable Diffusion</strong>（2022）：在 latent space 做 diffusion，速度快 10x</li>
+        <li><strong>DiT (Diffusion Transformer)</strong>（2023）：用 transformer 替代 UNet，Sora 用</li>
+        <li><strong>Flow Matching / Rectified Flow</strong>（2024+）：数学更简洁，Stable Diffusion 3 / Flux 用</li>
+      </ul>
+
+      <h3>4.2 加速</h3>
+
+      <p>Diffusion 慢的核心是"<strong>多步采样</strong>"（典型 20-50 步）。加速方法：</p>
+
+      <ul>
+        <li><strong>LCM (Latent Consistency)</strong>：训练时学"几步就能 denoise 完"，把 50 步降到 4 步</li>
+        <li><strong>DMD (Distribution Matching Distillation)</strong>：1 步生成（蒸馏自多步模型）</li>
+        <li><strong>FLUX.1 schnell</strong>：4 步生成接近 50 步质量</li>
+      </ul>
+
+      <h3>4.3 Text-to-Image 工程化</h3>
+
+      <table>
+        <thead><tr><th>组件</th><th>典型</th></tr></thead>
+        <tbody>
+          <tr><td>文本 encoder</td><td>CLIP / T5 / Qwen text encoder</td></tr>
+          <tr><td>Diffusion backbone</td><td>UNet (老) / DiT (新)</td></tr>
+          <tr><td>VAE (Latent encoder/decoder)</td><td>SDXL VAE / Flux VAE</td></tr>
+          <tr><td>采样调度器</td><td>DDIM / DPM-Solver / FlowMatching</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="chapter" id="ch5">
+      <div class="ch-head"><div class="num">05</div><div class="t">
+        <h2>Sora · 视频生成</h2>
+        <div class="sub">2024 开启 video diffusion 时代</div>
+      </div></div>
+
+      <h3>5.1 Sora 关键创新</h3>
+
+      <ol>
+        <li><strong>Spacetime Patch</strong>：把视频切成 3D patch（时间 × 高 × 宽），每个 patch 是一个 token</li>
+        <li><strong>DiT 架构</strong>：用 transformer 而非 UNet，可 scale up</li>
+        <li><strong>世界模型 emergent</strong>：模型自发学到物理规律（重力、流体）— 至少表面上</li>
+        <li><strong>视频长度</strong>：单次生成 60s（突破之前 4-8s）</li>
+      </ol>
+
+      <h3>5.2 2026 视频生成生态</h3>
+
+      <table>
+        <thead><tr><th>模型</th><th>特点</th></tr></thead>
+        <tbody>
+          <tr><td>OpenAI Sora</td><td>第一个突破性，长视频质量最强</td></tr>
+          <tr><td>Veo 2 / 3 (Google)</td><td>电影级质量</td></tr>
+          <tr><td>Runway Gen-3</td><td>商业最成熟，创作者用</td></tr>
+          <tr><td>HunyuanVideo（腾讯）</td><td>开源 SOTA</td></tr>
+          <tr><td>Kling AI（快手）</td><td>国内商业 SOTA</td></tr>
+          <tr><td>Wan 2.1（阿里）</td><td>开源，中文场景</td></tr>
+        </tbody>
+      </table>
+
+      <div class="intuition">
+        视频生成的 cost：1 秒视频 ~$0.1-1.0，<u>比 1k token LLM 贵 1000x</u>。所以 2026 主流不是"实时生成"，是"创作工具" — 用户描述+生成+精修。
+      </div>
+    </section>
+
+    <section class="chapter" id="ch6">
+      <div class="ch-head"><div class="num">06</div><div class="t">
+        <h2>智驾多模态融合</h2>
+        <div class="sub">VLM / VLA 上车</div>
+      </div></div>
+
+      <div class="analogy">
+        <div class="a-head"><span class="icon">🎬</span>生活类比 · AI 司机的眼+耳+脑</div>
+        <div class="a-body">
+          智驾系统 = 多模态融合的极致案例：<br>
+          ① <strong>多摄像头</strong>（前/后/左/右/环视）= 视觉<br>
+          ② <strong>毫米波雷达 + 激光雷达</strong> = 距离感<br>
+          ③ <strong>IMU + GPS</strong> = 自身位置/姿态<br>
+          ④ <strong>地图 + 导航</strong> = 路网知识<br>
+          ⑤ <strong>用户语音指令</strong>（"开慢点"）= 语言<br><br>
+          AI 系统要把所有这些<u>融合成一个"场景理解"</u>，输出方向盘转角和油门。
+        </div>
+      </div>
+
+      <h3>6.1 端到端 vs 模块化</h3>
+
+      <div class="grid cols-2">
+        <div class="card"><h4>🧱 传统模块化</h4>
+          <ul style="font-size:13px"><li>感知 (detect car/pedestrian)</li><li>预测 (trajectory)</li><li>规划 (plan path)</li><li>控制 (steer/throttle)</li></ul>
+          <p style="font-size:12px;color:var(--text-dim)"><strong>优势</strong>：可解释，可调试。<strong>劣势</strong>：模块边界 hard-code 限制。</p></div>
+        <div class="card violet"><h4>🧠 端到端 (E2E)</h4>
+          <ul style="font-size:13px"><li>多传感器 → 大 VLM → 直接输出 action</li><li>Tesla FSD v12 / 小鹏 XNGP 2025+ 用</li></ul>
+          <p style="font-size:12px;color:var(--text-dim)"><strong>优势</strong>：emergent intelligence。<strong>劣势</strong>：黑盒，难 debug，安全验证难。</p></div>
+      </div>
+
+      <h3>6.2 VLA · Vision-Language-Action</h3>
+
+      <p>从单一视觉 → action（VA）扩展到 <strong>视觉+语言 → action</strong>（VLA）。能听人话"在前方红绿灯左转"或"开慢点跟着前车"。具身机器人也用同范式。</p>
+    </section>
+
+    <section class="chapter" id="ch7">
+      <div class="ch-head"><div class="num">07</div><div class="t">
+        <h2>10 道多模态面试题</h2>
+      </div></div>
+
+      <details class="qa">
+        <summary><span class="lvl pill cyan">基础</span>Q1. CLIP 怎么训练？为什么 zero-shot 分类能 work？</summary>
+        <div class="a">
+          <div class="point"><div class="label">训练</div><div>contrastive learning：4 亿对 (图, 文)，同 batch 内正确对相似度最大错误对最小。图和文字被映射到同一向量空间。</div></div>
+          <div class="point"><div class="label">zero-shot</div><div>新类别时不需要重新训，只需把类别名（"猫"/"狗"）转 embedding，跟图 embedding 算相似度，最像的就是分类。</div></div>
+        </div>
+      </details>
+
+      <details class="qa">
+        <summary><span class="lvl pill cyan">基础</span>Q2. ViT 跟 ResNet/CNN 比有什么优势劣势？</summary>
+        <div class="a">
+          <div class="point"><div class="label">优势</div><div>① 统一架构（跟 LLM 一样 transformer）② 全局感受野 ③ scale up 效果更好</div></div>
+          <div class="point"><div class="label">劣势</div><div>① 需要更多数据训（CNN 有 inductive bias）② 高分辨率计算贵（patch 数平方）</div></div>
+        </div>
+      </details>
+
+      <details class="qa">
+        <summary><span class="lvl pill amber">进阶</span>Q3. VLM 的 architecture 主流 2 种？区别？</summary>
+        <div class="a">
+          <div class="point"><div class="label">2 种</div><div>① <strong>MLP projector</strong>（LLaVA 风）：vision encoder + 简单 MLP + LLM。简单但 token 数多<br>② <strong>Q-Former</strong>（BLIP-2 风）：用一组 learned query token 压缩视觉信息。token 少但复杂</div></div>
+          <div class="point deep"><div class="label">2026 主流</div><div>MLP 简单胜出（Qwen-VL / InternVL 都用）。Q-Former 慢慢淡出。</div></div>
+        </div>
+      </details>
+
+      <details class="qa">
+        <summary><span class="lvl pill amber">进阶</span>Q4. VLM 4 个常见局限？</summary>
+        <div class="a">
+          <div class="point"><div class="label">4 局限</div><div>① 计数/空间推理差 ② 高分辨率细节丢 ③ 视频时序弱 ④ 幻觉更严重（看不清就编造）</div></div>
+        </div>
+      </details>
+
+      <details class="qa">
+        <summary><span class="lvl pill cyan">基础</span>Q5. Whisper 为什么这么鲁棒（噪声/口音/多语言）？</summary>
+        <div class="a">
+          <div class="point"><div class="label">数据</div><div>68 万小时多语言数据训练，涵盖各种噪声/口音/方言。<u>规模碾压学术界 ASR 模型 100x</u>。</div></div>
+        </div>
+      </details>
+
+      <details class="qa">
+        <summary><span class="lvl pill amber">进阶</span>Q6. Diffusion 模型为什么能从噪声生成图像？数学直觉？</summary>
+        <div class="a">
+          <div class="point"><div class="label">训练</div><div>给真图加 T 步噪声 → 纯噪声。让模型学"反向去噪"（每一步预测要去掉的噪声）。</div></div>
+          <div class="point"><div class="label">推理</div><div>从纯噪声开始，反向去噪 T 步，逐渐浮现出图像。<em>数学上 = 学 reverse diffusion process 的 score function</em>。</div></div>
+        </div>
+      </details>
+
+      <details class="qa">
+        <summary><span class="lvl pill amber">进阶</span>Q7. LCM / DMD 怎么把 diffusion 从 50 步加速到 1-4 步？</summary>
+        <div class="a">
+          <div class="point"><div class="label">原理</div><div>用多步模型蒸馏到少步模型。LCM 训练时学"我跳几步预测就能跟原模型 N 步等效"。DMD 通过分布匹配 1 步生成。</div></div>
+        </div>
+      </details>
+
+      <details class="qa">
+        <summary><span class="lvl pill red">高频</span>Q8. Sora 跟之前视频生成有什么不同？</summary>
+        <div class="a">
+          <div class="point"><div class="label">3 创新</div><div>① <strong>Spacetime Patch</strong>：视频切 3D patch 当 token ② <strong>DiT 架构</strong>：transformer 替代 UNet，可 scale ③ <strong>长视频</strong>：60s 突破之前 4-8s</div></div>
+          <div class="point deep"><div class="label">emergent</div><div>大规模训练后<u>自发学到物理规律</u>（重力/流体），虽然不完美但显著优于上一代。</div></div>
+        </div>
+      </details>
+
+      <details class="qa">
+        <summary><span class="lvl pill amber">进阶</span>Q9. 智驾端到端 (E2E) 比模块化方案的优劣？</summary>
+        <div class="a">
+          <div class="point"><div class="label">优势</div><div>① emergent intelligence（学到模块化设计想不到的策略）② 不被模块边界 hard-code 限制</div></div>
+          <div class="point warn"><div class="label">劣势</div><div>① 黑盒，难 debug ② 安全验证难（ISO 26262 难认证）③ 失败模式不可预测</div></div>
+        </div>
+      </details>
+
+      <details class="qa">
+        <summary><span class="lvl pill red">高频</span>Q10. 2026 多模态主流趋势是什么？</summary>
+        <div class="a">
+          <div class="point"><div class="label">3 趋势</div><div>① <strong>统一 token</strong>：图/文/音/视频全部 token 化用同一 transformer（GPT-4o, Gemini 2.0）② <strong>实时对话</strong>：原生 audio LLM 让 latency 从 1-2s → 200ms ③ <strong>VLA 具身</strong>：视觉+语言+动作统一，机器人和车端都用</div></div>
+        </div>
+      </details>
+    </section>
+
+  <footer><p>上一篇 <a href="./agent_protocols_and_skills.html">X09</a> · 下一篇 <a href="./embedding_vector_search.html">X11 →</a> · 面试卡 <a href="../interview/ai_engineer_cards.html">I06</a></p></footer>
+  </main>
+</div>
+
+<script>
+(function(){var b=document.getElementById('progress');function u(){var h=document.documentElement;b.style.width=(h.scrollTop/(h.scrollHeight-h.clientHeight)*100)+'%'}window.addEventListener('scroll',u,{passive:true});u();})();
+(function(){var l=document.querySelectorAll('aside.toc nav>ol>li>a');var s=Array.from(document.querySelectorAll('section.chapter'));function u(){var y=window.scrollY+100;var c=s[0];for(var i=0;i<s.length;i++)if(s[i].offsetTop<=y)c=s[i];l.forEach(function(a){a.classList.toggle('active',a.getAttribute('href')==='#'+c.id)})}window.addEventListener('scroll',u,{passive:true});u();})();
+</script>
+</body>
+</html>
