@@ -1,122 +1,115 @@
 <div align="center">
 
-<img src="./assets/banner.png" alt="Tech Notes — an engineering journal" width="820">
+<img src="./assets/banner.png" alt="技术笔记 · Tech Notes" width="100%">
+
+<br>
+
+# 技术笔记
+
+### 📓 系统、架构与工程管理的工作笔记
+
+_关于 C++ 内部、分布式系统、工程实践与团队管理的一份长期笔记 · 单页 HTML · 离线可读_
 
 <br>
 
 <a href="https://kavinchan13.github.io/tech-notes/">
-  <img src="https://img.shields.io/badge/read%20online-kavinchan13.github.io-1c3a5e?style=flat-square&labelColor=faf8f3" alt="Read online">
+  <img src="https://img.shields.io/badge/在线阅读-kavinchan13.github.io-1c3a5e?style=flat-square&labelColor=faf8f3" alt="在线阅读">
 </a>
 &nbsp;
 <a href="./LICENSE">
-  <img src="https://img.shields.io/badge/license-MIT-8a2e2e?style=flat-square&labelColor=faf8f3" alt="MIT License">
+  <img src="https://img.shields.io/badge/License-MIT-8a2e2e?style=flat-square&labelColor=faf8f3" alt="License">
 </a>
 &nbsp;
-<img src="https://img.shields.io/badge/pure-HTML-2c6042?style=flat-square&labelColor=faf8f3" alt="Pure HTML">
+<img src="https://img.shields.io/badge/纯-HTML-2c6042?style=flat-square&labelColor=faf8f3" alt="Pure HTML">
+&nbsp;
+<img src="https://img.shields.io/badge/部署-GitHub%20Pages-a47018?style=flat-square&labelColor=faf8f3" alt="GitHub Pages">
 
 </div>
 
-<br>
-
-A slowly-growing library of working notes on **C++ internals, systems, software architecture, and engineering management** — accumulated from day-to-day work and kept as a single static site. Each page is a self-contained HTML file with no build step, no framework, and no telemetry. Open one in a browser and read it.
-
-The whole collection lives at **[kavinchan13.github.io/tech-notes](https://kavinchan13.github.io/tech-notes/)**.
-
-<br>
-
 ---
 
-### What's in here
+## 🎯 项目介绍
 
-It started as scattered C++ debugging notes and, over time, grew into ten folders that roughly mirror how the work is organized in practice:
+这是我在长期一线工作中沉淀下来的技术与管理笔记。最早只是几篇 C++ 调试记录，后来慢慢长成了一个有十个子目录、几十篇文档的静态站点。它不是教程，也不是面向某个具体岗位的体系——更像是一个"自用的工程参考书"：遇到问题翻一翻、回顾旧知识时也方便找。
 
-| Folder | What it covers |
-|---|---|
-| [`cpp/`](./cpp) | Language internals — compilation, object & memory model, value categories, templates, coroutines, smart pointers, the LLVM toolchain, sanitizer internals, modern CMake, concurrency. |
-| [`stl/`](./stl) | Containers and algorithms, design patterns rewritten in modern C++, concurrency patterns. |
-| [`perf-debug/`](./perf-debug) | Performance, low-latency, leak hunting, crash and deadlock debugging, sanitizers, ABI compatibility, hardening, observability, modern libraries. |
-| [`system/`](./system) | Linux kernel IO, file descriptors, OS fundamentals, networking, async network frameworks. |
-| [`architect/`](./architect) | Software architecture methodology, large-scale C++ engineering, distributed systems, storage, observability, plus a capstone walking through one design end-to-end. |
-| [`ai-native/`](./ai-native) | Working with LLMs — 15 guides covering Transformer internals, training (Pretrain/SFT/RLHF/DPO/GRPO), RAG, MCP & Skills, multimodal, embedding & vector search, evaluation, AI coding agents (Cursor/Devin/Claude Code), AI career landscape, and an AI math cheatsheet. |
-| [`ai-infra/`](./ai-infra) | The infrastructure underneath — 5 deep dives on CUDA for C++ engineers, vLLM/PagedAttention/Continuous Batching, distributed training (DDP/FSDP/Megatron/3D parallel), quantization (INT4/FP8/GPTQ/AWQ), and AI compilers (torch.compile/XLA/TVM/Triton/MLIR). |
-| [`embedded-realtime/`](./embedded-realtime) | Real-time and automotive C++ — PREEMPT_RT, AUTOSAR AP, ISO 26262, vehicle networking. |
-| [`management/`](./management) | Engineering management notes and a small set of EM templates (1:1, weekly, postmortem, hiring scorecard, ADR). |
-| [`pm/`](./pm) | A parallel track for project and product management, with a matching template library. |
-| [`interview/`](./interview) | A long-form Tech Lead guide plus interactive flashcard apps — C++, architect, EM, PM, and **AI engineer (120 cards across 9 topics)**, plus an AI system design playbook (15 problems) and an AI Tech Lead / EM interview guide. All cards have search, filters, and progress saved in `localStorage`. The full **30/60/90 day AI engineer study path** lives [here](./interview/ai_study_path.html). |
+整个仓库不依赖任何构建工具、框架或外部服务。每篇文档都是一个独立的 HTML 文件，clone 下来双击就能用浏览器打开；`push` 到 `main` 之后 GitHub Pages 会自动把仓库当作静态站点发布。每页右上角带统一的「主页 / Repo / Source」浮动胶囊，方便跳回索引或查看源码。
 
-<br>
+## 📚 快速开始
 
----
+### 在线阅读
 
-### Where to start
+**[🌐 进入知识库首页](https://kavinchan13.github.io/tech-notes/)** —— 无需下载，浏览器直接打开即可阅读全部内容。
 
-A handful of pages are good entry points if nothing in particular brought you here:
-
-- [The C++ object model](https://kavinchan13.github.io/tech-notes/cpp/object_model.html) — vtables, multiple inheritance, EBO, and the things that keep slipping out of memory.
-- [Low-latency programming](https://kavinchan13.github.io/tech-notes/perf-debug/low_latency_guide.html) — lock-free, kernel bypass, hardware timestamping.
-- [Architect capstone](https://kavinchan13.github.io/tech-notes/architect/architect_capstone.html) — one design walkthrough, from requirements to ADRs to storage.
-- [Transformer & modern LLM architecture](https://kavinchan13.github.io/tech-notes/ai-native/transformer_llm_architecture.html) — Attention, KV-Cache, RoPE, GQA→MLA, MoE, with life analogies and interactive demos.
-- [vLLM inference deep dive](https://kavinchan13.github.io/tech-notes/ai-infra/inference_serving.html) — PagedAttention, Continuous Batching, source-code tour. The C++ veteran's strongest leverage into AI.
-- [AI career landscape](https://kavinchan13.github.io/tech-notes/ai-native/ai_career_landscape.html) — 6 AI roles, salary bands, JD decoder, 10 reject signals, STAR story templates.
-- [AI engineer 30/60/90 study path](https://kavinchan13.github.io/tech-notes/interview/ai_study_path.html) — week-by-week plan with 3 tracks (AI Infra / LLM App / ML Research).
-- [EM templates](https://kavinchan13.github.io/tech-notes/management/em-templates/) — copy-paste 1:1s, weeklies, postmortems, hiring scorecards.
-
-<details>
-<summary>Looking for the full index? It's on the site, not in this README.</summary>
-
-<br>
-
-The README used to carry the full table of contents, which got long. The canonical index now lives at **[kavinchan13.github.io/tech-notes](https://kavinchan13.github.io/tech-notes/)**, with proper navigation, search, and the reading-time strip on every page.
-
-</details>
-
-<br>
-
----
-
-### Running it locally
-
-Every page is plain HTML, so cloning and opening `index.html` directly works. For something closer to the deployed site, run a static server:
+### 本地阅读
 
 ```bash
 git clone https://github.com/kavinChan13/tech-notes.git
 cd tech-notes
 
-# pick one
+# 方式一：直接双击 index.html
+# 方式二：起一个本地服务器（更接近 GitHub Pages 行为）
 python -m http.server 8080
+# 或
 npx serve .
 ```
 
-Then visit `http://localhost:8080/`.
+然后访问 `http://localhost:8080/`。
 
-<br>
+### ✨ 你能在这里看到什么
 
----
+- 📐 **C++ 与系统内功** —— 编译流程、对象模型、内存模型、模板、协程、LLVM 工具链、Sanitizer 内部、Modern CMake、并发
+- ⚡ **性能与排错** —— 低延迟、缓存友好、内存泄漏、崩溃/死锁、Sanitizers、ABI 兼容、安全硬化、可观测性
+- 🌐 **系统与网络** —— Linux 内核 IO、文件描述符全家桶、OS 基础、网络编程、异步框架
+- 🏛️ **架构与分布式** —— DDD / C4 / ADR、大型 C++ 工程化、Raft / Paxos、存储、可观测性、端到端 Capstone
+- 🤖 **AI-Native 工程** —— Prompt 工程、Agent 架构、LLMOps、AI Safety，以及配套的 AI 基础设施
+- 🚗 **嵌入式与车端** —— PREEMPT_RT、AUTOSAR AP、ISO 26262、车端网络
+- 👥 **工程管理** —— EM 知识体系、组织设计、AI 时代的工程管理，配套 EM 模板库
+- 📋 **PM 双线** —— 项目管理 + 产品管理双轨学习路线，配套 PM 模板库
+- 🎯 **面试速查卡** —— C++ / 架构师 / EM / PM 四套交互式卡片应用，可搜索、筛选、标记掌握度
 
-### Deployment
+## 📖 内容导航
 
-[`.github/workflows/pages.yml`](./.github/workflows/pages.yml) publishes the site to GitHub Pages on every push to `main`. There is no build step — the workflow uploads the repo as-is.
+| 板块 | 目录 | 主要内容 |
+| --- | --- | --- |
+| **C++ 语言核心** | [`cpp/`](./cpp) | 编译、对象与内存模型、值类别、模板、异常、现代特性、智能指针、协程、LLVM 工具链、Sanitizer 内部、Modern CMake、并发 |
+| **STL & 设计模式** | [`stl/`](./stl) | 容器、算法、GoF 模式（C++ 视角）、并发模式 |
+| **性能与调试** | [`perf-debug/`](./perf-debug) | 性能优化、低延迟、内存泄漏、崩溃与死锁调试、Sanitizers、CMake/CI、ABI 兼容、安全硬化、可观测性 |
+| **系统与网络** | [`system/`](./system) | Linux 内核 IO、文件描述符、OS 基础、网络编程、异步网络框架 |
+| **架构师方法论** | [`architect/`](./architect) | C4 / DDD / ADR、大型 C++ 工程化、分布式系统、存储、可观测性、Capstone、分布式进阶 |
+| **AI-Native 工程** | [`ai-native/`](./ai-native) · [`ai-infra/`](./ai-infra) | AI-Native 实践、Prompt 工程、Agent 架构、LLMOps、AI Safety + AI 基础设施 |
+| **嵌入式 / 实时 / 车端** | [`embedded-realtime/`](./embedded-realtime) | PREEMPT_RT、AUTOSAR AP、ISO 26262、车端网络 |
+| **工程管理 & EM** | [`management/`](./management) | 研发管理、管理知识体系、Senior EM、AI-Native EM、组织设计、EM 模板库 |
+| **PM 双线** | [`pm/`](./pm) | PgM × PdM 能力地图、EVM、A/B 测试、干系人、JTBD、PRD、PMBOK + PM 模板库 |
+| **面试** | [`interview/`](./interview) | Tech Lead 长文 + C++ / 架构师 / EM / PM 四套交互式卡片应用 |
+
+> 完整目录、跨文档链接、搜索、阅读时长等导航信息都在 [GitHub Pages 站点](https://kavinchan13.github.io/tech-notes/) 上。
+
+## 💡 推荐的几个入口
+
+如果不知道从哪里开始，可以试试这几篇：
+
+- [C++ 对象模型](https://kavinchan13.github.io/tech-notes/cpp/object_model.html) —— vtable、多继承、EBO，那些容易忘记的细节
+- [低延迟编程](https://kavinchan13.github.io/tech-notes/perf-debug/low_latency_guide.html) —— 无锁、内核旁路、硬件时间戳
+- [架构师 Capstone](https://kavinchan13.github.io/tech-notes/architect/architect_capstone.html) —— 一个端到端的设计走查：需求 → ADR → 存储 → 可观测性
+- [AI-Native 工程实践](https://kavinchan13.github.io/tech-notes/ai-native/engineering_practice.html) —— IC 与 EM 工作流中真正改变的部分
+- [EM 模板库](https://kavinchan13.github.io/tech-notes/management/em-templates/) —— 1on1、周报、Postmortem、招聘 Scorecard 等可直接复用的模板
+
+## 🚀 部署
+
+仓库已配置 [`.github/workflows/pages.yml`](./.github/workflows/pages.yml)，每次 push 到 `main` 之后会自动发布到 GitHub Pages，没有任何构建步骤。
 
 ```bash
 git add .
-git commit -m "docs: …"
+git commit -m "docs: ..."
 git push
+# 一两分钟后 https://kavinchan13.github.io/tech-notes/ 会自动更新
 ```
 
-A minute or two later the change is live.
+## 📜 关于内容
 
-<br>
+- 部分较长的文档由 AI 辅助起草，再经过本人人工整理、验证与修订后发布。所有内容只代表个人学习与思考记录，不代表任何雇主、客户或组织的观点，也不构成法律、安全或认证建议。
+- 文中提及的 PMBOK<sup>®</sup> / AUTOSAR<sup>®</sup> / ISO / IEC / MISRA 等名称均为各自权利人的注册商标或标准名称，仅用于描述性引用。本仓库与上述组织无任何附属、赞助或背书关系。
 
----
+## License
 
-### A note on how this is written
-
-Some of the longer guides were drafted with AI assistance and then edited, restructured, and verified by hand before being committed. They are personal notes, not the official position of any employer, client, or organization, and they should not be relied on as legal, safety, or certification advice. Where standards or trademarks are mentioned — PMBOK, AUTOSAR, ISO, IEC, MISRA, and so on — they belong to their respective owners and appear here only for descriptive reference.
-
-<br>
-
-<div align="center">
-
-<sub>[MIT](./LICENSE) © 2026 Kavin Chan</sub>
-
-</div>
+[MIT](./LICENSE) © 2026 Kavin Chan
