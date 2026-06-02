@@ -1,0 +1,1079 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RAG 深潜 · Chunking / Hybrid Search / Rerank / Graph RAG / Eval — Tech Notes</title>
+<link rel="stylesheet" href="../assets/site-theme.css">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<style>
+.analogy{background:linear-gradient(135deg,#1a1f3a 0%,#1f2842 100%);
+  border:1px solid rgba(125,211,252,.25);border-radius:14px;padding:20px 24px;margin:20px 0;
+  position:relative;overflow:hidden;box-shadow:0 8px 28px -10px rgba(125,211,252,.25);}
+.analogy::before{content:"";position:absolute;top:0;left:0;right:0;height:3px;
+  background:linear-gradient(90deg,#7dd3fc,#a78bfa,#34d399);}
+.analogy .a-head{display:flex;align-items:center;gap:10px;
+  font-size:13px;font-weight:700;color:#7dd3fc;
+  text-transform:uppercase;letter-spacing:1.5px;margin-bottom:12px;}
+.analogy .a-head .icon{font-size:22px;line-height:1}
+.analogy .a-body{font-size:14.5px;line-height:1.8;color:#e4e9f5}
+.analogy .a-body strong{color:#fbbf24}
+.analogy .a-map{margin-top:14px;padding:12px 16px;background:rgba(15,20,36,.55);
+  border-radius:8px;border:1px dashed rgba(125,211,252,.2);font-size:13px;color:#94a3b8;}
+.analogy .a-map .arrow{color:#7dd3fc;margin:0 6px;font-weight:700}
+.analogy .a-map .term{color:#a78bfa;font-weight:600;font-family:"JetBrains Mono",monospace}
+
+.intuition{background:rgba(251,191,36,.05);border-left:4px solid #fbbf24;
+  padding:14px 18px;border-radius:0 10px 10px 0;margin:14px 0;
+  font-size:14.5px;line-height:1.7;}
+.intuition::before{content:"🎯 一句话直觉 · ";color:#fbbf24;font-weight:700;font-size:13px}
+
+/* RAG 流水线可视化（核心组件） */
+.pipeline{
+  display:flex;align-items:center;gap:6px;
+  padding:18px;background:#080c18;border-radius:12px;margin:16px 0;
+  overflow-x:auto;
+}
+.pipeline .stage{
+  flex:1;min-width:120px;padding:14px 12px;border-radius:8px;
+  text-align:center;font-size:12px;color:#e4e9f5;
+  border:1px solid #2a3556;
+}
+.pipeline .stage strong{display:block;font-size:13px;margin-bottom:4px;color:#fff}
+.pipeline .stage .num{
+  font-family:"JetBrains Mono",monospace;font-size:10px;
+  color:#94a3b8;letter-spacing:1px;margin-bottom:4px;
+}
+.pipeline .stage.s1{background:linear-gradient(135deg,#1a3a5c,#0f1f2c)}
+.pipeline .stage.s2{background:linear-gradient(135deg,#3a2862,#1e1432)}
+.pipeline .stage.s3{background:linear-gradient(135deg,#624b14,#3a2c08)}
+.pipeline .stage.s4{background:linear-gradient(135deg,#1c4a2a,#0c2418)}
+.pipeline .stage.s5{background:linear-gradient(135deg,#62261f,#3a1410)}
+.pipeline .arrow{color:#94a3b8;font-size:18px;flex-shrink:0}
+
+/* Chunking 视觉对比 */
+.chunk-vis{background:#080c18;border-radius:10px;padding:14px;margin:14px 0;}
+.chunk-vis .doc{
+  background:#1a2138;padding:12px 14px;border-radius:8px;
+  font-size:13px;color:#cbd5e1;line-height:1.9;font-family:"JetBrains Mono",monospace;
+}
+.chunk-vis .chunk-a{background:rgba(125,211,252,.15);padding:1px 4px;border-radius:3px;border-bottom:2px solid #7dd3fc}
+.chunk-vis .chunk-b{background:rgba(167,139,250,.15);padding:1px 4px;border-radius:3px;border-bottom:2px solid #a78bfa}
+.chunk-vis .chunk-c{background:rgba(52,211,153,.15);padding:1px 4px;border-radius:3px;border-bottom:2px solid #34d399}
+.chunk-vis .chunk-d{background:rgba(251,191,36,.15);padding:1px 4px;border-radius:3px;border-bottom:2px solid #fbbf24}
+.chunk-vis .label{
+  text-align:center;font-size:11px;color:#94a3b8;margin-top:10px;
+  font-family:"JetBrains Mono",monospace;
+}
+
+/* Hybrid Search 对比 */
+.hybrid-cmp{
+  display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin:16px 0;
+}
+.hybrid-cmp .h-card{
+  background:#141a2c;border:1px solid #2a3556;border-radius:10px;padding:16px;
+}
+.hybrid-cmp .h-head{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px}
+.hybrid-cmp .h-card.bm25 .h-head{color:#fbbf24}
+.hybrid-cmp .h-card.dense .h-head{color:#a78bfa}
+.hybrid-cmp .h-card.hybrid .h-head{color:#34d399}
+.hybrid-cmp .h-body{font-size:13px;color:#cbd5e1;line-height:1.7}
+.hybrid-cmp .h-eg{
+  margin-top:10px;padding:8px 10px;background:#0a0e1a;border-radius:6px;
+  font-family:"JetBrains Mono",monospace;font-size:11px;color:#94a3b8;
+}
+@media(max-width:760px){.hybrid-cmp{grid-template-columns:1fr}}
+
+/* Rerank 漏斗 */
+.funnel{
+  display:flex;flex-direction:column;align-items:center;gap:8px;
+  padding:18px;background:#080c18;border-radius:10px;margin:14px 0;
+}
+.funnel .stage{
+  height:50px;display:flex;align-items:center;justify-content:center;
+  background:linear-gradient(135deg,#1f2842,#2a3556);border-radius:8px;
+  color:#e4e9f5;font-weight:700;border:1px solid #3a4670;
+  font-family:"JetBrains Mono",monospace;font-size:13px;
+}
+.funnel .arrow{color:#94a3b8;font-size:14px}
+.funnel .stage.s1{width:100%;background:linear-gradient(135deg,#1a3a5c,#0f1f2c);color:#7dd3fc}
+.funnel .stage.s2{width:60%;background:linear-gradient(135deg,#3a2862,#1e1432);color:#a78bfa}
+.funnel .stage.s3{width:30%;background:linear-gradient(135deg,#1c4a2a,#0c2418);color:#34d399}
+.funnel .stage.s4{width:12%;background:linear-gradient(135deg,#624b14,#3a2c08);color:#fbbf24}
+
+/* 真实案例卡 */
+.case{
+  background:#1a0a0a;border:1px solid rgba(248,113,113,.3);
+  border-left:4px solid #f87171;border-radius:0 12px 12px 0;
+  padding:18px 22px;margin:18px 0;
+}
+.case .c-head{
+  color:#f87171;font-size:12px;font-weight:700;text-transform:uppercase;
+  letter-spacing:1.5px;margin-bottom:10px;
+}
+.case .c-head::before{content:"🔥 真实事故 · "}
+.case .c-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:12px 0}
+.case .c-grid > div{padding:8px 10px;background:#0a0e1a;border-radius:6px}
+.case .c-grid h5{font-size:11px;color:#fbbf24;margin-bottom:4px;text-transform:uppercase;letter-spacing:1px}
+.case .c-grid p{font-size:13px;color:#cbd5e1;margin:0;line-height:1.6}
+@media(max-width:760px){.case .c-grid{grid-template-columns:1fr}}
+
+/* Metric 卡 */
+.metric-card{
+  background:linear-gradient(135deg,#1a2138 0%,#141a2c 100%);
+  border:1px solid #2a3556;border-radius:10px;padding:16px;
+  text-align:center;
+}
+.metric-card .m-name{font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:1.5px;margin-bottom:8px}
+.metric-card .m-val{
+  font-family:"JetBrains Mono",monospace;font-size:24px;font-weight:800;
+  background:linear-gradient(135deg,#7dd3fc,#a78bfa);
+  -webkit-background-clip:text;background-clip:text;color:transparent;
+}
+.metric-card .m-desc{font-size:12px;color:#cbd5e1;margin-top:6px}
+</style>
+</head>
+<body>
+
+<!-- tn-nav:v1 -->
+<style>
+#tn-nav{position:fixed;top:14px;right:14px;z-index:99999;display:flex;gap:6px;align-items:center;
+  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;
+  font-size:12px;line-height:1;font-weight:500;}
+#tn-nav a,#tn-nav .tn-meta{display:inline-flex;align-items:center;gap:4px;
+  background:rgba(20,20,30,.85);color:#fff !important;text-decoration:none !important;
+  padding:7px 11px;border-radius:999px;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+  border:1px solid rgba(255,255,255,.10);box-shadow:0 2px 8px rgba(0,0,0,.18);
+  transition:background .15s,transform .15s;}
+#tn-nav a:hover{background:rgba(56,189,248,.92);transform:translateY(-1px);}
+#tn-nav .tn-meta{background:rgba(20,20,30,.55);cursor:default;}
+@media (max-width:640px){#tn-nav{top:8px;right:8px;font-size:11px;gap:4px;}
+  #tn-nav a,#tn-nav .tn-meta{padding:5px 9px;}}
+@media print{#tn-nav{display:none;}}
+</style>
+<div id="tn-nav">
+  <a href="../index.html">← 主页</a>
+  <a href="../interview/ai_study_path.html">📚 路径</a>
+  <a href="./transformer_llm_architecture.html">🧠 X06</a>
+  <a href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener">📁 Repo</a>
+  <span class="tn-meta">⏱ 55 min</span>
+</div>
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>X08 · RAG Deep Dive</h2>
+    <nav>
+      <ol>
+        <li><a href="#ch0" class="active">读前地图</a></li>
+        <li><a href="#ch1">为什么 RAG · 开卷考试</a></li>
+        <li><a href="#ch2">朴素 RAG 4 个问题</a></li>
+        <li><a href="#ch3">Chunking · 文档切片</a></li>
+        <li><a href="#ch4">Embedding 模型选型</a></li>
+        <li><a href="#ch5">Hybrid Search · 关键字+语义</a></li>
+        <li><a href="#ch6">Reranking · 粗排+精排</a></li>
+        <li><a href="#ch7">高级模式 · GraphRAG / Self-RAG</a></li>
+        <li><a href="#ch8">RAG 评测 · RAGAS / TruLens</a></li>
+        <li><a href="#ch9">5 个真实事故</a></li>
+        <li><a href="#ch10">实战 · 搭 production RAG</a></li>
+        <li><a href="#ch11">12 道高频面试题</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+
+    <header class="hero">
+      <div class="badge">X08 · RAG Deep Dive · 通俗深潜版</div>
+      <h1>RAG 深潜<br>Chunking · Hybrid · Rerank · Eval · 真实事故</h1>
+      <p class="sub">
+        12 章 · 7 个生活类比 · 5 个真实事故 · 12 道面试题 · 完整 production RAG 蓝图。<br>
+        <strong>对位读者</strong>：搭过 LangChain demo RAG 但准确率上不去 / 想知道为什么"开源 RAG 框架"在生产掉链子 / LLM App 工程师想做出有数字的 case。<br>
+        <strong>关键 takeaway</strong>：<u>RAG 80% 的准确率提升不来自换模型，来自工程优化（chunking + hybrid + rerank + eval）</u>。
+      </p>
+      <div class="meta">
+        <span>12 章节</span>
+        <span>~55 min 阅读</span>
+        <span>7 个生活类比</span>
+        <span>5 个真实事故</span>
+        <span>12 面试题</span>
+      </div>
+    </header>
+
+    <!-- ============= Ch0：读前地图 ============= -->
+    <section class="chapter" id="ch0">
+      <div class="ch-head">
+        <div class="num">00</div>
+        <div class="t">
+          <h2>读前地图 · LLM App 工程师的核心战场</h2>
+          <div class="sub">3 种读者推荐路径</div>
+        </div>
+      </div>
+
+      <p class="lead">RAG 是 2024-2026 LLM App 工程师 <strong>最高频的工作</strong>。基本所有"AI 客服"、"知识库问答"、"文档助手"内部都是 RAG。本文不是 LangChain tutorial，<u>是教你"为什么开源 RAG 默认配置准确率只有 47%，怎么调到 89%"</u>。</p>
+
+      <div class="kmap">
+        <div class="kmap-title">3 种读者 · 推荐路径</div>
+        <div class="grid cols-3">
+          <div class="card">
+            <h4>🆕 没搭过 RAG</h4>
+            <p style="font-size:13px;color:var(--text-dim)">"听过 RAG 但不知道怎么搭"<br><strong>路径</strong>：ch1 (开卷考试类比) + ch2 + ch10 实战<br><strong>耗时</strong>：~20 min</p>
+          </div>
+          <div class="card violet">
+            <h4>🎓 用过 LangChain 但准确率低</h4>
+            <p style="font-size:13px;color:var(--text-dim)">"搭过 demo 但生产掉链子"<br><strong>路径</strong>：全文按序，重点 ch3-ch6 + ch8 eval<br><strong>耗时</strong>：~55 min</p>
+          </div>
+          <div class="card green">
+            <h4>🧠 在做高级 RAG</h4>
+            <p style="font-size:13px;color:var(--text-dim)">"已经用 Hybrid Search 想试 GraphRAG"<br><strong>路径</strong>：ch7 高级模式 + ch9 真实事故 + ch11 面试题<br><strong>耗时</strong>：~25 min</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============= Ch1：为什么 RAG ============= -->
+    <section class="chapter" id="ch1">
+      <div class="ch-head">
+        <div class="num">01</div>
+        <div class="t">
+          <h2>为什么 RAG · 让 LLM 开卷考试</h2>
+          <div class="sub">解决 LLM 3 大死穴：知识过期 / 幻觉 / 数据私有</div>
+        </div>
+      </div>
+
+      <div class="analogy">
+        <div class="a-head"><span class="icon">🎬</span><span>生活类比 · 闭卷 vs 开卷考试</span></div>
+        <div class="a-body">
+          <strong>朴素 LLM（=闭卷考试）</strong>：学生<u>只能凭记忆答题</u>。问 "公司昨天发布的新产品多少钱"，学生没学过 → 瞎编一个（=幻觉）。问 "我们公司 SOP 怎么写" → 没见过私有文档 → 答错。<br><br>
+          <strong>RAG（=开卷考试）</strong>：学生答题前<u>先翻教科书</u>，把相关章节抄到草稿纸（=context），<u>基于这些资料</u>回答。问什么都能查到精准答案，<u>而且能说"出处是第几页"</u>（=引用）。<br><br>
+          <strong>RAG = Retrieval-Augmented Generation</strong> — <u>先检索（Retrieval）相关资料，再让 LLM 基于这些资料生成（Generation）答案</u>。
+        </div>
+        <div class="a-map">
+          翻教科书 <span class="arrow">→</span> <span class="term">retrieval</span> &nbsp;·&nbsp;
+          相关章节 <span class="arrow">→</span> <span class="term">retrieved chunks</span> &nbsp;·&nbsp;
+          基于资料答 <span class="arrow">→</span> <span class="term">augmented generation</span> &nbsp;·&nbsp;
+          引用页码 <span class="arrow">→</span> <span class="term">citations</span>
+        </div>
+      </div>
+
+      <h3>1.1 RAG 解决了 LLM 的 3 个死穴</h3>
+
+      <div class="grid cols-3">
+        <div class="card danger">
+          <h4>❌ 知识过期</h4>
+          <p style="font-size:13.5px">GPT-4 训练数据截止 2023，问 2025 事就懵。<u>RAG 接实时知识库</u>，知识总是新的。</p>
+        </div>
+        <div class="card danger">
+          <h4>❌ 幻觉 (Hallucination)</h4>
+          <p style="font-size:13.5px">LLM 不知道时会"自信地胡说"。<u>RAG 强制让答案基于检索文档</u>，能引用出处，幻觉率从 18% 降到 3%。</p>
+        </div>
+        <div class="card danger">
+          <h4>❌ 私有数据</h4>
+          <p style="font-size:13.5px">公司内部文档 LLM 没训过。<u>RAG 不需要重新训模型</u>，把私有文档放向量库就行。</p>
+        </div>
+      </div>
+
+      <h3>1.2 标准 RAG 流水线 · 5 个阶段</h3>
+
+      <div class="pipeline">
+        <div class="stage s1"><div class="num">01</div><strong>Chunking</strong>把文档切片</div>
+        <div class="arrow">→</div>
+        <div class="stage s2"><div class="num">02</div><strong>Embedding</strong>切片转向量</div>
+        <div class="arrow">→</div>
+        <div class="stage s3"><div class="num">03</div><strong>Retrieval</strong>查相关切片</div>
+        <div class="arrow">→</div>
+        <div class="stage s4"><div class="num">04</div><strong>Rerank</strong>精排前 N</div>
+        <div class="arrow">→</div>
+        <div class="stage s5"><div class="num">05</div><strong>Generation</strong>LLM 生成</div>
+      </div>
+
+      <div class="intuition">
+        <strong>RAG 80% 的准确率提升不来自换 LLM，来自前 4 个阶段的工程优化</strong>。所以同一个 GPT-4 在不同 RAG 系统里，准确率可以从 47% 到 92%。本文 ch3-ch8 就是讲怎么把每个阶段调到最优。
+      </div>
+    </section>
+
+    <!-- ============= Ch2：朴素 RAG 4 个问题 ============= -->
+    <section class="chapter" id="ch2">
+      <div class="ch-head">
+        <div class="num">02</div>
+        <div class="t">
+          <h2>朴素 RAG 4 个致命问题</h2>
+          <div class="sub">用 LangChain 默认配置就会踩的坑</div>
+        </div>
+      </div>
+
+      <div class="analogy">
+        <div class="a-head"><span class="icon">🎬</span><span>生活类比 · 学渣开卷考试也不行</span></div>
+        <div class="a-body">
+          开卷考试不一定能拿高分 — 看你"翻书技术"好不好：<br>
+          ① <strong>书撕成什么段</strong>？撕得太碎找不全；撕得太大塞不进草稿纸 (=chunking)<br>
+          ② <strong>你的目录索引好不好</strong>？凭关键字搜还是凭意思搜 (=embedding/search)<br>
+          ③ <strong>搜出来 100 段你看不过来</strong>，要精排 (=rerank)<br>
+          ④ <strong>抄到草稿纸上 LLM 真的看了吗</strong>？看了一半 (=context utilization)<br><br>
+          这 4 个问题<u>每一个都能让 RAG 准确率掉 10-30%</u>。
+        </div>
+      </div>
+
+      <div class="grid cols-2">
+        <div class="card danger">
+          <h4>❌ 问题 1 · Chunking 太蠢</h4>
+          <p style="font-size:13.5px">默认按 1000 字符切，<u>把一个段落从中间切开</u> → 关键信息分散到 2 个 chunk，单独看都缺上下文。</p>
+          <p style="font-size:12.5px;color:var(--text-dim);margin-top:6px"><strong>影响</strong>：召回率 -20-40%</p>
+        </div>
+        <div class="card danger">
+          <h4>❌ 问题 2 · 纯 Dense Embedding 失精</h4>
+          <p style="font-size:13.5px">用纯语义检索，<u>问 "vLLM v0.8.5 性能"，检索出的全是 v0.8.0 的内容</u>（语义近，但版本号不匹配）。</p>
+          <p style="font-size:12.5px;color:var(--text-dim);margin-top:6px"><strong>影响</strong>：精确查询场景 -30-50%</p>
+        </div>
+        <div class="card danger">
+          <h4>❌ 问题 3 · 没有 Rerank</h4>
+          <p style="font-size:13.5px">直接把召回 top-10 给 LLM。<u>实际最相关的可能排第 7</u>，LLM 被前 6 个噪音淹没。</p>
+          <p style="font-size:12.5px;color:var(--text-dim);margin-top:6px"><strong>影响</strong>：精确率 -10-25%</p>
+        </div>
+        <div class="card danger">
+          <h4>❌ 问题 4 · Context 太长 LLM "中间遗忘"</h4>
+          <p style="font-size:13.5px">塞 20 个 chunk 进 context，<u>LLM 对位置中段的 token 关注度低</u>（lost in the middle 论文）。</p>
+          <p style="font-size:12.5px;color:var(--text-dim);margin-top:6px"><strong>影响</strong>：context 越长精度越掉</p>
+        </div>
+      </div>
+
+      <div class="tip">
+        <strong>4 个问题对应解法</strong>：① 智能 Chunking (ch3) ② Hybrid Search (ch5) ③ Cross-Encoder Rerank (ch6) ④ 控制 context 长度 + Rerank 保留 top-3 / top-5 (ch6)。<u>4 个加起来就是 production RAG</u>。
+      </div>
+    </section>
+
+    <!-- ============= Ch3：Chunking ============= -->
+    <section class="chapter" id="ch3">
+      <div class="ch-head">
+        <div class="num">03</div>
+        <div class="t">
+          <h2>Chunking · 文档怎么切才对</h2>
+          <div class="sub">6 种切片策略 · 没有一种万能</div>
+        </div>
+      </div>
+
+      <div class="analogy">
+        <div class="a-head"><span class="icon">🎬</span><span>生活类比 · 把一本书撕成几段最有用</span></div>
+        <div class="a-body">
+          想象你要"撕书做参考资料"，下次答题时翻这些纸条。<br>
+          <strong>不能整本撕一张</strong> — 一张纸太大塞不进草稿纸<br>
+          <strong>不能每个字一张</strong> — 找的时候根本看不出脉络<br>
+          <strong>最好按段落 / 章节撕</strong>，<u>每张纸内容自洽，能独立看懂</u><br><br>
+          这就是 Chunking 的核心 — <u>找到"语义自洽的最小单元"</u>。书的"段落"、代码的"函数"、对话的"轮次"都是好的边界。
+        </div>
+      </div>
+
+      <h3>3.1 6 种 Chunking 策略</h3>
+
+      <table>
+        <thead><tr><th>策略</th><th>原理</th><th>优势</th><th>劣势</th><th>适合</th></tr></thead>
+        <tbody>
+          <tr><td>固定大小（Fixed-Size）</td><td>每 512 字符切一段</td><td>简单 / 快</td><td>会切碎段落</td><td>简单 demo</td></tr>
+          <tr><td><strong>带 overlap 滑窗</strong></td><td>512 字符 + 50 字符 overlap</td><td>避免边界丢信息</td><td>有冗余</td><td>大多数场景默认</td></tr>
+          <tr><td>句子 / 段落级</td><td>按 . / \n\n 切</td><td>语义自然</td><td>长度参差</td><td>纯文本文档</td></tr>
+          <tr><td>语义切分（Semantic）</td><td>用 embedding 相似度找断点</td><td>语义最自洽</td><td>慢 / 贵</td><td>高质量场景</td></tr>
+          <tr><td>结构化切分</td><td>按 markdown header / code block</td><td>保留结构信息</td><td>仅适合特定格式</td><td>技术文档 / 代码</td></tr>
+          <tr><td><strong>层次化（Hierarchical）</strong></td><td>大 chunk → 小 chunk 嵌套</td><td>同时保 context 和精度</td><td>实现复杂</td><td>2026 最佳实践</td></tr>
+        </tbody>
+      </table>
+
+      <h3>3.2 切片大小怎么选</h3>
+
+      <div class="chunk-vis">
+        <div class="doc">
+          <strong>原文（500 字）</strong>：vLLM 是一个用于大语言模型推理和服务的开源库。它由 UC Berkeley 的研究者在 2023 年提出。vLLM 的核心创新是 PagedAttention 算法，灵感来自操作系统的虚拟内存分页机制。PagedAttention 通过把 KV-Cache 分成固定大小的块（典型 16 token），按需分配，避免了传统连续分配的内存碎片问题。这让显存利用率从 30% 提升到 96%。结合 Continuous Batching 调度算法，vLLM 在 throughput 上比 naive 推理快 14-24 倍。
+        </div>
+        <div class="label">原文（无切分）</div>
+      </div>
+
+      <div class="chunk-vis">
+        <div class="doc">
+          <span class="chunk-a">vLLM 是一个用于大语言模型推理和服务的开源库。它由 UC Berkeley 的研究者在 2023 年提出。vLLM 的核心创新是</span><span class="chunk-b"> PagedAttention 算法，灵感来自操作系统的虚拟内存分页机制。PagedAttention 通过把 KV-Cache 分成固定大小的</span><span class="chunk-c">块（典型 16 token），按需分配，避免了传统连续分配的内存碎片问题。这让显存利用率从 30% 提升到 96%。结合</span><span class="chunk-d"> Continuous Batching 调度算法，vLLM 在 throughput 上比 naive 推理快 14-24 倍。</span>
+        </div>
+        <div class="label">❌ 固定 100 字符切（破坏语义边界 — "vLLM 的核心创新是" / "PagedAttention 算法" 被切开）</div>
+      </div>
+
+      <div class="chunk-vis">
+        <div class="doc">
+          <span class="chunk-a">vLLM 是一个用于大语言模型推理和服务的开源库。它由 UC Berkeley 的研究者在 2023 年提出。</span><br>
+          <span class="chunk-b">vLLM 的核心创新是 PagedAttention 算法，灵感来自操作系统的虚拟内存分页机制。PagedAttention 通过把 KV-Cache 分成固定大小的块（典型 16 token），按需分配，避免了传统连续分配的内存碎片问题。这让显存利用率从 30% 提升到 96%。</span><br>
+          <span class="chunk-c">结合 Continuous Batching 调度算法，vLLM 在 throughput 上比 naive 推理快 14-24 倍。</span>
+        </div>
+        <div class="label">✅ 按句子切（语义自洽，每个 chunk 独立可读）</div>
+      </div>
+
+      <h3>3.3 经验值</h3>
+
+      <table>
+        <thead><tr><th>场景</th><th>推荐 chunk 大小</th><th>overlap</th></tr></thead>
+        <tbody>
+          <tr><td>通用问答</td><td>300-500 字符</td><td>50-100 字符</td></tr>
+          <tr><td>技术文档 / API doc</td><td>500-1000 字符（按 section）</td><td>0（用结构边界）</td></tr>
+          <tr><td>代码库</td><td>1 个函数 / 类</td><td>0</td></tr>
+          <tr><td>对话历史</td><td>1 轮对话</td><td>0</td></tr>
+          <tr><td>长文档总结</td><td>2000-4000 字符（章节）</td><td>200</td></tr>
+        </tbody>
+      </table>
+
+      <div class="warn">
+        <strong>常见错误</strong>：照搬 LangChain 默认 1000 字符 + 200 overlap。<u>很多场景这个太大或太小</u>。生产 RAG 必须根据自己数据特性测 3-5 种 chunk size，挑召回率最高的。
+      </div>
+    </section>
+
+    <!-- ============= Ch4：Embedding 选型 ============= -->
+    <section class="chapter" id="ch4">
+      <div class="ch-head">
+        <div class="num">04</div>
+        <div class="t">
+          <h2>Embedding 模型选型 · 语义相似怎么变成数字</h2>
+          <div class="sub">不是越大越好 · 不同场景选不同</div>
+        </div>
+      </div>
+
+      <div class="analogy">
+        <div class="a-head"><span class="icon">🎬</span><span>生活类比 · 把每个段落变成"坐标"</span></div>
+        <div class="a-body">
+          想象世界上每个段落都被映射到一个 N 维空间的"坐标"（典型 N=768 或 1024）。<u>语义相似的段落坐标距离近</u>。<br><br>
+          检索时：把你的问题也映射到坐标，<u>计算它跟每个段落的距离</u>，找最近的 K 个就是答案。<br><br>
+          <strong>Embedding 模型</strong> = 训练好的"段落 → 坐标"映射函数。不同 embedding 模型映射风格不同 — 有的擅长中文、有的擅长代码、有的擅长长文档。
+        </div>
+      </div>
+
+      <h3>4.1 主流 Embedding 模型对比</h3>
+
+      <table>
+        <thead><tr><th>模型</th><th>维度</th><th>语言</th><th>MTEB 分数</th><th>特点</th></tr></thead>
+        <tbody>
+          <tr><td><strong>BGE-Large (BAAI)</strong></td><td>1024</td><td>中英</td><td>~64</td><td>中文场景默认，免费</td></tr>
+          <tr><td>BGE-M3</td><td>1024</td><td>多语言</td><td>~66</td><td>同时支持 dense / sparse / multi-vec</td></tr>
+          <tr><td><strong>Qwen3-Embedding</strong></td><td>1024 / 4096</td><td>多语言</td><td>~70</td><td>2025 最强开源，中文 SOTA</td></tr>
+          <tr><td>OpenAI text-embedding-3-large</td><td>3072</td><td>多语言</td><td>~64</td><td>商业 API，稳但贵</td></tr>
+          <tr><td>Cohere embed-v3</td><td>1024</td><td>多语言</td><td>~64</td><td>压缩感知 / 多模态</td></tr>
+          <tr><td>VoyageAI voyage-3</td><td>1024</td><td>多语言</td><td>~66</td><td>面向 production 优化</td></tr>
+          <tr><td>NV-Embed-v2</td><td>4096</td><td>英文</td><td>~72</td><td>纯英文场景最强（基于 Mistral）</td></tr>
+        </tbody>
+      </table>
+
+      <h3>4.2 选型决策</h3>
+
+      <div class="grid cols-3">
+        <div class="card">
+          <h4>💰 成本敏感</h4>
+          <p style="font-size:13.5px"><strong>BGE-Large + 本地部署</strong>。免费，效果接近 OpenAI。</p>
+        </div>
+        <div class="card violet">
+          <h4>🌏 中文场景</h4>
+          <p style="font-size:13.5px"><strong>Qwen3-Embedding</strong>。中文 MTEB 第一，开源。</p>
+        </div>
+        <div class="card amber">
+          <h4>🚀 极致质量</h4>
+          <p style="font-size:13.5px"><strong>BGE-M3 + 多向量混合</strong> 或 <strong>NV-Embed-v2</strong>（英文）。</p>
+        </div>
+      </div>
+
+      <div class="info">
+        <strong>面试常问</strong>："为什么不直接用 OpenAI embedding"？答：① 国内合规 ② cost (本地 BGE 免费) ③ 中文场景 OpenAI 不如 Qwen3 / BGE。<u>2026 国内基本都用开源 BGE / Qwen3</u>。
+      </div>
+    </section>
+
+    <!-- ============= Ch5：Hybrid Search ============= -->
+    <section class="chapter" id="ch5">
+      <div class="ch-head">
+        <div class="num">05</div>
+        <div class="t">
+          <h2>Hybrid Search · BM25 + Dense 组合拳</h2>
+          <div class="sub">关键字搜 + 语义搜 强强联手</div>
+        </div>
+      </div>
+
+      <div class="analogy">
+        <div class="a-head"><span class="icon">🎬</span><span>生活类比 · 找资料的两种方式</span></div>
+        <div class="a-body">
+          你查 "vLLM v0.8.5 性能"，有两种找法：<br><br>
+          <strong>关键字搜</strong>（=BM25）：图书馆按关键字索引，能精确匹配 "vLLM"、"v0.8.5"、"性能"。<u>专有名词、版本号、人名找得准</u>，但近义词找不到（搜"汽车"找不到"轿车"）。<br><br>
+          <strong>语义搜</strong>（=Dense Embedding）：根据"意思"找，能匹配 "vLLM 速度评测"、"vLLM throughput benchmark"。<u>近义词找得到</u>，但版本号容易乱（搜 v0.8.5 可能给你 v0.8.0）。<br><br>
+          <strong>Hybrid Search</strong> = 两者都跑，<u>分数加权融合</u>。专有名词 + 语义都不丢。<u>2026 production RAG 默认要这么搞</u>。
+        </div>
+      </div>
+
+      <div class="hybrid-cmp">
+        <div class="h-card bm25">
+          <div class="h-head">📝 BM25 (关键字)</div>
+          <div class="h-body">
+            倒排索引，按关键字 token 频率打分。<br>
+            <strong>擅长</strong>：专有名词、版本号、ID、人名、代码<br>
+            <strong>差</strong>：近义词、跨语言、改写
+          </div>
+          <div class="h-eg">"vLLM v0.8.5 性能" → 找 "vLLM v0.8.5 性能..."</div>
+        </div>
+        <div class="h-card dense">
+          <div class="h-head">🧠 Dense (语义)</div>
+          <div class="h-body">
+            embedding 向量距离打分。<br>
+            <strong>擅长</strong>：近义词、跨语言、释义改写、长尾问题<br>
+            <strong>差</strong>：精确匹配（版本号、ID）
+          </div>
+          <div class="h-eg">"vLLM v0.8.5 性能" → 也能找 "vLLM throughput benchmark"</div>
+        </div>
+        <div class="h-card hybrid">
+          <div class="h-head">✨ Hybrid (融合)</div>
+          <div class="h-body">
+            两路并行检索，按 RRF / 加权和融合。<br>
+            <strong>优势</strong>：精确 + 语义都不丢<br>
+            <strong>代价</strong>：要部署 BM25 (Elasticsearch / Tantivy) + Vector DB
+          </div>
+          <div class="h-eg">召回 BM25 top-50 + Dense top-50 → 融合 top-20</div>
+        </div>
+      </div>
+
+      <h3>5.1 RRF (Reciprocal Rank Fusion) · 最常用融合算法</h3>
+
+      <pre><code><span class="c"># RRF: 用排名而不是分数融合（避免不同评分系统的尺度问题）</span>
+<span class="k">def</span> <span class="f">rrf</span>(bm25_results, dense_results, k=<span class="n">60</span>):
+    scores = {}
+    <span class="k">for</span> rank, doc_id <span class="k">in</span> <span class="f">enumerate</span>(bm25_results):
+        scores[doc_id] = scores.<span class="f">get</span>(doc_id, <span class="n">0</span>) + <span class="n">1</span> / (k + rank)
+    <span class="k">for</span> rank, doc_id <span class="k">in</span> <span class="f">enumerate</span>(dense_results):
+        scores[doc_id] = scores.<span class="f">get</span>(doc_id, <span class="n">0</span>) + <span class="n">1</span> / (k + rank)
+    <span class="k">return</span> <span class="f">sorted</span>(scores.<span class="f">items</span>(), key=<span class="k">lambda</span> x: -x[<span class="n">1</span>])</code></pre>
+
+      <h3>5.2 实战数据</h3>
+
+      <table>
+        <thead><tr><th>方法</th><th>典型 Recall@10</th><th>典型场景胜出</th></tr></thead>
+        <tbody>
+          <tr><td>纯 BM25</td><td>~55%</td><td>精确匹配 / 短关键字</td></tr>
+          <tr><td>纯 Dense</td><td>~70%</td><td>长描述 / 跨语言</td></tr>
+          <tr><td><strong>Hybrid (BM25 + Dense + RRF)</strong></td><td><strong>~85%</strong></td><td>大部分实际业务场景</td></tr>
+        </tbody>
+      </table>
+
+      <div class="tip">
+        <strong>2026 production RAG 标配</strong>：BM25 (Tantivy / OpenSearch) + Dense (Qdrant / Milvus) + RRF 融合。简单 1-2 周可以从纯 dense 升级，召回率 +15-20%。
+      </div>
+    </section>
+
+    <!-- ============= Ch6：Reranking ============= -->
+    <section class="chapter" id="ch6">
+      <div class="ch-head">
+        <div class="num">06</div>
+        <div class="t">
+          <h2>Reranking · 粗排召回 + 精排重排</h2>
+          <div class="sub">两阶段架构 · 速度 + 精度兼得</div>
+        </div>
+      </div>
+
+      <div class="analogy">
+        <div class="a-head"><span class="icon">🎬</span><span>生活类比 · 招聘漏斗</span></div>
+        <div class="a-body">
+          公司招 1 个工程师。<br>
+          <strong>粗排（=Embedding 召回）</strong>：HR 用关键字 + AI 简历筛 5000 → 100 份。速度快但粗糙。<br>
+          <strong>精排（=Cross-Encoder Rerank）</strong>：技术总监细看 100 份 → 10 份面试。<u>慢但精确</u>。<br><br>
+          RAG 一模一样：<u>第一步召回 50-100 个候选（embedding 快）</u> + <u>第二步用更强模型精排到 top-3 / top-5</u>。
+        </div>
+      </div>
+
+      <div class="funnel">
+        <div class="stage s1">全库 100,000 chunks</div>
+        <div class="arrow">↓ BM25 + Dense 召回</div>
+        <div class="stage s2">候选 100 chunks</div>
+        <div class="arrow">↓ Cross-Encoder Rerank</div>
+        <div class="stage s3">精排 30 chunks</div>
+        <div class="arrow">↓ 取 top-K</div>
+        <div class="stage s4">送 LLM Top 3-5</div>
+      </div>
+
+      <h3>6.1 Bi-Encoder vs Cross-Encoder</h3>
+
+      <div class="cpp-vs-cuda">
+        <div class="side cpp" style="background:rgba(167,139,250,.05)">
+          <div class="s-head" style="color:#a78bfa">⚡ Bi-Encoder（召回用）</div>
+          <div class="s-body" style="color:#cbd5e1">
+            <strong>结构</strong>：query 和 doc 分别独立 encode 成向量，算余弦相似度<br>
+            <strong>优势</strong>：doc 向量可以<u>预先算好存库</u>，查询时只算 query encoding<br>
+            <strong>速度</strong>：1ms / query<br>
+            <strong>精度</strong>：中（query 和 doc 没交互）
+          </div>
+        </div>
+        <div class="side cuda" style="background:rgba(52,211,153,.05)">
+          <div class="s-head" style="color:#34d399">🎯 Cross-Encoder（精排用）</div>
+          <div class="s-body" style="color:#cbd5e1">
+            <strong>结构</strong>：query 和 doc 拼一起送入模型，直接输出相关性分数<br>
+            <strong>优势</strong>：query 和 doc 全程交互，精度高<br>
+            <strong>速度</strong>：50-200ms / query-doc pair<br>
+            <strong>精度</strong>：高（NDCG 比 Bi-Encoder +10-20%）
+          </div>
+        </div>
+      </div>
+
+      <h3>6.2 主流 Rerank 模型</h3>
+
+      <table>
+        <thead><tr><th>模型</th><th>速度</th><th>效果</th></tr></thead>
+        <tbody>
+          <tr><td>BGE-Reranker-Large</td><td>~50ms</td><td>开源 baseline，中文好</td></tr>
+          <tr><td><strong>Qwen3-Reranker</strong></td><td>~80ms</td><td>2025 开源 SOTA</td></tr>
+          <tr><td>Cohere Rerank v3</td><td>~30ms (API)</td><td>商业，最强</td></tr>
+          <tr><td>VoyageAI rerank-2</td><td>~50ms (API)</td><td>面向 production</td></tr>
+        </tbody>
+      </table>
+
+      <div class="intuition">
+        <strong>有 Rerank 的 RAG vs 没有</strong>：典型场景精度 +15-30%。<u>Rerank 是 RAG 优化里 ROI 最高的一个动作</u> — 加 1-2 天工作量，准确率显著提升。
+      </div>
+    </section>
+
+    <!-- ============= Ch7：高级模式 ============= -->
+    <section class="chapter" id="ch7">
+      <div class="ch-head">
+        <div class="num">07</div>
+        <div class="t">
+          <h2>高级模式 · GraphRAG / Self-RAG / HyDE / Multi-hop</h2>
+          <div class="sub">朴素 RAG 解决不了的复杂场景</div>
+        </div>
+      </div>
+
+      <h3>7.1 HyDE · 用假答案找真答案</h3>
+
+      <div class="analogy">
+        <div class="a-head"><span class="icon">🎬</span><span>生活类比 · 先写"我心中的答案"再去对照</span></div>
+        <div class="a-body">
+          问 "vLLM 怎么实现 PagedAttention"。直接 embedding 这个问题去检索，效果一般。<br><br>
+          <strong>HyDE</strong>（Hypothetical Document Embeddings）：<u>先让 LLM 生成一个"假答案"</u>（不要求准），把这个假答案 embedding 去检索 — <u>因为"假答案"的语言风格更接近文档</u>，召回率显著提升。
+        </div>
+      </div>
+
+      <h3>7.2 Multi-hop · 多步推理</h3>
+
+      <p>问 <em>"DeepSeek-V3 的训练 cost 是 Llama 3 的几倍"</em> 这种问题，<u>需要分别检索 DeepSeek-V3 cost 和 Llama 3 cost，再对比</u>。朴素 RAG 一次召回搞不定。</p>
+
+      <p><strong>Multi-hop RAG</strong>：让 LLM 自己规划"先查 X，再查 Y，再算 Z"，多步串联。</p>
+
+      <h3>7.3 Self-RAG · 让 LLM 评估自己的检索</h3>
+
+      <p>朴素 RAG 不管检索质量都给 LLM。<strong>Self-RAG</strong>：<u>LLM 先评估"这个检索结果够不够好"</u>，不够好就重新检索、改写 query 或承认"我不知道"。</p>
+
+      <h3>7.4 GraphRAG · 知识图谱 + LLM</h3>
+
+      <div class="analogy">
+        <div class="a-head"><span class="icon">🎬</span><span>生活类比 · 维基百科的链接</span></div>
+        <div class="a-body">
+          普通 RAG = <u>独立的纸条</u>。每张纸条互不关联。<br>
+          GraphRAG = <u>带链接的纸条</u>（像维基百科）。"Alice 是 Bob 的妈妈"+"Bob 是 Carol 的爸爸"→ 可以推出 "Alice 是 Carol 的奶奶"。<br><br>
+          GraphRAG 适合<u>实体关系密集的领域</u>（医学、法律、企业知识图谱）。代价：构建知识图谱很贵。
+        </div>
+      </div>
+
+      <table>
+        <thead><tr><th>模式</th><th>解决什么</th><th>代价</th></tr></thead>
+        <tbody>
+          <tr><td>HyDE</td><td>查询和文档语言风格不匹配</td><td>+1 次 LLM 调用</td></tr>
+          <tr><td>Multi-hop</td><td>需要多步推理的问题</td><td>+多轮检索 + LLM 协调</td></tr>
+          <tr><td>Self-RAG</td><td>朴素 RAG 不知道"没找到"</td><td>+1-3 次 LLM 调用</td></tr>
+          <tr><td>GraphRAG (Microsoft)</td><td>实体关系密集的查询</td><td>预处理建图很贵</td></tr>
+          <tr><td>Agentic RAG</td><td>需要 tool use / 实时数据</td><td>架构复杂度上升</td></tr>
+        </tbody>
+      </table>
+
+      <div class="warn">
+        <strong>注意</strong>：高级模式不是"越多越好"。<u>先把朴素 RAG（chunking + hybrid + rerank）做到 80% 准确率，再考虑加高级模式</u>。很多团队跳过基础直接搞 GraphRAG，反而效果差。
+      </div>
+    </section>
+
+    <!-- ============= Ch8：评测 ============= -->
+    <section class="chapter" id="ch8">
+      <div class="ch-head">
+        <div class="num">08</div>
+        <div class="t">
+          <h2>RAG 评测 · 怎么知道你的 RAG 是好是坏</h2>
+          <div class="sub">RAGAS / TruLens / 自建 eval set</div>
+        </div>
+      </div>
+
+      <div class="analogy">
+        <div class="a-head"><span class="icon">🎬</span><span>生活类比 · 没有体重秤怎么减肥</span></div>
+        <div class="a-body">
+          你说要减肥，但<u>不称体重</u>，凭感觉就觉得"瘦了"。结果半年没变化。<br><br>
+          RAG 一样 — 不建 eval 体系，靠"产品经理感觉"判断好坏，<u>你永远不知道改动是改进还是退化</u>。<br><br>
+          <strong>RAG 必须有评测体系</strong>，至少有 100 道带标准答案的 eval set，每次改动跑一遍。
+        </div>
+      </div>
+
+      <h3>8.1 4 个核心 metric</h3>
+
+      <div class="grid cols-2">
+        <div class="metric-card">
+          <div class="m-name">Context Precision</div>
+          <div class="m-val">召回的 chunk 有多准</div>
+          <div class="m-desc">召回 top-10 里有几个真的相关</div>
+        </div>
+        <div class="metric-card">
+          <div class="m-name">Context Recall</div>
+          <div class="m-val">真正相关的 chunk 召回了多少</div>
+          <div class="m-desc">标准答案需要的信息有多少在 context 里</div>
+        </div>
+        <div class="metric-card">
+          <div class="m-name">Faithfulness</div>
+          <div class="m-val">答案是否基于 context</div>
+          <div class="m-desc">LLM 答案里的事实有多少能在 context 中找到（反幻觉）</div>
+        </div>
+        <div class="metric-card">
+          <div class="m-name">Answer Relevance</div>
+          <div class="m-val">答案是否切题</div>
+          <div class="m-desc">答案跟问题的语义相关性</div>
+        </div>
+      </div>
+
+      <h3>8.2 RAGAS / TruLens 工具</h3>
+
+      <table>
+        <thead><tr><th>工具</th><th>特点</th></tr></thead>
+        <tbody>
+          <tr><td><strong>RAGAS</strong></td><td>开源 / Python lib / 提供上面 4 个 metric 的自动评测（用 LLM-as-Judge）</td></tr>
+          <tr><td>TruLens</td><td>开源 / 偏 observability / 实时监控生产 RAG quality</td></tr>
+          <tr><td>Phoenix (Arize)</td><td>开源 / 偏 tracing + eval</td></tr>
+          <tr><td>LangSmith</td><td>商业 / LangChain 生态 / eval + tracing 一体</td></tr>
+        </tbody>
+      </table>
+
+      <h3>8.3 必备：自建 eval set</h3>
+
+      <ol>
+        <li><strong>收集 100 道真实用户问题</strong>（从日志 / 客服记录抽）</li>
+        <li><strong>人工标注标准答案 + 相关 chunk</strong>（耗时 1-2 天，价值最高）</li>
+        <li><strong>分类</strong>：简单事实题 / 复杂推理题 / 多文档综合题</li>
+        <li><strong>每次改动跑一遍</strong>，记录 metric 变化趋势</li>
+        <li><strong>失败 case 单独建 bucket</strong>，针对性优化</li>
+      </ol>
+
+      <div class="tip">
+        <strong>面试加分</strong>：很多候选人讲 RAG 只讲技术栈，<u>能讲"我建了 200 题 eval set，每个新 idea 上线前必跑"</u> 立刻显得专业。这是 senior 跟 mid 的重要区别。
+      </div>
+    </section>
+
+    <!-- ============= Ch9：5 个真实事故 ============= -->
+    <section class="chapter" id="ch9">
+      <div class="ch-head">
+        <div class="num">09</div>
+        <div class="t">
+          <h2>5 个真实事故 · 我见过的 RAG 翻车</h2>
+          <div class="sub">基于我作为顾问见过的 production 案例（已脱敏）</div>
+        </div>
+      </div>
+
+      <div class="case">
+        <div class="c-head">事故 1 · 客服 RAG 把"退货流程"答成"退款流程"</div>
+        <p>某电商客服 RAG，问"怎么退货"，答出来全是退款政策。准确率 47%。</p>
+        <div class="c-grid">
+          <div><h5>root cause</h5><p>"退货"和"退款"embedding 距离极近（语义相似）。纯 dense 召回大量退款 chunk。</p></div>
+          <div><h5>修复</h5><p>加 BM25（精确匹配"退货" vs "退款"）+ Hybrid Search RRF 融合。</p></div>
+          <div><h5>效果</h5><p>准确率 47% → 81%。耗时 3 天。</p></div>
+        </div>
+      </div>
+
+      <div class="case">
+        <div class="c-head">事故 2 · 文档版本号召回错</div>
+        <p>某 SaaS 公司知识库，用户问 "v2.5 API 怎么调"，答的是 v2.3 的内容。</p>
+        <div class="c-grid">
+          <div><h5>root cause</h5><p>"v2.5" 和 "v2.3" 的 embedding 距离很近，dense 检索分不清。</p></div>
+          <div><h5>修复</h5><p>预处理时把版本号提到 metadata，<u>检索时强制按版本 filter</u>，再 hybrid。</p></div>
+          <div><h5>效果</h5><p>版本相关查询准确率 32% → 96%。</p></div>
+        </div>
+      </div>
+
+      <div class="case">
+        <div class="c-head">事故 3 · 上线后 P95 latency 8.4s 流失 30% 用户</div>
+        <p>某客服 RAG 上线 1 个月后用户流失严重。监控发现 P95 latency 8.4s（用户期望 &lt; 2s）。</p>
+        <div class="c-grid">
+          <div><h5>root cause</h5><p>用 GPT-4-turbo + 塞 20 个 chunk 进 context。LLM 处理长 context 慢。</p></div>
+          <div><h5>修复</h5><p>① 加 rerank 把 20 chunk → 5 chunk ② 换 Qwen-72B vLLM 自部署 + FP8 量化。</p></div>
+          <div><h5>效果</h5><p>P95 8.4s → 1.6s，准确率 89% → 91%（rerank 副作用），月成本 -42%。</p></div>
+        </div>
+      </div>
+
+      <div class="case">
+        <div class="c-head">事故 4 · 多语言混在一个 index 召回率暴跌</div>
+        <p>某出海产品中英混合文档，召回率只有 38%。</p>
+        <div class="c-grid">
+          <div><h5>root cause</h5><p>用了纯中文 embedding 模型（BGE-Large-zh），英文 chunks 完全失效。</p></div>
+          <div><h5>修复</h5><p>换 BGE-M3（多语言），<u>或者按语言分 index</u>（query 先判断语言再路由）。</p></div>
+          <div><h5>效果</h5><p>召回率 38% → 79%。</p></div>
+        </div>
+      </div>
+
+      <div class="case">
+        <div class="c-head">事故 5 · 老板要的"准确率"飙升但用户满意度下降</div>
+        <p>RAG 上线 3 个月 metric 越来越好（准确率从 70% → 92%），但用户 NPS 反而降了。</p>
+        <div class="c-grid">
+          <div><h5>root cause</h5><p>团队只优化"答得对"，没优化"答得快、答得简短"。LLM 把 5 个 chunk 全展开，答案 800 字，用户看不下去。</p></div>
+          <div><h5>修复</h5><p>① Prompt 加 "请用 2-3 句话回答" ② eval set 加 "简洁度" metric ③ 加 streaming UX。</p></div>
+          <div><h5>效果</h5><p>NPS 反弹，平均阅读时长降 60%。</p></div>
+        </div>
+      </div>
+
+      <div class="tip">
+        这 5 个事故的共同教训：<strong>RAG 是"系统工程"不是"算法"</strong>。准确率不是唯一指标，<u>latency / cost / 简洁度 / 引用清晰度 都要平衡</u>。
+      </div>
+    </section>
+
+    <!-- ============= Ch10：实战 ============= -->
+    <section class="chapter" id="ch10">
+      <div class="ch-head">
+        <div class="num">10</div>
+        <div class="t">
+          <h2>实战 · production-grade RAG 蓝图</h2>
+          <div class="sub">从 demo 到上线的完整 stack</div>
+        </div>
+      </div>
+
+      <h3>10.1 推荐 stack（2026）</h3>
+
+      <table>
+        <thead><tr><th>组件</th><th>推荐</th><th>替代</th></tr></thead>
+        <tbody>
+          <tr><td>Embedding 模型</td><td>BGE-Large-zh / Qwen3-Embedding</td><td>OpenAI text-embedding-3-large</td></tr>
+          <tr><td>向量库</td><td>Qdrant (开源 + Rust)</td><td>Milvus / Weaviate / pgvector</td></tr>
+          <tr><td>BM25 / 倒排</td><td>OpenSearch</td><td>Elasticsearch / Tantivy</td></tr>
+          <tr><td>Rerank 模型</td><td>BGE-Reranker-Large</td><td>Cohere Rerank API</td></tr>
+          <tr><td>LLM</td><td>Qwen2.5-72B + vLLM 自部署</td><td>GPT-4-turbo / Claude / DeepSeek API</td></tr>
+          <tr><td>Eval 框架</td><td>RAGAS + 自建 eval set</td><td>TruLens</td></tr>
+          <tr><td>Observability</td><td>Langfuse (开源)</td><td>LangSmith / Phoenix</td></tr>
+          <tr><td>框架</td><td>自研 (~200 行核心)</td><td>LlamaIndex (慎用 LangChain)</td></tr>
+        </tbody>
+      </table>
+
+      <h3>10.2 从 demo 到 production · 8 步路线图</h3>
+
+      <ol>
+        <li><strong>Week 1</strong>：搭最小可用 RAG（固定 chunking + BGE + Qdrant + GPT-4）— 验证场景可行</li>
+        <li><strong>Week 2</strong>：建 eval set（100 题人工标注）+ RAGAS 自动评测</li>
+        <li><strong>Week 3</strong>：优化 chunking + 加 Hybrid Search → 召回率提升</li>
+        <li><strong>Week 4</strong>：加 Cross-Encoder Rerank → 精度提升</li>
+        <li><strong>Week 5</strong>：替换 LLM（GPT-4 → Qwen + vLLM 自部署）→ cost 降 5-10x</li>
+        <li><strong>Week 6</strong>：加 prompt 工程 + 处理 corner case（多语言 / 版本号 / 缩写）</li>
+        <li><strong>Week 7</strong>：上线灰度 5% + observability + 失败 case 收集</li>
+        <li><strong>Week 8+</strong>：基于真实失败 case 持续迭代（HyDE / Self-RAG / GraphRAG 按需）</li>
+      </ol>
+    </section>
+
+    <!-- ============= Ch11：12 面试题 ============= -->
+    <section class="chapter" id="ch11">
+      <div class="ch-head">
+        <div class="num">11</div>
+        <div class="t">
+          <h2>12 道 RAG 高频面试题</h2>
+          <div class="sub">折叠卡片 · 先想再展开</div>
+        </div>
+      </div>
+
+      <details class="qa">
+        <summary><span class="lvl pill cyan">基础</span>Q1. RAG 解决了 LLM 什么问题？为什么不直接微调？</summary>
+        <div class="a">
+          <div class="point">
+            <div class="label">RAG 解决</div>
+            <div>3 死穴：① 知识过期 ② 幻觉 ③ 私有数据。</div>
+          </div>
+          <div class="point deep">
+            <div class="label">vs 微调</div>
+            <div>微调成本高（需要 GPU + 数据 + 时间），知识更新慢，没法引用出处。<u>RAG 适合"事实查询"，微调适合"风格 / 复杂任务理解"</u>。生产经常 RAG + 轻微调结合。</div>
+          </div>
+        </div>
+      </details>
+
+      <details class="qa">
+        <summary><span class="lvl pill cyan">基础</span>Q2. 给一个 1000 字符 chunk 太大或太小会怎么样？</summary>
+        <div class="a">
+          <div class="point">
+            <div class="label">太大</div>
+            <div>① 一个 chunk 信息密度低 → 检索精度下降 ② context 长 → LLM "中间遗忘" ③ chunk 数少 → 召回多样性差</div>
+          </div>
+          <div class="point">
+            <div class="label">太小</div>
+            <div>① 语义不完整 → 单独看不懂 ② chunk 多 → 检索慢 ③ 上下文丢失（如代词 "它" 找不到指代）</div>
+          </div>
+        </div>
+      </details>
+
+      <details class="qa">
+        <summary><span class="lvl pill amber">进阶</span>Q3. 为什么需要 Hybrid Search？BM25 跟 Dense 区别？</summary>
+        <div class="a">
+          <div class="point">
+            <div class="label">BM25</div>
+            <div>关键字 + 倒排索引，擅长精确匹配（版本号 / ID / 代码 / 专有名词），差在近义词 / 改写。</div>
+          </div>
+          <div class="point">
+            <div class="label">Dense</div>
+            <div>embedding 语义相似度，擅长跨语言 / 释义改写，差在精确版本号。</div>
+          </div>
+          <div class="point deep">
+            <div class="label">Hybrid</div>
+            <div>两路并行召回 + RRF 融合。Recall@10 从 55% (BM25) / 70% (Dense) → 85% (Hybrid)。生产标配。</div>
+          </div>
+        </div>
+      </details>
+
+      <details class="qa">
+        <summary><span class="lvl pill amber">进阶</span>Q4. Cross-Encoder Rerank 跟 Bi-Encoder 召回区别？为什么不直接 Cross-Encoder？</summary>
+        <div class="a">
+          <div class="point">
+            <div class="label">Bi-Encoder</div>
+            <div>query/doc 分别编码成向量，余弦相似度。doc 向量可预先存库，<strong>1ms / query</strong>。</div>
+          </div>
+          <div class="point">
+            <div class="label">Cross-Encoder</div>
+            <div>query+doc 拼起来过模型直接输出分数。精度高（NDCG +10-20%），但 <strong>50-200ms / pair</strong>。</div>
+          </div>
+          <div class="point deep">
+            <div class="label">为什么两阶段</div>
+            <div>10 万文档全部 Cross-Encoder 跑一遍 = 几千秒，根本不可用。<u>先 Bi-Encoder 召回 100 个，再 Cross-Encoder 精排到 top-5</u> = 1ms + 10s = 可接受。</div>
+          </div>
+        </div>
+      </details>
+
+      <details class="qa">
+        <summary><span class="lvl pill red">高频</span>Q5. 你的 RAG 准确率从 60% 提到 90%，具体改了什么？</summary>
+        <div class="a">
+          <div class="point">
+            <div class="label">5 步</div>
+            <div>
+              ① <strong>建 eval set</strong>（先知道现状）<br>
+              ② <strong>智能 Chunking</strong>（按段落 + overlap 替代固定 1000 字符）→ +5-10%<br>
+              ③ <strong>Hybrid Search</strong>（加 BM25 + RRF）→ +10-15%<br>
+              ④ <strong>Cross-Encoder Rerank</strong>（top-100 → top-5）→ +10-20%<br>
+              ⑤ <strong>Prompt 优化</strong>（加 "请基于以下文档回答" 强约束）→ 减幻觉
+            </div>
+          </div>
+          <div class="point deep">
+            <div class="label">加分</div>
+            <div>提到 "每步都用 eval 验证，不是凭感觉调"。还能讲 1 个失败 case 的具体修复。</div>
+          </div>
+        </div>
+      </details>
+
+      <details class="qa">
+        <summary><span class="lvl pill amber">进阶</span>Q6. RAG 评测的核心 metric？怎么算 Faithfulness？</summary>
+        <div class="a">
+          <div class="point">
+            <div class="label">4 metric</div>
+            <div>Context Precision / Context Recall / Faithfulness / Answer Relevance</div>
+          </div>
+          <div class="point deep">
+            <div class="label">Faithfulness</div>
+            <div>"答案里的每个事实声明，是否能在 context 中找到支撑"。RAGAS 实现：用 LLM 把答案拆成 atomic statements，每个 statement 用 LLM 判断是否被 context 支持，<u>支持数 / 总数 = Faithfulness</u>。反映"反幻觉"程度。</div>
+          </div>
+        </div>
+      </details>
+
+      <details class="qa">
+        <summary><span class="lvl pill cyan">基础</span>Q7. GraphRAG 适合什么场景？为什么不普及？</summary>
+        <div class="a">
+          <div class="point">
+            <div class="label">适合</div>
+            <div>实体关系密集的领域：医学（病-药-症状）、法律（法规-案例-当事人）、企业知识图谱。需要<u>多跳推理</u>的查询。</div>
+          </div>
+          <div class="point warn">
+            <div class="label">为什么不普及</div>
+            <div>预处理建图很贵：需要实体识别 + 关系抽取 + 一致性维护。<u>大部分业务用普通 hybrid RAG 已经够</u>，GraphRAG ROI 不高。</div>
+          </div>
+        </div>
+      </details>
+
+      <details class="qa">
+        <summary><span class="lvl pill amber">进阶</span>Q8. 长 context（128k）能不能替代 RAG？</summary>
+        <div class="a">
+          <div class="point">
+            <div class="label">理论</div>
+            <div>可以。Gemini 1.5 / Qwen 2.5-1M 这种长上下文模型，理论上塞整个文档库进去就行。</div>
+          </div>
+          <div class="point warn">
+            <div class="label">实际</div>
+            <div>① <strong>cost 飞涨</strong>（按 token 计费 × 100k）② <strong>latency 飞涨</strong>（prefill 长）③ <strong>"lost in the middle"</strong> 准确率掉 ④ 知识库会涨到 GB 级，128k 也装不下<br>
+            <u>2026 共识：RAG + 中等上下文（8k-32k）比纯长上下文更经济</u>。Agent 场景例外。</div>
+          </div>
+        </div>
+      </details>
+
+      <details class="qa">
+        <summary><span class="lvl pill red">高频</span>Q9. 用户问"我们 v2.5 API 怎么调"，RAG 召回 v2.3 内容，怎么修？</summary>
+        <div class="a">
+          <div class="point">
+            <div class="label">原因</div>
+            <div>"v2.5" 和 "v2.3" embedding 太近，dense 分不清。</div>
+          </div>
+          <div class="point">
+            <div class="label">修复</div>
+            <div>
+              ① <strong>预处理时把版本号提到 metadata</strong>（chunk.version = "v2.5"）<br>
+              ② <strong>query 解析提取版本号</strong>（正则 / LLM）<br>
+              ③ <strong>检索时强制 filter</strong>（where version == "v2.5"）<br>
+              ④ <strong>再 hybrid + rerank</strong>
+            </div>
+          </div>
+        </div>
+      </details>
+
+      <details class="qa">
+        <summary><span class="lvl pill amber">进阶</span>Q10. Embedding 模型怎么选？BGE vs OpenAI vs Qwen3？</summary>
+        <div class="a">
+          <div class="point">
+            <div class="label">看场景</div>
+            <div>① 中文 → <strong>Qwen3-Embedding</strong> 或 BGE-Large-zh ② 多语言 → BGE-M3 ③ 英文 → NV-Embed-v2 ④ 商业 SaaS → OpenAI / Cohere ⑤ 国内合规 → 必用开源。</div>
+          </div>
+          <div class="point deep">
+            <div class="label">实战 tip</div>
+            <div>不要直接选"MTEB 第一"。在你的业务 eval set 上测 3-5 个候选 embedding，<u>实际 recall 才数</u>。MTEB 跟你场景可能不匹配。</div>
+          </div>
+        </div>
+      </details>
+
+      <details class="qa">
+        <summary><span class="lvl pill amber">进阶</span>Q11. 为什么 2026 招聘官看到 "LangChain" 是减分项？</summary>
+        <div class="a">
+          <div class="point">
+            <div class="label">原因</div>
+            <div>① LangChain 抽象层太多，<u>调试困难</u> ② 默认配置生产不可用 ③ 性能开销大（深 callback 链）④ 频繁 breaking change ⑤ 用 LangChain 表示你"复制粘贴 demo"，没自己设计。</div>
+          </div>
+          <div class="point deep">
+            <div class="label">应对</div>
+            <div>简历写"用过但自研替代，启动 12s → 0.4s"或"用 LlamaIndex 替代"。展示你<u>有判断力</u>，不是无脑用框架。</div>
+          </div>
+        </div>
+      </details>
+
+      <details class="qa">
+        <summary><span class="lvl pill violet">实战</span>Q12. 一个 RAG 上线 1 个月后准确率从 90% 掉到 70%，怎么排查？</summary>
+        <div class="a">
+          <div class="point">
+            <div class="label">排查 5 步</div>
+            <div>
+              ① <strong>检查输入分布</strong>：用户问题是不是变了（新场景？促销季新问题？）<br>
+              ② <strong>检查知识库</strong>：新加的 chunk 质量如何？有没有错误 chunk 拉低召回？<br>
+              ③ <strong>检查检索召回</strong>：top-10 里多少跟标准答案相关？召回率是否下降？<br>
+              ④ <strong>检查 LLM</strong>：模型 API 有没有版本升级？prompt 有没有改？<br>
+              ⑤ <strong>抓 100 个失败 case</strong>：手动分析根因，按类型归类
+            </div>
+          </div>
+        </div>
+      </details>
+    </section>
+
+  <footer>
+    <div class="made">TECH NOTES · AI APPLICATION · X08 · 通俗深潜版</div>
+    <p style="margin-top:14px">
+      上一篇：<a href="./agent_protocols_and_skills.html">🔌 X09 MCP / Tools / Skills →</a> &nbsp;·&nbsp;
+      下一篇：<a href="./multimodal.html">🎨 X10 多模态 →</a> &nbsp;·&nbsp;
+      Eval：<a href="./ai_eval.html">📏 X12 AI 评测 →</a> &nbsp;·&nbsp;
+      Embedding 深入：<a href="./embedding_vector_search.html">🧭 X11 →</a> &nbsp;·&nbsp;
+      面试卡：<a href="../interview/ai_engineer_cards.html">🎴 I06 →</a>
+    </p>
+  </footer>
+  </main>
+</div>
+
+<script>
+(function(){var bar=document.getElementById('progress');function update(){var h=document.documentElement;bar.style.width=(h.scrollTop/(h.scrollHeight-h.clientHeight)*100)+'%';}window.addEventListener('scroll',update,{passive:true});update();})();
+(function(){var links=document.querySelectorAll('aside.toc nav > ol > li > a');var sections=Array.from(document.querySelectorAll('section.chapter'));function update(){var y=window.scrollY+100;var cur=sections[0];for(var i=0;i<sections.length;i++){if(sections[i].offsetTop<=y)cur=sections[i];}links.forEach(function(a){if(a.getAttribute('href')==='#'+cur.id)a.classList.add('active');else a.classList.remove('active');});}window.addEventListener('scroll',update,{passive:true});update();})();
+</script>
+
+</body>
+</html>
