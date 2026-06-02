@@ -1,0 +1,940 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>模型量化 · INT4 / FP8 / GPTQ / AWQ / SmoothQuant — Tech Notes</title>
+<link rel="stylesheet" href="../assets/site-theme.css">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<style>
+.analogy{background:linear-gradient(135deg,#1a1f3a 0%,#1f2842 100%);
+  border:1px solid rgba(125,211,252,.25);border-radius:14px;padding:20px 24px;margin:20px 0;
+  position:relative;overflow:hidden;box-shadow:0 8px 28px -10px rgba(125,211,252,.25);}
+.analogy::before{content:"";position:absolute;top:0;left:0;right:0;height:3px;
+  background:linear-gradient(90deg,#7dd3fc,#a78bfa,#34d399);}
+.analogy .a-head{display:flex;align-items:center;gap:10px;
+  font-size:13px;font-weight:700;color:#7dd3fc;
+  text-transform:uppercase;letter-spacing:1.5px;margin-bottom:12px;}
+.analogy .a-head .icon{font-size:22px;line-height:1}
+.analogy .a-body{font-size:14.5px;line-height:1.8;color:#e4e9f5}
+.analogy .a-body strong{color:#fbbf24}
+.analogy .a-map{margin-top:14px;padding:12px 16px;background:rgba(15,20,36,.55);
+  border-radius:8px;border:1px dashed rgba(125,211,252,.2);font-size:13px;color:#94a3b8;}
+.analogy .a-map .arrow{color:#7dd3fc;margin:0 6px;font-weight:700}
+.analogy .a-map .term{color:#a78bfa;font-weight:600;font-family:"JetBrains Mono",monospace}
+
+.intuition{background:rgba(251,191,36,.05);border-left:4px solid #fbbf24;
+  padding:14px 18px;border-radius:0 10px 10px 0;margin:14px 0;
+  font-size:14.5px;line-height:1.7;}
+.intuition::before{content:"🎯 一句话直觉 · ";color:#fbbf24;font-weight:700;font-size:13px}
+
+/* 精度对比可视化（核心组件） */
+.precision-cmp{background:#080c18;border-radius:12px;padding:18px;margin:14px 0}
+.precision-cmp .pc-row{
+  display:flex;align-items:center;gap:14px;padding:10px 0;
+  border-bottom:1px dashed #1f2740;
+}
+.precision-cmp .pc-row:last-child{border-bottom:0}
+.precision-cmp .pc-name{width:90px;font-family:"JetBrains Mono",monospace;font-size:13px;color:#fbbf24;flex-shrink:0;font-weight:700}
+.precision-cmp .pc-bits{
+  display:flex;gap:1px;flex:1;
+}
+.precision-cmp .pc-bit{
+  width:18px;height:22px;display:flex;align-items:center;justify-content:center;
+  font-size:9px;font-family:"JetBrains Mono",monospace;font-weight:700;
+}
+.precision-cmp .pc-bit.sign{background:#f87171;color:#0a0e1a}
+.precision-cmp .pc-bit.exp{background:#fbbf24;color:#0a0e1a}
+.precision-cmp .pc-bit.mant{background:#34d399;color:#0a0e1a}
+.precision-cmp .pc-bit.int{background:#7dd3fc;color:#0a0e1a}
+.precision-cmp .pc-meta{width:160px;font-size:11px;color:#94a3b8;font-family:"JetBrains Mono",monospace;flex-shrink:0}
+
+.precision-legend{display:flex;gap:14px;justify-content:center;margin-top:10px;font-size:11px;color:#94a3b8;flex-wrap:wrap}
+.precision-legend .sw{width:14px;height:14px;border-radius:3px;display:inline-block;margin-right:5px;vertical-align:middle}
+
+/* 量化方法对比 */
+.method-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:14px 0}
+.method-grid .mc{
+  background:linear-gradient(180deg,#141a2c,#0f1424);
+  border:1px solid #2a3556;border-radius:10px;padding:16px;
+  position:relative;
+}
+.method-grid .mc::before{content:"";position:absolute;top:0;left:0;right:0;height:3px}
+.method-grid .mc.gptq::before{background:#7dd3fc}
+.method-grid .mc.awq::before{background:#a78bfa}
+.method-grid .mc.smq::before{background:#34d399}
+.method-grid .mc.spqr::before{background:#fbbf24}
+.method-grid .mc .name{font-size:14px;font-weight:700;color:#e4e9f5;margin-bottom:4px}
+.method-grid .mc .tag{font-size:11px;color:#94a3b8;font-family:"JetBrains Mono",monospace;margin-bottom:10px}
+.method-grid .mc .body{font-size:13px;color:#cbd5e1;line-height:1.7}
+@media(max-width:760px){.method-grid{grid-template-columns:1fr}}
+
+/* Outlier 示意 */
+.outlier-vis{background:#080c18;border-radius:10px;padding:18px;margin:14px 0}
+.outlier-row{display:flex;align-items:center;gap:2px;height:60px;margin:8px 0}
+.outlier-bar{
+  width:14px;display:flex;align-items:flex-end;justify-content:center;
+  font-size:9px;color:#94a3b8;
+}
+.outlier-bar .fill{
+  background:linear-gradient(180deg,#34d399,#7dd3fc);
+  width:12px;border-radius:2px 2px 0 0;
+}
+.outlier-bar .fill.outlier{background:linear-gradient(180deg,#f87171,#fb923c)}
+
+/* 性能提升表 */
+.perf-row{display:flex;align-items:center;gap:14px;padding:10px 0;border-bottom:1px dashed #1f2740}
+.perf-row:last-child{border-bottom:0}
+.perf-row .pr-name{width:180px;flex-shrink:0;font-size:13.5px;color:#cbd5e1}
+.perf-row .pr-name strong{color:#e4e9f5;display:block}
+.perf-row .pr-bar{flex:1;height:22px;background:#1f2740;border-radius:11px;position:relative;overflow:hidden}
+.perf-row .pr-fill{position:absolute;top:0;left:0;bottom:0;border-radius:11px;
+  background:linear-gradient(90deg,#7dd3fc,#34d399)}
+.perf-row .pr-text{position:absolute;top:50%;transform:translateY(-50%);right:10px;
+  font-family:"JetBrains Mono",monospace;font-size:11px;color:#fff;font-weight:700}
+</style>
+</head>
+<body>
+
+<!-- tn-nav:v1 -->
+<style>
+#tn-nav{position:fixed;top:14px;right:14px;z-index:99999;display:flex;gap:6px;align-items:center;
+  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;
+  font-size:12px;line-height:1;font-weight:500;}
+#tn-nav a,#tn-nav .tn-meta{display:inline-flex;align-items:center;gap:4px;
+  background:rgba(20,20,30,.85);color:#fff !important;text-decoration:none !important;
+  padding:7px 11px;border-radius:999px;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+  border:1px solid rgba(255,255,255,.10);box-shadow:0 2px 8px rgba(0,0,0,.18);
+  transition:background .15s,transform .15s;}
+#tn-nav a:hover{background:rgba(56,189,248,.92);transform:translateY(-1px);}
+#tn-nav .tn-meta{background:rgba(20,20,30,.55);cursor:default;}
+@media (max-width:640px){#tn-nav{top:8px;right:8px;font-size:11px;gap:4px;}
+  #tn-nav a,#tn-nav .tn-meta{padding:5px 9px;}}
+@media print{#tn-nav{display:none;}}
+</style>
+<div id="tn-nav">
+  <a href="../index.html">← 主页</a>
+  <a href="../interview/ai_study_path.html">📚 路径</a>
+  <a href="./inference_serving.html">🚀 Y02 vLLM</a>
+  <span class="tn-meta">⏱ 50 min</span>
+</div>
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>Y04 · Quantization</h2>
+    <nav>
+      <ol>
+        <li><a href="#ch0" class="active">读前地图</a></li>
+        <li><a href="#ch1">为什么需要量化</a></li>
+        <li><a href="#ch2">浮点 vs 整数 · 精度本质</a></li>
+        <li><a href="#ch3">PTQ vs QAT · 两条路</a></li>
+        <li><a href="#ch4">GPTQ / AWQ · INT4 主流</a>
+          <ol>
+            <li><a href="#s4-1">GPTQ</a></li>
+            <li><a href="#s4-2">AWQ</a></li>
+            <li><a href="#s4-3">SmoothQuant</a></li>
+          </ol>
+        </li>
+        <li><a href="#ch5">FP8 · H100 时代标配</a></li>
+        <li><a href="#ch6">KV-Cache 量化</a></li>
+        <li><a href="#ch7">Speculative Decoding</a></li>
+        <li><a href="#ch8">实战 · 量化 Qwen-7B 到 INT4</a></li>
+        <li><a href="#ch9">5 个量化坑</a></li>
+        <li><a href="#ch10">12 道高频面试题</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+
+    <header class="hero">
+      <div class="badge">Y04 · Model Quantization · 通俗深潜版</div>
+      <h1>模型量化与推理加速<br>INT4 / FP8 / GPTQ / AWQ / SmoothQuant</h1>
+      <p class="sub">
+        10 章 · 6 个生活类比 · 5 个量化坑 · 12 道面试题。<br>
+        <strong>对位读者</strong>：AI Infra 候选人 / 想用同样硬件跑更大模型 / 想把推理 cost 砍 4-10x / vLLM/SGLang 部署调优。<br>
+        <strong>核心 takeaway</strong>：<u>INT4 把 70B 模型显存从 140 GB 砍到 35 GB，质量损失 &lt; 2%，throughput +2-3x</u>。这是 2026 AI Infra 必备工程能力。
+      </p>
+      <div class="meta">
+        <span>10 章节</span>
+        <span>~50 min 阅读</span>
+        <span>6 个生活类比</span>
+        <span>5 个量化坑</span>
+        <span>12 面试题</span>
+      </div>
+    </header>
+
+    <!-- ============= Ch0 ============= -->
+    <section class="chapter" id="ch0">
+      <div class="ch-head">
+        <div class="num">00</div>
+        <div class="t">
+          <h2>读前地图 · 量化是 AI Infra 的杠杆点</h2>
+          <div class="sub">3 种读者推荐路径</div>
+        </div>
+      </div>
+
+      <p class="lead"><strong>量化 = AI Infra 工程师 ROI 最高的优化方向</strong>。1-2 周工作量可以把推理 cost 砍 50-75%。本文 50 分钟把量化讲透。</p>
+
+      <div class="kmap">
+        <div class="kmap-title">3 种读者</div>
+        <div class="grid cols-3">
+          <div class="card"><h4>🆕 没量化过模型</h4>
+            <p style="font-size:13px"><strong>路径</strong>：ch1 + ch2 概念 + ch4 §4-1 GPTQ + ch8 实战<br><strong>耗时</strong>：~25 min</p></div>
+          <div class="card violet"><h4>🎓 用过 GPTQ/AWQ</h4>
+            <p style="font-size:13px"><strong>路径</strong>：全文按序 / 重点 ch4 + ch5 FP8 + ch6 KV 量化<br><strong>耗时</strong>：~50 min</p></div>
+          <div class="card green"><h4>🧠 量化 production</h4>
+            <p style="font-size:13px"><strong>路径</strong>：ch5 FP8 + ch7 Spec Decoding + ch9 坑 + ch10 面试题<br><strong>耗时</strong>：~25 min</p></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============= Ch1 ============= -->
+    <section class="chapter" id="ch1">
+      <div class="ch-head">
+        <div class="num">01</div>
+        <div class="t">
+          <h2>为什么需要量化 · 用同样硬件跑更大模型</h2>
+        </div>
+      </div>
+
+      <div class="analogy">
+        <div class="a-head"><span class="icon">🎬</span><span>生活类比 · 把高清照片压成 JPEG</span></div>
+        <div class="a-body">
+          一张高清照片 50 MB（=FP16 模型）。<u>每个像素用 16 位浮点存</u>。<br>
+          压成 JPEG 后变 5 MB（=INT4 量化），<u>每个像素只用 4 位</u>。看起来基本一样（人眼分辨不出），文件小 10 倍。<br><br>
+          <strong>模型量化一模一样</strong>：把 FP16 权重（16 位）压成 INT4（4 位），<u>模型大小砍 4 倍</u>，质量损失 1-3%（基本感觉不到）。但能装更大模型 + 推理更快 + 显存够装更多并发。
+        </div>
+        <div class="a-map">
+          JPEG 压缩 <span class="arrow">→</span> <span class="term">量化</span> &nbsp;·&nbsp;
+          像素 <span class="arrow">→</span> <span class="term">weight / activation</span> &nbsp;·&nbsp;
+          视觉无损 <span class="arrow">→</span> <span class="term">PPL / accuracy 几乎不变</span>
+        </div>
+      </div>
+
+      <h3>1.1 量化的 3 大收益</h3>
+
+      <div class="grid cols-3">
+        <div class="card">
+          <h4>💾 显存 ÷ 2-4x</h4>
+          <p style="font-size:13.5px">Llama-70B FP16 = 140 GB（要 2 张 H100）。<u>INT4 = 35 GB（1 张 H100 装下还有空 KV-Cache）</u>。</p>
+        </div>
+        <div class="card violet">
+          <h4>⚡ 推理速度 ×2-3</h4>
+          <p style="font-size:13.5px">Decode 是 memory-bound（见 <a href="../ai-native/transformer_llm_architecture.html#ch3">X06 §3</a>）。weight 小 4x → 每步要读的字节少 4x → <u>速度涨 2-3x</u>（未必满 4x 因为还有其它开销）。</p>
+        </div>
+        <div class="card green">
+          <h4>💰 Cost ÷ 2-5x</h4>
+          <p style="font-size:13.5px">同样 throughput 用少一半 GPU。<u>月成本直接腰斩</u>。这是为什么 vLLM 默认要支持量化。</p>
+        </div>
+      </div>
+
+      <div class="intuition">
+        量化 ≠ 蒸馏。蒸馏是<u>训一个新小模型模仿大模型</u>（参数少、能力降）。量化是<u>同一个模型，只是参数用更少 bit 存</u>（参数数量不变，精度降）。两者经常组合用。
+      </div>
+    </section>
+
+    <!-- ============= Ch2 ============= -->
+    <section class="chapter" id="ch2">
+      <div class="ch-head">
+        <div class="num">02</div>
+        <div class="t">
+          <h2>浮点 vs 整数 · 精度本质</h2>
+          <div class="sub">为什么 16 → 8 → 4 bit 不会全崩</div>
+        </div>
+      </div>
+
+      <h3>2.1 各种精度可视化</h3>
+
+      <div class="precision-cmp">
+        <div class="pc-row">
+          <div class="pc-name">FP32</div>
+          <div class="pc-bits">
+            <div class="pc-bit sign">S</div>
+            <div class="pc-bit exp">E</div><div class="pc-bit exp">E</div><div class="pc-bit exp">E</div><div class="pc-bit exp">E</div>
+            <div class="pc-bit exp">E</div><div class="pc-bit exp">E</div><div class="pc-bit exp">E</div><div class="pc-bit exp">E</div>
+            <div class="pc-bit mant">M</div><div class="pc-bit mant">M</div><div class="pc-bit mant">M</div><div class="pc-bit mant">M</div>
+            <div class="pc-bit mant">M</div><div class="pc-bit mant">M</div><div class="pc-bit mant">M</div><div class="pc-bit mant">M</div>
+            <div class="pc-bit mant">M</div><div class="pc-bit mant">M</div><div class="pc-bit mant">M</div><div class="pc-bit mant">M</div>
+            <div class="pc-bit mant">M</div><div class="pc-bit mant">M</div><div class="pc-bit mant">M</div>
+          </div>
+          <div class="pc-meta">32 bit · 训练标准</div>
+        </div>
+        <div class="pc-row">
+          <div class="pc-name">FP16</div>
+          <div class="pc-bits">
+            <div class="pc-bit sign">S</div>
+            <div class="pc-bit exp">E</div><div class="pc-bit exp">E</div><div class="pc-bit exp">E</div><div class="pc-bit exp">E</div><div class="pc-bit exp">E</div>
+            <div class="pc-bit mant">M</div><div class="pc-bit mant">M</div><div class="pc-bit mant">M</div><div class="pc-bit mant">M</div>
+            <div class="pc-bit mant">M</div><div class="pc-bit mant">M</div><div class="pc-bit mant">M</div><div class="pc-bit mant">M</div>
+            <div class="pc-bit mant">M</div><div class="pc-bit mant">M</div>
+          </div>
+          <div class="pc-meta">16 bit · 推理默认</div>
+        </div>
+        <div class="pc-row">
+          <div class="pc-name">BF16</div>
+          <div class="pc-bits">
+            <div class="pc-bit sign">S</div>
+            <div class="pc-bit exp">E</div><div class="pc-bit exp">E</div><div class="pc-bit exp">E</div><div class="pc-bit exp">E</div>
+            <div class="pc-bit exp">E</div><div class="pc-bit exp">E</div><div class="pc-bit exp">E</div><div class="pc-bit exp">E</div>
+            <div class="pc-bit mant">M</div><div class="pc-bit mant">M</div><div class="pc-bit mant">M</div>
+            <div class="pc-bit mant">M</div><div class="pc-bit mant">M</div><div class="pc-bit mant">M</div><div class="pc-bit mant">M</div>
+          </div>
+          <div class="pc-meta">16 bit · 训练默认</div>
+        </div>
+        <div class="pc-row">
+          <div class="pc-name">FP8 (E4M3)</div>
+          <div class="pc-bits">
+            <div class="pc-bit sign">S</div>
+            <div class="pc-bit exp">E</div><div class="pc-bit exp">E</div><div class="pc-bit exp">E</div><div class="pc-bit exp">E</div>
+            <div class="pc-bit mant">M</div><div class="pc-bit mant">M</div><div class="pc-bit mant">M</div>
+          </div>
+          <div class="pc-meta">8 bit · H100 + B200</div>
+        </div>
+        <div class="pc-row">
+          <div class="pc-name">INT8</div>
+          <div class="pc-bits">
+            <div class="pc-bit sign">S</div>
+            <div class="pc-bit int">I</div><div class="pc-bit int">I</div><div class="pc-bit int">I</div>
+            <div class="pc-bit int">I</div><div class="pc-bit int">I</div><div class="pc-bit int">I</div><div class="pc-bit int">I</div>
+          </div>
+          <div class="pc-meta">8 bit · 旧 GPU 通用</div>
+        </div>
+        <div class="pc-row">
+          <div class="pc-name">INT4</div>
+          <div class="pc-bits">
+            <div class="pc-bit int">I</div><div class="pc-bit int">I</div><div class="pc-bit int">I</div><div class="pc-bit int">I</div>
+          </div>
+          <div class="pc-meta">4 bit · 推理标配</div>
+        </div>
+        <div class="pc-row">
+          <div class="pc-name">FP4 (NVFP4)</div>
+          <div class="pc-bits">
+            <div class="pc-bit sign">S</div>
+            <div class="pc-bit exp">E</div><div class="pc-bit exp">E</div>
+            <div class="pc-bit mant">M</div>
+          </div>
+          <div class="pc-meta">4 bit · Blackwell 2024+</div>
+        </div>
+      </div>
+
+      <div class="precision-legend">
+        <div><span class="sw" style="background:#f87171"></span>符号位 (Sign)</div>
+        <div><span class="sw" style="background:#fbbf24"></span>指数位 (Exponent)</div>
+        <div><span class="sw" style="background:#34d399"></span>尾数位 (Mantissa)</div>
+        <div><span class="sw" style="background:#7dd3fc"></span>整数位 (Integer)</div>
+      </div>
+
+      <h3>2.2 浮点 vs 整数 · 数值分布差异</h3>
+
+      <div class="grid cols-2">
+        <div class="card">
+          <h4>浮点数（FP）</h4>
+          <p style="font-size:13.5px">数值非均匀分布 — <u>0 附近密，远处稀</u>。能表示极小到极大范围。<br><strong>适合</strong>：activation 和 weight 都有 outlier 的场景</p>
+        </div>
+        <div class="card violet">
+          <h4>整数（INT）</h4>
+          <p style="font-size:13.5px">数值<u>均匀分布</u>。只有 -128 到 127（INT8）。需要 scale factor 把 weight 映射到这个范围。<br><strong>适合</strong>：weight 分布相对均匀的情况</p>
+        </div>
+      </div>
+
+      <h3>2.3 INT 量化的核心公式</h3>
+
+      <pre><code><span class="c"># 假设 weight W (FP16) 范围 [-2.5, 1.8]</span>
+<span class="c"># 量化到 INT8 [-127, 127]:</span>
+
+scale = (W.<span class="f">max</span>() - W.<span class="f">min</span>()) / <span class="n">255</span>     <span class="c"># 一个量化区间多大</span>
+zero_point = -W.<span class="f">min</span>() / scale            <span class="c"># 0 对应哪个 int 值</span>
+
+W_int8 = <span class="f">round</span>(W / scale + zero_point)
+       = <span class="f">clip</span>(W_int8, -<span class="n">128</span>, <span class="n">127</span>)
+
+<span class="c"># 反量化（推理时用）:</span>
+W_dequant = (W_int8 - zero_point) * scale</code></pre>
+
+      <div class="intuition">
+        关键 trick：<strong>scale 不是全模型一个</strong>。Per-channel quantization（每行/列一个 scale）比 per-tensor 精度高很多。<u>2026 SOTA 用 group-wise（每 128 个元素一个 scale）</u>，平衡精度和存储开销。
+      </div>
+    </section>
+
+    <!-- ============= Ch3 ============= -->
+    <section class="chapter" id="ch3">
+      <div class="ch-head">
+        <div class="num">03</div>
+        <div class="t">
+          <h2>PTQ vs QAT · 两条量化路径</h2>
+        </div>
+      </div>
+
+      <div class="analogy">
+        <div class="a-head"><span class="icon">🎬</span><span>生活类比 · 减肥的两种方法</span></div>
+        <div class="a-body">
+          <strong>PTQ</strong>（Post-Training Quantization）= 已经训好的胖子直接抽脂。<u>快</u>，几小时搞定，<u>但有效果损失</u>。<br>
+          <strong>QAT</strong>（Quantization-Aware Training）= 训练过程中就<u>模拟量化</u>，让模型学会"在低精度下也表现好"。<u>慢</u>，要训几天，<u>但效果好</u>。<br><br>
+          <strong>2024+ LLM 主流用 PTQ</strong>，因为：① LLM 训练贵到 QAT 不划算 ② 现代 PTQ 算法（GPTQ / AWQ）已经很好，损失 &lt; 2%
+        </div>
+      </div>
+
+      <table>
+        <thead><tr><th>维度</th><th>PTQ</th><th>QAT</th></tr></thead>
+        <tbody>
+          <tr><td>需要训练</td><td><span class="cell-ok">✅ 不需要</span></td><td><span class="cell-bad">❌ 需要</span></td></tr>
+          <tr><td>耗时</td><td>几小时</td><td>几天-几周</td></tr>
+          <tr><td>需要数据</td><td>~128 calibration 样本</td><td>完整训练数据</td></tr>
+          <tr><td>精度损失</td><td>1-3%</td><td>&lt; 1%</td></tr>
+          <tr><td>LLM 实战</td><td><strong>主流</strong></td><td>稀少</td></tr>
+        </tbody>
+      </table>
+
+      <p>本文剩下章节都讲 PTQ（LLM 量化的主流）。</p>
+    </section>
+
+    <!-- ============= Ch4 ============= -->
+    <section class="chapter" id="ch4">
+      <div class="ch-head">
+        <div class="num">04</div>
+        <div class="t">
+          <h2>INT4 量化 · GPTQ / AWQ / SmoothQuant 对比</h2>
+          <div class="sub">3 种主流 PTQ 算法</div>
+        </div>
+      </div>
+
+      <h3 id="s4-1">4.1 GPTQ · 第一代 INT4 王者（2023）</h3>
+
+      <div class="analogy">
+        <div class="a-head"><span class="icon">🎬</span><span>生活类比 · 一层一层量化 + 误差校正</span></div>
+        <div class="a-body">
+          GPTQ 思路：<u>逐层量化</u>，每层量化时<u>用前面层量化的误差校正</u>。就像盖房子，每砌一层都<u>考虑前面层的偏差</u>来调整。<br><br>
+          数学上：用 Hessian 矩阵的 inverse 来决定<u>哪些 weight 量化先后</u>，最小化整层 quantization error。
+        </div>
+      </div>
+
+      <h3 id="s4-2">4.2 AWQ · 关键 weight 保留（2023.6）</h3>
+
+      <div class="analogy">
+        <div class="a-head"><span class="icon">🎬</span><span>生活类比 · VIP 客户高规格服务</span></div>
+        <div class="a-body">
+          AWQ 发现：<u>不是所有 weight 同样重要</u>。<u>1% 的"关键 weight"</u>（对 activation 影响最大）保留 FP16 不量化，其它 99% 量化到 INT4。<br><br>
+          AWQ 的关键 insight：activation magnitude 大的<u>对应 channel 的 weight 最重要</u>，量化时优先保护。
+        </div>
+      </div>
+
+      <h3 id="s4-3">4.3 SmoothQuant · activation 量化的钥匙（2023.4）</h3>
+
+      <p>GPTQ / AWQ 只量化 weight。<strong>SmoothQuant 量化 weight + activation</strong>（W8A8）。难点：<u>activation 有 outlier</u>，直接量化误差大。</p>
+
+      <div class="outlier-vis">
+        <p style="font-size:13px;color:#94a3b8;margin-bottom:8px">典型 activation 分布（X 轴 = channel index, Y 轴 = magnitude）：</p>
+        <div class="outlier-row">
+          <div class="outlier-bar"><div class="fill" style="height:30%"></div></div>
+          <div class="outlier-bar"><div class="fill" style="height:25%"></div></div>
+          <div class="outlier-bar"><div class="fill" style="height:35%"></div></div>
+          <div class="outlier-bar"><div class="fill" style="height:28%"></div></div>
+          <div class="outlier-bar"><div class="fill outlier" style="height:95%"></div></div>
+          <div class="outlier-bar"><div class="fill" style="height:32%"></div></div>
+          <div class="outlier-bar"><div class="fill" style="height:30%"></div></div>
+          <div class="outlier-bar"><div class="fill" style="height:27%"></div></div>
+          <div class="outlier-bar"><div class="fill outlier" style="height:88%"></div></div>
+          <div class="outlier-bar"><div class="fill" style="height:33%"></div></div>
+          <div class="outlier-bar"><div class="fill" style="height:30%"></div></div>
+          <div class="outlier-bar"><div class="fill" style="height:25%"></div></div>
+          <div class="outlier-bar"><div class="fill" style="height:30%"></div></div>
+          <div class="outlier-bar"><div class="fill outlier" style="height:92%"></div></div>
+          <div class="outlier-bar"><div class="fill" style="height:28%"></div></div>
+          <div class="outlier-bar"><div class="fill" style="height:30%"></div></div>
+        </div>
+        <p style="font-size:11px;color:#94a3b8;text-align:center;margin-top:8px"><span style="color:#f87171">红色 = outlier channel</span>（远高于其它），直接量化会损失大量信息</p>
+      </div>
+
+      <p><strong>SmoothQuant 的解</strong>：把 outlier 从 activation"挪"到 weight。<u>activation × scale → weight × (1/scale)</u>，数学等价但 activation 分布变平滑，weight 仍能量化。</p>
+
+      <h3>4.4 3 方法对比</h3>
+
+      <div class="method-grid">
+        <div class="mc gptq">
+          <div class="name">GPTQ</div>
+          <div class="tag">2022.10 · Frantar et al.</div>
+          <div class="body">
+            <strong>量化目标</strong>：仅 weight<br>
+            <strong>精度</strong>：W4A16（W = INT4, A = FP16）<br>
+            <strong>速度提升</strong>：~2-3x<br>
+            <strong>精度损失</strong>：1-2%<br>
+            <strong>实现</strong>：AutoGPTQ
+          </div>
+        </div>
+        <div class="mc awq">
+          <div class="name">AWQ</div>
+          <div class="tag">2023.6 · MIT/Tsinghua</div>
+          <div class="body">
+            <strong>量化目标</strong>：仅 weight + 1% 保留<br>
+            <strong>精度</strong>：W4A16<br>
+            <strong>速度提升</strong>：~2-3x<br>
+            <strong>精度损失</strong>：0.5-1.5% <strong>(优于 GPTQ)</strong><br>
+            <strong>实现</strong>：AutoAWQ / vLLM 内置
+          </div>
+        </div>
+        <div class="mc smq">
+          <div class="name">SmoothQuant</div>
+          <div class="tag">2022.11 · MIT</div>
+          <div class="body">
+            <strong>量化目标</strong>：weight + activation<br>
+            <strong>精度</strong>：W8A8（INT8 全量化）<br>
+            <strong>速度提升</strong>：~1.5-2x<br>
+            <strong>精度损失</strong>：&lt; 0.5%<br>
+            <strong>用途</strong>：需要 activation 量化的场景
+          </div>
+        </div>
+        <div class="mc spqr">
+          <div class="name">SpQR (2023.6)</div>
+          <div class="tag">+ 2024 GGUF / EXL2</div>
+          <div class="body">
+            <strong>极致压缩</strong>：3-bit 甚至 2-bit<br>
+            <strong>精度</strong>：保留少量 high-precision outlier<br>
+            <strong>损失</strong>：3-bit ~1%，2-bit 5%+<br>
+            <strong>用途</strong>：本地 / 端侧 LLM
+          </div>
+        </div>
+      </div>
+
+      <div class="tip">
+        <strong>选型决策</strong>：默认 <strong>AWQ</strong>（精度最好的 INT4），需要 INT8 W8A8 用 SmoothQuant，极致压缩本地用 GGUF（2-3 bit）。<u>vLLM / SGLang / TRT-LLM 三家都默认支持 GPTQ + AWQ</u>。
+      </div>
+    </section>
+
+    <!-- ============= Ch5：FP8 ============= -->
+    <section class="chapter" id="ch5">
+      <div class="ch-head">
+        <div class="num">05</div>
+        <div class="t">
+          <h2>FP8 · H100 时代的训练 + 推理标配</h2>
+          <div class="sub">为什么 H100 量化主流转 FP8 而不是 INT8</div>
+        </div>
+      </div>
+
+      <div class="analogy">
+        <div class="a-head"><span class="icon">🎬</span><span>生活类比 · 8 位浮点 vs 8 位整数的"动态范围"</span></div>
+        <div class="a-body">
+          INT8 像<u>固定刻度的尺</u>：从 -128 到 127 均匀分布。<u>测细节准，但测超大数会爆</u>。<br>
+          FP8 像<u>对数刻度的尺</u>：能测从 0.0001 到 10000 的超大范围，<u>但同一区间内精度低</u>。<br><br>
+          深度学习里 activation 经常有<u>extreme outlier</u>（attention 输出有时是几千），<u>INT8 装不下要 clip 损失大</u>。FP8 能装下，所以 H100 + B200 主推 FP8。
+        </div>
+      </div>
+
+      <h3>5.1 FP8 vs INT8 数据特性</h3>
+
+      <table>
+        <thead><tr><th>维度</th><th>INT8</th><th>FP8 (E4M3)</th></tr></thead>
+        <tbody>
+          <tr><td>范围</td><td>[-128, 127]</td><td>±448</td></tr>
+          <tr><td>动态范围</td><td>~2.5 个数量级</td><td>~16 个数量级</td></tr>
+          <tr><td>0 附近精度</td><td>±0.5 (固定)</td><td>±0.001 (高)</td></tr>
+          <tr><td>大数精度</td><td>±0.5 (固定)</td><td>±16 (低)</td></tr>
+          <tr><td>硬件支持</td><td>所有 GPU</td><td>H100, B200, MI300</td></tr>
+        </tbody>
+      </table>
+
+      <h3>5.2 FP8 训练的革命</h3>
+
+      <p>DeepSeek-V3 是<u>首个公开做 FP8 mixed-precision 训练的大规模模型</u>（671B）：</p>
+      <ul>
+        <li><strong>训练成本省 50%</strong>（FP8 算力是 FP16 的 2x）</li>
+        <li>少量 sensitive 算子（如 attention softmax）仍用 BF16</li>
+        <li>需要细粒度 scale + outlier handling 才能不崩</li>
+      </ul>
+
+      <div class="tip">
+        2026 趋势：<strong>大公司训练 + 推理都转 FP8</strong>。Llama 3.3 / Qwen2.5 / DeepSeek-V3 / Gemini 都已支持。<u>面试提到"FP8 训练 + 推理一体化"加分</u>。
+      </div>
+    </section>
+
+    <!-- ============= Ch6：KV-Cache 量化 ============= -->
+    <section class="chapter" id="ch6">
+      <div class="ch-head">
+        <div class="num">06</div>
+        <div class="t">
+          <h2>KV-Cache 量化 · Decode 性能的杀手锏</h2>
+        </div>
+      </div>
+
+      <p class="lead">Decode 阶段瓶颈是<u>读 KV-Cache 的带宽</u>（见 <a href="../ai-native/transformer_llm_architecture.html#ch3">X06 §3</a>）。<strong>KV-Cache 量化直接降"要读的字节"</strong>，提速比 weight 量化更明显。</p>
+
+      <h3>6.1 KV-Cache 量化的收益</h3>
+
+      <div class="perf-row">
+        <div class="pr-name"><strong>FP16 KV-Cache</strong><span style="font-size:11px;color:#94a3b8">baseline</span></div>
+        <div class="pr-bar"><div class="pr-fill" style="width:25%"></div><div class="pr-text">100% / 1x</div></div>
+      </div>
+      <div class="perf-row">
+        <div class="pr-name"><strong>FP8 KV</strong><span style="font-size:11px;color:#94a3b8">几乎无损</span></div>
+        <div class="pr-bar"><div class="pr-fill" style="width:55%"></div><div class="pr-text">50% 显存 / 1.5-2x 速度</div></div>
+      </div>
+      <div class="perf-row">
+        <div class="pr-name"><strong>INT4 KV</strong><span style="font-size:11px;color:#94a3b8">长上下文略损 1-2%</span></div>
+        <div class="pr-bar"><div class="pr-fill" style="width:90%"></div><div class="pr-text">25% 显存 / 2-3x 速度</div></div>
+      </div>
+
+      <h3>6.2 INT4 KV-Cache 的代价</h3>
+
+      <div class="grid cols-2">
+        <div class="card green">
+          <h4>✅ 收益</h4>
+          <ul style="font-size:13.5px">
+            <li>KV-Cache 显存 / 4 → 装 4x 并发或 4x 上下文</li>
+            <li>Decode 带宽消耗 / 4 → 速度 2-3x</li>
+            <li>vLLM / SGLang / TRT-LLM 都已支持</li>
+          </ul>
+        </div>
+        <div class="card amber">
+          <h4>⚠ 代价</h4>
+          <ul style="font-size:13.5px">
+            <li>短上下文（&lt; 4k）精度几乎无损</li>
+            <li><u>长上下文（&gt; 32k）累积误差可见</u>，精度 -1-2%</li>
+            <li>不同 layer 敏感度不同（前几层比后几层敏感）</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============= Ch7：Speculative Decoding ============= -->
+    <section class="chapter" id="ch7">
+      <div class="ch-head">
+        <div class="num">07</div>
+        <div class="t">
+          <h2>Speculative Decoding · 用小模型加速</h2>
+          <div class="sub">跟量化互补的另一个加速维度</div>
+        </div>
+      </div>
+
+      <p>详见 <a href="./inference_serving.html#ch6">Y02 Ch6</a>。简言之：<u>小模型预测 K 个 token + 大模型一次性验证</u>，单步等效产出 K 个 token。</p>
+
+      <h3>跟量化的关系</h3>
+
+      <table>
+        <thead><tr><th>维度</th><th>量化</th><th>Spec Decoding</th></tr></thead>
+        <tbody>
+          <tr><td>优化目标</td><td>每步算/读字节少</td><td>少跑几步</td></tr>
+          <tr><td>典型加速</td><td>2-3x</td><td>1.5-3x</td></tr>
+          <tr><td>组合效果</td><td colspan="2" style="text-align:center"><strong>互补可叠加</strong>，组合 4-9x</td></tr>
+        </tbody>
+      </table>
+
+      <div class="tip">
+        2026 主流 production 推理 stack：<strong>vLLM + AWQ INT4 weight + INT8 KV-Cache + Speculative Decoding</strong>。综合 throughput 比 naive FP16 高 8-15x。
+      </div>
+    </section>
+
+    <!-- ============= Ch8：实战 ============= -->
+    <section class="chapter" id="ch8">
+      <div class="ch-head">
+        <div class="num">08</div>
+        <div class="t">
+          <h2>实战 · 30 分钟量化 Qwen-7B 到 INT4</h2>
+        </div>
+      </div>
+
+      <h3>8.1 用 AutoAWQ</h3>
+
+      <pre><code><span class="c"># 安装</span>
+pip install autoawq
+
+<span class="c"># 量化脚本</span>
+<span class="k">from</span> awq <span class="k">import</span> AutoAWQForCausalLM
+<span class="k">from</span> transformers <span class="k">import</span> AutoTokenizer
+
+model_path = <span class="s">"Qwen/Qwen2.5-7B-Instruct"</span>
+quant_path = <span class="s">"./qwen2.5-7b-awq"</span>
+
+<span class="c"># 加载</span>
+model = AutoAWQForCausalLM.<span class="f">from_pretrained</span>(model_path)
+tokenizer = AutoTokenizer.<span class="f">from_pretrained</span>(model_path)
+
+<span class="c"># 量化（用 128 条 calibration 样本）</span>
+model.<span class="f">quantize</span>(
+    tokenizer,
+    quant_config={
+        <span class="s">"w_bit"</span>: <span class="n">4</span>,           <span class="c"># 4-bit weight</span>
+        <span class="s">"q_group_size"</span>: <span class="n">128</span>,  <span class="c"># 每 128 个元素一个 scale</span>
+        <span class="s">"zero_point"</span>: <span class="k">True</span>,
+        <span class="s">"version"</span>: <span class="s">"GEMM"</span>,    <span class="c"># GEMM 模式 (vs GEMV)</span>
+    }
+)
+
+<span class="c"># 保存</span>
+model.<span class="f">save_quantized</span>(quant_path)
+tokenizer.<span class="f">save_pretrained</span>(quant_path)
+<span class="c"># 量化完成，模型大小从 14 GB 降到 4.5 GB</span></code></pre>
+
+      <h3>8.2 用 vLLM serving 量化后模型</h3>
+
+      <pre><code><span class="c"># vLLM 自动识别 AWQ 格式</span>
+vllm serve ./qwen2.5-7b-awq \
+    --quantization awq \
+    --max-model-len <span class="n">8192</span> \
+    --gpu-memory-utilization <span class="n">0.9</span>
+
+<span class="c"># 跑 benchmark 对比</span>
+<span class="c"># FP16: ~120 tokens/s</span>
+<span class="c"># AWQ INT4: ~280 tokens/s   (2.3x 提速)</span></code></pre>
+
+      <h3>8.3 验证精度</h3>
+
+      <pre><code><span class="c"># 用 lm-eval-harness 跑 MMLU / GSM8K / 你的业务 eval set</span>
+pip install lm-eval
+
+lm_eval --model vllm \
+    --model_args pretrained=./qwen2.5-7b-awq,quantization=awq \
+    --tasks mmlu,gsm8k \
+    --batch_size <span class="n">16</span>
+
+<span class="c"># 对比 FP16 baseline 看精度损失（典型 -1-2%）</span></code></pre>
+    </section>
+
+    <!-- ============= Ch9：5 个坑 ============= -->
+    <section class="chapter" id="ch9">
+      <div class="ch-head">
+        <div class="num">09</div>
+        <div class="t">
+          <h2>5 个量化常见坑</h2>
+        </div>
+      </div>
+
+      <div class="card danger">
+        <h4>坑 1 · INT4 量化后 reasoning 任务掉得多</h4>
+        <p style="font-size:13.5px">7B 模型 INT4 后 GSM8K 数学题准确率从 65% 掉到 42%。普通对话感觉没变。</p>
+        <p style="font-size:12.5px;color:var(--text-dim);margin-top:6px"><strong>根因</strong>：reasoning 是 long-tail capability，对精度敏感。<u>修复</u>：reasoning 场景用 INT8 或 FP8 而不是 INT4。</p>
+      </div>
+
+      <div class="card danger">
+        <h4>坑 2 · Calibration 数据选错</h4>
+        <p style="font-size:13.5px">用通用文本做 calibration，量化后在公司专业领域准确率暴跌。</p>
+        <p style="font-size:12.5px;color:var(--text-dim);margin-top:6px"><strong>根因</strong>：calibration 决定 scale 怎么选。<u>修复</u>：用业务实际数据做 calibration（128 条够），跟生产分布一致。</p>
+      </div>
+
+      <div class="card danger">
+        <h4>坑 3 · 长上下文 INT4 KV-Cache 累积误差</h4>
+        <p style="font-size:13.5px">短对话好好的，长文档总结质量暴跌。</p>
+        <p style="font-size:12.5px;color:var(--text-dim);margin-top:6px"><strong>根因</strong>：每步 decode 误差累积，长上下文放大。<u>修复</u>：长上下文场景用 FP8 KV-Cache 而非 INT4，或前几层保留 FP16。</p>
+      </div>
+
+      <div class="card danger">
+        <h4>坑 4 · 量化模型反而比 FP16 慢</h4>
+        <p style="font-size:13.5px">某团队量化后 latency 反而涨了。</p>
+        <p style="font-size:12.5px;color:var(--text-dim);margin-top:6px"><strong>根因</strong>：① 推理引擎没启用专门 INT4 kernel（fallback 到通用 kernel） ② batch size 太小（量化收益要靠 batching 摊薄）。<u>修复</u>：确认 vLLM/SGLang 用 marlin / wint4 等专用 kernel。</p>
+      </div>
+
+      <div class="card danger">
+        <h4>坑 5 · 量化后微调（QAT 替代）失败</h4>
+        <p style="font-size:13.5px">先 SFT 再 AWQ 量化效果不错；想反过来"量化后微调"，效果崩。</p>
+        <p style="font-size:12.5px;color:var(--text-dim);margin-top:6px"><strong>根因</strong>：INT4 weight 直接 SFT 数值不稳。<u>修复</u>：用 QLoRA — 量化 base + 训练 FP16 LoRA adapter。</p>
+      </div>
+    </section>
+
+    <!-- ============= Ch10：12 面试题 ============= -->
+    <section class="chapter" id="ch10">
+      <div class="ch-head">
+        <div class="num">10</div>
+        <div class="t">
+          <h2>12 道量化高频面试题</h2>
+        </div>
+      </div>
+
+      <details class="qa">
+        <summary><span class="lvl pill cyan">基础</span>Q1. 量化的 3 个收益？</summary>
+        <div class="a">
+          <div class="point">
+            <div class="label">3 收益</div>
+            <div>① 显存 ÷ 2-4x（同硬件装更大模型）② 推理速度 ×2-3（decode 是 memory-bound，weight 小 → 读快）③ Cost ÷ 2-5x</div>
+          </div>
+        </div>
+      </details>
+
+      <details class="qa">
+        <summary><span class="lvl pill cyan">基础</span>Q2. PTQ 和 QAT 区别？LLM 主流哪个？</summary>
+        <div class="a">
+          <div class="point">
+            <div class="label">PTQ</div>
+            <div>训练后量化，不需要训，几小时搞定，精度损失 1-3%。<u>LLM 主流</u>。</div>
+          </div>
+          <div class="point">
+            <div class="label">QAT</div>
+            <div>训练时模拟量化，需要训练几天-几周，精度损失 &lt; 1%。<u>LLM 太贵不划算</u>，主要 CV 用。</div>
+          </div>
+        </div>
+      </details>
+
+      <details class="qa">
+        <summary><span class="lvl pill amber">进阶</span>Q3. GPTQ / AWQ / SmoothQuant 区别？</summary>
+        <div class="a">
+          <div class="point">
+            <div class="label">GPTQ</div>
+            <div>逐层量化 + Hessian 误差校正。仅 weight INT4。</div>
+          </div>
+          <div class="point">
+            <div class="label">AWQ</div>
+            <div>识别 1% "关键 channel"（activation magnitude 大对应的）保留 FP16，其它 INT4。<strong>精度优于 GPTQ</strong>。</div>
+          </div>
+          <div class="point">
+            <div class="label">SmoothQuant</div>
+            <div>同时量化 weight + activation (W8A8)。通过"挪 outlier 从 activation 到 weight"解决 activation 量化难题。</div>
+          </div>
+        </div>
+      </details>
+
+      <details class="qa">
+        <summary><span class="lvl pill red">高频</span>Q4. 为什么 H100 推 FP8 而不是 INT8？</summary>
+        <div class="a">
+          <div class="point">
+            <div class="label">动态范围</div>
+            <div>INT8 范围 [-128,127]，FP8 范围 ±448。LLM activation 经常有 extreme outlier（attention 输出可能几千），<u>INT8 装不下 clip 损失大，FP8 能装下</u>。</div>
+          </div>
+          <div class="point deep">
+            <div class="label">硬件</div>
+            <div>H100 + B200 内置 FP8 Tensor Core，算力是 FP16 的 2x。是 2026 训练 + 推理主流。</div>
+          </div>
+        </div>
+      </details>
+
+      <details class="qa">
+        <summary><span class="lvl pill amber">进阶</span>Q5. 为什么 KV-Cache 量化对 decode 加速比 weight 量化更明显？</summary>
+        <div class="a">
+          <div class="point">
+            <div class="label">原因</div>
+            <div>Decode 每步要读<u>整个 KV-Cache</u>（GB 级），weight 是固定的（cache 在 SM 内）。KV-Cache 量化直接减少"每步要读的字节"，瓶颈解除得更彻底。</div>
+          </div>
+          <div class="point deep">
+            <div class="label">数据</div>
+            <div>典型 70B 模型 32k 上下文：weight FP16 = 140GB，KV-Cache FP16 = 84GB。<u>KV 量化收益是 weight 量化的 60% 但更便宜实现</u>。</div>
+          </div>
+        </div>
+      </details>
+
+      <details class="qa">
+        <summary><span class="lvl pill red">高频</span>Q6. INT4 量化后什么场景质量掉得最多？</summary>
+        <div class="a">
+          <div class="point">
+            <div class="label">长尾</div>
+            <div>① <strong>Reasoning</strong>（数学 / 代码）→ INT4 掉 5-20% ② <strong>长上下文</strong>（&gt; 32k）→ 累积误差 ③ <strong>稀少语言</strong>（小语种 / 方言）④ <strong>edge case</strong></div>
+          </div>
+          <div class="point">
+            <div class="label">主流场景</div>
+            <div>普通对话 / 短问答 / 摘要 → 几乎无损（&lt; 1%）</div>
+          </div>
+        </div>
+      </details>
+
+      <details class="qa">
+        <summary><span class="lvl pill cyan">基础</span>Q7. Per-tensor / Per-channel / Group-wise 量化区别？</summary>
+        <div class="a">
+          <div class="point">
+            <div class="label">Per-tensor</div>
+            <div>整个 tensor 共享 1 个 scale。最简单，精度最差。</div>
+          </div>
+          <div class="point">
+            <div class="label">Per-channel</div>
+            <div>每个 channel 一个 scale。精度好很多，存储略增。</div>
+          </div>
+          <div class="point deep">
+            <div class="label">Group-wise</div>
+            <div>每 128 个元素一个 scale。<u>2026 SOTA</u>，精度跟 per-channel 接近但 GEMM 更高效。AWQ / GPTQ 默认。</div>
+          </div>
+        </div>
+      </details>
+
+      <details class="qa">
+        <summary><span class="lvl pill amber">进阶</span>Q8. SmoothQuant 怎么解决 activation outlier？</summary>
+        <div class="a">
+          <div class="point">
+            <div class="label">核心 trick</div>
+            <div>把 outlier 从 activation 数学等价地"挪"到 weight。<u>activation × scale_factor → weight × (1/scale_factor)</u>，最终结果一样，但 activation 分布变平滑可量化。</div>
+          </div>
+          <div class="point deep">
+            <div class="label">为什么 work</div>
+            <div>weight 本身是离线静态的，可以容忍更大动态范围；activation 是动态的，需要小动态范围才能 INT8。</div>
+          </div>
+        </div>
+      </details>
+
+      <details class="qa">
+        <summary><span class="lvl pill amber">进阶</span>Q9. Calibration 数据怎么选？多少条够？</summary>
+        <div class="a">
+          <div class="point">
+            <div class="label">选什么</div>
+            <div>必须跟生产数据 distribution 一致。<u>用通用 web 文本 calibration 然后跑专业领域 → 大幅掉点</u>。</div>
+          </div>
+          <div class="point">
+            <div class="label">多少条</div>
+            <div>典型 128-512 条。<u>再多边际收益小</u>。质量比数量重要。</div>
+          </div>
+        </div>
+      </details>
+
+      <details class="qa">
+        <summary><span class="lvl pill red">高频</span>Q10. QLoRA 是什么？怎么 work？</summary>
+        <div class="a">
+          <div class="point">
+            <div class="label">是什么</div>
+            <div>"量化 base 模型 (INT4) + 训练 FP16 LoRA adapter"。让 70B 模型在 1 张 24GB 消费级 GPU 上能 fine-tune。</div>
+          </div>
+          <div class="point deep">
+            <div class="label">关键 trick</div>
+            <div>① NF4 (NormalFloat 4-bit) 替代 INT4 — 更适合 weight 分布 ② Double Quantization — 量化 scale 自己再量化 ③ Paged Optimizer — 用 GPU-CPU 切换避免 OOM</div>
+          </div>
+        </div>
+      </details>
+
+      <details class="qa">
+        <summary><span class="lvl pill amber">进阶</span>Q11. Activation 量化为什么比 weight 量化难？</summary>
+        <div class="a">
+          <div class="point">
+            <div class="label">原因</div>
+            <div>① Activation 是动态的（每 forward 不同），难 calibration ② 有 extreme outlier ③ Outlier channel 不固定（每层不同）</div>
+          </div>
+          <div class="point deep">
+            <div class="label">解</div>
+            <div>SmoothQuant（挪 outlier）、FP8（足够动态范围）、混合精度（outlier 层保留 FP16）</div>
+          </div>
+        </div>
+      </details>
+
+      <details class="qa">
+        <summary><span class="lvl pill violet">实战</span>Q12. 我有 Llama-70B 想部署到 1 张 H100 80GB，怎么做？</summary>
+        <div class="a">
+          <div class="point">
+            <div class="label">配方</div>
+            <div>
+              ① <strong>AWQ INT4 量化 weight</strong>：70B × 2 字节 (FP16) = 140GB → AWQ INT4 = 35GB ✅<br>
+              ② <strong>FP8 KV-Cache</strong>：32k 上下文 KV ≈ 21GB（GQA + FP8）<br>
+              ③ <strong>剩余</strong>：80 - 35 - 21 - 5 (activation) = 19GB，能跑 ~3-5 并发 32k 用户<br>
+              ④ <strong>提速</strong>：再加 Speculative Decoding（用 Llama-1B draft） + Continuous Batching<br>
+              ⑤ <strong>预期</strong>：throughput ~600 tokens/s，P95 latency ~2s，cost vs 用 2 张卡 -50%
+            </div>
+          </div>
+          <div class="point deep">
+            <div class="label">加分</div>
+            <div>提到 reasoning 任务可能要降级到 FP8 weight 而不是 INT4。</div>
+          </div>
+        </div>
+      </details>
+    </section>
+
+  <footer>
+    <div class="made">TECH NOTES · AI INFRA · Y04 · 通俗深潜版</div>
+    <p style="margin-top:14px">
+      上一篇：<a href="./distributed_training.html">🌐 Y03 分布式训练 →</a> &nbsp;·&nbsp;
+      下一篇：<a href="./ai_compilers.html">⚙️ Y05 AI 编译器 →</a> &nbsp;·&nbsp;
+      推理引擎：<a href="./inference_serving.html">🚀 Y02 vLLM →</a> &nbsp;·&nbsp;
+      CUDA：<a href="./cuda_for_cpp.html">⚡ Y01 →</a> &nbsp;·&nbsp;
+      面试卡：<a href="../interview/ai_engineer_cards.html">🎴 I06 →</a>
+    </p>
+  </footer>
+  </main>
+</div>
+
+<script>
+(function(){var bar=document.getElementById('progress');function update(){var h=document.documentElement;bar.style.width=(h.scrollTop/(h.scrollHeight-h.clientHeight)*100)+'%';}window.addEventListener('scroll',update,{passive:true});update();})();
+(function(){var links=document.querySelectorAll('aside.toc nav > ol > li > a');var sections=Array.from(document.querySelectorAll('section.chapter'));function update(){var y=window.scrollY+100;var cur=sections[0];for(var i=0;i<sections.length;i++){if(sections[i].offsetTop<=y)cur=sections[i];}links.forEach(function(a){if(a.getAttribute('href')==='#'+cur.id)a.classList.add('active');else a.classList.remove('active');});}window.addEventListener('scroll',update,{passive:true});update();})();
+</script>
+
+</body>
+</html>

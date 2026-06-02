@@ -1,0 +1,838 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>分布式训练 · DDP / FSDP / Megatron / 3D Parallel — Tech Notes</title>
+<link rel="stylesheet" href="../assets/site-theme.css">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<style>
+.analogy{background:linear-gradient(135deg,#1a1f3a 0%,#1f2842 100%);
+  border:1px solid rgba(125,211,252,.25);border-radius:14px;padding:20px 24px;margin:20px 0;
+  position:relative;overflow:hidden;box-shadow:0 8px 28px -10px rgba(125,211,252,.25);}
+.analogy::before{content:"";position:absolute;top:0;left:0;right:0;height:3px;
+  background:linear-gradient(90deg,#7dd3fc,#a78bfa,#34d399);}
+.analogy .a-head{display:flex;align-items:center;gap:10px;
+  font-size:13px;font-weight:700;color:#7dd3fc;
+  text-transform:uppercase;letter-spacing:1.5px;margin-bottom:12px;}
+.analogy .a-head .icon{font-size:22px;line-height:1}
+.analogy .a-body{font-size:14.5px;line-height:1.8;color:#e4e9f5}
+.analogy .a-body strong{color:#fbbf24}
+.analogy .a-map{margin-top:14px;padding:12px 16px;background:rgba(15,20,36,.55);
+  border-radius:8px;border:1px dashed rgba(125,211,252,.2);font-size:13px;color:#94a3b8;}
+.analogy .a-map .arrow{color:#7dd3fc;margin:0 6px;font-weight:700}
+.analogy .a-map .term{color:#a78bfa;font-weight:600;font-family:"JetBrains Mono",monospace}
+
+.intuition{background:rgba(251,191,36,.05);border-left:4px solid #fbbf24;
+  padding:14px 18px;border-radius:0 10px 10px 0;margin:14px 0;
+  font-size:14.5px;line-height:1.7;}
+.intuition::before{content:"🎯 一句话直觉 · ";color:#fbbf24;font-weight:700;font-size:13px}
+
+/* GPU 分组可视化（核心组件） */
+.gpu-vis{background:#080c18;border-radius:12px;padding:18px;margin:14px 0}
+.gpu-grid{display:grid;grid-template-columns:repeat(8,1fr);gap:6px;max-width:520px;margin:10px auto}
+.gpu-cell{
+  aspect-ratio:1;border-radius:4px;
+  display:flex;align-items:center;justify-content:center;
+  font-size:10px;color:#0a0e1a;font-weight:700;font-family:"JetBrains Mono",monospace;
+}
+.gpu-cell.dp1{background:#7dd3fc}
+.gpu-cell.dp2{background:#a78bfa}
+.gpu-cell.dp3{background:#34d399}
+.gpu-cell.dp4{background:#fbbf24}
+.gpu-cell.tp1{background:linear-gradient(135deg,#7dd3fc,#a78bfa)}
+.gpu-cell.tp2{background:linear-gradient(135deg,#a78bfa,#fbbf24)}
+.gpu-cell.tp3{background:linear-gradient(135deg,#34d399,#7dd3fc)}
+.gpu-cell.tp4{background:linear-gradient(135deg,#fbbf24,#f87171)}
+.gpu-cell.idle{background:#1f2740;color:#475569}
+.gpu-legend{display:flex;gap:14px;justify-content:center;margin-top:10px;font-size:11px;color:#94a3b8;flex-wrap:wrap}
+.gpu-legend .sw{width:14px;height:14px;border-radius:3px;display:inline-block;margin-right:5px;vertical-align:middle}
+
+/* ZeRO stage 对比 */
+.zero-cmp{
+  display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:14px 0;
+}
+.zero-cmp .zc{
+  background:linear-gradient(180deg,#141a2c,#0f1424);
+  border:1px solid #2a3556;border-radius:10px;padding:14px;
+  position:relative;
+}
+.zero-cmp .zc::before{content:"";position:absolute;top:0;left:0;right:0;height:3px}
+.zero-cmp .zc.s0::before{background:#f87171}
+.zero-cmp .zc.s1::before{background:#fbbf24}
+.zero-cmp .zc.s2::before{background:#a78bfa}
+.zero-cmp .zc.s3::before{background:#34d399}
+.zero-cmp .zc .name{font-size:14px;font-weight:700;color:#e4e9f5;margin-bottom:6px}
+.zero-cmp .zc .body{font-size:12.5px;color:#cbd5e1;line-height:1.7}
+.zero-cmp .zc .save{font-family:"JetBrains Mono",monospace;font-size:13px;color:#34d399;margin-top:8px;display:block;font-weight:700}
+@media(max-width:760px){.zero-cmp{grid-template-columns:1fr 1fr}}
+
+/* AllReduce 通信流程 */
+.allreduce-vis{background:#080c18;border-radius:10px;padding:18px;margin:14px 0}
+.ar-step{display:flex;gap:14px;align-items:center;margin:10px 0}
+.ar-num{
+  width:48px;flex-shrink:0;text-align:center;
+  font-family:"JetBrains Mono",monospace;font-size:12px;color:#fbbf24;
+  padding:8px;background:rgba(251,191,36,.1);border-radius:6px;font-weight:700;
+}
+.ar-desc{flex:1;font-size:13px;color:#cbd5e1;line-height:1.6}
+</style>
+</head>
+<body>
+
+<!-- tn-nav:v1 -->
+<style>
+#tn-nav{position:fixed;top:14px;right:14px;z-index:99999;display:flex;gap:6px;align-items:center;
+  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;
+  font-size:12px;line-height:1;font-weight:500;}
+#tn-nav a,#tn-nav .tn-meta{display:inline-flex;align-items:center;gap:4px;
+  background:rgba(20,20,30,.85);color:#fff !important;text-decoration:none !important;
+  padding:7px 11px;border-radius:999px;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+  border:1px solid rgba(255,255,255,.10);box-shadow:0 2px 8px rgba(0,0,0,.18);
+  transition:background .15s,transform .15s;}
+#tn-nav a:hover{background:rgba(56,189,248,.92);transform:translateY(-1px);}
+#tn-nav .tn-meta{background:rgba(20,20,30,.55);cursor:default;}
+@media (max-width:640px){#tn-nav{top:8px;right:8px;font-size:11px;gap:4px;}
+  #tn-nav a,#tn-nav .tn-meta{padding:5px 9px;}}
+@media print{#tn-nav{display:none;}}
+</style>
+<div id="tn-nav">
+  <a href="../index.html">← 主页</a>
+  <a href="../interview/ai_study_path.html">📚 路径</a>
+  <a href="./quantization.html">📦 Y04 量化</a>
+  <span class="tn-meta">⏱ 55 min</span>
+</div>
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>Y03 · Distributed Training</h2>
+    <nav>
+      <ol>
+        <li><a href="#ch0" class="active">读前地图</a></li>
+        <li><a href="#ch1">为什么单卡训不动</a></li>
+        <li><a href="#ch2">3 维并行 · DP/TP/PP</a></li>
+        <li><a href="#ch3">DDP · 数据并行入门</a></li>
+        <li><a href="#ch4">ZeRO / FSDP · 显存优化</a>
+          <ol>
+            <li><a href="#s4-1">ZeRO 3 阶段</a></li>
+            <li><a href="#s4-2">FSDP</a></li>
+          </ol>
+        </li>
+        <li><a href="#ch5">Tensor Parallel · 切矩阵</a></li>
+        <li><a href="#ch6">Pipeline Parallel · 切层</a></li>
+        <li><a href="#ch7">Expert Parallel (MoE)</a></li>
+        <li><a href="#ch8">3D Parallel · 万卡训练</a></li>
+        <li><a href="#ch9">NCCL · 集体通信</a></li>
+        <li><a href="#ch10">5 个真实千卡训练事故</a></li>
+        <li><a href="#ch11">12 道高频面试题</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+
+    <header class="hero">
+      <div class="badge">Y03 · Distributed Training · 通俗深潜版</div>
+      <h1>分布式训练系统<br>DDP / FSDP / 3D Parallel / Megatron</h1>
+      <p class="sub">
+        11 章 · 6 个生活类比 · 5 个真实千卡训练事故 · 12 道面试题。<br>
+        <strong>对位读者</strong>：ML Eng 候选人 / AI Infra Senior+ / 想搞懂"千卡训练崩了怎么排查"。<br>
+        <strong>核心 takeaway</strong>：单卡训不下大模型不是因为算力，<u>是显存</u>。所有分布式训练技术（DP/TP/PP/EP/ZeRO）都在解决"显存怎么分到多卡 + 通信怎么不卡瓶颈"。
+      </p>
+      <div class="meta">
+        <span>11 章节</span>
+        <span>~55 min 阅读</span>
+        <span>6 个生活类比</span>
+        <span>5 个真实事故</span>
+        <span>12 面试题</span>
+      </div>
+    </header>
+
+    <!-- ============= Ch0 ============= -->
+    <section class="chapter" id="ch0">
+      <div class="ch-head">
+        <div class="num">00</div>
+        <div class="t">
+          <h2>读前地图 · 千卡训练的技术栈</h2>
+        </div>
+      </div>
+
+      <div class="kmap">
+        <div class="kmap-title">3 种读者推荐路径</div>
+        <div class="grid cols-3">
+          <div class="card"><h4>🆕 单卡训过 SFT</h4>
+            <p style="font-size:13px"><strong>路径</strong>：ch1 + ch2 + ch3 DDP + ch4 ZeRO 概念<br><strong>耗时</strong>：~25 min</p></div>
+          <div class="card violet"><h4>🎓 用过 FSDP / DeepSpeed</h4>
+            <p style="font-size:13px"><strong>路径</strong>：全文按序 / 重点 ch4 ZeRO + ch5 TP + ch9 NCCL<br><strong>耗时</strong>：~55 min</p></div>
+          <div class="card green"><h4>🧠 跑过千卡训练</h4>
+            <p style="font-size:13px"><strong>路径</strong>：ch8 3D Parallel + ch10 真实事故 + ch11 面试题<br><strong>耗时</strong>：~25 min</p></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============= Ch1 ============= -->
+    <section class="chapter" id="ch1">
+      <div class="ch-head">
+        <div class="num">01</div>
+        <div class="t">
+          <h2>为什么单卡训不动大模型 · 显存账本</h2>
+        </div>
+      </div>
+
+      <div class="analogy">
+        <div class="a-head"><span class="icon">🎬</span><span>生活类比 · 一个人装不下整个图书馆</span></div>
+        <div class="a-body">
+          训练 70B 模型，<u>不是 1 张 H100 80GB 装不下"模型"</u>（140 GB 装不下），而是<strong>"训练状态"</strong>远比模型本身大。<br><br>
+          一个 70B 模型完整训练需要：<br>
+          ① <strong>模型 weight</strong>（FP16）：140 GB<br>
+          ② <strong>梯度</strong>（同 weight）：140 GB<br>
+          ③ <strong>Optimizer state</strong>（Adam: m + v，FP32）：560 GB（4x weight）<br>
+          ④ <strong>Activation</strong>（中间激活值）：100-500 GB（取决于 batch size 和 seq len）<br><br>
+          <strong>合计 1-1.5 TB</strong>，至少要 15-20 张 H100。这就是为什么训 LLM 必须分布式。
+        </div>
+      </div>
+
+      <h3>1.1 显存账本（70B 模型示例）</h3>
+
+      <table>
+        <thead><tr><th>组件</th><th>大小</th><th>占模型 X 倍</th></tr></thead>
+        <tbody>
+          <tr><td>Weight (FP16)</td><td>140 GB</td><td>1x</td></tr>
+          <tr><td>Gradient (FP16)</td><td>140 GB</td><td>1x</td></tr>
+          <tr><td>Adam state m (FP32)</td><td>280 GB</td><td>2x</td></tr>
+          <tr><td>Adam state v (FP32)</td><td>280 GB</td><td>2x</td></tr>
+          <tr><td>Activation (随 batch / seq)</td><td>100-500 GB</td><td>1-4x</td></tr>
+          <tr><td><strong>合计</strong></td><td><strong>~1-1.4 TB</strong></td><td><strong>7-10x weight</strong></td></tr>
+        </tbody>
+      </table>
+
+      <div class="intuition">
+        <strong>显存才是瓶颈，不是算力</strong>。即使你愿意训得久，单卡装不下就是装不下。<u>这也是为什么大公司囤 GPU 显存大小（H100 80GB / B200 192GB）远比算力关键</u>。
+      </div>
+    </section>
+
+    <!-- ============= Ch2：3 维并行 ============= -->
+    <section class="chapter" id="ch2">
+      <div class="ch-head">
+        <div class="num">02</div>
+        <div class="t">
+          <h2>3 维并行 · DP / TP / PP 全景</h2>
+          <div class="sub">3 种切法 · 解决 3 种不同瓶颈</div>
+        </div>
+      </div>
+
+      <div class="analogy">
+        <div class="a-head"><span class="icon">🎬</span><span>生活类比 · 工厂流水线的 3 种切法</span></div>
+        <div class="a-body">
+          一家工厂要生产 1000 个 iPhone，怎么用 4 个车间分？<br><br>
+          <strong>Data Parallel (DP)</strong> = <u>4 个车间各做 250 部</u>。每个车间设备齐全（=完整模型副本），分一份订单（=数据切片）。最简单。<br><br>
+          <strong>Tensor Parallel (TP)</strong> = <u>4 个车间分工做"组装一部"</u>。车间 1 装屏幕，车间 2 装芯片，车间 3 装电池，车间 4 装外壳。<u>所有车间一起完成 1 部 iPhone</u>。<br><br>
+          <strong>Pipeline Parallel (PP)</strong> = <u>4 个车间是流水线</u>。车间 1 出半成品 → 车间 2 加工 → 车间 3 → 车间 4 出成品。每个车间只做一道工序。<br><br>
+          <strong>千卡训练 = 3 种同时用（3D Parallel）</strong>。比如 1024 卡：DP=8 × TP=8 × PP=16 = 1024。
+        </div>
+      </div>
+
+      <h3>2.1 3 维并行对比表</h3>
+
+      <table>
+        <thead><tr><th>维度</th><th>切什么</th><th>通信量</th><th>适合</th><th>典型规模</th></tr></thead>
+        <tbody>
+          <tr><td><strong>DP</strong>（Data Parallel）</td><td>不同 GPU 跑不同数据</td><td>中（梯度 AllReduce）</td><td>模型能装单卡，加速 throughput</td><td>2-512 卡</td></tr>
+          <tr><td><strong>TP</strong>（Tensor Parallel）</td><td>同一层的矩阵切到多卡</td><td>高（每层 forward/backward 都通信）</td><td>单层都装不下时</td><td>2-8 卡（NVLink 内）</td></tr>
+          <tr><td><strong>PP</strong>（Pipeline Parallel）</td><td>不同层放不同卡</td><td>低（只在层边界通信）</td><td>跨机训练 / 极大模型</td><td>2-64 卡</td></tr>
+          <tr><td>+ EP (Expert Parallel)</td><td>MoE expert 切到不同卡</td><td>高（每 token 路由）</td><td>MoE 模型必需</td><td>取决 expert 数</td></tr>
+        </tbody>
+      </table>
+
+      <div class="intuition">
+        组合规则：<strong>TP 内（NVLink），PP 跨机（PCIe/IB），DP 外层</strong>。例：32 卡训练，2 节点 × 16 卡，TP=8（节点内 NVLink）/ PP=2（跨节点）/ DP=2（数据切片）。
+      </div>
+    </section>
+
+    <!-- ============= Ch3：DDP ============= -->
+    <section class="chapter" id="ch3">
+      <div class="ch-head">
+        <div class="num">03</div>
+        <div class="t">
+          <h2>DDP · 数据并行入门</h2>
+          <div class="sub">最简单也是大部分场景的默认</div>
+        </div>
+      </div>
+
+      <div class="gpu-vis">
+        <p style="text-align:center;color:#94a3b8;font-size:13px;margin-bottom:10px">DDP：4 张 GPU 各自完整复制模型，数据切 4 份</p>
+        <div class="gpu-grid">
+          <div class="gpu-cell dp1">GPU<br>0</div>
+          <div class="gpu-cell dp2">GPU<br>1</div>
+          <div class="gpu-cell dp3">GPU<br>2</div>
+          <div class="gpu-cell dp4">GPU<br>3</div>
+          <div class="gpu-cell dp1">data<br>0-25%</div>
+          <div class="gpu-cell dp2">data<br>25-50%</div>
+          <div class="gpu-cell dp3">data<br>50-75%</div>
+          <div class="gpu-cell dp4">data<br>75-100%</div>
+        </div>
+        <p style="text-align:center;color:#94a3b8;font-size:11px;margin-top:10px">每张卡装完整模型 + 1/4 数据 · backward 后 AllReduce 同步梯度</p>
+      </div>
+
+      <h3>3.1 DDP 工作流</h3>
+
+      <ol>
+        <li><strong>初始化</strong>：每张 GPU 加载相同模型 weight</li>
+        <li><strong>Forward</strong>：每张 GPU 跑自己的 1/N 数据，得到 loss</li>
+        <li><strong>Backward</strong>：每张 GPU 算自己数据的梯度</li>
+        <li><strong>AllReduce 同步</strong>：所有 GPU 的梯度求平均（通过 NCCL）</li>
+        <li><strong>Optimizer step</strong>：每张 GPU 用同样的平均梯度更新（结果一致）</li>
+      </ol>
+
+      <pre><code><span class="c"># PyTorch DDP 代码</span>
+<span class="k">import</span> torch.distributed <span class="k">as</span> dist
+<span class="k">from</span> torch.nn.parallel <span class="k">import</span> DistributedDataParallel <span class="k">as</span> DDP
+
+dist.<span class="f">init_process_group</span>(backend=<span class="s">"nccl"</span>)        <span class="c"># 初始化 NCCL</span>
+torch.cuda.<span class="f">set_device</span>(local_rank)
+
+model = <span class="f">MyModel</span>().<span class="f">cuda</span>(local_rank)
+model = <span class="f">DDP</span>(model, device_ids=[local_rank])
+
+<span class="c"># 后续训练跟单卡一样，DDP 自动处理梯度同步</span>
+<span class="k">for</span> batch <span class="k">in</span> loader:
+    loss = <span class="f">model</span>(batch).<span class="f">backward</span>()       <span class="c"># backward 自动触发 AllReduce</span>
+    optimizer.<span class="f">step</span>()</code></pre>
+
+      <h3>3.2 DDP 的局限</h3>
+
+      <div class="warn">
+        DDP 的<strong>核心假设</strong>：每张卡能装下完整模型 + 训练状态。<u>对 1B-7B 模型有效，70B 立即失效</u>（每张卡需要 ~1 TB，不可能）。70B+ 模型必须用 FSDP / ZeRO。
+      </div>
+    </section>
+
+    <!-- ============= Ch4：ZeRO/FSDP ============= -->
+    <section class="chapter" id="ch4">
+      <div class="ch-head">
+        <div class="num">04</div>
+        <div class="t">
+          <h2>ZeRO / FSDP · 显存优化王者</h2>
+          <div class="sub">让 70B 模型也能"数据并行"</div>
+        </div>
+      </div>
+
+      <div class="analogy">
+        <div class="a-head"><span class="icon">🎬</span><span>生活类比 · N 个工人共享一套工具箱</span></div>
+        <div class="a-body">
+          DDP 的浪费：4 个工人每人都背着<u>完整一套工具箱</u>（120 公斤），其实<u>同时用的工具只有 5%</u>。<br><br>
+          <strong>ZeRO 的思路</strong>：4 个工人<u>每人只背 1/4 工具</u>。需要时<u>临时从其它工人那里借</u>（gather），用完还回去。每人负重从 120 → 30 公斤，但每次干活前要"借一下"（通信开销）。<br><br>
+          这就是 ZeRO（DeepSpeed）/ FSDP（PyTorch 原生）的核心。
+        </div>
+      </div>
+
+      <h3 id="s4-1">4.1 ZeRO 3 阶段</h3>
+
+      <div class="zero-cmp">
+        <div class="zc s0">
+          <div class="name">ZeRO-0 (DDP)</div>
+          <div class="body">
+            什么都不分。每张 GPU 装完整 weight + grad + optimizer。<br>
+            最简单，但显存占用 = 完整 7-10x model size。
+          </div>
+          <span class="save">无节省</span>
+        </div>
+        <div class="zc s1">
+          <div class="name">ZeRO-1</div>
+          <div class="body">
+            <strong>Optimizer state</strong> 分到 N 卡。其它仍复制。<br>
+            Adam optimizer state 占大头（4x model size），分掉后省一大半。
+          </div>
+          <span class="save">显存 ÷ 4</span>
+        </div>
+        <div class="zc s2">
+          <div class="name">ZeRO-2</div>
+          <div class="body">
+            <strong>Optimizer state + Gradient</strong> 都分。<br>
+            Forward 后梯度立刻 Reduce-Scatter（部分聚合后分散到各卡）。
+          </div>
+          <span class="save">显存 ÷ 8</span>
+        </div>
+        <div class="zc s3">
+          <div class="name">ZeRO-3 (FSDP)</div>
+          <div class="body">
+            <strong>weight + grad + opt-state 全部分</strong>。<br>
+            每张卡只存 1/N 的 weight，需要时 AllGather 临时取完整 weight 算 forward。
+          </div>
+          <span class="save">显存 ÷ N</span>
+        </div>
+      </div>
+
+      <h3>4.2 ZeRO 显存节省对比（70B 模型）</h3>
+
+      <table>
+        <thead><tr><th>策略</th><th>weight</th><th>grad</th><th>opt-state</th><th>每卡总显存</th></tr></thead>
+        <tbody>
+          <tr><td>DDP</td><td>140G</td><td>140G</td><td>560G</td><td><span class="cell-bad">840G ❌</span></td></tr>
+          <tr><td>ZeRO-1 (8 卡)</td><td>140G</td><td>140G</td><td>70G</td><td>350G</td></tr>
+          <tr><td>ZeRO-2 (8 卡)</td><td>140G</td><td>17G</td><td>70G</td><td>227G</td></tr>
+          <tr><td><strong>ZeRO-3 (8 卡)</strong></td><td>17G</td><td>17G</td><td>70G</td><td><span class="cell-ok">~105G ✅</span></td></tr>
+          <tr><td>ZeRO-3 (64 卡)</td><td>2G</td><td>2G</td><td>9G</td><td><span class="cell-ok">~13G</span></td></tr>
+        </tbody>
+      </table>
+
+      <h3 id="s4-2">4.3 FSDP · PyTorch 原生</h3>
+
+      <p>FSDP 等于 PyTorch 原生的 ZeRO-3。<u>2023+ 推荐用 FSDP 而不是 DeepSpeed ZeRO</u>，因为：</p>
+
+      <ul>
+        <li>更好集成 PyTorch eager / compile</li>
+        <li>更灵活的 wrapping 策略</li>
+        <li>2024+ FSDP2 增加 per-parameter sharding</li>
+      </ul>
+
+      <pre><code><span class="k">from</span> torch.distributed.fsdp <span class="k">import</span> FullyShardedDataParallel <span class="k">as</span> FSDP
+
+model = <span class="f">FSDP</span>(
+    model,
+    sharding_strategy=ShardingStrategy.FULL_SHARD,   <span class="c"># ZeRO-3 风格</span>
+    auto_wrap_policy=transformer_wrap_policy,         <span class="c"># 按 transformer block wrap</span>
+    mixed_precision=<span class="f">MixedPrecision</span>(param_dtype=torch.bfloat16),
+    cpu_offload=<span class="f">CPUOffload</span>(offload_params=<span class="k">False</span>),   <span class="c"># 显存不够可 offload 到 CPU</span>
+)</code></pre>
+
+      <div class="tip">
+        <strong>选型决策</strong>：
+        <ul>
+          <li>模型 &lt; 7B / 单卡装得下 → DDP（最快）</li>
+          <li>模型 7B-70B / 单卡装不下 weight + grad → FSDP / ZeRO-3</li>
+          <li>模型 100B+ / 单层都装不下 → FSDP + TP 组合</li>
+          <li>模型 671B (DeepSeek-V3) → 3D Parallel + EP（见 ch8）</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ============= Ch5：TP ============= -->
+    <section class="chapter" id="ch5">
+      <div class="ch-head">
+        <div class="num">05</div>
+        <div class="t">
+          <h2>Tensor Parallel · 切矩阵</h2>
+          <div class="sub">单层都装不下时</div>
+        </div>
+      </div>
+
+      <div class="analogy">
+        <div class="a-head"><span class="icon">🎬</span><span>生活类比 · 4 个人一起搬一个大桌子</span></div>
+        <div class="a-body">
+          一个超大矩阵乘 (10240 × 10240 → 10240 × 10240) <u>单卡显存装不下中间结果</u>。<br>
+          TP 思路：<u>把这个矩阵按列切成 4 块</u>（每块 10240 × 2560），4 张卡每张算一块的 GEMM，最后 concat 结果。
+        </div>
+      </div>
+
+      <h3>5.1 TP 在 Transformer 里怎么切</h3>
+
+      <p>Megatron-LM 的经典做法（2020 论文）：</p>
+
+      <ul>
+        <li><strong>FFN</strong>：第一层 W1 按列切 (column-parallel) / 第二层 W2 按行切 (row-parallel)，<u>每层只需 1 次 AllReduce</u></li>
+        <li><strong>Attention</strong>：把多个 head 切到不同卡 (head-parallel)，<u>每层 1 次 AllReduce</u></li>
+        <li><strong>Embedding</strong>：vocab 维度切</li>
+      </ul>
+
+      <div class="intuition">
+        TP 的成本：<u>每层 forward 和 backward 都需要 AllReduce</u>。<strong>必须用高速互联（NVLink，不能 PCIe）</strong>。所以 TP 一般 ≤ 8（节点内 NVLink），跨节点用 PP。
+      </div>
+
+      <h3>5.2 TP 限制</h3>
+
+      <div class="warn">
+        TP 通信极频繁（每层 2 次 AllReduce），<u>跨节点 TP 会变成通信瓶颈</u>，速度比 PP 慢。所以 70B 模型典型用：TP=8（节点内 NVLink） + PP=2（节点间） + DP/FSDP 外层。
+      </div>
+    </section>
+
+    <!-- ============= Ch6：PP ============= -->
+    <section class="chapter" id="ch6">
+      <div class="ch-head">
+        <div class="num">06</div>
+        <div class="t">
+          <h2>Pipeline Parallel · 切层</h2>
+          <div class="sub">跨节点训练的关键</div>
+        </div>
+      </div>
+
+      <div class="analogy">
+        <div class="a-head"><span class="icon">🎬</span><span>生活类比 · 装配线 + 流水节奏</span></div>
+        <div class="a-body">
+          80 层 Transformer 切 4 段：<u>卡 0 跑 layer 1-20，卡 1 跑 21-40，卡 2 跑 41-60，卡 3 跑 61-80</u>。<br><br>
+          <strong>问题</strong>：朴素流水线下，<u>同一时间只有 1 张卡在工作</u>（其它在等）。GPU 利用率 25%。<br><br>
+          <strong>解决</strong>：把一个 batch 切成 N 个 micro-batch，<u>像流水线一样让 4 张卡同时干不同 micro-batch</u>。GPU 利用率涨到 80%+。
+        </div>
+      </div>
+
+      <h3>6.1 经典调度策略</h3>
+
+      <table>
+        <thead><tr><th>算法</th><th>GPU 利用率</th><th>显存</th></tr></thead>
+        <tbody>
+          <tr><td>Naive PP</td><td>~25%</td><td>低</td></tr>
+          <tr><td>GPipe（micro-batch）</td><td>~70%</td><td>高（buffer 所有 activation）</td></tr>
+          <tr><td><strong>1F1B (PipeDream)</strong></td><td>~85%</td><td>中（边 forward 边 backward）</td></tr>
+          <tr><td>Interleaved 1F1B (Megatron)</td><td>~90%</td><td>中</td></tr>
+        </tbody>
+      </table>
+
+      <div class="tip">
+        <strong>2026 主流</strong>：Megatron-LM 的 Interleaved 1F1B。<u>面试提到 "1F1B 调度"加分</u>。
+      </div>
+
+      <h3>6.2 Pipeline Bubble · 不可避免的 idle 时间</h3>
+
+      <p>无论怎么调度，<u>流水线开始和结束阶段必有 idle</u>（warm-up 和 cool-down）。Bubble ratio ≈ (PP - 1) / (PP - 1 + num_microbatch)。<u>micro-batch 越多 bubble 越小</u>。</p>
+    </section>
+
+    <!-- ============= Ch7：EP ============= -->
+    <section class="chapter" id="ch7">
+      <div class="ch-head">
+        <div class="num">07</div>
+        <div class="t">
+          <h2>Expert Parallel (MoE) · 把专家切到不同卡</h2>
+        </div>
+      </div>
+
+      <p class="lead">MoE 模型有几十-几百个 expert，<u>所有 expert 都要装显存但每 token 只用 k 个</u>。EP 把不同 expert 放不同卡。</p>
+
+      <div class="analogy">
+        <div class="a-head"><span class="icon">🎬</span><span>生活类比 · 部门按专业分布在不同楼层</span></div>
+        <div class="a-body">
+          公司有 256 个专家，每个问题只问 8 个。<u>不可能 1 个办公室装 256 人</u>。<br>
+          <strong>EP 解</strong>：256 个专家分到 32 层楼，每层 8 个。问题来时<u>判断该问哪 8 个</u>，路由到对应楼层。<br><br>
+          代价：每层 forward 都要做 <strong>All-to-All</strong> 通信（把 token 发到对应 expert 所在卡），通信量极大。
+        </div>
+      </div>
+
+      <h3>7.1 MoE 训练的 4 个挑战</h3>
+
+      <ol>
+        <li><strong>All-to-All 通信瓶颈</strong>：每层 2 次（dispatch + combine），跨节点慢</li>
+        <li><strong>Load imbalance</strong>：router 总选热门 expert → 部分卡忙死部分闲死</li>
+        <li><strong>Activation 显存</strong>：dispatch 后 activation 重排，临时 buffer 大</li>
+        <li><strong>Dead expert</strong>：训练后期某些 expert 几乎不被选 → 浪费参数</li>
+      </ol>
+    </section>
+
+    <!-- ============= Ch8：3D Parallel ============= -->
+    <section class="chapter" id="ch8">
+      <div class="ch-head">
+        <div class="num">08</div>
+        <div class="t">
+          <h2>3D Parallel · 万卡训练真相</h2>
+          <div class="sub">DP × TP × PP 三维组合</div>
+        </div>
+      </div>
+
+      <div class="gpu-vis">
+        <p style="text-align:center;color:#94a3b8;font-size:13px;margin-bottom:10px">典型 1024 卡训练 = DP=8 × TP=8 × PP=16</p>
+        <p style="text-align:center;color:#94a3b8;font-size:12px">
+          每个绿色块代表一个 (TP × PP) 模型并行单元（8 × 16 = 128 卡），<br>
+          8 个这样的单元组成 DP（每个单元处理 1/8 数据，梯度同步）
+        </p>
+      </div>
+
+      <h3>8.1 实战配置 · 不同规模</h3>
+
+      <table>
+        <thead><tr><th>规模</th><th>典型配置</th><th>说明</th></tr></thead>
+        <tbody>
+          <tr><td>8 卡 (1 节点)</td><td>FSDP（ZeRO-3）</td><td>7B 模型，单节点搞定</td></tr>
+          <tr><td>64 卡 (8 节点)</td><td>FSDP + TP=4</td><td>70B 训练</td></tr>
+          <tr><td>256 卡</td><td>DP=4 + TP=8 + PP=8</td><td>175B / Llama-3 405B</td></tr>
+          <tr><td>1024 卡</td><td>DP=8 + TP=8 + PP=16</td><td>万亿参数</td></tr>
+          <tr><td>2048+ 卡 (MoE)</td><td>DP + TP + PP + <strong>EP</strong></td><td>DeepSeek-V3 671B</td></tr>
+        </tbody>
+      </table>
+
+      <h3>8.2 通信带宽要求</h3>
+
+      <div class="grid cols-3">
+        <div class="card">
+          <h4>🔵 节点内（NVLink）</h4>
+          <p style="font-size:13px">~900 GB/s（H100 NVLink 4）。<u>TP / FSDP shard 用这个</u>。</p>
+        </div>
+        <div class="card violet">
+          <h4>🟣 节点间（InfiniBand）</h4>
+          <p style="font-size:13px">~50-400 GB/s（IB HDR/NDR）。<u>PP / DP / EP 用这个</u>。</p>
+        </div>
+        <div class="card amber">
+          <h4>🟠 跨机房</h4>
+          <p style="font-size:13px">~10-100 Gb/s。<u>训练几乎不可用</u>，只能离线 sync。</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============= Ch9：NCCL ============= -->
+    <section class="chapter" id="ch9">
+      <div class="ch-head">
+        <div class="num">09</div>
+        <div class="t">
+          <h2>NCCL · 集体通信库</h2>
+          <div class="sub">分布式训练的"网线"</div>
+        </div>
+      </div>
+
+      <p class="lead">NCCL (NVIDIA Collective Communications Library) 是分布式训练所有通信的底层。<u>面试常问 NCCL 的原语</u>。</p>
+
+      <h3>9.1 5 个核心原语</h3>
+
+      <table>
+        <thead><tr><th>原语</th><th>做什么</th><th>用在哪</th></tr></thead>
+        <tbody>
+          <tr><td><strong>AllReduce</strong></td><td>所有卡的 tensor 求和后广播给所有卡</td><td>DP 梯度同步</td></tr>
+          <tr><td><strong>ReduceScatter</strong></td><td>求和但分散到各卡（每卡得 1/N）</td><td>ZeRO-2 梯度分发</td></tr>
+          <tr><td><strong>AllGather</strong></td><td>所有卡的 shard 聚合到完整 tensor，所有卡都拿到</td><td>FSDP forward 取 weight</td></tr>
+          <tr><td><strong>All-to-All</strong></td><td>所有卡互相交换数据</td><td>MoE expert dispatch</td></tr>
+          <tr><td><strong>Broadcast</strong></td><td>1 张卡的 tensor 广播给所有卡</td><td>初始化时同步 weight</td></tr>
+        </tbody>
+      </table>
+
+      <h3>9.2 Ring AllReduce · 经典算法</h3>
+
+      <div class="allreduce-vis">
+        <div class="ar-step"><div class="ar-num">1</div><div class="ar-desc">N 张卡组成 ring，每张持有 N/N 的数据</div></div>
+        <div class="ar-step"><div class="ar-num">2</div><div class="ar-desc"><strong>Reduce-Scatter 阶段</strong>：N-1 步，每步每张卡传 1/N 数据给下家，并和收到的累加</div></div>
+        <div class="ar-step"><div class="ar-num">3</div><div class="ar-desc"><strong>AllGather 阶段</strong>：N-1 步，每步广播自己的 partial sum</div></div>
+        <div class="ar-step"><div class="ar-num">→</div><div class="ar-desc">总通信量 = 2 × (N-1)/N × T ≈ 2T（T = 数据大小），<u>不随 N 增长</u>，是带宽最优算法</div></div>
+      </div>
+
+      <div class="tip">
+        <strong>面试常问</strong>："为什么 Ring AllReduce 比 naive AllReduce 好？" 答：naive 是 master 收 + 广播 (~ N × T)，<u>master 瓶颈</u>。Ring 让每张卡都成参与方，<u>不依赖 master + 通信量恒定 2T</u>。
+      </div>
+    </section>
+
+    <!-- ============= Ch10：5 个事故 ============= -->
+    <section class="chapter" id="ch10">
+      <div class="ch-head">
+        <div class="num">10</div>
+        <div class="t">
+          <h2>5 个真实千卡训练事故</h2>
+          <div class="sub">已脱敏 · 学他人血泪</div>
+        </div>
+      </div>
+
+      <div class="card danger">
+        <h4>事故 1 · NCCL hang 24 小时</h4>
+        <p style="font-size:13.5px">千卡训练第 2 天 NCCL AllReduce 卡了 24 小时无响应，整集群 idle。</p>
+        <p style="font-size:12.5px;color:var(--text-dim);margin-top:6px"><strong>根因</strong>：某 GPU 慢慢 ECC 错误，让所有其它 GPU 等它。NCCL 默认无超时。<strong>修复</strong>：设 NCCL_TIMEOUT 30s + healthcheck 监控 ECC + auto failover。</p>
+      </div>
+
+      <div class="card danger">
+        <h4>事故 2 · Loss spike 后训练崩</h4>
+        <p style="font-size:13.5px">训到 50k step loss 突然飙升到 NaN，无法恢复。</p>
+        <p style="font-size:12.5px;color:var(--text-dim);margin-top:6px"><strong>根因</strong>：BF16 训练中某 batch 数据极端 → activation overflow → NaN 传播。<strong>修复</strong>：梯度 clipping + 数据预过滤 + checkpoint 回滚到 stable。</p>
+      </div>
+
+      <div class="card danger">
+        <h4>事故 3 · MoE expert load imbalance</h4>
+        <p style="font-size:13.5px">MoE 训练后期发现某些 expert 几乎不被选（活跃度 1%），其它 expert 过载。</p>
+        <p style="font-size:12.5px;color:var(--text-dim);margin-top:6px"><strong>根因</strong>：router 偏好稳定后强者更强。<strong>修复</strong>：加大 load balancing loss + auxiliary loss。</p>
+      </div>
+
+      <div class="card danger">
+        <h4>事故 4 · Pipeline bubble 大让 GPU 利用率只有 40%</h4>
+        <p style="font-size:13.5px">PP=16，但训练 GPU util 只有 40%。期望 80%+。</p>
+        <p style="font-size:12.5px;color:var(--text-dim);margin-top:6px"><strong>根因</strong>：micro-batch 数量太少（=PP），bubble ratio 50%。<strong>修复</strong>：micro-batch 数 ≥ 4 × PP，调到 64。util 涨到 85%。</p>
+      </div>
+
+      <div class="card danger">
+        <h4>事故 5 · Activation checkpointing 没开训到 OOM</h4>
+        <p style="font-size:13.5px">70B 模型 8 卡 FSDP，跑几百 step 后 OOM。</p>
+        <p style="font-size:12.5px;color:var(--text-dim);margin-top:6px"><strong>根因</strong>：activation 显存没考虑。<strong>修复</strong>：开 activation checkpointing（forward 时不存中间 activation，backward 时重算），显存 -50% 代价 +30% 计算。</p>
+      </div>
+    </section>
+
+    <!-- ============= Ch11：12 面试题 ============= -->
+    <section class="chapter" id="ch11">
+      <div class="ch-head">
+        <div class="num">11</div>
+        <div class="t">
+          <h2>12 道分布式训练高频面试题</h2>
+        </div>
+      </div>
+
+      <details class="qa">
+        <summary><span class="lvl pill cyan">基础</span>Q1. 训 70B 模型需要的显存？为什么是 weight 的 7-10x？</summary>
+        <div class="a">
+          <div class="point">
+            <div class="label">账本</div>
+            <div>weight (1x) + grad (1x) + Adam state (4x，FP32 m+v) + activation (1-4x) = 7-10x weight。<u>70B FP16 = 1-1.4 TB</u>，至少 15-20 张 H100。</div>
+          </div>
+        </div>
+      </details>
+
+      <details class="qa">
+        <summary><span class="lvl pill cyan">基础</span>Q2. DP / TP / PP 区别？什么时候用哪个？</summary>
+        <div class="a">
+          <div class="point">
+            <div class="label">DP</div>
+            <div>不同 GPU 跑不同数据，每张完整模型。<u>模型装下单卡才用</u>。</div>
+          </div>
+          <div class="point">
+            <div class="label">TP</div>
+            <div>同一层矩阵切到多卡。通信极频繁，<u>需要 NVLink，限节点内</u>。</div>
+          </div>
+          <div class="point">
+            <div class="label">PP</div>
+            <div>不同层放不同卡。通信少（只在边界），<u>适合跨节点</u>。但有 bubble。</div>
+          </div>
+        </div>
+      </details>
+
+      <details class="qa">
+        <summary><span class="lvl pill red">高频</span>Q3. ZeRO 3 个 stage 区别？</summary>
+        <div class="a">
+          <div class="point">
+            <div class="label">3 阶段</div>
+            <div>① ZeRO-1：optimizer state 分 ② ZeRO-2：optimizer + gradient 分 ③ <strong>ZeRO-3 (FSDP)</strong>：weight + grad + opt 全分</div>
+          </div>
+          <div class="point deep">
+            <div class="label">权衡</div>
+            <div>越高 stage 显存越省，<u>但通信开销越大</u>（ZeRO-3 每层 forward 都要 AllGather weight）。</div>
+          </div>
+        </div>
+      </details>
+
+      <details class="qa">
+        <summary><span class="lvl pill amber">进阶</span>Q4. FSDP vs DeepSpeed ZeRO-3 区别？</summary>
+        <div class="a">
+          <div class="point">
+            <div class="label">两者等价</div>
+            <div>FSDP 是 PyTorch 原生 ZeRO-3 实现。功能一致。</div>
+          </div>
+          <div class="point deep">
+            <div class="label">选型</div>
+            <div>2024+ 推荐 FSDP（PyTorch 团队主推，更好集成 torch.compile / mixed precision）。DeepSpeed 仍在 Microsoft / 历史代码库中常见。</div>
+          </div>
+        </div>
+      </details>
+
+      <details class="qa">
+        <summary><span class="lvl pill amber">进阶</span>Q5. Tensor Parallel 在 Transformer 里怎么切？</summary>
+        <div class="a">
+          <div class="point">
+            <div class="label">Megatron-LM 经典做法</div>
+            <div>① FFN 第一层 W1 按列切 + 第二层 W2 按行切，<u>每层 1 次 AllReduce</u> ② Attention 按 head 切（head-parallel）③ Embedding 按 vocab 切</div>
+          </div>
+        </div>
+      </details>
+
+      <details class="qa">
+        <summary><span class="lvl pill amber">进阶</span>Q6. Pipeline Parallel 的 bubble 是什么？怎么减少？</summary>
+        <div class="a">
+          <div class="point">
+            <div class="label">是什么</div>
+            <div>PP 流水线启动和收尾时部分卡 idle 的现象。bubble ratio ≈ (PP-1) / (PP-1 + num_microbatch)。</div>
+          </div>
+          <div class="point deep">
+            <div class="label">减少</div>
+            <div>① 增加 micro-batch 数（典型 ≥ 4 × PP） ② 用 1F1B 或 Interleaved 1F1B 调度（边 forward 边 backward） ③ 缩小 PP 维度</div>
+          </div>
+        </div>
+      </details>
+
+      <details class="qa">
+        <summary><span class="lvl pill cyan">基础</span>Q7. NCCL 5 个核心原语？</summary>
+        <div class="a">
+          <div class="point">
+            <div class="label">5 个</div>
+            <div>AllReduce（DP 梯度）/ ReduceScatter（ZeRO-2）/ AllGather（FSDP forward）/ All-to-All（MoE）/ Broadcast（init）</div>
+          </div>
+        </div>
+      </details>
+
+      <details class="qa">
+        <summary><span class="lvl pill red">高频</span>Q8. 为什么 Ring AllReduce 比 naive 好？</summary>
+        <div class="a">
+          <div class="point">
+            <div class="label">Naive</div>
+            <div>所有卡 → master 汇总 → master 广播。<u>master 是瓶颈，O(N×T) 通信</u>。</div>
+          </div>
+          <div class="point deep">
+            <div class="label">Ring</div>
+            <div>组 ring，每张卡都参与传输。<u>通信量恒定 2T 不随 N 增长，带宽最优</u>。</div>
+          </div>
+        </div>
+      </details>
+
+      <details class="qa">
+        <summary><span class="lvl pill amber">进阶</span>Q9. MoE EP 训练的 4 个挑战？</summary>
+        <div class="a">
+          <div class="point">
+            <div class="label">挑战</div>
+            <div>① All-to-All 通信瓶颈（每层 2 次） ② Load imbalance（router 偏好少数 expert） ③ Activation 重排显存 ④ Dead expert</div>
+          </div>
+        </div>
+      </details>
+
+      <details class="qa">
+        <summary><span class="lvl pill amber">进阶</span>Q10. Activation Checkpointing 是什么？什么时候用？</summary>
+        <div class="a">
+          <div class="point">
+            <div class="label">是什么</div>
+            <div>Forward 时不存中间 activation，backward 时<u>重新算一遍</u>。显存 -50% 代价 +30% 计算。</div>
+          </div>
+          <div class="point">
+            <div class="label">什么时候用</div>
+            <div>显存不够 train 大模型 / 大 batch / 长 seq。<u>大模型训练几乎必开</u>。</div>
+          </div>
+        </div>
+      </details>
+
+      <details class="qa">
+        <summary><span class="lvl pill red">高频</span>Q11. 千卡训练 NCCL hang 怎么排查？</summary>
+        <div class="a">
+          <div class="point">
+            <div class="label">5 步</div>
+            <div>
+              ① <strong>看 NCCL log</strong>（设 NCCL_DEBUG=INFO 重新跑）<br>
+              ② <strong>找慢卡</strong>：dcgmi / nvidia-smi 看哪张卡 util 异常<br>
+              ③ <strong>检查 ECC 错误</strong>：硬件慢慢退化常见<br>
+              ④ <strong>网络</strong>：ibstatus / ib_send_bw 测 IB 健康<br>
+              ⑤ <strong>设 NCCL_TIMEOUT</strong>（默认无穷大）避免下次再 hang
+            </div>
+          </div>
+        </div>
+      </details>
+
+      <details class="qa">
+        <summary><span class="lvl pill violet">实战</span>Q12. 给一个 70B 模型 + 64 张 H100，配置训练方案？</summary>
+        <div class="a">
+          <div class="point">
+            <div class="label">方案</div>
+            <div>
+              ① <strong>主结构</strong>：FSDP（ZeRO-3）+ TP=4<br>
+              ② <strong>布局</strong>：8 节点 × 8 卡，每节点 TP=4 × 2，跨节点 FSDP shard<br>
+              ③ <strong>显存</strong>：weight 17.5GB + grad 17.5GB + opt 70GB 分到 64 卡 ≈ 1.6GB/卡（绰绰有余）<br>
+              ④ <strong>必开</strong>：Activation Checkpointing / BF16 / FlashAttention / Gradient Clipping<br>
+              ⑤ <strong>监控</strong>：dcgmi + Wandb + healthcheck script<br>
+              ⑥ <strong>故障预案</strong>：Checkpoint 每 1000 step 存一次，NCCL_TIMEOUT=30s
+            </div>
+          </div>
+        </div>
+      </details>
+    </section>
+
+  <footer>
+    <div class="made">TECH NOTES · AI INFRA · Y03 · 通俗深潜版</div>
+    <p style="margin-top:14px">
+      上一篇：<a href="./inference_serving.html">🚀 Y02 vLLM 推理 →</a> &nbsp;·&nbsp;
+      下一篇：<a href="./quantization.html">📦 Y04 量化 →</a> &nbsp;·&nbsp;
+      <a href="./ai_compilers.html">⚙️ Y05 AI 编译器 →</a> &nbsp;·&nbsp;
+      训练理论：<a href="../ai-native/llm_training.html">🏋️ X07 LLM 训练 →</a> &nbsp;·&nbsp;
+      面试卡：<a href="../interview/ai_engineer_cards.html">🎴 I06 →</a>
+    </p>
+  </footer>
+  </main>
+</div>
+
+<script>
+(function(){var bar=document.getElementById('progress');function update(){var h=document.documentElement;bar.style.width=(h.scrollTop/(h.scrollHeight-h.clientHeight)*100)+'%';}window.addEventListener('scroll',update,{passive:true});update();})();
+(function(){var links=document.querySelectorAll('aside.toc nav > ol > li > a');var sections=Array.from(document.querySelectorAll('section.chapter'));function update(){var y=window.scrollY+100;var cur=sections[0];for(var i=0;i<sections.length;i++){if(sections[i].offsetTop<=y)cur=sections[i];}links.forEach(function(a){if(a.getAttribute('href')==='#'+cur.id)a.classList.add('active');else a.classList.remove('active');});}window.addEventListener('scroll',update,{passive:true});update();})();
+</script>
+
+</body>
+</html>
