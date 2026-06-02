@@ -1,0 +1,1567 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LLM 推理引擎深潜 · vLLM / PagedAttention / Continuous Batching — Tech Notes</title>
+<link rel="stylesheet" href="../assets/site-theme.css">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<style>
+/* 沿用 X06/X14/R05 的视觉系统 */
+
+.analogy{
+  background:linear-gradient(135deg,#1a1f3a 0%,#1f2842 100%);
+  border:1px solid rgba(125,211,252,.25);
+  border-radius:14px;padding:20px 24px;margin:20px 0;
+  position:relative;overflow:hidden;
+  box-shadow:0 8px 28px -10px rgba(125,211,252,.25);
+}
+.analogy::before{
+  content:"";position:absolute;top:0;left:0;right:0;height:3px;
+  background:linear-gradient(90deg,#7dd3fc,#a78bfa,#34d399);
+}
+.analogy .a-head{
+  display:flex;align-items:center;gap:10px;
+  font-size:13px;font-weight:700;color:#7dd3fc;
+  text-transform:uppercase;letter-spacing:1.5px;margin-bottom:12px;
+}
+.analogy .a-head .icon{font-size:22px;line-height:1}
+.analogy .a-body{font-size:14.5px;line-height:1.8;color:#e4e9f5}
+.analogy .a-body strong{color:#fbbf24}
+.analogy .a-map{
+  margin-top:14px;padding:12px 16px;background:rgba(15,20,36,.55);
+  border-radius:8px;border:1px dashed rgba(125,211,252,.2);
+  font-size:13px;color:#94a3b8;
+}
+.analogy .a-map .arrow{color:#7dd3fc;margin:0 6px;font-weight:700}
+.analogy .a-map .term{color:#a78bfa;font-weight:600;font-family:"JetBrains Mono",monospace}
+
+.intuition{
+  background:rgba(251,191,36,.05);
+  border-left:4px solid #fbbf24;
+  padding:14px 18px;border-radius:0 10px 10px 0;margin:14px 0;
+  font-size:14.5px;line-height:1.7;
+}
+.intuition::before{
+  content:"🎯 一句话直觉 · ";color:#fbbf24;font-weight:700;font-size:13px;
+}
+
+.read-hint{
+  display:inline-flex;align-items:center;gap:6px;
+  font-size:12px;color:#94a3b8;
+  background:rgba(125,211,252,.05);
+  padding:4px 10px;border-radius:99px;
+  border:1px solid rgba(125,211,252,.15);
+  font-family:"JetBrains Mono",monospace;
+}
+.read-hint.beginner{color:#34d399;border-color:rgba(52,211,153,.25);background:rgba(52,211,153,.06)}
+.read-hint.deep{color:#a78bfa;border-color:rgba(167,139,250,.25);background:rgba(167,139,250,.06)}
+
+/* 🎮 交互演示容器 */
+.demo{
+  background:#0f1424;border:1px solid #2a3556;border-radius:14px;
+  padding:20px;margin:20px 0;position:relative;
+}
+.demo .demo-title{
+  display:flex;align-items:center;gap:10px;font-size:13px;
+  font-weight:700;color:#a78bfa;text-transform:uppercase;letter-spacing:1.5px;
+  margin-bottom:14px;padding-bottom:10px;border-bottom:1px solid #1f2740;
+}
+.demo .demo-title::before{content:"🎮 交互演示"}
+.demo .demo-controls{
+  display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;align-items:center;
+}
+.demo .demo-controls button{
+  background:linear-gradient(135deg,#1f2842,#2a3556);
+  color:#7dd3fc;border:1px solid #2a3556;
+  padding:6px 14px;border-radius:6px;cursor:pointer;
+  font-family:inherit;font-size:12px;font-weight:600;
+  transition:all .15s;
+}
+.demo .demo-controls button:hover{
+  background:linear-gradient(135deg,#2a3556,#3a4670);
+  border-color:#7dd3fc;transform:translateY(-1px);
+}
+.demo .demo-controls button.danger{color:#f87171}
+.demo .demo-controls .v{
+  display:inline-block;min-width:36px;text-align:center;
+  font-family:"JetBrains Mono",monospace;color:#fbbf24;font-weight:700;
+}
+.demo .demo-stage{
+  background:#0a0e1a;border:1px solid #1f2740;border-radius:10px;
+  padding:16px;min-height:120px;font-family:"JetBrains Mono",monospace;
+  font-size:13px;
+}
+
+/* PagedAttention 内存块可视化 */
+.mem-grid{
+  display:grid;grid-template-columns:repeat(16,1fr);gap:3px;
+  padding:14px;background:#080c18;border-radius:8px;margin:10px 0;
+}
+.mem-grid .block{
+  aspect-ratio:1;border-radius:3px;background:#1f2740;
+  display:flex;align-items:center;justify-content:center;
+  font-size:9px;color:#475569;
+  transition:all .3s;
+}
+.mem-grid .block.req-1{background:#7dd3fc;color:#0a0e1a}
+.mem-grid .block.req-2{background:#a78bfa;color:#0a0e1a}
+.mem-grid .block.req-3{background:#34d399;color:#0a0e1a}
+.mem-grid .block.req-4{background:#fbbf24;color:#0a0e1a}
+.mem-grid .block.free{background:#1f2740;color:#94a3b8}
+.mem-grid .block.frag{background:#3a1a1a;border:1px dashed #f87171;color:#f87171}
+.mem-legend{
+  display:flex;gap:14px;justify-content:center;flex-wrap:wrap;
+  font-size:11px;color:#94a3b8;margin-top:10px;
+}
+.mem-legend .item{display:flex;align-items:center;gap:6px}
+.mem-legend .swatch{width:14px;height:14px;border-radius:3px;display:inline-block}
+
+/* Batching timeline */
+.batch-tl{
+  background:#080c18;border-radius:8px;padding:14px;margin:10px 0;
+}
+.batch-row{
+  display:flex;gap:2px;margin:4px 0;height:24px;align-items:center;
+}
+.batch-row .lbl{
+  width:60px;font-size:11px;color:#94a3b8;
+  font-family:"JetBrains Mono",monospace;flex-shrink:0;text-align:right;
+  padding-right:8px;
+}
+.batch-row .timeline-track{flex:1;display:flex;gap:1px;height:20px}
+.batch-row .slot{
+  height:100%;border-radius:2px;flex:1;
+  display:flex;align-items:center;justify-content:center;
+  font-size:9px;color:#0a0e1a;font-weight:700;
+}
+.batch-row .slot.idle{background:#1f2740}
+.batch-row .slot.req-a{background:#7dd3fc}
+.batch-row .slot.req-b{background:#a78bfa}
+.batch-row .slot.req-c{background:#34d399}
+.batch-row .slot.req-d{background:#fbbf24}
+.batch-row .slot.prefill{background:#fb923c}
+
+/* Comparison table emphasis */
+.cmp-pill{display:inline-block;padding:2px 8px;border-radius:99px;font-size:11px;font-weight:700;font-family:"JetBrains Mono",monospace}
+.cmp-pill.win{background:rgba(52,211,153,.15);color:#34d399;border:1px solid rgba(52,211,153,.3)}
+.cmp-pill.lose{background:rgba(248,113,113,.15);color:#f87171;border:1px solid rgba(248,113,113,.3)}
+.cmp-pill.mid{background:rgba(251,191,36,.15);color:#fbbf24;border:1px solid rgba(251,191,36,.3)}
+
+/* Source tour 卡 */
+.src-tour{
+  background:#0a0e1a;border:1px solid #2a3556;border-radius:12px;
+  padding:18px 22px;margin:14px 0;
+}
+.src-tour .st-path{
+  font-family:"JetBrains Mono",monospace;font-size:12px;
+  background:rgba(125,211,252,.06);color:#7dd3fc;
+  padding:6px 12px;border-radius:6px;display:inline-block;
+  margin-bottom:10px;border:1px solid rgba(125,211,252,.2);
+}
+.src-tour h4{margin:6px 0 8px}
+.src-tour p{font-size:13.5px;color:#cbd5e1;line-height:1.7;margin:6px 0}
+.src-tour .st-key{
+  margin-top:10px;padding:10px 14px;background:rgba(251,191,36,.05);
+  border-left:3px solid #fbbf24;border-radius:0 8px 8px 0;font-size:13px;
+}
+.src-tour .st-key::before{content:"🔑 阅读重点 · ";color:#fbbf24;font-weight:700;font-size:12px}
+</style>
+</head>
+<body>
+
+<!-- tn-nav:v1 -->
+<style>
+#tn-nav{position:fixed;top:14px;right:14px;z-index:99999;display:flex;gap:6px;align-items:center;
+  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;
+  font-size:12px;line-height:1;font-weight:500;}
+#tn-nav a,#tn-nav .tn-meta{display:inline-flex;align-items:center;gap:4px;
+  background:rgba(20,20,30,.85);color:#fff !important;text-decoration:none !important;
+  padding:7px 11px;border-radius:999px;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+  border:1px solid rgba(255,255,255,.10);box-shadow:0 2px 8px rgba(0,0,0,.18);
+  transition:background .15s,transform .15s;}
+#tn-nav a:hover{background:rgba(56,189,248,.92);transform:translateY(-1px);}
+#tn-nav .tn-meta{background:rgba(20,20,30,.55);cursor:default;}
+@media (max-width:640px){#tn-nav{top:8px;right:8px;font-size:11px;gap:4px;}
+  #tn-nav a,#tn-nav .tn-meta{padding:5px 9px;}}
+@media print{#tn-nav{display:none;}}
+</style>
+<div id="tn-nav">
+  <a href="../index.html" title="返回主页">← 主页</a>
+  <a href="../interview/ai_study_path.html" title="R05 学习路径">📚 路径</a>
+  <a href="../ai-native/transformer_llm_architecture.html" title="X06 Transformer">🧠 X06</a>
+  <a href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener">📁 Repo</a>
+  <span class="tn-meta">⏱ 70 min</span>
+</div>
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>Y02 · LLM Inference</h2>
+    <nav>
+      <ol>
+        <li><a href="#ch0" class="active">读前地图</a></li>
+        <li><a href="#ch1">为什么需要推理引擎</a></li>
+        <li><a href="#ch2">朴素推理的 4 个瓶颈</a></li>
+        <li><a href="#ch3">PagedAttention · 内存分页</a>
+          <ol>
+            <li><a href="#s3-1">碎片化问题</a></li>
+            <li><a href="#s3-2">借鉴 OS 虚拟内存</a></li>
+            <li><a href="#s3-3">block table 设计</a></li>
+            <li><a href="#s3-4">prefix caching</a></li>
+          </ol>
+        </li>
+        <li><a href="#ch4">Continuous Batching · 流水线作业</a></li>
+        <li><a href="#ch5">Prefill-Decode 分离</a></li>
+        <li><a href="#ch6">Speculative Decoding · 投机解码</a></li>
+        <li><a href="#ch7">vLLM vs SGLang vs TRT-LLM</a></li>
+        <li><a href="#ch8">实战：跑通 vLLM serving</a></li>
+        <li><a href="#ch9">vLLM 源码导览（3 文件）</a></li>
+        <li><a href="#ch10">生产环境优化清单</a></li>
+        <li><a href="#ch11">15 道高频面试题</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+
+    <header class="hero">
+      <div class="badge">Y02 · LLM Inference Engine · 通俗深潜</div>
+      <h1>LLM 推理引擎深潜<br>vLLM / PagedAttention / Continuous Batching</h1>
+      <p class="sub">
+        12 章 · 7 个生活类比 · 3 个交互演示 · 15 道面试题 · vLLM 源码 3 文件导览。<br>
+        <strong>对位读者</strong>：想从"会调 OpenAI API"升级到"自己跑 LLM serving"的工程师 / C++ 老兵想切 AI Infra 的 Senior / 想看懂"为什么 vLLM 比 huggingface naive 推理快 24x"的人。<br>
+        <strong>预设知识</strong>：<a href="../ai-native/transformer_llm_architecture.html">X06</a> Ch3（KV-Cache 显存公式）已读 · CUDA 基础可选（<a href="./cuda_for_cpp.html">Y01</a>）。
+      </p>
+      <div class="meta">
+        <span>12 章节</span>
+        <span>~70 min 阅读</span>
+        <span>7 个生活类比</span>
+        <span>3 个交互演示</span>
+        <span>15 面试题</span>
+        <span>vLLM 源码导览</span>
+      </div>
+    </header>
+
+    <!-- ============= Ch0：读前地图 ============= -->
+    <section class="chapter" id="ch0">
+      <div class="ch-head">
+        <div class="num">00</div>
+        <div class="t">
+          <h2>读前地图 · 这是 AI Infra 的旗舰章</h2>
+          <div class="sub">3 种读者推荐路径 · 关键概念依赖</div>
+        </div>
+      </div>
+
+      <p class="lead">本文是 <strong>AI Infra 主线</strong>（Y 系列 5 篇）里最核心的一篇。<u>如果只读一篇 AI Infra，就读这篇</u>。其它 Y 系列章节都是它的支撑：</p>
+
+      <div class="kmap">
+        <div class="kmap-title">Y 系列 · 知识依赖关系</div>
+        <div class="grid cols-3">
+          <div class="card">
+            <h4>⚡ Y01 · CUDA 基础</h4>
+            <p style="font-size:13px;color:var(--text-dim)">GPU 硬件模型 / 内存层次 / kernel 编程。<u>Y02 假设你"听过这些词"，深入可读 Y01</u>。</p>
+          </div>
+          <div class="card violet" style="border:2px solid #fbbf24">
+            <h4>🚀 Y02 · 推理引擎（本文）</h4>
+            <p style="font-size:13px;color:var(--text-dim)">PagedAttention / Continuous Batching / Spec Decoding。<u>真正让 LLM 跑得起来的工程</u>。</p>
+          </div>
+          <div class="card amber">
+            <h4>📦 Y04 · 量化</h4>
+            <p style="font-size:13px;color:var(--text-dim)">INT4 / FP8 / GPTQ / AWQ。<u>把 KV-Cache 和模型砍 4x，Y02 是它最大的应用场景</u>。</p>
+          </div>
+        </div>
+      </div>
+
+      <h3>3 种读者推荐路径</h3>
+
+      <div class="grid cols-3">
+        <div class="card">
+          <h4>🆕 完全没用过 vLLM</h4>
+          <p style="font-size:13.5px">"我只用过 ChatGPT / 没自己跑过模型"</p>
+          <p style="font-size:12.5px;color:var(--text-dim);margin-top:8px">
+            <strong>建议</strong>：ch1 + ch2 + ch3 (只看类比 + 直觉) + ch8 实战。<u>不深入算法</u>。<br>
+            <strong>耗时</strong>：~30 min "知道为什么 vLLM 重要"
+          </p>
+        </div>
+        <div class="card violet">
+          <h4>🎓 用过 vLLM API</h4>
+          <p style="font-size:13.5px">"起过 vLLM serving，调过 max_batch_size，但不知道内部"</p>
+          <p style="font-size:12.5px;color:var(--text-dim);margin-top:8px">
+            <strong>建议</strong>：全文按序读，重点 ch3 PagedAttention + ch4 Continuous Batching + ch10 生产优化。<br>
+            <strong>耗时</strong>：~70 min 系统理解
+          </p>
+        </div>
+        <div class="card green">
+          <h4>🧠 已读过部分源码</h4>
+          <p style="font-size:13.5px">"对 PagedAttention 有印象，但想搞清楚调度器细节"</p>
+          <p style="font-size:12.5px;color:var(--text-dim);margin-top:8px">
+            <strong>建议</strong>：ch3 §3-3 block table 实现 + ch4 batching 调度 + ch9 源码导览 + ch11 面试题。<br>
+            <strong>耗时</strong>：~40 min 精读
+          </p>
+        </div>
+      </div>
+
+      <div class="info">
+        本文不教 "怎么用 vLLM Python API"（官方 readme 5 分钟够了），而是教 <strong>"为什么 vLLM 这么设计 + 内部怎么实现 + 你做选型时怎么取舍"</strong>。这才是面试 / 工程师价值的本质。
+      </div>
+    </section>
+
+    <!-- ============= Ch1：为什么需要推理引擎 ============= -->
+    <section class="chapter" id="ch1">
+      <div class="ch-head">
+        <div class="num">01</div>
+        <div class="t">
+          <h2>为什么需要专用推理引擎 · vLLM 比裸跑快 24x</h2>
+          <div class="sub">从"能跑"到"能用"中间的 5 个工程鸿沟</div>
+        </div>
+      </div>
+
+      <div class="analogy">
+        <div class="a-head"><span class="icon">🎬</span><span>生活类比 · 家庭厨房 vs 餐厅厨房</span></div>
+        <div class="a-body">
+          家里炒菜，你<u>一次只能服务一桌</u>，洗菜切菜炒菜全靠一个人，慢悠悠 30 分钟出 1 道菜。<br><br>
+          但餐厅厨房不一样 — <u>同时服务 50 桌</u>。它有 ① 流水线（切菜区、炒菜区、出菜区并行）② 共享原料（很多菜共用一锅高汤）③ 预先备菜（高峰前 prefill）④ 上菜节奏统筹（不让某桌空等）。结果：单菜成本下降 90%，吞吐量提升 30 倍。<br><br>
+          <strong>vLLM 就是 LLM 的"餐厅厨房"</strong>。你用 huggingface transformers 直接跑 model.generate() 就是"家庭厨房" — 能跑但效率极低。vLLM 把"家庭厨房"升级成"餐厅厨房"，throughput 提升 14-24x。
+        </div>
+        <div class="a-map">
+          餐厅厨房 <span class="arrow">→</span> <span class="term">推理引擎</span> &nbsp;·&nbsp;
+          并行炒菜 <span class="arrow">→</span> <span class="term">batching</span> &nbsp;·&nbsp;
+          共享高汤 <span class="arrow">→</span> <span class="term">prefix caching</span> &nbsp;·&nbsp;
+          预先备菜 <span class="arrow">→</span> <span class="term">prefill 阶段</span> &nbsp;·&nbsp;
+          上菜节奏 <span class="arrow">→</span> <span class="term">scheduler</span>
+        </div>
+      </div>
+
+      <h3>1.1 naive 推理 vs vLLM · 性能对比数据</h3>
+
+      <table>
+        <thead>
+          <tr><th>方案</th><th>throughput (tokens/s)</th><th>P95 latency</th><th>GPU 利用率</th><th>说明</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>HuggingFace <code>model.generate()</code></td><td>~120</td><td>~25s</td><td>15-25%</td><td>baseline，"家庭厨房"</td></tr>
+          <tr><td>HF + static batching</td><td>~600</td><td>~12s</td><td>40%</td><td>固定 batch，但会"等慢的"</td></tr>
+          <tr><td>FasterTransformer</td><td>~1500</td><td>~6s</td><td>55%</td><td>NVIDIA 早期方案</td></tr>
+          <tr><td><strong>vLLM</strong></td><td><strong>~2800</strong></td><td><strong>~1.6s</strong></td><td><strong>75-85%</strong></td><td>PagedAttention + Continuous Batching</td></tr>
+          <tr><td>SGLang (2024+)</td><td>~3500</td><td>~1.4s</td><td>80-90%</td><td>vLLM 升级版 + RadixAttention</td></tr>
+          <tr><td>TensorRT-LLM</td><td>~3800</td><td>~1.2s</td><td>85-95%</td><td>NVIDIA 商业方案，深度优化 H100</td></tr>
+        </tbody>
+      </table>
+
+      <p style="font-size:12px;color:var(--text-mute);font-style:italic">数据来源：vLLM 官方 benchmark + SGLang paper + 实测（Llama-7B / A100 / batch=64 / seq_len=2k）。具体数字会因硬件和模型不同。</p>
+
+      <div class="intuition">
+        vLLM 相对 naive 提速 24x，<u>不是因为算法变了</u>（attention 还是 attention），<u>而是因为工程优化</u>：① 内存不再浪费（PagedAttention）② GPU 不再空闲（Continuous Batching）③ 重复计算被复用（Prefix Caching）。<strong>这就是 AI Infra 工程师的价值 — 不写新算法，但能让算法跑出 10x+ 性能</strong>。
+      </div>
+
+      <h3>1.2 朴素推理的"5 个工程鸿沟"</h3>
+
+      <div class="grid cols-2">
+        <div class="card danger">
+          <h4>❌ 鸿沟 1 · 内存碎片</h4>
+          <p style="font-size:13.5px">每个请求预分配 <code>max_seq_len</code> 大小的 KV-Cache 空间。<u>但 80% 请求只用 30%</u>，剩下 70% 空着也没法给别人 — <strong>显存利用率只有 30-40%</strong>。</p>
+        </div>
+        <div class="card danger">
+          <h4>❌ 鸿沟 2 · 慢的拖累快的</h4>
+          <p style="font-size:13.5px">Static batching 把 N 个请求绑一起处理。<u>1 个请求要生成 1000 token，其它 N-1 个只要 10 token</u> — 后者必须空等前者，GPU 大量空闲。</p>
+        </div>
+        <div class="card danger">
+          <h4>❌ 鸿沟 3 · 重复计算 prompt</h4>
+          <p style="font-size:13.5px">很多请求<u>有相同前缀</u>（system prompt / few-shot 示例）。Naive 每次都重新算这段 prefix 的 attention — <strong>纯浪费</strong>。</p>
+        </div>
+        <div class="card danger">
+          <h4>❌ 鸿沟 4 · Prefill 阻塞 Decode</h4>
+          <p style="font-size:13.5px">来一个新请求要 prefill（大矩阵乘，几百 ms），<u>这期间其它请求的 decode 全停</u> — 已有用户体验飞快变慢。</p>
+        </div>
+        <div class="card danger">
+          <h4>❌ 鸿沟 5 · Decode 浪费算力</h4>
+          <p style="font-size:13.5px">Decode 阶段每步只算 1 个 token，GPU 算力大量闲置。<u>能不能"批量生成多个 token"？</u>能（Speculative Decoding）。</p>
+        </div>
+      </div>
+
+      <div class="tip">
+        vLLM (2023) 一开始主要解决 <strong>鸿沟 1 (内存碎片) + 鸿沟 2 (慢的拖累快的)</strong>，分别对应 PagedAttention + Continuous Batching。这就是它一战成名的核心创新。后续 vLLM / SGLang / TRT-LLM 又陆续解决了鸿沟 3 / 4 / 5。
+      </div>
+    </section>
+
+    <!-- ============= Ch2：朴素推理 4 个瓶颈 ============= -->
+    <section class="chapter" id="ch2">
+      <div class="ch-head">
+        <div class="num">02</div>
+        <div class="t">
+          <h2>朴素推理为什么慢 · 拆解到根因</h2>
+          <div class="sub">理解瓶颈才能理解 vLLM 的设计选择</div>
+        </div>
+      </div>
+
+      <h3>2.1 LLM 推理的两阶段 · 一图回顾</h3>
+
+      <p>回顾 <a href="../ai-native/transformer_llm_architecture.html#ch3">X06 Ch3</a> 的核心结论：LLM 推理分两阶段，<u>瓶颈完全不同</u>。</p>
+
+      <div class="grid cols-2">
+        <div class="card violet">
+          <h4>🔥 Prefill 阶段</h4>
+          <ul style="font-size:13.5px">
+            <li>处理整个 prompt（n 个 token 一起）</li>
+            <li>n×n 大矩阵乘 — <em>compute-bound</em></li>
+            <li>GPU 算力打满 ~85%</li>
+            <li>耗时：~ms 级（n=2k 时 ~200ms）</li>
+            <li>FLOPs ≈ 2 × n × P</li>
+          </ul>
+        </div>
+        <div class="card amber">
+          <h4>🐌 Decode 阶段</h4>
+          <ul style="font-size:13.5px">
+            <li>每步生成 1 个 token</li>
+            <li>要读整个 KV-Cache（GB 级）— <em>memory-bound</em></li>
+            <li>GPU 算力利用率 ~15-25%（带宽瓶颈）</li>
+            <li>耗时：每 token ~30-50 ms</li>
+            <li>arithmetic intensity 极低</li>
+          </ul>
+        </div>
+      </div>
+
+      <h3>2.2 时间都花在哪了 · perf 拆解</h3>
+
+      <p>一个典型对话请求（prompt 500 token + 输出 200 token）在 Llama-7B / A100 上的耗时拆解：</p>
+
+      <table>
+        <thead><tr><th>阶段</th><th>占比</th><th>瓶颈</th><th>优化方向</th></tr></thead>
+        <tbody>
+          <tr><td>Prefill (500 token 一次)</td><td>~15%</td><td>compute</td><td>FlashAttention / FP8</td></tr>
+          <tr><td><strong>Decode (200 步 × 每步)</strong></td><td><strong>~80%</strong></td><td><strong>memory bandwidth</strong></td><td><strong>GQA / KV 量化 / Spec Decoding</strong></td></tr>
+          <tr><td>Tokenization / detokenization</td><td>~2%</td><td>CPU</td><td>异步 / 缓存</td></tr>
+          <tr><td>Sampling (softmax + top-k/p)</td><td>~3%</td><td>compute</td><td>fused kernel</td></tr>
+        </tbody>
+      </table>
+
+      <div class="intuition">
+        <u>Decode 阶段占 80% 时间</u>，这是为什么所有推理引擎优化都<strong>主攻 decode</strong>。Prefill 只是"热身"，Decode 才是"持久战"。
+      </div>
+
+      <h3>2.3 KV-Cache 显存的双重压力</h3>
+
+      <p>KV-Cache（参考 <a href="../ai-native/transformer_llm_architecture.html#s3-2">X06 §3.2</a>）一边是 <strong>容量</strong>（装不下 = 不能服务更多用户），一边是 <strong>带宽</strong>（读不完 = 每个 token 都慢）。</p>
+
+      <div class="grid cols-2">
+        <div class="card">
+          <h4>📏 容量压力</h4>
+          <p style="font-size:13.5px">Llama-70B GQA / 32k 上下文 / 单 sequence ≈ <strong>10 GB</strong>。A100 80GB 装下 7B 模型（14GB）后只剩 66GB ÷ 10GB = <u>最多 6 个并发用户</u>。</p>
+        </div>
+        <div class="card">
+          <h4>⚡ 带宽压力</h4>
+          <p style="font-size:13.5px">每步 decode 要读完整 KV-Cache。HBM3 带宽 3 TB/s，读 10 GB ≈ 3.3 ms — <u>这就是单 token latency 下限</u>。增加用户 = 总带宽需求 × N。</p>
+        </div>
+      </div>
+
+      <div class="warn">
+        最坑的事实：<strong>静态预分配 KV-Cache 会浪费 60-70% 显存</strong>。请求 A 设了 max_len=2048 实际只用了 200 token — 剩下 1848 个 slot 空着<u>但别的请求不能用</u>。这就是 PagedAttention 要解决的"鸿沟 1"。
+      </div>
+    </section>
+
+    <!-- ============= Ch3：PagedAttention ============= -->
+    <section class="chapter" id="ch3">
+      <div class="ch-head">
+        <div class="num">03</div>
+        <div class="t">
+          <h2>PagedAttention · 像 OS 那样管理 KV-Cache</h2>
+          <div class="sub">vLLM 的核心创新 · 把内存利用率从 30% 提到 96%</div>
+        </div>
+      </div>
+
+      <div class="analogy">
+        <div class="a-head"><span class="icon">🎬</span><span>生活类比 · 公寓 vs 房间分时租</span></div>
+        <div class="a-body">
+          想象你管理一栋公寓楼，有 100 间房（=100 个 KV-Cache slot）。<br><br>
+          <strong>朴素方案（连续分配）</strong>：来一个长租客（=请求 A）说"我可能住 1 年"，你<u>给他预留连续 10 间房</u>。但他实际只住了 3 间，<u>剩 7 间空着也不能给别人</u>（因为承诺给他了）。一年下来 70% 的房间是空的。<br><br>
+          <strong>分页方案</strong>：来 1 间分 1 间。租客需要扩展时再给他下一间 — <u>不要求连续</u>。每间房记一个"住户花名册"（block table）。结果：100 间房真的住 96 间，利用率 96%。<br><br>
+          这就是 <strong>PagedAttention</strong> — 借鉴 OS 虚拟内存的分页（paging）思想，把 KV-Cache 从"连续分配"改成"按需分页"。
+        </div>
+        <div class="a-map">
+          房间 <span class="arrow">→</span> <span class="term">KV block (典型 16 token 大)</span> &nbsp;·&nbsp;
+          住户花名册 <span class="arrow">→</span> <span class="term">block table</span> &nbsp;·&nbsp;
+          公寓楼 <span class="arrow">→</span> <span class="term">GPU 显存</span>
+        </div>
+      </div>
+
+      <h3 id="s3-1">3.1 碎片化问题 · 朴素方案为什么浪费</h3>
+
+      <h4>🎮 交互演示 · 内存碎片化</h4>
+
+      <div class="demo">
+        <div class="demo-title"></div>
+        <p style="font-size:13px;color:var(--text-dim);margin-bottom:14px">点击"朴素方案"看连续预分配的碎片，点击"PagedAttention"看分页后的紧凑布局。<u>看右下角利用率</u>。</p>
+
+        <div class="demo-controls">
+          <button id="naive-btn">📕 朴素方案（预留 max_len）</button>
+          <button id="paged-btn">📗 PagedAttention（按需分页）</button>
+          <button id="mem-reset" class="danger">⟲ 重置</button>
+          <span style="color:var(--text-dim);font-size:12px;margin-left:auto">利用率: <span class="v" id="mem-util">—</span></span>
+        </div>
+
+        <div class="demo-stage">
+          <div class="mem-grid" id="mem-grid"></div>
+          <div class="mem-legend">
+            <div class="item"><span class="swatch" style="background:#7dd3fc"></span>请求 A (实际 5 block)</div>
+            <div class="item"><span class="swatch" style="background:#a78bfa"></span>请求 B (实际 3 block)</div>
+            <div class="item"><span class="swatch" style="background:#34d399"></span>请求 C (实际 8 block)</div>
+            <div class="item"><span class="swatch" style="background:#fbbf24"></span>请求 D (实际 4 block)</div>
+            <div class="item"><span class="swatch" style="background:#3a1a1a;border:1px dashed #f87171"></span>预留未用（浪费）</div>
+            <div class="item"><span class="swatch" style="background:#1f2740"></span>空闲</div>
+          </div>
+          <p id="mem-explain" style="text-align:center;color:var(--text-dim);font-size:12px;margin-top:10px;font-family:inherit"></p>
+        </div>
+      </div>
+
+      <h3 id="s3-2">3.2 借鉴 OS 虚拟内存 · 物理页 vs 逻辑页</h3>
+
+      <p>PagedAttention 借鉴的就是 OS 虚拟内存的核心思想：<u>逻辑地址连续，但物理地址可以分散</u>。</p>
+
+      <div class="grid cols-2">
+        <div class="card">
+          <h4>OS 虚拟内存（对应）</h4>
+          <ul style="font-size:13.5px">
+            <li><strong>物理页</strong>：RAM 上 4KB 大小的页</li>
+            <li><strong>虚拟页</strong>：进程看到的连续地址</li>
+            <li><strong>页表</strong>：虚拟页 → 物理页 映射</li>
+            <li><strong>Page Fault</strong>：访问未映射页，OS 分配</li>
+          </ul>
+        </div>
+        <div class="card violet">
+          <h4>PagedAttention（类比）</h4>
+          <ul style="font-size:13.5px">
+            <li><strong>物理 KV block</strong>：显存上 16 token 的连续 KV 槽</li>
+            <li><strong>逻辑 sequence</strong>：请求看到的连续 token</li>
+            <li><strong>Block Table</strong>：逻辑 → 物理 block 映射</li>
+            <li><strong>Allocate on demand</strong>：需要新 token 时分配新 block</li>
+          </ul>
+        </div>
+      </div>
+
+      <h3 id="s3-3">3.3 Block Table · 实现核心</h3>
+
+      <p>每个 sequence 都有一个 block table，记录它的逻辑 block 0、1、2... 对应哪些物理 block。</p>
+
+      <pre><code><span class="c"># 假设 block_size = 16 (每 block 装 16 token 的 KV)</span>
+<span class="c"># Sequence A 现在有 50 token, 需要 ceil(50/16) = 4 block</span>
+
+block_table_A = [
+    <span class="n">42</span>,   <span class="c"># 逻辑 block 0 (token 0-15) → 物理 block #42</span>
+    <span class="n">17</span>,   <span class="c"># 逻辑 block 1 (token 16-31) → 物理 block #17</span>
+    <span class="n">8</span>,    <span class="c"># 逻辑 block 2 (token 32-47) → 物理 block #8</span>
+    <span class="n">31</span>,   <span class="c"># 逻辑 block 3 (token 48-49, 半满) → 物理 block #31</span>
+]
+
+<span class="c"># 计算 attention 时, kernel 通过 block_table 找到所有物理位置</span>
+<span class="k">def</span> <span class="f">paged_attention</span>(query, block_table, kv_cache, seq_len):
+    <span class="k">for</span> i <span class="k">in</span> <span class="f">range</span>(<span class="f">len</span>(block_table)):
+        phys_block_id = block_table[i]
+        kv_block = kv_cache[phys_block_id]   <span class="c"># 物理位置取出 KV</span>
+        <span class="c"># 在 query 跟这个 block 上做 attention</span>
+        ...</code></pre>
+
+      <h4>关键设计决策</h4>
+
+      <div class="grid cols-3">
+        <div class="card">
+          <h4>📐 Block size = 16</h4>
+          <p style="font-size:13px">不能太小（block table 元数据太多）也不能太大（碎片回来了）。<u>vLLM 默认 16</u>，是实验最优。</p>
+        </div>
+        <div class="card violet">
+          <h4>🔀 物理 block 池统一管理</h4>
+          <p style="font-size:13px">所有 sequence 共享一个 free block pool。<u>请求来了从 pool 拿，结束了还回去</u>。跟 OS 物理页管理一模一样。</p>
+        </div>
+        <div class="card green">
+          <h4>📦 自定义 CUDA kernel</h4>
+          <p style="font-size:13px">普通 attention kernel 假设 KV 是连续内存。<u>vLLM 写了专用 PagedAttention kernel</u>，按 block_table 跳着读 KV，是项目核心 C++/CUDA 代码。</p>
+        </div>
+      </div>
+
+      <h3 id="s3-4">3.4 Prefix Caching · 物理 block 共享</h3>
+
+      <p>有了 block table，<strong>多个请求可以共享同一个物理 block</strong>。这就是 prefix caching 的基础。</p>
+
+      <div class="analogy">
+        <div class="a-head"><span class="icon">🎬</span><span>生活类比 · 多个学生共用同一份讲义</span></div>
+        <div class="a-body">
+          想象 100 个学生都在写 ChatGPT 的代码作业，<u>每个学生的 prompt 前 200 字都是相同的 system prompt</u>（"你是助手 / 请按代码块返回..."）。<br><br>
+          <strong>朴素</strong>：每个学生都自己抄一份这 200 字 → 100 份重复内容占内存。<br>
+          <strong>Prefix Caching</strong>：把这 200 字的 KV 算一次存起来，<u>所有学生的 block table 前几项都指向同一个物理 block</u>。100 个并发用户的 prefix 只算 1 次！<br><br>
+          <strong>vLLM Automatic Prefix Caching</strong>（2024 加入）就是这么做的。在 chatbot / RAG 等 prompt 高度重复的场景，<u>throughput 再 +30-50%</u>。
+        </div>
+      </div>
+
+      <div class="tip">
+        <strong>面试高频追问</strong>："如果两个请求 prompt 前缀相同但后面不同，PagedAttention 怎么处理？"
+        答：① 检测前缀 hash 相同 ② 它们的 block table 前面几项指向同一物理 block（引用计数 +1）③ 第一个开始"分叉"的位置，给新请求分配新 block，<u>old block 引用计数 -1 但还活着</u>。
+      </div>
+    </section>
+
+    <!-- ============= Ch4：Continuous Batching ============= -->
+    <section class="chapter" id="ch4">
+      <div class="ch-head">
+        <div class="num">04</div>
+        <div class="t">
+          <h2>Continuous Batching · 流水线作业</h2>
+          <div class="sub">解决"慢的拖累快的"问题 · throughput 再翻倍</div>
+        </div>
+      </div>
+
+      <div class="analogy">
+        <div class="a-head"><span class="icon">🎬</span><span>生活类比 · 顺丰快递站的流水线</span></div>
+        <div class="a-body">
+          想象 1 个快递站每天要分拣 1000 个包裹。<br><br>
+          <strong>Static Batching（旧方案）</strong>：把包裹凑成 10 个一批，<u>必须等这 10 个全部分拣完，才能进下一批</u>。<u>如果某个包裹特别复杂（地址难找），其它 9 个都得等</u>。<br><br>
+          <strong>Continuous Batching（vLLM 方案）</strong>：分拣台是流水线，<u>分拣完的包裹立刻离开</u>，<u>空出的位置马上塞新的包裹进来</u>。任何时刻总有 10 个包裹在分拣，但成员一直在变。<u>没有"快的等慢的"</u>，效率翻倍。
+        </div>
+        <div class="a-map">
+          快递站 <span class="arrow">→</span> <span class="term">GPU</span> &nbsp;·&nbsp;
+          分拣台 <span class="arrow">→</span> <span class="term">batch slot</span> &nbsp;·&nbsp;
+          包裹 <span class="arrow">→</span> <span class="term">request</span> &nbsp;·&nbsp;
+          复杂包裹 <span class="arrow">→</span> <span class="term">长输出请求</span>
+        </div>
+      </div>
+
+      <h3>4.1 Static vs Continuous · 一图看懂</h3>
+
+      <h4>🎮 交互演示 · Batching 调度对比</h4>
+
+      <div class="demo">
+        <div class="demo-title"></div>
+        <p style="font-size:13px;color:var(--text-dim);margin-bottom:14px">4 个请求（A/B/C/D）长度不等。<u>看 Static vs Continuous 哪个 GPU 利用率高</u>。</p>
+
+        <div class="demo-controls">
+          <button id="static-btn">🟦 Static Batching</button>
+          <button id="cont-btn">🟧 Continuous Batching</button>
+        </div>
+
+        <div class="demo-stage">
+          <div id="batch-mode-title" style="color:#94a3b8;font-size:13px;margin-bottom:10px;text-align:center">点击上方按钮查看</div>
+          <div class="batch-tl" id="batch-tl"></div>
+          <p id="batch-explain" style="text-align:center;color:var(--text-dim);font-size:12px;margin-top:10px;font-family:inherit"></p>
+        </div>
+      </div>
+
+      <h3>4.2 调度器（Scheduler）核心算法</h3>
+
+      <p>Continuous Batching 的核心是<strong>每个 decode step</strong>都重新决定"哪些请求进 batch"。算法大概是这样：</p>
+
+      <pre><code><span class="k">def</span> <span class="f">schedule_step</span>(running_seqs, waiting_seqs, free_blocks):
+    <span class="c"># Step 1: 检查 running 里有谁完成了 (输出 EOS 或达到 max_len)</span>
+    <span class="k">for</span> seq <span class="k">in</span> running_seqs:
+        <span class="k">if</span> seq.finished:
+            release_blocks(seq.block_table)   <span class="c"># 释放它的 KV block</span>
+            running_seqs.remove(seq)
+
+    <span class="c"># Step 2: 检查 running 里谁需要新 block (token 数 % 16 == 0)</span>
+    <span class="k">for</span> seq <span class="k">in</span> running_seqs:
+        <span class="k">if</span> seq.needs_new_block():
+            <span class="k">if</span> free_blocks.empty:
+                <span class="c"># 显存满了, 把最低优先级的 seq swap 到 CPU memory</span>
+                evict_to_cpu(<span class="f">lowest_priority</span>(running_seqs))
+            allocate_block(seq)
+
+    <span class="c"># Step 3: 从 waiting 队列拉新请求进 batch (满足资源时)</span>
+    <span class="k">while</span> free_blocks.<span class="f">count</span>() &gt;= waiting_seqs[0].prefill_blocks_needed:
+        new_seq = waiting_seqs.<span class="f">pop</span>(0)
+        prefill(new_seq)                       <span class="c"># prefill 它的 prompt</span>
+        running_seqs.<span class="f">append</span>(new_seq)
+
+    <span class="c"># Step 4: 对所有 running seq 跑一步 decode</span>
+    decode_one_step(running_seqs)</code></pre>
+
+      <div class="intuition">
+        <u>关键点 1</u>：scheduler 每个 step 都跑一次（每 ~30ms），<u>不是固定 batch</u>。<u>关键点 2</u>：完成的请求<u>立刻空出 slot</u> 让新请求进来。<u>关键点 3</u>：显存不够时<u>swap 到 CPU</u>（保住已开始的请求，不会丢）。
+      </div>
+
+      <h3>4.3 Continuous Batching 的边界</h3>
+
+      <div class="grid cols-2">
+        <div class="card">
+          <h4>✅ 适合</h4>
+          <ul style="font-size:13.5px">
+            <li>在线 chat / chatbot（请求长度参差不齐）</li>
+            <li>大量并发用户（&gt; 10）</li>
+            <li>用户对 throughput 敏感（成本/月）</li>
+          </ul>
+        </div>
+        <div class="card amber">
+          <h4>⚠️ 不太适合</h4>
+          <ul style="font-size:13.5px">
+            <li>单用户大文档（batch=1 优势消失）</li>
+            <li>实时高优先级（仍可能被调度延迟）</li>
+            <li>极端延迟敏感（&lt; 100ms）</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============= Ch5：Prefill-Decode 分离 ============= -->
+    <section class="chapter" id="ch5">
+      <div class="ch-head">
+        <div class="num">05</div>
+        <div class="t">
+          <h2>Prefill-Decode 分离 · 2 个厨房比 1 个好</h2>
+          <div class="sub">SGLang / TensorRT-LLM 2024 新趋势 · 解决 "prefill 阻塞 decode" 问题</div>
+        </div>
+      </div>
+
+      <div class="analogy">
+        <div class="a-head"><span class="icon">🎬</span><span>生活类比 · 餐厅"备菜区"和"出菜区"分离</span></div>
+        <div class="a-body">
+          餐厅高峰时段，新桌点完单 → 需要洗菜切菜（=prefill），耗时 ~5 分钟。在这 5 分钟里，<u>主厨没法分心去给已上桌的"加水加饭"（=decode）</u>。<br><br>
+          聪明餐厅的做法：<u>开两个厨房</u>。一个专门"备菜"（prefill 厨房），一个专门"出菜+加水"（decode 厨房）。两边互不影响，新桌不影响老桌的体验。<br><br>
+          <strong>Prefill-Decode 分离</strong> = 这个思想直接搬到 GPU：<u>用一组 GPU 专门做 prefill，另一组 GPU 专门做 decode</u>。KV-Cache 通过高速网络传输。
+        </div>
+      </div>
+
+      <h3>5.1 为什么需要分离</h3>
+
+      <p>回想 ch2 的结论：Prefill 是 compute-bound（吃算力），Decode 是 memory-bound（吃带宽）。<strong>它们对硬件的需求完全不同</strong>。</p>
+
+      <table>
+        <thead><tr><th>阶段</th><th>瓶颈</th><th>理想硬件</th></tr></thead>
+        <tbody>
+          <tr><td>Prefill</td><td>算力（FLOPS）</td><td>计算密度高的 GPU（H100, B200）/ TPU</td></tr>
+          <tr><td>Decode</td><td>显存带宽</td><td>大显存 + 高带宽 GPU（A100 80GB 也够）</td></tr>
+        </tbody>
+      </table>
+
+      <p>朴素方案是<u>同一组 GPU 干两件事</u>，造成：</p>
+      <ul>
+        <li>Prefill 时算力打满，但带宽闲置</li>
+        <li>Decode 时带宽打满，但算力闲置 80%</li>
+        <li>更糟：prefill 阶段的大矩阵乘<strong>独占 GPU</strong>，已有 decode 全部停顿（TTFT 飞涨）</li>
+      </ul>
+
+      <h3>5.2 分离架构</h3>
+
+      <div class="card">
+        <h4>典型架构（SGLang / TRT-LLM / vLLM Disaggregated）</h4>
+        <pre><code>用户请求
+   ↓
+[Load Balancer]
+   ↓
+[Prefill Worker Pool]    ← H100 × N 专门做 prefill
+   ↓ KV-Cache via RDMA / NVLink
+[Decode Worker Pool]     ← A100 × M 专门做 decode
+   ↓
+[Streaming Response]
+   ↓
+用户</code></pre>
+      </div>
+
+      <ul>
+        <li><strong>KV-Cache 跨节点传输</strong>：Prefill 完成后，把 KV-Cache 通过 RDMA / NVLink 传到 Decode worker。代价 ~50ms（视模型大小）</li>
+        <li><strong>资源解耦</strong>：可以独立扩容（高峰期开多 Prefill worker，平峰期回收）</li>
+        <li><strong>SLO 隔离</strong>：新请求的 prefill 不影响老请求的 decode latency</li>
+      </ul>
+
+      <div class="tip">
+        <strong>2024-2026 趋势</strong>：所有头部推理引擎都在做 prefill-decode 分离。代表项目：<u>vLLM Disaggregated</u> / <u>SGLang</u> / <u>DistServe (paper)</u> / <u>TensorRT-LLM disagg</u>。<strong>面试可以提到这是"2024 最重要的推理优化方向之一"</strong>。
+      </div>
+    </section>
+
+    <!-- ============= Ch6：Speculative Decoding ============= -->
+    <section class="chapter" id="ch6">
+      <div class="ch-head">
+        <div class="num">06</div>
+        <div class="t">
+          <h2>Speculative Decoding · 用小模型猜大模型</h2>
+          <div class="sub">把 decode 从"一次 1 token"变成"一次 K token"</div>
+        </div>
+      </div>
+
+      <div class="analogy">
+        <div class="a-head"><span class="icon">🎬</span><span>生活类比 · 实习生先写草稿，主管批量校对</span></div>
+        <div class="a-body">
+          公司里有个明星顾问（=大模型，70B），每咨询一个问题要 30 分钟，但答案权威。<u>每次客户只能问 1 个问题</u>。<br><br>
+          聪明做法：雇个实习生（=小模型，1B），他每问回答只要 1 分钟，但答案常出错。<u>实习生先批量回答 5 个问题</u>，明星顾问<u>一口气审核 5 个答案</u>（也是 30 分钟，但同时审 5 个）。如果实习生答对了 4 个，<u>客户净赚 4 倍效率</u>。<br><br>
+          这就是 <strong>Speculative Decoding</strong>：<u>用小模型生成 K 个候选 token，大模型并行验证（用 K+1 次 forward 验证 K 个 token），验证通过的直接用</u>。
+        </div>
+      </div>
+
+      <h3>6.1 算法核心</h3>
+
+      <pre><code><span class="k">def</span> <span class="f">speculative_decode</span>(big_model, small_model, prefix):
+    <span class="c"># Step 1: 小模型快速生成 K 个候选 token</span>
+    candidates = []
+    cur = prefix
+    <span class="k">for</span> i <span class="k">in</span> <span class="f">range</span>(K):
+        next_tok = small_model.<span class="f">forward</span>(cur).<span class="f">argmax</span>()
+        candidates.<span class="f">append</span>(next_tok)
+        cur = cur + [next_tok]
+
+    <span class="c"># Step 2: 大模型一次性并行验证这 K 个候选</span>
+    <span class="c"># (输入: prefix + K 个候选, 输出: K+1 个 logits)</span>
+    big_logits = big_model.<span class="f">forward</span>(prefix + candidates)
+
+    <span class="c"># Step 3: 从左到右接受 / 拒绝</span>
+    accepted = []
+    <span class="k">for</span> i <span class="k">in</span> <span class="f">range</span>(K):
+        big_top = big_logits[i].<span class="f">argmax</span>()
+        <span class="k">if</span> big_top == candidates[i]:
+            accepted.<span class="f">append</span>(candidates[i])
+        <span class="k">else</span>:
+            <span class="c"># 第 i 个不匹配, 用大模型的输出, 后面全丢</span>
+            accepted.<span class="f">append</span>(big_top)
+            <span class="k">break</span>
+
+    <span class="k">return</span> accepted</code></pre>
+
+      <div class="intuition">
+        关键：<u>大模型一次 forward 同时计算 K+1 个位置的 logits</u>（attention 是天然并行的，多算 K 个 token 几乎免费）。所以 <u>1 次大模型 forward = 最多接受 K 个 token</u>，等价于 K 倍加速（如果接受率高）。
+      </div>
+
+      <h3>6.2 接受率决定加速比</h3>
+
+      <table>
+        <thead><tr><th>场景</th><th>典型接受率</th><th>实际加速</th></tr></thead>
+        <tbody>
+          <tr><td>简单文本生成（小模型质量近大模型）</td><td>70-80%</td><td>2-3x</td></tr>
+          <tr><td>代码生成（结构化）</td><td>60-75%</td><td>2-2.5x</td></tr>
+          <tr><td>复杂推理（reasoning model）</td><td>40-50%</td><td>1.5-1.8x</td></tr>
+          <tr><td>多语言切换</td><td>30-40%</td><td>1.2-1.5x</td></tr>
+        </tbody>
+      </table>
+
+      <h3>6.3 演进 · 各种 Speculative 变体</h3>
+
+      <div class="grid cols-3">
+        <div class="card">
+          <h4>🎯 Vanilla Spec Decoding</h4>
+          <p style="font-size:13.5px">一个独立的小模型猜。简单但小模型要训练。</p>
+        </div>
+        <div class="card violet">
+          <h4>🦞 Medusa (2024)</h4>
+          <p style="font-size:13.5px">在大模型最后一层加几个 "medusa head"，<u>多头并行预测下 K 个 token</u>，不需要独立小模型。</p>
+        </div>
+        <div class="card amber">
+          <h4>🦅 EAGLE / Lookahead</h4>
+          <p style="font-size:13.5px">用大模型自己的早期 layer 当 "draft model"。<u>更高接受率（80%+）</u>，2024 SOTA。</p>
+        </div>
+      </div>
+
+      <div class="tip">
+        vLLM / SGLang / TRT-LLM 都已支持 Spec Decoding。<u>面试常问"它跟普通 batching 哪个更好"</u> — 答：互补，<strong>低并发用 Spec Decoding（降单 token latency），高并发用 Continuous Batching（提 throughput）</strong>。
+      </div>
+    </section>
+
+    <!-- ============= Ch7：vLLM vs SGLang vs TRT-LLM ============= -->
+    <section class="chapter" id="ch7">
+      <div class="ch-head">
+        <div class="num">07</div>
+        <div class="t">
+          <h2>vLLM vs SGLang vs TRT-LLM · 怎么选</h2>
+          <div class="sub">2026 三大主流推理引擎横向对比</div>
+        </div>
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th>维度</th>
+            <th>vLLM</th>
+            <th>SGLang</th>
+            <th>TensorRT-LLM</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>核心创新</strong></td>
+            <td>PagedAttention + Continuous Batching</td>
+            <td>RadixAttention (prefix tree) + 高级前端 DSL</td>
+            <td>深度 NVIDIA H100 优化 + 内核融合</td>
+          </tr>
+          <tr>
+            <td><strong>开发方</strong></td>
+            <td>UC Berkeley → 社区</td>
+            <td>UC Berkeley LMSYS</td>
+            <td>NVIDIA</td>
+          </tr>
+          <tr>
+            <td><strong>License</strong></td>
+            <td><span class="cmp-pill win">Apache 2.0</span></td>
+            <td><span class="cmp-pill win">Apache 2.0</span></td>
+            <td><span class="cmp-pill mid">商业 + 部分开源</span></td>
+          </tr>
+          <tr>
+            <td><strong>性能</strong></td>
+            <td>baseline ⭐⭐⭐⭐</td>
+            <td><span class="cmp-pill win">⭐⭐⭐⭐⭐</span></td>
+            <td><span class="cmp-pill win">⭐⭐⭐⭐⭐+</span> (H100)</td>
+          </tr>
+          <tr>
+            <td><strong>模型支持广度</strong></td>
+            <td><span class="cmp-pill win">最广，几乎全部 HF 模型</span></td>
+            <td><span class="cmp-pill mid">主流模型 OK</span></td>
+            <td><span class="cmp-pill lose">需要单独转换 + 编译</span></td>
+          </tr>
+          <tr>
+            <td><strong>易用性</strong></td>
+            <td>Python OpenAI 兼容 API</td>
+            <td>Python + DSL（学习曲线）</td>
+            <td>C++ engine 编译，复杂</td>
+          </tr>
+          <tr>
+            <td><strong>结构化输出 / Agent</strong></td>
+            <td>guided generation（基础）</td>
+            <td><span class="cmp-pill win">RadixAttention + 共享 prompt 优化最佳</span></td>
+            <td>基础</td>
+          </tr>
+          <tr>
+            <td><strong>分布式 / 多 GPU</strong></td>
+            <td>tensor parallel / pipeline parallel</td>
+            <td>同上</td>
+            <td>同上 + Triton Inference Server</td>
+          </tr>
+          <tr>
+            <td><strong>量化支持</strong></td>
+            <td>GPTQ/AWQ/FP8/INT8</td>
+            <td>GPTQ/AWQ/FP8</td>
+            <td><span class="cmp-pill win">最全 + 最深度优化</span></td>
+          </tr>
+          <tr>
+            <td><strong>适合场景</strong></td>
+            <td>通用场景默认选 / 快速 POC</td>
+            <td>Agent / 多轮对话 / 高 prefix 共享</td>
+            <td>生产 / 大规模 / H100 集群</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>选型决策</h3>
+
+      <div class="grid cols-3">
+        <div class="card green">
+          <h4>👶 初学 / POC</h4>
+          <p style="font-size:13.5px"><strong>vLLM</strong>。Apache 开源、模型支持最广、API 跟 OpenAI 兼容（前端代码改 base_url 就能切）。</p>
+        </div>
+        <div class="card violet">
+          <h4>🎯 Agent / 多轮</h4>
+          <p style="font-size:13.5px"><strong>SGLang</strong>。RadixAttention 对 Agent 场景（大量共享 prefix）有 2-3x 优势。</p>
+        </div>
+        <div class="card amber">
+          <h4>🏭 大规模生产</h4>
+          <p style="font-size:13.5px"><strong>TRT-LLM</strong>。如果你有 H100 集群 + 愿意花精力做模型编译，能榨干硬件最后 10-20% 性能。</p>
+        </div>
+      </div>
+
+      <div class="info">
+        <strong>SGLang vs vLLM 内部差异</strong>：SGLang 用 RadixAttention（基数树）做 prefix 共享，比 vLLM Automatic Prefix Caching（hash 表 + reference count）更通用 — 不仅 prefix 共享，<u>任意 sub-tree 都能共享</u>。这就是为什么 SGLang 在 Agent 场景（多轮对话有大量重复 sub-prompt）显著胜出。
+      </div>
+    </section>
+
+    <!-- ============= Ch8：实战 ============= -->
+    <section class="chapter" id="ch8">
+      <div class="ch-head">
+        <div class="num">08</div>
+        <div class="t">
+          <h2>实战 · 30 分钟跑通 vLLM serving</h2>
+          <div class="sub">命令 / 配置 / benchmark / 调参</div>
+        </div>
+      </div>
+
+      <h3>8.1 安装 + 启动（5 分钟）</h3>
+
+      <pre><code><span class="c"># 安装 vLLM (推荐用 uv 或 conda 隔离环境)</span>
+pip install vllm
+
+<span class="c"># 起一个 Qwen-7B 的 OpenAI 兼容 serving</span>
+vllm serve Qwen/Qwen2.5-7B-Instruct \
+    --tensor-parallel-size <span class="n">1</span> \
+    --max-model-len <span class="n">8192</span> \
+    --gpu-memory-utilization <span class="n">0.9</span> \
+    --port <span class="n">8000</span></code></pre>
+
+      <h3>8.2 客户端调用（OpenAI SDK 兼容）</h3>
+
+      <pre><code><span class="k">from</span> openai <span class="k">import</span> OpenAI
+
+client = <span class="f">OpenAI</span>(
+    base_url=<span class="s">"http://localhost:8000/v1"</span>,
+    api_key=<span class="s">"EMPTY"</span>,  <span class="c"># 本地不验证</span>
+)
+
+response = client.chat.completions.<span class="f">create</span>(
+    model=<span class="s">"Qwen/Qwen2.5-7B-Instruct"</span>,
+    messages=[{<span class="s">"role"</span>: <span class="s">"user"</span>, <span class="s">"content"</span>: <span class="s">"你好"</span>}],
+    stream=<span class="k">True</span>,
+)
+<span class="k">for</span> chunk <span class="k">in</span> response:
+    <span class="f">print</span>(chunk.choices[<span class="n">0</span>].delta.content, end=<span class="s">""</span>)</code></pre>
+
+      <h3>8.3 跑 benchmark（10 分钟）</h3>
+
+      <pre><code><span class="c"># 用 vllm 自带 benchmark 脚本测 throughput + latency</span>
+python -m vllm.entrypoints.openai.api_server_benchmark \
+    --model Qwen/Qwen2.5-7B-Instruct \
+    --dataset-name sharegpt \
+    --num-prompts <span class="n">1000</span> \
+    --request-rate <span class="n">10</span>
+
+<span class="c"># 输出示例</span>
+<span class="c"># Total throughput:    2843.21 tokens/s</span>
+<span class="c"># P50 latency:         1.21 s</span>
+<span class="c"># P95 latency:         1.64 s</span>
+<span class="c"># P99 latency:         2.18 s</span>
+<span class="c"># GPU util:            83%</span></code></pre>
+
+      <h3>8.4 常用调参</h3>
+
+      <table>
+        <thead><tr><th>参数</th><th>典型值</th><th>影响</th></tr></thead>
+        <tbody>
+          <tr><td><code>--tensor-parallel-size</code></td><td>1 / 2 / 4 / 8</td><td>模型切多少卡（70B 模型至少 2-4 卡）</td></tr>
+          <tr><td><code>--max-model-len</code></td><td>2k / 8k / 32k</td><td>支持最大上下文，越大 KV-Cache 越占</td></tr>
+          <tr><td><code>--gpu-memory-utilization</code></td><td>0.85 - 0.95</td><td>vLLM 使用 GPU 显存比例，留点给其它进程</td></tr>
+          <tr><td><code>--max-num-seqs</code></td><td>32 / 64 / 256</td><td>最大并发请求数，<u>throughput vs latency trade-off</u></td></tr>
+          <tr><td><code>--enable-prefix-caching</code></td><td>true (推荐)</td><td>开启 Automatic Prefix Caching</td></tr>
+          <tr><td><code>--quantization</code></td><td>awq / gptq / fp8</td><td>启用量化，显存减半</td></tr>
+          <tr><td><code>--speculative-model</code></td><td>"Qwen/Qwen2.5-0.5B"</td><td>启用 Spec Decoding，draft 用 0.5B</td></tr>
+        </tbody>
+      </table>
+
+      <div class="tip">
+        实战经验：第一次起 vLLM 建议先用 <strong>默认参数 + 单卡 + 小模型</strong> 跑通，再调参。<u>过早优化是 vLLM 调参的最大陷阱</u>。
+      </div>
+    </section>
+
+    <!-- ============= Ch9：源码导览 ============= -->
+    <section class="chapter" id="ch9">
+      <div class="ch-head">
+        <div class="num">09</div>
+        <div class="t">
+          <h2>vLLM 源码导览 · 3 个核心文件</h2>
+          <div class="sub">想深入面试就读这 3 个 · 别盲读整个 repo</div>
+        </div>
+      </div>
+
+      <p class="lead">vLLM repo 有几百个文件，<u>盲读会迷路</u>。下面是 3 个"读完能撑过 Senior 面试"的核心文件，按优先级：</p>
+
+      <div class="src-tour">
+        <div class="st-path">vllm/core/scheduler.py</div>
+        <h4>① 调度器 · Continuous Batching 的灵魂</h4>
+        <p><strong>它做什么</strong>：每个推理 step 决定哪些 sequence 进 batch、哪些被 evict、哪些 prefill / decode 优先。</p>
+        <p><strong>关键函数</strong>：<code>Scheduler._schedule_running()</code>、<code>_schedule_prefills()</code>、<code>_schedule_default()</code>。读这 3 个函数（共 ~300 行）就理解了核心调度逻辑。</p>
+        <div class="st-key">
+          理解 "preemption（抢占）"机制 — 显存满时怎么决定 evict 哪个 sequence。<u>面试经常问</u>。
+        </div>
+      </div>
+
+      <div class="src-tour">
+        <div class="st-path">vllm/worker/model_runner.py</div>
+        <h4>② Model Runner · 真正跑 forward 的地方</h4>
+        <p><strong>它做什么</strong>：拿 scheduler 给的 batched sequences，准备 input tensor、调 model 的 forward、采样。是 Python 跟 CUDA kernel 的桥梁。</p>
+        <p><strong>关键函数</strong>：<code>execute_model()</code>、<code>_prepare_model_input()</code>。注意它怎么<u>把不同长度的 sequence packed 进同一个 batch</u>（这是 Continuous Batching 的实现细节）。</p>
+        <div class="st-key">
+          理解 "model_input.input_tokens" 跟 "model_input.input_positions" 的分布 — <u>这是 packed batch 的核心结构</u>。
+        </div>
+      </div>
+
+      <div class="src-tour">
+        <div class="st-path">csrc/attention/paged_attention_v2.cu</div>
+        <h4>③ PagedAttention CUDA Kernel · 性能命门</h4>
+        <p><strong>它做什么</strong>：根据 block_table 跳着读 KV 做 attention。vLLM 性能的根基。</p>
+        <p><strong>读法建议</strong>：先读注释和函数签名理解参数，然后看 <code>paged_attention_v2_kernel</code> 主循环。<u>不需要每行都懂</u>，理解 "为什么用 shared memory" + "block_table 怎么用" 就行。</p>
+        <div class="st-key">
+          这是 C++ 老兵转 AI Infra 的<strong>最大杠杆 — 你已有的 CUDA / 并行思维直接复用</strong>。<u>在简历写"读过 vLLM PagedAttention kernel"是强信号</u>。
+        </div>
+      </div>
+
+      <h3>9.1 阅读顺序建议</h3>
+
+      <ol>
+        <li><strong>Day 1</strong>：跑通 ch8 实战，知道 vLLM 怎么用</li>
+        <li><strong>Day 2</strong>：读 <code>scheduler.py</code>，画一遍调度流程图</li>
+        <li><strong>Day 3</strong>：读 <code>model_runner.py</code>，跟踪一个 request 走完全程</li>
+        <li><strong>Day 4-5</strong>：读 <code>paged_attention_v2.cu</code>，理解 CUDA kernel</li>
+        <li><strong>Day 6-7</strong>：选一个 "good first issue" 提 PR</li>
+      </ol>
+    </section>
+
+    <!-- ============= Ch10：生产环境优化清单 ============= -->
+    <section class="chapter" id="ch10">
+      <div class="ch-head">
+        <div class="num">10</div>
+        <div class="t">
+          <h2>生产环境优化清单 · 10 个实战 tips</h2>
+          <div class="sub">线上跑过才知道的坑</div>
+        </div>
+      </div>
+
+      <table>
+        <thead><tr><th>#</th><th>优化</th><th>预期收益</th><th>难度</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td><strong>开 prefix caching</strong> (<code>--enable-prefix-caching</code>)</td><td>+30-50% throughput（chat 场景）</td><td><span class="cmp-pill win">⭐ 低</span></td></tr>
+          <tr><td>2</td><td><strong>调 max-num-seqs</strong>（典型 64-256）</td><td>+20-50% throughput</td><td><span class="cmp-pill win">⭐ 低</span></td></tr>
+          <tr><td>3</td><td><strong>启用 FP8 / AWQ 量化</strong></td><td>+50-100% throughput，质量略降</td><td><span class="cmp-pill mid">⭐⭐ 中</span></td></tr>
+          <tr><td>4</td><td><strong>启用 Speculative Decoding</strong></td><td>+1.5-3x latency 降低</td><td><span class="cmp-pill mid">⭐⭐ 中</span></td></tr>
+          <tr><td>5</td><td><strong>Tensor Parallel 切分</strong>（70B 用 2-4 卡）</td><td>显存够 + 提升 throughput</td><td><span class="cmp-pill mid">⭐⭐ 中</span></td></tr>
+          <tr><td>6</td><td><strong>调高 gpu-memory-utilization 到 0.92-0.95</strong></td><td>+10-20% throughput</td><td><span class="cmp-pill win">⭐ 低</span></td></tr>
+          <tr><td>7</td><td><strong>Prefill-Decode 分离</strong>（多机部署）</td><td>P95 latency -40%（隔离影响）</td><td><span class="cmp-pill lose">⭐⭐⭐ 高</span></td></tr>
+          <tr><td>8</td><td><strong>CPU offload + swap</strong>（显存不够时）</td><td>支持更多并发，单 token latency +10-20%</td><td><span class="cmp-pill mid">⭐⭐ 中</span></td></tr>
+          <tr><td>9</td><td><strong>Multi-LoRA serving</strong>（共享 base，每个用户独立 LoRA）</td><td>1 套 GPU 服务 N 个微调模型</td><td><span class="cmp-pill lose">⭐⭐⭐ 高</span></td></tr>
+          <tr><td>10</td><td><strong>从 vLLM 切到 SGLang</strong>（Agent 场景）</td><td>+50-200% throughput（高 prefix 共享）</td><td><span class="cmp-pill mid">⭐⭐ 中</span></td></tr>
+        </tbody>
+      </table>
+
+      <div class="warn">
+        <strong>避免的 5 个常见坑</strong>：
+        <ol>
+          <li>把 <code>gpu-memory-utilization</code> 设到 0.99 — <u>偶发 OOM 杀死整个服务</u></li>
+          <li>开 prefix caching 但 prompt 多变 — <u>没有共享，反而增加内存碎片</u></li>
+          <li>Spec Decoding draft 模型选太大 — <u>验证比直接 decode 还慢</u></li>
+          <li>Tensor Parallel 切到不该切的小模型 — <u>通信开销大于切分收益</u></li>
+          <li>不监控 GPU 利用率 — <u>不知道瓶颈在哪就盲调参</u></li>
+        </ol>
+      </div>
+    </section>
+
+    <!-- ============= Ch11：15 道面试题 ============= -->
+    <section class="chapter" id="ch11">
+      <div class="ch-head">
+        <div class="num">11</div>
+        <div class="t">
+          <h2>15 道 AI Infra 高频面试题</h2>
+          <div class="sub">折叠卡片 · 先想再展开 · 招聘官真在考</div>
+        </div>
+      </div>
+
+      <details class="qa">
+        <summary><span class="lvl pill cyan">基础</span>Q1. vLLM 为什么比 huggingface naive 推理快 10x+？</summary>
+        <div class="a">
+          <div class="point">
+            <div class="label">核心</div>
+            <div>3 个工程优化：① PagedAttention 把显存利用率从 30% 提到 96% → 能装更多并发 ② Continuous Batching 让快请求不等慢请求 → GPU 利用率 25% → 80% ③ 自定义 CUDA kernel 提升单步性能。<u>算法没变，只是工程优化</u>。</div>
+          </div>
+        </div>
+      </details>
+
+      <details class="qa">
+        <summary><span class="lvl pill cyan">基础</span>Q2. PagedAttention 跟 OS 虚拟内存的相似性？</summary>
+        <div class="a">
+          <div class="point">
+            <div class="label">对应</div>
+            <div>① OS 虚拟页 ↔ 逻辑 KV block / OS 物理页 ↔ 物理 KV block / OS 页表 ↔ block table ② 都解决"地址连续但物理分散"问题 ③ 都用"按需分配 + 共享物理块"提升利用率。</div>
+          </div>
+          <div class="point deep">
+            <div class="label">差异</div>
+            <div>OS 页 4KB / vLLM block 16 token (KB 级)；OS 由 MMU 硬件加速 / vLLM 由专用 CUDA kernel 实现。</div>
+          </div>
+        </div>
+      </details>
+
+      <details class="qa">
+        <summary><span class="lvl pill amber">进阶</span>Q3. Continuous Batching 跟 Static Batching 区别？什么时候用 Static？</summary>
+        <div class="a">
+          <div class="point">
+            <div class="label">区别</div>
+            <div>Static 把 N 个请求绑一起进 batch，<u>必须等最慢的</u>；Continuous 每个 step 都重新调度，完成的立刻空出 slot。</div>
+          </div>
+          <div class="point deep">
+            <div class="label">什么时候 Static</div>
+            <div>① 离线 batch 推理（请求长度差不多）② 极端 throughput 优先（GPU 利用率最大化）③ 简单实现。<u>在线 chat 永远用 Continuous</u>。</div>
+          </div>
+        </div>
+      </details>
+
+      <details class="qa">
+        <summary><span class="lvl pill amber">进阶</span>Q4. 解释 prefix caching 工作原理 + 什么场景效果好？</summary>
+        <div class="a">
+          <div class="point">
+            <div class="label">原理</div>
+            <div>同一个 prefix 的 KV 算一次存物理 block，<u>多个请求的 block_table 前几项指向同一物理 block</u>（引用计数）。哪个请求开始"分叉"就分配新 block。</div>
+          </div>
+          <div class="point">
+            <div class="label">最适合场景</div>
+            <div>① Chat (system prompt 重复) ② Few-shot prompting (示例重复) ③ Agent multi-turn (历史对话重复) ④ RAG (retrieved chunk 重复)。<u>SGLang RadixAttention 对此优化最深</u>。</div>
+          </div>
+        </div>
+      </details>
+
+      <details class="qa">
+        <summary><span class="lvl pill red">高频</span>Q5. 为什么 LLM 推理 decode 阶段是 memory-bound？怎么优化？</summary>
+        <div class="a">
+          <div class="point">
+            <div class="label">为什么</div>
+            <div>每步 decode 只算 1 个 token (FLOPs ≈ 2P)，但要读整个 KV-Cache (GB 级)。arithmetic intensity = FLOPs / Bytes = 极低 → memory-bound。</div>
+          </div>
+          <div class="point deep">
+            <div class="label">优化方向</div>
+            <div>① 减小 KV-Cache：GQA / MLA / KV 量化 ② 提高并发：Continuous Batching 摊薄 KV 读取 ③ 减少 step 数：Speculative Decoding ④ Hide latency：Prefill-Decode 分离</div>
+          </div>
+        </div>
+      </details>
+
+      <details class="qa">
+        <summary><span class="lvl pill red">高频</span>Q6. Speculative Decoding 怎么工作？什么场景效果差？</summary>
+        <div class="a">
+          <div class="point">
+            <div class="label">原理</div>
+            <div>小模型并行生成 K 个候选 token，大模型一次 forward 同时验证 K+1 个位置 (attention 天然并行)。接受率高的话 → 1 次 forward 出 K 个 token。</div>
+          </div>
+          <div class="point warn">
+            <div class="label">差场景</div>
+            <div>① 推理任务 (reasoning model) — 小模型猜不对 ② 多语言切换 — 小模型语言能力差 ③ 高熵任务 (创意写作) — 没有"正确答案"。<u>接受率 &lt; 50% 时 spec decoding 反而变慢</u>。</div>
+          </div>
+        </div>
+      </details>
+
+      <details class="qa">
+        <summary><span class="lvl pill amber">进阶</span>Q7. Tensor Parallel vs Pipeline Parallel 在推理时的区别？</summary>
+        <div class="a">
+          <div class="point">
+            <div class="label">TP</div>
+            <div>把 weight 矩阵切到多卡，每层都需要 AllReduce 通信。<u>适合单层大、卡间高速互联 (NVLink)</u>。</div>
+          </div>
+          <div class="point">
+            <div class="label">PP</div>
+            <div>把不同 layer 放不同卡，通信只在 layer 边界。<u>适合卡间慢互联 (PCIe)，但 latency 会增加 (流水线 bubble)</u>。</div>
+          </div>
+          <div class="point deep">
+            <div class="label">推理实战</div>
+            <div>单机多卡几乎都用 TP（NVLink 够快）；跨机才用 PP。70B 模型典型 TP=2 or 4。</div>
+          </div>
+        </div>
+      </details>
+
+      <details class="qa">
+        <summary><span class="lvl pill cyan">基础</span>Q8. KV-Cache 量化 INT4 / FP8 的 trade-off？</summary>
+        <div class="a">
+          <div class="point">
+            <div class="label">收益</div>
+            <div>KV-Cache 显存 ÷ 4 (INT4) 或 ÷ 2 (FP8) → 能装更多并发 / 更长上下文 / 更大 batch → throughput +50-100%。</div>
+          </div>
+          <div class="point warn">
+            <div class="label">代价</div>
+            <div>精度损失：INT4 KV 一般 -1-2% 准确率，FP8 几乎无损。<u>越长上下文 INT4 累积误差越大</u>。</div>
+          </div>
+        </div>
+      </details>
+
+      <details class="qa">
+        <summary><span class="lvl pill amber">进阶</span>Q9. vLLM 的 preemption 机制是什么？怎么决定 evict 谁？</summary>
+        <div class="a">
+          <div class="point">
+            <div class="label">触发</div>
+            <div>显存满，新 token 无法分配新 block 时触发。</div>
+          </div>
+          <div class="point">
+            <div class="label">策略</div>
+            <div>① <strong>Recompute</strong>: 丢掉某个 sequence 的所有 KV-Cache（释放最多 block），稍后从头 prefill（适合 prompt 短的）② <strong>Swap</strong>: 把 KV-Cache 拷到 CPU memory，需要时拷回来（适合 prompt 长的）。<u>vLLM 默认 Recompute</u>。</div>
+          </div>
+          <div class="point deep">
+            <div class="label">选谁</div>
+            <div>按到达时间 FIFO（最晚到的最先被牺牲），或按用户优先级。</div>
+          </div>
+        </div>
+      </details>
+
+      <details class="qa">
+        <summary><span class="lvl pill red">高频</span>Q10. vLLM vs SGLang 在 Agent 场景为什么 SGLang 胜出？</summary>
+        <div class="a">
+          <div class="point">
+            <div class="label">SGLang 优势</div>
+            <div>RadixAttention 用基数树（radix tree）做 prefix 共享 — <u>不只是前缀共享，任意 sub-tree 都能共享</u>。Agent multi-turn 对话有大量重复 sub-prompt（system + 历史 + 工具描述），radix tree 命中率 70%+。</div>
+          </div>
+          <div class="point deep">
+            <div class="label">vLLM 局限</div>
+            <div>vLLM Automatic Prefix Caching 用 hash 表，只看完整 prefix 命中。Agent 场景 hash 命中率低很多。</div>
+          </div>
+        </div>
+      </details>
+
+      <details class="qa">
+        <summary><span class="lvl pill amber">进阶</span>Q11. Prefill-Decode 分离架构有什么 trade-off？</summary>
+        <div class="a">
+          <div class="point">
+            <div class="label">收益</div>
+            <div>① 资源解耦（独立扩容）② SLO 隔离（新请求不影响老请求 latency）③ 硬件匹配（H100 做 prefill / A100 做 decode）④ 整体吞吐 +30-50%。</div>
+          </div>
+          <div class="point warn">
+            <div class="label">代价</div>
+            <div>① KV-Cache 跨节点传输延迟（RDMA 也要 30-50ms）② 部署复杂度上升（需要 LB + 路由）③ 故障域扩大 ④ 适合大规模，小规模反而 overhead 大。</div>
+          </div>
+        </div>
+      </details>
+
+      <details class="qa">
+        <summary><span class="lvl pill cyan">基础</span>Q12. 给定一个 7B 模型 / A100 80GB / 4k 上下文，估算最大并发？</summary>
+        <div class="a">
+          <div class="point">
+            <div class="label">计算</div>
+            <div>① 模型权重 FP16 = 14 GB ② Activation buffer ≈ 2 GB ③ 剩余显存 = 80 - 14 - 2 = 64 GB ④ KV-Cache per seq (Llama-7B GQA H=8): 2 × 4k × 32 × 8 × 128 × 2 = 0.5 GB ⑤ <strong>最大并发 ≈ 64 / 0.5 = 128 个 sequence</strong>。</div>
+          </div>
+          <div class="point deep">
+            <div class="label">加分</div>
+            <div>提到 PagedAttention 实际能装更多（减少碎片），FP8 量化 KV 能翻倍到 256。</div>
+          </div>
+        </div>
+      </details>
+
+      <details class="qa">
+        <summary><span class="lvl pill amber">进阶</span>Q13. Multi-LoRA serving 是什么？怎么实现？</summary>
+        <div class="a">
+          <div class="point">
+            <div class="label">需求</div>
+            <div>1 个 base model 给 100 个用户服务，每个用户有自己的 LoRA 微调权重（小，~50 MB）。不能为每个用户单独起一个推理服务（GPU 太贵）。</div>
+          </div>
+          <div class="point">
+            <div class="label">实现</div>
+            <div>① base 模型加载一次到 GPU ② 所有 LoRA weights 全在 CPU memory ③ 请求来了根据 user_id 把对应 LoRA swap 到 GPU 临时合并 ④ 算完后释放。<u>vLLM / SGLang 都已支持</u>。</div>
+          </div>
+        </div>
+      </details>
+
+      <details class="qa">
+        <summary><span class="lvl pill red">高频</span>Q14. 如果生产 vLLM serving 突然 latency 飙升怎么排查？</summary>
+        <div class="a">
+          <div class="point">
+            <div class="label">排查步骤</div>
+            <div>
+              ① <strong>看 metrics</strong>：vLLM 暴露 prometheus metrics（pending requests / running batch size / GPU util / cache hit rate）<br>
+              ② <strong>检查 batch size</strong>：突然变小 → 请求太长 / KV-Cache 满了 / preemption 频繁<br>
+              ③ <strong>检查 prefill 占比</strong>：突然来了一波长 prompt → prefill 阻塞 decode<br>
+              ④ <strong>检查 GPU util</strong>：低 → memory-bound 但 cache 大；高 → compute-bound（应该是 prefill 风暴）<br>
+              ⑤ <strong>看上游</strong>：是不是请求模式变了（prompt 突然变长）
+            </div>
+          </div>
+        </div>
+      </details>
+
+      <details class="qa">
+        <summary><span class="lvl pill violet">实战</span>Q15. 你怎么把一个朴素 model.generate() 服务升级到 vLLM？migration 步骤？</summary>
+        <div class="a">
+          <div class="point">
+            <div class="label">步骤</div>
+            <div>
+              ① <strong>评估</strong>：测当前 throughput 和 latency 做 baseline<br>
+              ② <strong>本地 POC</strong>：起 vLLM 本地服务，跑 ch8 benchmark，确认性能<br>
+              ③ <strong>客户端改造</strong>：vLLM 提供 OpenAI 兼容 API，<u>客户端只改 base_url</u>，代码几乎不动<br>
+              ④ <strong>灰度</strong>：5% 流量切到 vLLM，监控 quality / latency / cost<br>
+              ⑤ <strong>调参</strong>：根据线上 prompt 分布调 max-num-seqs / prefix-caching / 量化<br>
+              ⑥ <strong>全量</strong>：100% 切流，回收旧服务 GPU
+            </div>
+          </div>
+          <div class="point deep">
+            <div class="label">回滚预案</div>
+            <div>留下原服务备份；vLLM API 兼容 OpenAI，回滚只需要切 base_url。Quality 监控异常立即回滚。</div>
+          </div>
+        </div>
+      </details>
+    </section>
+
+  <footer>
+    <div class="made">TECH NOTES · AI INFRA · Y02 · 通俗深潜版</div>
+    <p style="margin-top:14px">
+      上一篇：<a href="./cuda_for_cpp.html">⚡ Y01 CUDA 全景 →</a> &nbsp;·&nbsp;
+      下一篇：<a href="./distributed_training.html">🌐 Y03 分布式训练 →</a> &nbsp;·&nbsp;
+      量化：<a href="./quantization.html">📦 Y04 量化 →</a> &nbsp;·&nbsp;
+      Transformer 基础：<a href="../ai-native/transformer_llm_architecture.html">🧠 X06 →</a> &nbsp;·&nbsp;
+      面试卡：<a href="../interview/ai_engineer_cards.html">🎴 I06 →</a>
+    </p>
+  </footer>
+  </main>
+</div>
+
+<script>
+/* Progress bar */
+(function(){
+  var bar = document.getElementById('progress');
+  function update(){
+    var h = document.documentElement;
+    var pct = h.scrollTop / (h.scrollHeight - h.clientHeight) * 100;
+    bar.style.width = pct + '%';
+  }
+  window.addEventListener('scroll', update, {passive:true});
+  update();
+})();
+
+/* TOC active section */
+(function(){
+  var links = document.querySelectorAll('aside.toc nav > ol > li > a');
+  var sections = Array.from(document.querySelectorAll('section.chapter'));
+  function update(){
+    var scrollY = window.scrollY + 100;
+    var current = sections[0];
+    for(var i=0;i<sections.length;i++){
+      if(sections[i].offsetTop <= scrollY) current = sections[i];
+    }
+    var id = current.id;
+    links.forEach(function(a){
+      if(a.getAttribute('href') === '#'+id) a.classList.add('active');
+      else a.classList.remove('active');
+    });
+  }
+  window.addEventListener('scroll', update, {passive:true});
+  update();
+})();
+
+/* ============= 交互演示 1: PagedAttention 内存可视化 ============= */
+(function(){
+  var grid = document.getElementById('mem-grid');
+  var explainEl = document.getElementById('mem-explain');
+  var utilEl = document.getElementById('mem-util');
+  if(!grid) return;
+
+  var TOTAL = 128; /* 8 rows × 16 cols */
+
+  function render(blocks, util, explain){
+    var html = '';
+    for(var i=0;i<TOTAL;i++){
+      var b = blocks[i];
+      var cls = b.cls || 'free';
+      var label = b.label || '';
+      html += '<div class="block '+cls+'">'+label+'</div>';
+    }
+    grid.innerHTML = html;
+    utilEl.textContent = util + '%';
+    explainEl.innerHTML = explain;
+  }
+
+  /* 朴素：4 个请求每个预留 20 block (max_len)，实际只用 5/3/8/4 */
+  function naive(){
+    var blocks = [];
+    var i = 0;
+    /* Req A: 预留 20，用 5 */
+    for(var j=0;j<5;j++) blocks.push({cls:'req-1',label:'A'+j});
+    for(var j=0;j<15;j++) blocks.push({cls:'frag',label:''}); i = 20;
+    /* Req B: 预留 20，用 3 */
+    for(var j=0;j<3;j++) blocks.push({cls:'req-2',label:'B'+j});
+    for(var j=0;j<17;j++) blocks.push({cls:'frag',label:''}); i = 40;
+    /* Req C: 预留 20，用 8 */
+    for(var j=0;j<8;j++) blocks.push({cls:'req-3',label:'C'+j});
+    for(var j=0;j<12;j++) blocks.push({cls:'frag',label:''}); i = 60;
+    /* Req D: 预留 20，用 4 */
+    for(var j=0;j<4;j++) blocks.push({cls:'req-4',label:'D'+j});
+    for(var j=0;j<16;j++) blocks.push({cls:'frag',label:''}); i = 80;
+    /* 剩下 48 个真正空闲 */
+    while(blocks.length < TOTAL) blocks.push({cls:'free',label:''});
+
+    var used = 5+3+8+4;
+    var reserved = 80;
+    var util = Math.round(used / 128 * 100);
+    render(blocks, util,
+      '4 个请求各预留 20 block (max_len=320 token)，实际只用 <strong style="color:#34d399">'+used+'</strong> block。' +
+      '剩下 <strong style="color:#f87171">'+(reserved-used)+'</strong> block 被预留但浪费。' +
+      '<br><strong style="color:#f87171">利用率 '+util+'%</strong> — 即使有 48 个真正空闲 block，也不能给新请求用（因为承诺给这 4 个了）。'
+    );
+  }
+
+  /* PagedAttention：按需分配，紧密排列 */
+  function paged(){
+    var blocks = [];
+    /* Req A: 实际 5 block */
+    for(var j=0;j<5;j++) blocks.push({cls:'req-1',label:'A'+j});
+    /* Req B: 实际 3 */
+    for(var j=0;j<3;j++) blocks.push({cls:'req-2',label:'B'+j});
+    /* Req C: 实际 8 */
+    for(var j=0;j<8;j++) blocks.push({cls:'req-3',label:'C'+j});
+    /* Req D: 实际 4 */
+    for(var j=0;j<4;j++) blocks.push({cls:'req-4',label:'D'+j});
+    /* 剩下 108 都空闲，给后续请求用 */
+    while(blocks.length < TOTAL) blocks.push({cls:'free',label:''});
+
+    var used = 5+3+8+4;
+    var util = Math.round(used / 128 * 100);
+    render(blocks, util,
+      '4 个请求按需分配，<strong style="color:#34d399">完全没有浪费</strong>。剩下 <strong style="color:#34d399">'+(TOTAL-used)+'</strong> block 真正可用，可以马上服务新请求。' +
+      '<br><strong style="color:#34d399">实际显存利用率 '+util+'%</strong>（演示数据少；真实场景 vLLM 把 30% → 96%）。' +
+      '<br>关键：每个请求的 block_table 记录"我用了哪些物理 block"，物理位置不必连续。'
+    );
+  }
+
+  function reset(){
+    var blocks = [];
+    for(var i=0;i<TOTAL;i++) blocks.push({cls:'free',label:''});
+    render(blocks, '—', '点击上方按钮查看两种方案的内存布局对比。');
+  }
+
+  document.getElementById('naive-btn').addEventListener('click', naive);
+  document.getElementById('paged-btn').addEventListener('click', paged);
+  document.getElementById('mem-reset').addEventListener('click', reset);
+  reset();
+})();
+
+/* ============= 交互演示 2: Continuous vs Static Batching ============= */
+(function(){
+  var tlEl = document.getElementById('batch-tl');
+  var titleEl = document.getElementById('batch-mode-title');
+  var explainEl = document.getElementById('batch-explain');
+  if(!tlEl) return;
+
+  /* 4 个请求，长度：A=2, B=6, C=3, D=4 (单位 step) */
+  var requests = [
+    {id:'A', len:2, cls:'req-a'},
+    {id:'B', len:6, cls:'req-b'},
+    {id:'C', len:3, cls:'req-c'},
+    {id:'D', len:4, cls:'req-d'},
+  ];
+  var TOTAL_STEPS = 12;
+
+  function staticMode(){
+    titleEl.innerHTML = '🟦 Static Batching · 必须等最长的请求完成才能进下一批';
+    var html = '';
+    /* Batch 1: A+B+C+D 一起开始，等到 step 6 (B 完成) */
+    var rows = ['A','B','C','D'];
+    rows.forEach(function(r,i){
+      var req = requests[i];
+      html += '<div class="batch-row"><div class="lbl">'+r+'</div><div class="timeline-track">';
+      for(var s=0;s<TOTAL_STEPS;s++){
+        if(s < req.len){
+          html += '<div class="slot '+req.cls+'">'+(r)+'</div>';
+        } else if(s < 6){
+          /* 等 batch 完成 */
+          html += '<div class="slot idle">idle</div>';
+        } else {
+          /* 第 6 步后 batch 完成 */
+          html += '<div class="slot idle"></div>';
+        }
+      }
+      html += '</div></div>';
+    });
+    tlEl.innerHTML = html;
+
+    explainEl.innerHTML = '请求 A 只需 2 step 就完成，但<strong style="color:#f87171">必须空等到 step 6</strong>（B 完成）才能释放 GPU。' +
+      '<br>GPU 利用率 = (2+6+3+4) / (4×6) = <strong style="color:#f87171">62.5%</strong>（大量 idle 浪费）。';
+  }
+
+  function continuousMode(){
+    titleEl.innerHTML = '🟧 Continuous Batching · 完成立刻空出，新请求随时进来';
+    var html = '';
+    /* 模拟：start 时 A B C 进 batch，A 在 step 2 完成 → D 进 batch */
+    var schedule = [
+      ['A','A','-','-','-','-','-','-','-','-','-','-'],   // A 跑 2 步完成
+      ['B','B','B','B','B','B','-','-','-','-','-','-'],   // B 跑 6 步
+      ['C','C','C','-','-','-','-','-','-','-','-','-'],   // C 跑 3 步
+      ['-','-','D','D','D','D','-','-','-','-','-','-'],   // D 在第 3 步加入（A 完成）
+    ];
+    var clsMap = {'A':'req-a','B':'req-b','C':'req-c','D':'req-d','-':'idle'};
+    schedule.forEach(function(row, i){
+      var name = ['A','B','C','D'][i];
+      html += '<div class="batch-row"><div class="lbl">'+name+'</div><div class="timeline-track">';
+      row.forEach(function(s){
+        if(s === '-'){
+          html += '<div class="slot idle"></div>';
+        } else {
+          html += '<div class="slot '+clsMap[s]+'">'+s+'</div>';
+        }
+      });
+      html += '</div></div>';
+    });
+    tlEl.innerHTML = html;
+
+    explainEl.innerHTML = '<strong style="color:#34d399">A 完成立刻空出 slot</strong>，D 在 step 3 立刻进入 batch。所有请求总耗时只用 6 step（vs Static 也是 6 step），' +
+      '但<strong style="color:#34d399">同样时间多服务了 1 个请求</strong>。' +
+      '<br>真实场景中（请求长度参差不齐），<strong style="color:#34d399">throughput 提升 2-4x</strong>。';
+  }
+
+  document.getElementById('static-btn').addEventListener('click', staticMode);
+  document.getElementById('cont-btn').addEventListener('click', continuousMode);
+})();
+</script>
+
+</body>
+</html>
