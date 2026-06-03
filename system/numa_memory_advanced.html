@@ -1,0 +1,820 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NUMA + 高级内存管理 · HugePages / slab / cgroup memory / madvise — Tech Notes</title>
+<link rel="stylesheet" href="../assets/site-theme.css">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<style>
+.intuition{background:rgba(251,191,36,.05);border-left:4px solid #fbbf24;
+  padding:14px 18px;border-radius:0 10px 10px 0;margin:14px 0;font-size:14.5px;line-height:1.7}
+.intuition::before{content:"🎯 关键 · ";color:#fbbf24;font-weight:700;font-size:13px}
+
+.tool-card{background:#0a0e1a;border:1px solid #1f2740;border-radius:10px;
+  padding:14px 18px;margin:12px 0;border-left:3px solid #7dd3fc}
+.tool-card h4{margin:0 0 8px 0;font-size:14.5px;color:#7dd3fc}
+.tool-card.violet{border-left-color:#a78bfa}
+.tool-card.violet h4{color:#a78bfa}
+.tool-card.amber{border-left-color:#fbbf24}
+.tool-card.amber h4{color:#fbbf24}
+.tool-card.green{border-left-color:#34d399}
+.tool-card.green h4{color:#34d399}
+.tool-card.danger{border-left-color:#f87171}
+.tool-card.danger h4{color:#f87171}
+.tool-card .when{display:inline-block;background:rgba(251,191,36,.1);color:#fbbf24;
+  padding:1px 8px;border-radius:4px;font-size:11px;margin-left:6px;
+  font-family:"JetBrains Mono",monospace;font-weight:600}
+.tool-card ul{margin:6px 0 0;padding-left:22px}
+.tool-card li{font-size:13.5px;color:#cbd5e1;line-height:1.7;margin:4px 0}
+.tool-card li strong{color:#e4e9f5}
+.tool-card pre{background:#1a2138;border-radius:6px;padding:10px 12px;margin:8px 0;
+  font-size:12px;color:#cbd5e1;overflow-x:auto;border-left:2px solid #2a3556;line-height:1.55;font-family:"JetBrains Mono",monospace}
+.tool-card code{background:#1a2138;color:#fbbf24;padding:1px 5px;border-radius:3px;font-size:12px;font-family:"JetBrains Mono",monospace}
+
+/* NUMA topology viz */
+.numa-topo{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:14px 0}
+.numa-node{background:#0a0e1a;border:2px solid;border-radius:12px;padding:14px}
+.numa-node.n0{border-color:#7dd3fc}
+.numa-node.n1{border-color:#a78bfa}
+.numa-node h4{margin:0 0 8px 0;font-size:13px;font-family:"JetBrains Mono",monospace}
+.numa-node.n0 h4{color:#7dd3fc}.numa-node.n1 h4{color:#a78bfa}
+.numa-node .cpu{display:inline-block;padding:3px 8px;border-radius:4px;background:#1a2138;color:#cbd5e1;
+  margin:2px;font-size:11px;font-family:"JetBrains Mono",monospace}
+.numa-node .mem{margin-top:8px;padding:6px 10px;background:#1a2138;border-radius:6px;color:#fbbf24;
+  font-size:11.5px;font-family:"JetBrains Mono",monospace}
+.numa-link{text-align:center;color:#475569;font-family:"JetBrains Mono",monospace;font-size:11px;
+  margin:6px 0;padding:4px;border-radius:4px;background:rgba(248,113,113,.08);border:1px dashed rgba(248,113,113,.3)}
+
+/* Cheatsheet */
+.cheatsheet{background:#0a0e1a;border:1px solid #2a3556;border-radius:10px;padding:0;margin:18px 0;overflow:hidden}
+.cheatsheet table{width:100%;border-collapse:collapse;font-size:13px;margin:0}
+.cheatsheet thead th{background:#141a2c;color:#7dd3fc;text-align:left;padding:10px 14px;
+  border-bottom:2px solid #2a3556;font-family:"JetBrains Mono",monospace;font-size:11.5px;
+  text-transform:uppercase;letter-spacing:1px}
+.cheatsheet tbody td{padding:10px 14px;border-bottom:1px dashed #1f2740;color:#cbd5e1;vertical-align:top}
+.cheatsheet tbody tr:nth-child(even){background:rgba(20,26,44,.4)}
+.cheatsheet tbody td code{background:#1a2138;color:#fbbf24;padding:1px 6px;border-radius:3px;font-size:11.5px;font-family:"JetBrains Mono",monospace}
+
+/* Case */
+.case-card{background:linear-gradient(135deg,#1a0a0a 0%,#1f1010 100%);
+  border:1px solid rgba(248,113,113,.3);border-left:4px solid #f87171;
+  border-radius:0 14px 14px 0;padding:18px 22px;margin:18px 0}
+.case-card .cc-head{color:#f87171;font-size:13px;font-weight:700;
+  text-transform:uppercase;letter-spacing:1.5px;margin-bottom:10px}
+.case-card .cc-head::before{content:"🔥 真实优化 case · "}
+.case-card .cc-flow{background:#0a0e1a;border-radius:8px;padding:12px 14px;margin:10px 0;
+  font-family:"JetBrains Mono",monospace;font-size:12px;color:#cbd5e1;line-height:1.7;
+  white-space:pre-wrap;word-break:break-word}
+.case-card .cc-flow .step{color:#7dd3fc;font-weight:700}
+.case-card .cc-flow .out{color:#34d399}
+.case-card .cc-flow .alert{color:#f87171}
+
+.insight-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin:16px 0}
+.insight-grid .card{background:#141a2c;border:1px solid #2a3556;border-radius:12px;padding:16px 18px}
+.insight-grid .card h4{margin:0 0 8px 0;font-size:14px;color:#fbbf24}
+.insight-grid .card.green{border-left:3px solid #34d399}
+.insight-grid .card.green h4{color:#34d399}
+.insight-grid .card.violet{border-left:3px solid #a78bfa}
+.insight-grid .card.violet h4{color:#a78bfa}
+.insight-grid .card p{font-size:13px;color:#cbd5e1;line-height:1.65;margin:0}
+@media(max-width:760px){.insight-grid{grid-template-columns:1fr}}
+
+/* Checklist */
+.checklist{background:rgba(52,211,153,.05);border:1px solid rgba(52,211,153,.2);
+  border-left:4px solid #34d399;border-radius:0 12px 12px 0;padding:16px 20px;margin:14px 0}
+.checklist h4{color:#34d399;margin:0 0 10px 0;font-size:14px;text-transform:uppercase;letter-spacing:1px}
+.checklist ul{margin:0;padding-left:22px}
+.checklist li{font-size:13.5px;color:#cbd5e1;line-height:1.7;margin:6px 0}
+.checklist li strong{color:#e4e9f5}
+.checklist li code{background:#1a2138;color:#fbbf24;padding:1px 5px;border-radius:3px;font-size:12px;font-family:"JetBrains Mono",monospace}
+</style>
+</head>
+<body>
+
+<style>#tn-nav{position:fixed;top:14px;right:14px;z-index:99999;display:flex;gap:6px;font-size:12px;
+  font-family:-apple-system,'Segoe UI','Microsoft YaHei',sans-serif}
+#tn-nav a,#tn-nav span{background:rgba(20,20,30,.85);color:#fff!important;text-decoration:none;
+  padding:7px 11px;border-radius:999px;border:1px solid rgba(255,255,255,.10)}
+#tn-nav a:hover{background:rgba(56,189,248,.92)}</style>
+<div id="tn-nav">
+  <a href="../index.html">← 主页</a>
+  <a href="./os_fundamentals.html" title="N03 OS 基础">🏛 N03</a>
+  <a href="./io_linux_kernel_guide.html" title="N01 Linux IO">🐧 N01</a>
+  <a href="./observability_ebpf.html" title="N06 eBPF">🔬 N06</a>
+  <span>⏱ 45 min</span>
+</div>
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc"><h2>N07 · NUMA + 高级内存</h2><nav><ol>
+    <li><a href="#ch0" class="active">读前 · vs N03 / N01</a></li>
+    <li><a href="#ch1">NUMA · 为什么重要</a></li>
+    <li><a href="#ch2">硬件架构 + numactl 工具</a></li>
+    <li><a href="#ch3">NUMA 感知编程</a></li>
+    <li><a href="#ch4">HugePages 大页内存</a></li>
+    <li><a href="#ch5">slab / buddy / vmalloc</a></li>
+    <li><a href="#ch6">madvise / mlock / 内存策略</a></li>
+    <li><a href="#ch7">OOM killer + cgroup v2 memory</a></li>
+    <li><a href="#ch8">5 个真实优化 case</a></li>
+    <li><a href="#ch9">checklist + 推荐工具</a></li>
+  </ol></nav></aside>
+
+  <main>
+
+    <header class="hero">
+      <div class="badge">N07 · NUMA + Advanced Memory Mgmt</div>
+      <h1>NUMA + 高级内存管理<br>HugePages / slab / cgroup / madvise</h1>
+      <p class="sub">
+        10 章 · NUMA 全景 · HugePages 工程实战 · slab/buddy 内核分配器 · cgroup v2 memory · 5 个真实优化 case · 调试 checklist。<br>
+        <strong>对位读者</strong>：5+ 年 C++ / Linux 工程师做<u>性能优化 / 大型服务 (DB / JVM / LLM serving)</u> · 需要懂 NUMA / 大页 / 内核内存 · Senior C++ 面试常被问的"系统内存"深度。<br>
+        <strong>跟现有文档关系</strong>：<a href="./os_fundamentals.html">N03 OS 基础</a> 讲虚拟内存 / mmap 基础 · <strong>本文是 N03 的内存章节深度版</strong>（多 6 个深度 topic：NUMA / HugePages / slab / madvise / cgroup memory / OOM killer）。
+      </p>
+      <div class="meta">
+        <span>10 章节</span>
+        <span>~45 min 阅读</span>
+        <span>NUMA + 大页 + cgroup</span>
+        <span>5 优化 case</span>
+      </div>
+    </header>
+
+    <!-- ============= Ch0 ============= -->
+    <section class="chapter" id="ch0">
+      <div class="ch-head"><div class="num">00</div><div class="t">
+        <h2>读前定位 · vs 现有文档</h2>
+      </div></div>
+
+      <div class="insight-grid">
+        <div class="card">
+          <h4>🏛 <a href="./os_fundamentals.html">N03 OS 基础</a></h4>
+          <p>虚拟内存 / mmap / 进程线程 基础 · 入门必读。<u>不深入 NUMA / 大页 / 内核分配器</u>。</p>
+        </div>
+        <div class="card violet">
+          <h4>🐧 <a href="./io_linux_kernel_guide.html">N01 Linux IO</a></h4>
+          <p>讲 Page Cache + mmap IO · 偏 <strong>IO 路径</strong>。<u>不讲 NUMA / cgroup memory</u>。</p>
+        </div>
+        <div class="card green">
+          <h4>🧠 本文 N07</h4>
+          <p><strong>高级内存深度</strong>：NUMA / HugePages / slab / cgroup memory / OOM killer。<u>性能优化必懂 + 大型服务必懂</u>。</p>
+        </div>
+      </div>
+
+      <h3>0.1 什么场景必须懂 N07</h3>
+
+      <ul>
+        <li><strong>跨 NUMA 服务</strong>：JVM / Postgres / Redis / DPDK / LLM serving (vLLM) · 默认配置经常踩 NUMA penalty 30-50%</li>
+        <li><strong>大内存服务</strong>：> 32GB heap / cache / inference model · 必用 HugePages 减 TLB miss</li>
+        <li><strong>容器化 production</strong>：cgroup v2 memory 配置 / memory.high vs memory.max 区别 / OOM kill 调试</li>
+        <li><strong>kernel-level 内存优化</strong>：slab cache 大 / SLUB 调优 / vm.swappiness 等 sysctl</li>
+      </ul>
+
+      <div class="intuition">
+        <strong>关键认知</strong>：<u>2020+ 服务器普遍 2+ NUMA node</u>（双路 CPU）· 默认 Linux 给你分内存"哪个 node 空闲给哪个" · 但<u>跨 node 访问内存慢 2-3x</u>。<strong>不懂 NUMA 写大型服务 = 直接吃 30-50% 性能损失</strong>。
+      </div>
+    </section>
+
+    <!-- ============= Ch1 ============= -->
+    <section class="chapter" id="ch1">
+      <div class="ch-head"><div class="num">01</div><div class="t">
+        <h2>NUMA · 是什么 + 为什么重要</h2>
+      </div></div>
+
+      <p class="lead"><strong>NUMA = Non-Uniform Memory Access</strong>。简言之：<u>不同 CPU 访问不同内存条速度不一样</u>。</p>
+
+      <h3>1.1 类比 · 办公室的座位</h3>
+
+      <p>想象 2 个团队（NUMA node 0 + 1）共享 1 个办公室：</p>
+      <ul>
+        <li><strong>每个团队有自己的本地文件柜</strong>（本地内存）· 访问 5 秒</li>
+        <li><strong>另一个团队的文件柜在远端</strong>（远程内存）· 访问 15 秒</li>
+        <li><strong>但所有人都能访问任何柜子</strong>（uniform 地址空间）</li>
+      </ul>
+
+      <p>关键洞察：<strong>如果你团队总是从对方柜子拿文件 → 慢 3 倍</strong>。这就是 NUMA penalty。</p>
+
+      <h3>1.2 典型服务器 NUMA topology</h3>
+
+      <p>下图是典型的 dual-socket Xeon 服务器（2 个 NUMA node）：</p>
+
+      <div class="numa-topo">
+        <div class="numa-node n0">
+          <h4>NUMA Node 0</h4>
+          <div>
+            <span class="cpu">CPU 0</span><span class="cpu">CPU 1</span><span class="cpu">CPU 2</span><span class="cpu">CPU 3</span>
+            <span class="cpu">CPU 4</span><span class="cpu">CPU 5</span><span class="cpu">CPU 6</span><span class="cpu">CPU 7</span>
+          </div>
+          <div class="mem">本地 RAM 128 GB · L3 32 MB</div>
+        </div>
+        <div class="numa-node n1">
+          <h4>NUMA Node 1</h4>
+          <div>
+            <span class="cpu">CPU 8</span><span class="cpu">CPU 9</span><span class="cpu">CPU 10</span><span class="cpu">CPU 11</span>
+            <span class="cpu">CPU 12</span><span class="cpu">CPU 13</span><span class="cpu">CPU 14</span><span class="cpu">CPU 15</span>
+          </div>
+          <div class="mem">本地 RAM 128 GB · L3 32 MB</div>
+        </div>
+      </div>
+      <div class="numa-link">
+        ⇄ QPI / UPI / Infinity Fabric （node 间互联 · ~80 ns vs 本地 25 ns）
+      </div>
+
+      <h3>1.3 NUMA penalty 数字</h3>
+
+      <table>
+        <thead><tr><th>访问类型</th><th>典型延迟 (Xeon)</th><th>带宽 / 倍率</th></tr></thead>
+        <tbody>
+          <tr><td>L1 cache</td><td>~1 ns</td><td>极高</td></tr>
+          <tr><td>L2 cache</td><td>~3 ns</td><td>高</td></tr>
+          <tr><td>L3 cache (本地)</td><td>~10 ns</td><td>高</td></tr>
+          <tr><td><strong>本地 RAM (同 NUMA node)</strong></td><td><strong>~80 ns</strong></td><td>baseline</td></tr>
+          <tr><td><strong>远程 RAM (跨 NUMA node)</strong></td><td><strong>~150-200 ns</strong></td><td><u>2-2.5x 慢</u></td></tr>
+          <tr><td>带宽：本地 RAM</td><td>—</td><td>~25 GB/s per channel</td></tr>
+          <tr><td>带宽：跨 node (QPI/UPI)</td><td>—</td><td>~15 GB/s / link</td></tr>
+        </tbody>
+      </table>
+
+      <div class="intuition">
+        服务器跑高强度内存访问的程序（DB / cache / LLM serving）· <u>如果线程经常跨 node 访问内存 · 实际性能可能损失 30-50%</u>。<strong>且 vmstat / top 看不出 — 你以为是 "CPU 100% busy"，其实 30% CPU 在等远程 RAM</strong>。
+      </div>
+    </section>
+
+    <!-- ============= Ch2 ============= -->
+    <section class="chapter" id="ch2">
+      <div class="ch-head"><div class="num">02</div><div class="t">
+        <h2>硬件架构 + numactl 工具</h2>
+      </div></div>
+
+      <h3>2.1 看你的机器有几个 NUMA node</h3>
+
+      <div class="tool-card">
+        <h4>numactl --hardware · NUMA topology 速查</h4>
+        <pre>$ numactl --hardware
+available: 2 nodes (0-1)
+node 0 cpus: 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+node 0 size: 128871 MB
+node 0 free: 12345 MB
+node 1 cpus: 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31
+node 1 size: 128871 MB
+node 1 free: 23456 MB
+node distances:
+node   0   1
+  0:  10  21        <span style="color:#94a3b8"># 本地 node 距离 = 10 (baseline) · 远程 = 21 (2.1x slower)</span>
+  1:  21  10</pre>
+        <ul>
+          <li><code>node distances</code> 是<u>关键</u>：21 / 10 = 2.1x · 这就是 NUMA penalty 系数</li>
+          <li>大于 2 个 node 时（4-socket 服务器）· distances 可能 10 / 21 / 31 多级</li>
+        </ul>
+      </div>
+
+      <div class="tool-card violet">
+        <h4>numastat · 看内存分配在哪个 node</h4>
+        <pre>$ numastat -p &lt;pid&gt;
+Per-node process memory usage (in MBs) for PID 1234 (myapp)
+                           Node 0          Node 1           Total
+                  --------------- --------------- ---------------
+Huge                         0.00            0.00            0.00
+Heap                       128.45          892.34         1020.79     <span style="color:#f87171"># &lt;- 不平衡!</span>
+Stack                        0.45            0.10            0.55
+Private                    256.34         1543.21         1799.55
+
+$ numastat -mn          <span style="color:#94a3b8"># 系统级 (显示每 node 的 free / used / cached)</span></pre>
+        <ul>
+          <li>看到某进程内存 90% 在 Node 1 但线程跑在 Node 0 → <u>每次访问都跨 node</u>，性能损失大</li>
+        </ul>
+      </div>
+
+      <div class="tool-card amber">
+        <h4>numactl 启动绑定（最常用）</h4>
+        <pre><span style="color:#94a3b8"># 把进程绑到 NUMA node 0 (CPU + 内存都在 0)</span>
+$ numactl --cpunodebind=0 --membind=0 ./myapp
+
+<span style="color:#94a3b8"># 内存优先本地 · 不够时用其它 node</span>
+$ numactl --preferred=0 ./myapp
+
+<span style="color:#94a3b8"># 跨所有 node 平摊（interleave）</span>
+$ numactl --interleave=all ./myapp</pre>
+        <ul>
+          <li><code>--membind</code> = 严格绑定 · 不够就 OOM</li>
+          <li><code>--preferred</code> = 优先 · 不够 spill 到其它 node（更柔性）</li>
+          <li><code>--interleave</code> = 跨 node 平摊 · 适合<u>大于单 node RAM 的服务</u>（如 LLM model &gt; 128GB）</li>
+        </ul>
+      </div>
+
+      <h3>2.2 一个 myth · "我没绑核 = 没 NUMA 问题"</h3>
+
+      <p><strong>错</strong>。Linux 默认 NUMA 策略 = "first touch"（哪个 CPU 第一次写内存，内存分给哪个 node）：</p>
+      <ul>
+        <li>① 进程启动 (single thread) → 所有 init 内存分到 Node 0</li>
+        <li>② 后续 spawn 多线程 → 一半线程跑到 Node 1</li>
+        <li>③ Node 1 线程访问 init 时分配的内存 → <strong>全部跨 node 访问 (慢 2x)</strong></li>
+      </ul>
+
+      <p>这就是 "<u>无意识 NUMA 退化</u>"。<strong>解决方法</strong>：</p>
+      <ol style="font-size:13.5px;line-height:1.85">
+        <li>启动时 <code>numactl --interleave=all</code>（最简单粗暴）</li>
+        <li>用 <code>numa_alloc_local()</code> / <code>numa_alloc_onnode()</code>（libnuma）精细控制</li>
+        <li>大数据结构在 worker thread 内"first touch"（确保分配到本地 node）</li>
+      </ol>
+    </section>
+
+    <!-- ============= Ch3 ============= -->
+    <section class="chapter" id="ch3">
+      <div class="ch-head"><div class="num">03</div><div class="t">
+        <h2>NUMA 感知编程</h2>
+      </div></div>
+
+      <h3>3.1 libnuma API (C/C++ 程序)</h3>
+
+      <div class="tool-card violet">
+        <h4>常用 API · 链接 -lnuma</h4>
+        <pre>#include &lt;numa.h&gt;
+
+<span style="color:#94a3b8">// 检查 NUMA 可用</span>
+if (numa_available() == -1) { /* 退化到无 NUMA */ }
+
+<span style="color:#94a3b8">// 看有几个 node</span>
+int n = numa_num_configured_nodes();
+
+<span style="color:#94a3b8">// 在本地 node 分配 (推荐 - 多数场景)</span>
+void* p = numa_alloc_local(size);
+
+<span style="color:#94a3b8">// 在指定 node 分配</span>
+void* p2 = numa_alloc_onnode(size, /*node=*/1);
+
+<span style="color:#94a3b8">// 跨所有 node interleave</span>
+void* p3 = numa_alloc_interleaved(size);
+
+<span style="color:#94a3b8">// 把当前线程绑到 node 0 的 CPU</span>
+struct bitmask* mask = numa_allocate_cpumask();
+numa_node_to_cpus(0, mask);
+numa_sched_setaffinity(0, mask);
+
+<span style="color:#94a3b8">// 释放</span>
+numa_free(p, size);</pre>
+      </div>
+
+      <h3>3.2 sched_setaffinity 绑核（更轻量）</h3>
+
+      <div class="tool-card amber">
+        <h4>纯 POSIX · 不依赖 libnuma</h4>
+        <pre>#include &lt;sched.h&gt;
+
+cpu_set_t set;
+CPU_ZERO(&amp;set);
+CPU_SET(0, &amp;set);    <span style="color:#94a3b8">// 绑到 CPU 0</span>
+CPU_SET(1, &amp;set);    <span style="color:#94a3b8">// 也绑到 CPU 1</span>
+
+<span style="color:#94a3b8">// 绑当前线程 (pid=0 表示自己)</span>
+sched_setaffinity(0, sizeof(cpu_set_t), &amp;set);</pre>
+        <ul>
+          <li><u>缺点</u>：只控制 CPU · 没控制内存 → 还得配合 <code>numa_alloc_*</code></li>
+          <li><u>优点</u>：不需要 libnuma · POSIX 标准</li>
+        </ul>
+      </div>
+
+      <h3>3.3 First-touch 模式 · 让内存"自然"贴近 worker</h3>
+
+      <div class="tool-card green">
+        <h4>正确的多线程 init 模式</h4>
+        <pre><span style="color:#94a3b8">// ❌ 反模式 (主线程 init · worker 全跨 node)</span>
+data = malloc(LARGE);
+memset(data, 0, LARGE);    <span style="color:#94a3b8">// 所有 page 都 touch 到 main thread 的 node</span>
+spawn_workers(data);
+
+<span style="color:#94a3b8">// ✅ 正确 (worker first-touch 自己的部分)</span>
+data = malloc(LARGE);      <span style="color:#94a3b8">// 只分配虚拟地址 · 不实际触发分配</span>
+parallel_for(N_WORKERS, [&amp;](int tid) {
+  size_t my_start = tid * LARGE / N_WORKERS;
+  size_t my_end   = (tid+1) * LARGE / N_WORKERS;
+  memset(data + my_start, 0, my_end - my_start);
+                          <span style="color:#94a3b8">// worker first-touch · page 分配到 worker 的 node</span>
+});</pre>
+        <ul>
+          <li><strong>Linux 默认 page fault on first write</strong> 分配物理 page · 哪个 CPU first-write 给哪个 node</li>
+          <li>这是 OpenMP / TBB / 自研线程池<u>性能优化第一原则</u></li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ============= Ch4 ============= -->
+    <section class="chapter" id="ch4">
+      <div class="ch-head"><div class="num">04</div><div class="t">
+        <h2>HugePages · 大页内存</h2>
+      </div></div>
+
+      <p class="lead"><strong>HugePages = 用 2MB / 1GB 替代默认 4KB page</strong> · 减 TLB miss · 大内存程序的标配优化。</p>
+
+      <h3>4.1 为什么需要大页</h3>
+
+      <p>TLB (Translation Lookaside Buffer) 是 CPU 的 page table cache · 典型只能 cache 几千个 entry。如果你的服务用 100GB heap：</p>
+      <ul>
+        <li><strong>4KB page</strong>：100GB / 4KB = <u>25,000,000 个 page</u> · TLB 必然 miss 严重</li>
+        <li><strong>2MB HugePage</strong>：100GB / 2MB = <u>50,000 个 page</u> · TLB 容易 cover</li>
+        <li><strong>1GB HugePage</strong>：100GB / 1GB = <u>100 个 page</u> · TLB 几乎不 miss</li>
+      </ul>
+
+      <p>典型收益：<strong>TLB miss rate 从 5-15% → 0.5-2% · 整体吞吐 +10-30%</strong>（memory-bound 程序）。</p>
+
+      <h3>4.2 两种模式 · 显式 vs 透明</h3>
+
+      <div class="insight-grid">
+        <div class="card violet">
+          <h4>① Explicit HugePages</h4>
+          <p>系统启动时<u>预留 N 个 hugepage</u> · 应用通过 mmap MAP_HUGETLB / shmget 使用。<strong>稳定可控</strong>但<u>需要 reserve · 不够时分配失败</u>。</p>
+        </div>
+        <div class="card amber">
+          <h4>② Transparent HugePages (THP)</h4>
+          <p>内核<u>自动尝试用 2MB page</u> · 应用无感知。<strong>方便</strong>但<u>有 "page collapse" 性能尖刺</u>（kcompactd 后台合并 page）· DB 类（Postgres / MongoDB）<strong>反而推荐禁用 THP</strong>。</p>
+        </div>
+      </div>
+
+      <h3>4.3 配置 Explicit HugePages</h3>
+
+      <div class="tool-card">
+        <h4>预留 + 检查</h4>
+        <pre><span style="color:#94a3b8"># 预留 1024 个 2MB hugepage (= 2GB)</span>
+$ echo 1024 | sudo tee /proc/sys/vm/nr_hugepages
+
+<span style="color:#94a3b8"># 检查</span>
+$ cat /proc/meminfo | grep Huge
+HugePages_Total:    1024
+HugePages_Free:      512
+HugePages_Rsvd:        0
+HugePages_Surp:        0
+Hugepagesize:       2048 kB
+
+<span style="color:#94a3b8"># 永久配置 (boot 参数)</span>
+$ vim /etc/default/grub
+GRUB_CMDLINE_LINUX="hugepages=1024 default_hugepagesz=2M"
+$ update-grub &amp;&amp; reboot</pre>
+      </div>
+
+      <div class="tool-card violet">
+        <h4>应用代码使用 hugepage</h4>
+        <pre><span style="color:#94a3b8">// 方式 1: mmap with MAP_HUGETLB</span>
+void* p = mmap(NULL, 2 * 1024 * 1024,    <span style="color:#94a3b8">// 必须 2MB 倍数</span>
+               PROT_READ | PROT_WRITE,
+               MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB,
+               -1, 0);
+
+<span style="color:#94a3b8">// 方式 2: hugetlbfs 文件系统</span>
+$ mkdir -p /mnt/huge
+$ mount -t hugetlbfs nodev /mnt/huge
+<span style="color:#94a3b8">// 应用 open("/mnt/huge/myfile") 然后 mmap</span>
+
+<span style="color:#94a3b8">// 方式 3 (1GB hugepage 启动时配)</span>
+$ echo 4 | sudo tee /sys/devices/system/node/node0/hugepages/hugepages-1048576kB/nr_hugepages</pre>
+      </div>
+
+      <h3>4.4 THP 控制 + DB 反模式</h3>
+
+      <div class="tool-card danger">
+        <h4>什么时候关 THP</h4>
+        <pre>$ cat /sys/kernel/mm/transparent_hugepage/enabled
+[always] madvise never
+
+<span style="color:#94a3b8"># DB / Java GC / Redis 推荐: 设为 madvise 或 never</span>
+$ echo madvise | sudo tee /sys/kernel/mm/transparent_hugepage/enabled
+<span style="color:#94a3b8"># 永久 (rc.local)</span></pre>
+        <ul>
+          <li><u>Postgres / MongoDB / Redis / Cassandra</u> 官方文档<strong>都推荐关 THP</strong> (always)</li>
+          <li><u>原因</u>：kcompactd 后台合并 4KB → 2MB 时<u>会 stall 应用</u> · DB 类无法忍受 spike</li>
+          <li><u>HugePage 本身好</u> · 但要用 explicit / madvise · 不要用 transparent</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ============= Ch5 ============= -->
+    <section class="chapter" id="ch5">
+      <div class="ch-head"><div class="num">05</div><div class="t">
+        <h2>slab / buddy / vmalloc · 内核内存分配器</h2>
+      </div></div>
+
+      <p class="lead">用户态 <code>malloc</code> 底层是 <code>brk</code> / <code>mmap</code>。<u>内核态自己有 3 个分配器</u> — 知道这些能更好理解 <code>/proc/slabinfo</code> 等观测数据。</p>
+
+      <h3>5.1 3 个分配器对比</h3>
+
+      <div class="insight-grid">
+        <div class="card violet">
+          <h4>① Buddy Allocator</h4>
+          <p>分配<u>大块连续物理内存</u>（页粒度 4KB → 4MB · 2 的幂）· 内核 page 分配根基。看 <code>/proc/buddyinfo</code>。</p>
+        </div>
+        <div class="card amber">
+          <h4>② Slab / SLUB</h4>
+          <p>分配<u>小对象</u>（kernel 数据结构 dentry / inode / task_struct 等）· 减 fragmentation + cache 友好。看 <code>/proc/slabinfo</code>。</p>
+        </div>
+        <div class="card green">
+          <h4>③ vmalloc</h4>
+          <p>分配<u>大块但物理不连续</u>（vmap 映射成虚拟连续）· 内核模块 / 大 buffer · <strong>慢 + 占 TLB</strong>，避免用。</p>
+        </div>
+      </div>
+
+      <h3>5.2 看 slab 占用</h3>
+
+      <div class="tool-card">
+        <h4>slabtop 命令</h4>
+        <pre>$ sudo slabtop
+ Active / Total Objects (% used)    : 5234567 / 5345678 (97.9%)
+ Active / Total Slabs (% used)      : 123456 / 124567 (99.1%)
+ Active / Total Caches (% used)     : 89 / 105 (84.8%)
+ Active / Total Size (% used)       : 1024 MB / 1156 MB (88.6%)
+ ...
+
+  OBJS ACTIVE  USE OBJ SIZE  SLABS OBJ/SLAB CACHE SIZE NAME
+2345678 2245678  95%    0.19K  78901       30    315604K dentry           <span style="color:#fbbf24"># dentry 占 300MB+</span>
+1234567 1134567  91%    1.05K  41152       30   1316864K ext4_inode_cache <span style="color:#fbbf24"># inode cache 1.3GB</span>
+ 234567  214567  91%    0.10K   6015       39     24060K buffer_head</pre>
+        <ul>
+          <li><u>常见问题</u>：dentry / inode cache 涨到几 GB → 系统说"内存紧张"但实际是 cache</li>
+          <li>处理：<code>echo 2 > /proc/sys/vm/drop_caches</code>（手动 drop）· 或调 <code>vm.vfs_cache_pressure</code></li>
+        </ul>
+      </div>
+
+      <h3>5.3 内核内存看哪些指标</h3>
+
+      <div class="cheatsheet">
+        <table>
+          <thead><tr><th>指标</th><th>含义</th><th>看哪</th></tr></thead>
+          <tbody>
+            <tr><td><code>MemTotal</code></td><td>总物理内存</td><td><code>/proc/meminfo</code></td></tr>
+            <tr><td><code>MemFree</code></td><td>完全空闲</td><td><code>/proc/meminfo</code></td></tr>
+            <tr><td><code>MemAvailable</code></td><td><strong>真正可用</strong>（含可 reclaim 的 cache）· 关键指标</td><td><code>/proc/meminfo</code></td></tr>
+            <tr><td><code>Buffers / Cached</code></td><td>Page Cache · 可 reclaim</td><td><code>/proc/meminfo</code></td></tr>
+            <tr><td><code>Slab</code></td><td>内核 slab cache</td><td><code>/proc/meminfo</code></td></tr>
+            <tr><td><code>SReclaimable / SUnreclaim</code></td><td>slab 可/不可 reclaim 部分</td><td><code>/proc/meminfo</code></td></tr>
+            <tr><td><code>AnonPages</code></td><td>匿名页 (用户进程 heap / stack)</td><td><code>/proc/meminfo</code></td></tr>
+            <tr><td><code>HugePages_*</code></td><td>大页统计</td><td><code>/proc/meminfo</code></td></tr>
+            <tr><td><code>Committed_AS</code></td><td>所有进程承诺总用量</td><td><code>/proc/meminfo</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ============= Ch6 ============= -->
+    <section class="chapter" id="ch6">
+      <div class="ch-head"><div class="num">06</div><div class="t">
+        <h2>madvise / mlock · 内存策略 advisory</h2>
+      </div></div>
+
+      <p class="lead"><code>madvise(addr, len, advice)</code> = <strong>告诉内核"我打算怎么用这段内存"</strong>·内核根据 advice 优化（preread / 提前 swap / 用大页 / 不要 swap 等）。</p>
+
+      <h3>6.1 常用 advice 选项</h3>
+
+      <div class="cheatsheet">
+        <table>
+          <thead><tr><th>Advice</th><th>含义</th><th>典型场景</th></tr></thead>
+          <tbody>
+            <tr><td><code>MADV_SEQUENTIAL</code></td><td>顺序读 · 内核积极 readahead</td><td>大文件流式处理</td></tr>
+            <tr><td><code>MADV_RANDOM</code></td><td>随机读 · 内核不 readahead</td><td>DB / 哈希表</td></tr>
+            <tr><td><code>MADV_WILLNEED</code></td><td>即将访问 · prefetch 进 cache</td><td>预热</td></tr>
+            <tr><td><code>MADV_DONTNEED</code></td><td>暂时不用 · 内核可回收 (会 zero-fill)</td><td>临时大 buffer 处理完</td></tr>
+            <tr><td><code>MADV_FREE</code></td><td>jemalloc / tcmalloc 用 · 标记可回收但不立刻</td><td>用户态 allocator</td></tr>
+            <tr><td><code>MADV_HUGEPAGE</code></td><td>建议内核给我这段用 HugePage</td><td>大对象</td></tr>
+            <tr><td><code>MADV_NOHUGEPAGE</code></td><td>禁止 HugePage · 避免 THP collapse spike</td><td>DB 关键路径</td></tr>
+            <tr><td><code>MADV_COLD</code></td><td>降低 page reclaim 优先级</td><td>历史 buffer</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>6.2 mlock / mlockall · 锁定物理内存不被 swap</h3>
+
+      <div class="tool-card">
+        <h4>用法</h4>
+        <pre>#include &lt;sys/mman.h&gt;
+
+<span style="color:#94a3b8">// 锁定指定范围</span>
+mlock(addr, size);
+
+<span style="color:#94a3b8">// 锁定所有当前 + 未来内存 (Real-time 服务常用)</span>
+mlockall(MCL_CURRENT | MCL_FUTURE);
+
+<span style="color:#94a3b8">// 解锁</span>
+munlock(addr, size);</pre>
+        <ul>
+          <li><strong>典型场景</strong>：实时系统 / 金融交易 · <u>不能容忍 swap 时的延迟 spike</u></li>
+          <li><strong>限制</strong>：<code>RLIMIT_MEMLOCK</code>（默认 64KB 极小）· 需要 <code>ulimit -l unlimited</code> 或 setcap</li>
+          <li><strong>注意</strong>：lock 太多内存 = 系统可分配少了 = 反而可能 OOM 其它进程</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ============= Ch7 ============= -->
+    <section class="chapter" id="ch7">
+      <div class="ch-head"><div class="num">07</div><div class="t">
+        <h2>OOM killer + cgroup v2 memory</h2>
+      </div></div>
+
+      <h3>7.1 OOM killer 工作机制</h3>
+
+      <p>当系统物理内存 + swap 都满 · 内核启动 OOM killer 选一个进程杀。算法：</p>
+
+      <ol style="font-size:13.5px;line-height:1.85">
+        <li>遍历所有进程算 <code>oom_score</code>（基于 RSS / oom_score_adj / nice / 是否 root）</li>
+        <li>选 oom_score 最高的进程 SIGKILL</li>
+        <li>dmesg 记录 + /var/log/messages 留痕</li>
+      </ol>
+
+      <div class="tool-card violet">
+        <h4>看进程 OOM 倾向 + 调整</h4>
+        <pre><span style="color:#94a3b8"># 看当前 oom_score (越高越容易被杀)</span>
+$ cat /proc/&lt;pid&gt;/oom_score
+
+<span style="color:#94a3b8"># 看 / 调 oom_score_adj (-1000 到 1000 · 默认 0 · -1000 = 永不被杀)</span>
+$ cat /proc/&lt;pid&gt;/oom_score_adj
+$ echo -500 &gt; /proc/&lt;pid&gt;/oom_score_adj    <span style="color:#94a3b8"># 关键服务降低被杀概率</span>
+
+<span style="color:#94a3b8"># 看历史 OOM 事件</span>
+$ dmesg | grep -i "killed process"
+$ journalctl -k | grep -i oom</pre>
+      </div>
+
+      <div class="tool-card amber">
+        <h4>bpftrace 抓 OOM (Ch5 #6 one-liner 在 N06)</h4>
+        <pre>sudo bpftrace -e '
+  kprobe:oom_kill_process {
+    printf("OOM kill: pid=%d comm=%s\n", pid, comm);
+  }'</pre>
+        <ul>
+          <li>常驻 production · <u>每次 OOM 立刻知道触发进程</u></li>
+        </ul>
+      </div>
+
+      <h3>7.2 cgroup v2 memory 控制</h3>
+
+      <p>cgroup v2（2016+ 主流）<strong>统一了 memory controller</strong>，关键文件：</p>
+
+      <div class="cheatsheet">
+        <table>
+          <thead><tr><th>文件</th><th>含义</th></tr></thead>
+          <tbody>
+            <tr><td><code>memory.max</code></td><td><strong>硬上限</strong>·超过 = OOM kill cgroup 内进程</td></tr>
+            <tr><td><code>memory.high</code></td><td><strong>软上限</strong>·超过 = 内核 throttle 该 cgroup·允许超但慢</td></tr>
+            <tr><td><code>memory.low</code></td><td>保底值·系统紧张时<u>优先不 reclaim 这部分</u></td></tr>
+            <tr><td><code>memory.min</code></td><td>绝对保底·永不 reclaim</td></tr>
+            <tr><td><code>memory.current</code></td><td>当前使用</td></tr>
+            <tr><td><code>memory.events</code></td><td>事件计数 (max / high / oom / oom_kill)</td></tr>
+            <tr><td><code>memory.stat</code></td><td>详细统计 (anon / file / slab / 等)</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="tool-card green">
+        <h4>用 systemd 设置 memory limit (最常用)</h4>
+        <pre><span style="color:#94a3b8"># /etc/systemd/system/myapp.service</span>
+[Service]
+ExecStart=/usr/bin/myapp
+MemoryMax=4G           <span style="color:#94a3b8"># 硬上限</span>
+MemoryHigh=3G          <span style="color:#94a3b8"># 软上限 (开始 throttle)</span>
+MemoryLow=2G           <span style="color:#94a3b8"># 系统紧张时保护</span>
+OOMScoreAdjust=-500    <span style="color:#94a3b8"># 降低被杀概率</span>
+
+$ systemctl daemon-reload &amp;&amp; systemctl restart myapp</pre>
+        <ul>
+          <li><strong>Docker / K8s</strong> 内部也是用 cgroup v2 · K8s 的 <code>resources.limits.memory</code> = <code>memory.max</code></li>
+          <li><strong>关键差异</strong>：<code>memory.high</code> 是 cgroup v2 才有 · v1 没有 · <u>推荐升 v2</u></li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ============= Ch8 ============= -->
+    <section class="chapter" id="ch8">
+      <div class="ch-head"><div class="num">08</div><div class="t">
+        <h2>5 个真实优化 case</h2>
+      </div></div>
+
+      <div class="case-card">
+        <div class="cc-head">Case 1 · Java 服务 NUMA 优化 · 吞吐 +35%</div>
+        <p style="font-size:13px;margin:0 0 8px;color:#cbd5e1"><strong>背景</strong>：双 socket Xeon · 32 GB heap JVM · 默认部署 · 吞吐不达预期。</p>
+        <div class="cc-flow"><span class="step">[Day 1]</span> numastat -p &lt;jvm-pid&gt;:
+  <span class="out">→</span> 内存 18 GB on Node 0, 14 GB on Node 1
+<span class="step">[Day 1]</span> bpftrace 看 GC thread 跑哪：
+  <span class="out">→</span> 8 个 GC thread <span class="alert">一半在 Node 0, 一半在 Node 1</span>
+<span class="step">[修复]</span> systemd: ExecStart=numactl --interleave=all /usr/bin/java ...
+<span class="step">[结果]</span> 吞吐 +35% · GC pause -20%</div>
+      </div>
+
+      <div class="case-card">
+        <div class="cc-head">Case 2 · Postgres 性能 spike · 元凶 THP</div>
+        <p style="font-size:13px;margin:0 0 8px;color:#cbd5e1"><strong>背景</strong>：Postgres P99 偶有 500ms spike · DB 自身 metric 正常。</p>
+        <div class="cc-flow"><span class="step">[Day 1]</span> bpftrace 看哪个 syscall 慢:
+  <span class="out">→</span> spike 时 mmap / madvise 慢
+<span class="step">[Day 1]</span> 看 /proc/vmstat:
+  <span class="out">→</span> thp_collapse_alloc 频率高 (kcompactd 在合并 page)
+<span class="step">[修复]</span> echo madvise &gt; /sys/kernel/mm/transparent_hugepage/enabled
+<span class="step">[结果]</span> P99 spike 消失</div>
+      </div>
+
+      <div class="case-card">
+        <div class="cc-head">Case 3 · 推理服务 (vLLM) NUMA 退化</div>
+        <p style="font-size:13px;margin:0 0 8px;color:#cbd5e1"><strong>背景</strong>：LLM serving (70B INT4 在 4 张 H100) · throughput 比官方 benchmark 低 30%。</p>
+        <div class="cc-flow"><span class="step">[Day 1]</span> numactl --hardware:
+  <span class="out">→</span> 4 张 H100 分 Node 0 (GPU 0,1) + Node 1 (GPU 2,3)
+<span class="step">[Day 1]</span> nvidia-smi topo -m:
+  <span class="out">→</span> 显示 GPU 跟 NUMA 关系
+<span class="step">[Day 2]</span> 跟踪 model loading:
+  <span class="out">→</span> CPU 内存全在 Node 0 · GPU 2/3 的 DMA <span class="alert">跨 node</span>
+<span class="step">[修复]</span> 分两个 worker process · 各 numactl --cpunodebind 各自 node
+<span class="step">[结果]</span> throughput +28% 接近 benchmark</div>
+      </div>
+
+      <div class="case-card">
+        <div class="cc-head">Case 4 · 容器 OOM 但 memory.current 没满</div>
+        <p style="font-size:13px;margin:0 0 8px;color:#cbd5e1"><strong>背景</strong>：K8s Pod 设 limit = 8GB · 实际 memory.current = 6GB 却被 OOM。</p>
+        <div class="cc-flow"><span class="step">[Day 1]</span> 看 memory.events:
+  <span class="out">→</span> oom_kill_count = 3
+<span class="step">[Day 1]</span> 看 memory.stat:
+  <span class="out">→</span> <span class="alert">file = 5.5GB</span> (page cache)
+  → 应用 anon 才 500MB · 但 cache 大 → mem 触 high → throttle → oom
+<span class="step">[修复]</span> ① 应用代码 madvise(MADV_DONTNEED) 处理完大文件
+            ② 或者调 memory.high 留 cache 空间 (limit 提高)
+<span class="step">[结果]</span> 不再 OOM</div>
+      </div>
+
+      <div class="case-card">
+        <div class="cc-head">Case 5 · 高频交易系统 · 锁定内存 + 大页 + 隔核</div>
+        <p style="font-size:13px;margin:0 0 8px;color:#cbd5e1"><strong>背景</strong>：交易延迟敏感 · 不能容忍 page fault / TLB miss / 调度抖动。</p>
+        <div class="cc-flow"><span class="step">[组合优化]</span>
+  ① mlockall(MCL_CURRENT | MCL_FUTURE) <span class="out">→ 永不 swap</span>
+  ② mmap with MAP_HUGETLB (1GB hugepage) <span class="out">→ TLB miss → 0</span>
+  ③ isolcpus=2,3 内核启动参数 <span class="out">→ CPU 2,3 不参与调度</span>
+  ④ sched_setaffinity 绑 worker 到 CPU 2,3
+  ⑤ numactl --membind 匹配 CPU 的 NUMA node
+<span class="step">[结果]</span> 延迟 P99 从 200us → 12us · 抖动 -95%</div>
+      </div>
+    </section>
+
+    <!-- ============= Ch9 ============= -->
+    <section class="chapter" id="ch9">
+      <div class="ch-head"><div class="num">09</div><div class="t">
+        <h2>checklist + 推荐工具</h2>
+      </div></div>
+
+      <div class="checklist">
+        <h4>新部署大型服务必查 (10 项)</h4>
+        <ul>
+          <li>① <code>numactl --hardware</code> 看 NUMA topology · 服务 vs CPU 关系</li>
+          <li>② 启动时绑核 + 内存策略（<code>numactl --interleave</code> 或 <code>--membind</code>）</li>
+          <li>③ <code>/proc/meminfo</code> 看 HugePages 配置 · 大内存服务必启用</li>
+          <li>④ <code>/sys/kernel/mm/transparent_hugepage/enabled</code> · DB/Redis 设 madvise</li>
+          <li>⑤ cgroup memory 限制设了吗 · memory.max + memory.high 都设</li>
+          <li>⑥ <code>oom_score_adj</code> · 关键服务设 -500 ~ -1000</li>
+          <li>⑦ <code>vm.swappiness</code> · production server 设 1 或 10 (不轻易 swap)</li>
+          <li>⑧ <code>vm.overcommit_memory</code> 策略合适 · DB 类设 2 (no overcommit)</li>
+          <li>⑨ bpftrace OOM 监控常驻 (Ch5 #6 in N06)</li>
+          <li>⑩ <code>numastat -p &lt;pid&gt;</code> 月度抽查 NUMA 平衡</li>
+        </ul>
+      </div>
+
+      <h3>9.1 工具速查</h3>
+
+      <div class="cheatsheet">
+        <table>
+          <thead><tr><th>命令</th><th>用途</th></tr></thead>
+          <tbody>
+            <tr><td><code>numactl --hardware</code></td><td>NUMA topology + distances</td></tr>
+            <tr><td><code>numastat -p PID</code></td><td>进程的 NUMA 内存分布</td></tr>
+            <tr><td><code>numastat -mn</code></td><td>系统级 NUMA 统计</td></tr>
+            <tr><td><code>cat /proc/PID/numa_maps</code></td><td>进程虚拟内存 → NUMA node 详细映射</td></tr>
+            <tr><td><code>cat /proc/meminfo | grep Huge</code></td><td>HugePages 配置</td></tr>
+            <tr><td><code>slabtop</code></td><td>实时 slab 占用 top</td></tr>
+            <tr><td><code>cat /proc/slabinfo</code></td><td>详细 slab 列表</td></tr>
+            <tr><td><code>cat /proc/buddyinfo</code></td><td>buddy allocator 状态（fragmentation）</td></tr>
+            <tr><td><code>cat /proc/vmstat</code></td><td>VM 子系统统计 (含 thp 事件)</td></tr>
+            <tr><td><code>echo 2 &gt; /proc/sys/vm/drop_caches</code></td><td>手动 drop page cache（debug 用）</td></tr>
+            <tr><td><code>cat /sys/fs/cgroup/.../memory.*</code></td><td>cgroup v2 memory 各项</td></tr>
+            <tr><td><code>systemd-cgls / systemd-cgtop</code></td><td>cgroup 层级 + 实时 top</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>9.2 推荐阅读</h3>
+
+      <ul>
+        <li><strong>书</strong>：Mel Gorman <em>Understanding the Linux Virtual Memory Manager</em>（老但经典）</li>
+        <li><strong>kernel doc</strong>：<code>Documentation/admin-guide/mm/</code> · 最权威</li>
+        <li><strong>OSS code</strong>：jemalloc / tcmalloc / mimalloc 源码 · 看用户态 allocator 怎么用 madvise / mmap</li>
+        <li><strong>Blog</strong>：Brendan Gregg <em>Memory Reclaim</em> series</li>
+      </ul>
+
+      <div class="intuition">
+        <strong>关键认知</strong>：NUMA / HugePages / cgroup memory <u>不是"高级"技巧</u>，是<u>大型 production 服务的基础设施</u>。<strong>每个 senior C++ / Linux 工程师都应该 1 周内能背下 Ch9 checklist 10 项</strong>。这是<u>跟 "junior 写得能跑" 和 "senior 写得能 sustain" 的核心差异</u>。
+      </div>
+    </section>
+
+    <footer style="text-align:center;padding:40px 20px 20px;color:#94a3b8;font-size:13px;line-height:2">
+      系统主线：<a href="./os_fundamentals.html">🏛 N03 OS 基础</a> &nbsp;·&nbsp;
+      <a href="./io_linux_kernel_guide.html">🐧 N01 Linux IO</a> &nbsp;·&nbsp;
+      <a href="./observability_ebpf.html">🔬 N06 eBPF 实战</a><br>
+      AI Infra 桥接：<a href="../ai-infra/inference_serving.html">🚀 Y02 vLLM (NUMA + 大页 + GPU affinity)</a><br>
+      性能：<a href="../perf-debug/perf_landscape.html">⚡ P01 Perf 全景</a>
+    </footer>
+
+  </main>
+</div>
+
+<script>
+(function(){var b=document.getElementById('progress');function u(){var h=document.documentElement;b.style.width=(h.scrollTop/(h.scrollHeight-h.clientHeight)*100)+'%'}window.addEventListener('scroll',u,{passive:true});u();})();
+(function(){var l=document.querySelectorAll('aside.toc nav>ol>li>a');var s=Array.from(document.querySelectorAll('section.chapter'));function u(){var y=window.scrollY+100;var c=s[0];for(var i=0;i<s.length;i++)if(s[i].offsetTop<=y)c=s[i];l.forEach(function(a){a.classList.toggle('active',a.getAttribute('href')==='#'+c.id)})}window.addEventListener('scroll',u,{passive:true});u();})();
+</script>
+</body>
+</html>
