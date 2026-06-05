@@ -1484,37 +1484,176 @@ unique_ptr&lt;Base&gt; up{<span class="kw">new</span> Derived};      <span class
     </div>
   </div>
 
+  <p class="lead" style="font-size:14px">点击每道题展开参考答案（先自测，再对照）。</p>
+
   <h3 id="s14-1">14.1 基础（必答）</h3>
-  <ol>
-    <li>unique_ptr / shared_ptr / weak_ptr 各自语义？</li>
-    <li>sizeof(unique_ptr) 多少？sizeof(shared_ptr) 多少？</li>
-    <li>make_shared 比 shared_ptr(new T) 好在哪？至少 3 点</li>
-    <li>shared_ptr 的引用计数线程安全吗？对象本身呢？</li>
-    <li>循环引用怎么产生？怎么解？</li>
-  </ol>
+
+  <details class="qa">
+    <summary><span class="lvl pill cyan">基础</span>unique_ptr / shared_ptr / weak_ptr 各自语义？</summary>
+    <div class="a">
+      <div class="point"><div class="label">unique</div><div>独占所有权，不可拷贝、可移动，零开销（等价裸指针）。</div></div>
+      <div class="point"><div class="label">shared</div><div>共享所有权，原子引用计数，最后一个析构时释放对象。</div></div>
+      <div class="point"><div class="label">weak</div><div>不增加强引用的观察者，用于打破循环；通过 <code>lock()</code> 临时提升为 shared_ptr。</div></div>
+    </div>
+  </details>
+
+  <details class="qa">
+    <summary><span class="lvl pill cyan">基础</span>sizeof(unique_ptr) 多少？sizeof(shared_ptr) 多少？</summary>
+    <div class="a">
+      <div class="point"><div class="label">unique</div><div>默认 1 个指针大小（8B），无状态 deleter 经 EBO 不占空间；<strong>带状态 deleter 会变大</strong>。</div></div>
+      <div class="point"><div class="label">shared</div><div>2 个指针（16B）：对象指针 + 控制块指针。</div></div>
+    </div>
+  </details>
+
+  <details class="qa">
+    <summary><span class="lvl pill cyan">基础</span>make_shared 比 shared_ptr(new T) 好在哪？至少 3 点</summary>
+    <div class="a">
+      <div class="point"><div class="label">① 单次分配</div><div>控制块 + 对象合并成一块，减少一次 malloc + 提升缓存局部性。</div></div>
+      <div class="point"><div class="label">② 异常安全</div><div>避免 <code>f(shared_ptr(new T), g())</code> 求值顺序导致的泄漏。</div></div>
+      <div class="point"><div class="label">③ 简洁</div><div>不写裸 <code>new</code>，代码更短。</div></div>
+      <div class="point warn"><div class="label">代价</div><div>只要还有 <code>weak_ptr</code> 存活，<strong>整块内存（含大对象空间）不释放</strong>。</div></div>
+    </div>
+  </details>
+
+  <details class="qa">
+    <summary><span class="lvl pill cyan">基础</span>shared_ptr 的引用计数线程安全吗？对象本身呢？</summary>
+    <div class="a">
+      <div class="point"><div class="label">计数</div><div>控制块引用计数是<strong>原子的、线程安全</strong>：多个 shared_ptr 各自拷贝 / 析构安全。</div></div>
+      <div class="point bad"><div class="label">对象</div><div><strong>不安全</strong>：并发改同一对象需自行加锁；多线程读写<strong>同一个</strong> shared_ptr 实例需 <code>atomic&lt;shared_ptr&gt;</code>。</div></div>
+    </div>
+  </details>
+
+  <details class="qa">
+    <summary><span class="lvl pill cyan">基础</span>循环引用怎么产生？怎么解？</summary>
+    <div class="a">
+      <div class="point bad"><div class="label">产生</div><div>两对象互相用 shared_ptr 持有 → 计数永不归零 → 内存泄漏。</div></div>
+      <div class="point"><div class="label">解</div><div>把其中一方改 <code>weak_ptr</code>（典型：父→子用 shared，子→父用 weak）。</div></div>
+    </div>
+  </details>
 
   <h3 id="s14-2">14.2 中级</h3>
-  <ol start="6">
-    <li>控制块里有哪些字段？为什么 weak_count 初值是 1？</li>
-    <li>enable_shared_from_this 内部怎么工作？为什么必须先用 shared_ptr 创建对象？</li>
-    <li>shared_ptr 拷贝时引用计数 +1 用什么 memory_order？为什么？</li>
-    <li>weak_ptr.lock() 内部做了什么？</li>
-    <li>aliasing constructor 是什么？给一个真实使用场景</li>
-    <li>shared_ptr&lt;Base&gt;{new Derived} 在 Base 析构非 virtual 时为何安全？</li>
-    <li>shared_ptr 和 std::function 都做类型擦除，开销分别在哪？</li>
-  </ol>
+
+  <details class="qa">
+    <summary><span class="lvl pill amber">中级</span>控制块里有哪些字段？为什么 weak_count 初值是 1？</summary>
+    <div class="a">
+      <div class="point"><div class="label">字段</div><div>strong count、weak count、删除器、分配器，以及（make_shared 时）内联的对象存储。</div></div>
+      <div class="point deep"><div class="label">weak=1</div><div>所有 strong 引用合起来算"一个 weak 持有者"。strong 归零时减掉这个 1，使控制块在最后一个 weak 也消失时才释放 —— 保证 <code>expired()</code> 等查询期间控制块仍有效。</div></div>
+    </div>
+  </details>
+
+  <details class="qa">
+    <summary><span class="lvl pill amber">中级</span>enable_shared_from_this 内部怎么工作？为什么必须先用 shared_ptr 创建对象？</summary>
+    <div class="a">
+      <div class="point"><div class="label">机制</div><div>基类内藏一个 <code>weak_ptr</code>；shared_ptr 构造时检测到该基类并<strong>回填</strong>这个 weak。<code>shared_from_this()</code> 即 <code>weak.lock()</code>。</div></div>
+      <div class="point bad"><div class="label">前提</div><div>若对象不是被 shared_ptr 管理（栈对象 / 裸 new），weak 未初始化 → C++17 起抛 <code>bad_weak_ptr</code>（旧标准 UB）。</div></div>
+    </div>
+  </details>
+
+  <details class="qa">
+    <summary><span class="lvl pill amber">中级</span>shared_ptr 拷贝时引用计数 +1 用什么 memory_order？为什么？</summary>
+    <div class="a">
+      <div class="point"><div class="label">+1</div><div><code>relaxed</code>。增加引用不改变对象可见性 —— 调用前我已持有合法引用，仅让计数变大，无需 happens-before。</div></div>
+      <div class="point deep"><div class="label">-1</div><div><code>acq_rel</code>（或 release + 末次 acquire fence），保证其他线程对对象的<strong>所有写</strong> happens-before 析构。详见 §14.4。</div></div>
+    </div>
+  </details>
+
+  <details class="qa">
+    <summary><span class="lvl pill amber">中级</span>weak_ptr.lock() 内部做了什么？</summary>
+    <div class="a">
+      <div class="point"><div class="label">实现</div><div>原子检查 strong count 是否 &gt; 0，是则用 <strong>CAS</strong> 把 strong+1 并返回 shared_ptr，否则返回空。本质是一个无锁 CAS 循环。</div></div>
+    </div>
+  </details>
+
+  <details class="qa">
+    <summary><span class="lvl pill amber">中级</span>aliasing constructor 是什么？给一个真实使用场景</summary>
+    <div class="a">
+      <div class="point"><div class="label">定义</div><div><code>shared_ptr&lt;T&gt;(other_sp, raw_ptr)</code>：<strong>共享 other 的控制块（计数）</strong>，但 <code>get()</code> 返回另一个指针。</div></div>
+      <div class="point deep"><div class="label">场景</div><div>持有结构体某个<strong>成员</strong>的 shared_ptr，同时让整个结构体保持存活（计数挂在父对象上）。</div></div>
+    </div>
+  </details>
+
+  <details class="qa">
+    <summary><span class="lvl pill amber">中级</span>shared_ptr&lt;Base&gt;{new Derived} 在 Base 析构非 virtual 时为何安全？</summary>
+    <div class="a">
+      <div class="point"><div class="label">原因</div><div>shared_ptr 构造时把删除器<strong>类型擦除</strong>为 <code>delete (Derived*)</code> 并存进控制块，析构时调用记录的删除器删真实类型 Derived，不依赖 Base 虚析构。</div></div>
+      <div class="point warn"><div class="label">对比</div><div><code>unique_ptr</code> 无此保护 —— 多态删除仍需虚析构。</div></div>
+    </div>
+  </details>
+
+  <details class="qa">
+    <summary><span class="lvl pill amber">中级</span>shared_ptr 和 std::function 都做类型擦除，开销分别在哪？</summary>
+    <div class="a">
+      <div class="point"><div class="label">shared_ptr</div><div>擦除"如何删除"（删除器），开销在控制块一次分配 + 原子计数。</div></div>
+      <div class="point"><div class="label">function</div><div>擦除"如何调用"，开销在可能的堆分配（超过 SBO 时）+ 一次间接调用。</div></div>
+    </div>
+  </details>
 
   <h3 id="s14-3">14.3 高级（体现深度）</h3>
-  <ol start="13">
-    <li>std::atomic&lt;std::shared_ptr&lt;T&gt;&gt; 内部是真无锁吗？</li>
-    <li>make_shared 创建大对象 + weak_ptr 长期持有，会有什么问题？</li>
-    <li>shared_ptr 跨 .so 边界传递有什么 ABI 坑？怎么规避？</li>
-    <li>boost::intrusive_ptr 比 std::shared_ptr 强在哪？弱在哪？</li>
-    <li>设计一个"对象池版" shared_ptr（释放时回池，不 delete），怎么做？</li>
-    <li>shared_ptr 持有 const T 与持有 mutable T 的语义区别？</li>
-    <li>从一个 shared_ptr&lt;Derived&gt; 转成 shared_ptr&lt;Base&gt; 是什么成本？反过来呢？</li>
-    <li>设计一个 LRU cache，key→value 是 weak_ptr，怎么避免 cache 自己延长对象生命周期？</li>
-  </ol>
+
+  <details class="qa">
+    <summary><span class="lvl pill red">高级</span>std::atomic&lt;std::shared_ptr&lt;T&gt;&gt; 内部是真无锁吗？</summary>
+    <div class="a">
+      <div class="point bad"><div class="label">不保证</div><div><code>is_lock_free()</code> 多为 false。多数实现用 spinlock / 锁分段保护控制块的原子换出 —— 逻辑上无锁语义，物理上常有锁。</div></div>
+    </div>
+  </details>
+
+  <details class="qa">
+    <summary><span class="lvl pill red">高级</span>make_shared 创建大对象 + weak_ptr 长期持有，会有什么问题？</summary>
+    <div class="a">
+      <div class="point bad"><div class="label">问题</div><div>对象与控制块同一块内存；strong 归零对象析构，但只要 weak 还在，<strong>整块内存（含大对象空间）不释放</strong> → 内存浪费。</div></div>
+      <div class="point"><div class="label">对策</div><div>大对象 + 长 weak 改用 <code>shared_ptr(new T)</code> 分离分配。</div></div>
+    </div>
+  </details>
+
+  <details class="qa">
+    <summary><span class="lvl pill red">高级</span>shared_ptr 跨 .so 边界传递有什么 ABI 坑？怎么规避？</summary>
+    <div class="a">
+      <div class="point bad"><div class="label">坑</div><div>不同编译器 / STL 版本控制块布局不同；删除器与分配器跨边界；可能跨不同堆。</div></div>
+      <div class="point"><div class="label">规避</div><div>边界用 C 接口，或保证两侧同一套 ABI / 运行时；删除器在<strong>创建侧</strong>定义。</div></div>
+    </div>
+  </details>
+
+  <details class="qa">
+    <summary><span class="lvl pill red">高级</span>boost::intrusive_ptr 比 std::shared_ptr 强在哪？弱在哪？</summary>
+    <div class="a">
+      <div class="point"><div class="label">强</div><div>计数嵌入对象内 → 单次分配、<code>sizeof</code>=1 指针、可从裸指针重建。</div></div>
+      <div class="point warn"><div class="label">弱</div><div>侵入式需改对象、无内建 weak、需手写 <code>add_ref</code> / <code>release</code>。</div></div>
+    </div>
+  </details>
+
+  <details class="qa">
+    <summary><span class="lvl pill red">高级</span>设计一个"对象池版" shared_ptr（释放时回池，不 delete），怎么做？</summary>
+    <div class="a">
+      <div class="point"><div class="label">做法</div><div>用自定义删除器归还池而非 delete：
+<pre>std::shared_ptr&lt;T&gt; p(pool.<span class="f">alloc</span>(),
+    [&amp;pool](T* q){ pool.<span class="f">recycle</span>(q); });</pre></div></div>
+      <div class="point warn"><div class="label">注意</div><div>池的生命周期必须 &gt; 所有指针；删除器捕获的引用 / 指针不能悬空。</div></div>
+    </div>
+  </details>
+
+  <details class="qa">
+    <summary><span class="lvl pill red">高级</span>shared_ptr 持有 const T 与持有 mutable T 的语义区别？</summary>
+    <div class="a">
+      <div class="point"><div class="label">const T</div><div>只读共享：不能改对象，但能 <code>reset</code> 指针本身。多读者天然安全。</div></div>
+      <div class="point"><div class="label">mutable T</div><div>允许改对象，多写者需自行同步。</div></div>
+    </div>
+  </details>
+
+  <details class="qa">
+    <summary><span class="lvl pill red">高级</span>从一个 shared_ptr&lt;Derived&gt; 转成 shared_ptr&lt;Base&gt; 是什么成本？反过来呢？</summary>
+    <div class="a">
+      <div class="point"><div class="label">上行</div><div><code>static_pointer_cast</code>，共享控制块，原子 +1，O(1) 无检查。</div></div>
+      <div class="point deep"><div class="label">下行</div><div><code>dynamic_pointer_cast</code>，含 RTTI 运行时检查，更贵且可能失败返回空。</div></div>
+    </div>
+  </details>
+
+  <details class="qa">
+    <summary><span class="lvl pill red">高级</span>设计一个 LRU cache，key→value 是 weak_ptr，怎么避免 cache 自己延长对象生命周期？</summary>
+    <div class="a">
+      <div class="point"><div class="label">做法</div><div>value 存 <code>weak_ptr</code>，get 时 <code>lock()</code>：命中且 lock 成功才返回；失败说明对象已被外部释放 → 当作 miss 并清理该 entry。</div></div>
+      <div class="point deep"><div class="label">效果</div><div>cache 不持 strong 引用、不延长寿命；可配合定期清理过期 entry。</div></div>
+    </div>
+  </details>
 
   <h3 id="s14-4">14.4 速答示范（第 8 题：shared_ptr 拷贝的 memory_order）</h3>
   <div class="box ok">
