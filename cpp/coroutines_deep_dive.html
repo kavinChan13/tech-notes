@@ -1569,37 +1569,185 @@ std::generator&lt;<span class="kw">int</span>&gt; <span class="fn">primes</span>
     </div>
   </div>
 
+  <p class="lead" style="font-size:14px">点击每道题展开参考答案（先自测，再对照）。</p>
+
   <h3 id="s17-1">17.1 基础（必答）</h3>
-  <ol>
-    <li>协程与线程的本质区别？无栈协程 vs 有栈协程？</li>
-    <li>C++20 给了哪三个关键字？编译器看到这些做了什么？</li>
-    <li>协程帧里存哪些东西？为什么不在栈上？</li>
-    <li>promise_type 的 6 个必需钩子是什么？</li>
-    <li>initial_suspend / final_suspend 通常应该返回什么？为什么？</li>
-  </ol>
+
+  <details class="qa">
+    <summary><span class="lvl pill cyan">基础</span>协程与线程的本质区别？无栈协程 vs 有栈协程？</summary>
+    <div class="a">
+      <div class="point"><div class="label">vs 线程</div><div>协程是用户态可挂起 / 恢复的函数，<strong>协作式</strong>调度、无内核切换；线程由 OS <strong>抢占</strong>调度。</div></div>
+      <div class="point deep"><div class="label">无栈/有栈</div><div>C++20 是<strong>无栈协程</strong>：只把必要状态存进堆上的协程帧，不保存整个调用栈；有栈协程（ucontext / boost.context）保存完整栈，可在任意深度挂起但切换更重。</div></div>
+    </div>
+  </details>
+
+  <details class="qa">
+    <summary><span class="lvl pill cyan">基础</span>C++20 给了哪三个关键字？编译器看到这些做了什么？</summary>
+    <div class="a">
+      <div class="point"><div class="label">关键字</div><div><code>co_await</code> / <code>co_yield</code> / <code>co_return</code>，函数含任一即为协程。</div></div>
+      <div class="point"><div class="label">改写</div><div>编译器把函数改写成<strong>状态机</strong>：分配协程帧、创建 promise、在挂起点保存 / 恢复状态，并按 promise 钩子织入逻辑。</div></div>
+    </div>
+  </details>
+
+  <details class="qa">
+    <summary><span class="lvl pill cyan">基础</span>协程帧里存哪些东西？为什么不在栈上？</summary>
+    <div class="a">
+      <div class="point"><div class="label">存</div><div>promise 对象、形参拷贝、跨挂起点存活的局部变量、挂起点编号 / 恢复地址。</div></div>
+      <div class="point deep"><div class="label">为何在堆</div><div>挂起后调用者栈帧会销毁，状态必须存在<strong>堆</strong>（或 HALO 优化后的调用者帧）才能在恢复时仍有效。</div></div>
+    </div>
+  </details>
+
+  <details class="qa">
+    <summary><span class="lvl pill cyan">基础</span>promise_type 的 6 个必需钩子是什么？</summary>
+    <div class="a">
+      <div class="point"><div class="label">钩子</div><div><code>get_return_object</code>、<code>initial_suspend</code>、<code>final_suspend</code>(noexcept)、<code>unhandled_exception</code>、<code>return_void</code> 或 <code>return_value</code>，以及（generator 需）<code>yield_value</code>。</div></div>
+    </div>
+  </details>
+
+  <details class="qa">
+    <summary><span class="lvl pill cyan">基础</span>initial_suspend / final_suspend 通常应该返回什么？为什么？</summary>
+    <div class="a">
+      <div class="point"><div class="label">initial</div><div>Task 常 <code>suspend_always</code>（懒启动）；eager 任务用 <code>suspend_never</code>。</div></div>
+      <div class="point deep"><div class="label">final</div><div>几乎总 <code>suspend_always</code> 且 <code>noexcept</code> —— 让帧在结束后保留，便于取结果 / symmetric transfer 唤醒等待者，再由外部 <code>destroy</code>。</div></div>
+    </div>
+  </details>
 
   <h3 id="s17-2">17.2 中级</h3>
-  <ol start="6">
-    <li>awaiter 的三个方法 await_ready / await_suspend / await_resume 各自语义？</li>
-    <li>await_suspend 的三种返回类型（void / bool / coroutine_handle）有什么区别？</li>
-    <li>什么是 Symmetric Transfer？为什么它是 C++ 协程"零开销"的关键？</li>
-    <li>HALO 是什么？满足什么条件才能生效？</li>
-    <li>协程主体抛异常会怎样？怎么传给等待者？</li>
-    <li>co_yield / co_return 在编译器层面分别被翻译成什么？</li>
-    <li>什么是 std::noop_coroutine？什么时候用？</li>
-  </ol>
+
+  <details class="qa">
+    <summary><span class="lvl pill amber">中级</span>awaiter 的三个方法 await_ready / await_suspend / await_resume 各自语义？</summary>
+    <div class="a">
+      <div class="point"><div class="label">ready</div><div>是否已就绪，<code>true</code> 则跳过挂起。</div></div>
+      <div class="point"><div class="label">suspend(h)</div><div>挂起时调用，决定挂起 / 恢复 / 转移。</div></div>
+      <div class="point"><div class="label">resume</div><div>恢复后调用，返回值即 <code>co_await</code> 表达式的值。</div></div>
+    </div>
+  </details>
+
+  <details class="qa">
+    <summary><span class="lvl pill amber">中级</span>await_suspend 的三种返回类型（void / bool / coroutine_handle）有什么区别？</summary>
+    <div class="a">
+      <div class="point"><div class="label">void</div><div>无条件挂起，控制权回到 resume 的调用者。</div></div>
+      <div class="point"><div class="label">bool</div><div><code>true</code> 挂起；<code>false</code> 不挂起、立即继续本协程。</div></div>
+      <div class="point deep"><div class="label">handle</div><div>symmetric transfer：尾调用恢复返回的那个协程，<strong>栈深度不增</strong>。</div></div>
+    </div>
+  </details>
+
+  <details class="qa">
+    <summary><span class="lvl pill amber">中级</span>什么是 Symmetric Transfer？为什么它是 C++ 协程"零开销"的关键？</summary>
+    <div class="a">
+      <div class="point"><div class="label">机制</div><div>await_suspend 返回另一协程 handle，编译器翻译成<strong>尾调用</strong>，当前栈帧立即释放，链式恢复栈深度恒定，避免深嵌套 / 循环 yield 栈溢出。完整解析见 §17.4。</div></div>
+    </div>
+  </details>
+
+  <details class="qa">
+    <summary><span class="lvl pill amber">中级</span>HALO 是什么？满足什么条件才能生效？</summary>
+    <div class="a">
+      <div class="point"><div class="label">HALO</div><div>Heap Allocation eLision Optimization：编译器省略协程帧的堆分配，放进调用者栈帧。</div></div>
+      <div class="point warn"><div class="label">条件</div><div>协程生命周期完全被调用者包含（不逃逸）且编译器能看到全部信息（通常需内联）。属"可做"优化，不保证。</div></div>
+    </div>
+  </details>
+
+  <details class="qa">
+    <summary><span class="lvl pill amber">中级</span>协程主体抛异常会怎样？怎么传给等待者？</summary>
+    <div class="a">
+      <div class="point"><div class="label">捕获</div><div>未捕获异常触发 <code>promise.unhandled_exception()</code>，通常 <code>exc_ = std::current_exception()</code> 存到 promise。</div></div>
+      <div class="point deep"><div class="label">透传</div><div><code>await_resume()</code> 时检查并 <code>rethrow_exception</code>，从而传给 <code>co_await</code> 它的等待者。</div></div>
+    </div>
+  </details>
+
+  <details class="qa">
+    <summary><span class="lvl pill amber">中级</span>co_yield / co_return 在编译器层面分别被翻译成什么？</summary>
+    <div class="a">
+      <div class="point"><div class="label">co_yield e</div><div>→ <code>co_await promise.yield_value(e)</code>。</div></div>
+      <div class="point"><div class="label">co_return e</div><div>→ <code>promise.return_value(e)</code> 后跳到 final_suspend（无值则 <code>return_void</code>）。</div></div>
+    </div>
+  </details>
+
+  <details class="qa">
+    <summary><span class="lvl pill amber">中级</span>什么是 std::noop_coroutine？什么时候用？</summary>
+    <div class="a">
+      <div class="point"><div class="label">作用</div><div>返回一个"什么都不做"的 <code>coroutine_handle</code>。</div></div>
+      <div class="point deep"><div class="label">场景</div><div>symmetric transfer 链的终点：final_suspend 在没有等待者时返回 <code>noop_coroutine()</code> 安全结束、把控制权交回调度器，而不是返回无效 handle。</div></div>
+    </div>
+  </details>
 
   <h3 id="s17-3">17.3 高级（体现深度）</h3>
-  <ol start="13">
-    <li>手写一个 Task&lt;T&gt; 支持 co_await + 异常透传，至少要哪些核心代码？</li>
-    <li>为什么协程函数<strong>不能</strong>用引用参数？给一个 UB 示例</li>
-    <li>fire-and-forget 协程的异常去哪了？怎么正确处理？</li>
-    <li>std::generator 比手写 generator 强在哪？（提示：elements_of）</li>
-    <li>跨调度器的协程链可能死锁吗？怎么避免？</li>
-    <li>协程怎么和 io_uring / Reactor 对接？写一个 read awaiter 骨架</li>
-    <li>协程 frame 能不堆分配吗？答出 HALO 之外还有什么手段</li>
-    <li>解释为什么 final_suspend 必须 noexcept，且通常返回 suspend_always</li>
-  </ol>
+
+  <details class="qa">
+    <summary><span class="lvl pill red">高级</span>手写一个 Task&lt;T&gt; 支持 co_await + 异常透传，至少要哪些核心代码？</summary>
+    <div class="a">
+      <div class="point"><div class="label">promise</div><div><code>get_return_object</code> / <code>initial_suspend=suspend_always</code> / <code>final_suspend</code> 返回唤醒 continuation 的 awaiter / <code>unhandled_exception</code> 存 <code>exception_ptr</code> / <code>return_value</code>。</div></div>
+      <div class="point deep"><div class="label">Task</div><div>持有 <code>coroutine_handle</code>；<code>operator co_await</code> 返回 awaiter（await_suspend 记录 continuation 并 symmetric transfer 启动本协程，await_resume 重抛异常并取值）；析构 <code>destroy</code>。</div></div>
+    </div>
+  </details>
+
+  <details class="qa">
+    <summary><span class="lvl pill red">高级</span>为什么协程函数<strong>不能</strong>用引用参数？给一个 UB 示例</summary>
+    <div class="a">
+      <div class="point bad"><div class="label">原因</div><div>形参按值拷贝进协程帧，但引用 / 指针参数只拷贝引用本身、<strong>不延长被引用对象寿命</strong>。</div></div>
+      <div class="point"><div class="label">UB 示例</div><div>
+<pre>Task <span class="f">f</span>(<span class="k">const</span> std::<span class="t">string</span>&amp; s) {
+    <span class="k">co_await</span> <span class="f">something</span>();   <span class="c">// 挂起后临时实参已销毁</span>
+    <span class="f">use</span>(s);                <span class="c">// 悬空引用 → UB</span>
+}
+<span class="f">f</span>(std::<span class="t">string</span>(<span class="s">"tmp"</span>));     <span class="c">// 临时只活到第一次挂起</span></pre>
+应<strong>按值传参</strong>。</div></div>
+    </div>
+  </details>
+
+  <details class="qa">
+    <summary><span class="lvl pill red">高级</span>fire-and-forget 协程的异常去哪了？怎么正确处理？</summary>
+    <div class="a">
+      <div class="point bad"><div class="label">陷阱</div><div>detached 协程无人 co_await，<code>unhandled_exception</code> 里若 rethrow 会 <code>terminate</code>。</div></div>
+      <div class="point"><div class="label">正确</div><div>在 <code>unhandled_exception</code> 内 catch / 记日志，或设计成不分离、由 supervisor 持有并取异常。</div></div>
+    </div>
+  </details>
+
+  <details class="qa">
+    <summary><span class="lvl pill red">高级</span>std::generator 比手写 generator 强在哪？（提示：elements_of）</summary>
+    <div class="a">
+      <div class="point"><div class="label">优势</div><div>标准、正确处理异常与提前结束，且支持<strong>递归 yield</strong>：<code>co_yield std::elements_of(subrange)</code> 高效展开嵌套生成器（递归生成器每元素 O(1)，避免手写转发的 O(depth) 开销）。</div></div>
+    </div>
+  </details>
+
+  <details class="qa">
+    <summary><span class="lvl pill red">高级</span>跨调度器的协程链可能死锁吗？怎么避免？</summary>
+    <div class="a">
+      <div class="point bad"><div class="label">风险</div><div>continuation 在错误线程 / 持锁时恢复，或两调度器互等线程 → 死锁 / 饥饿。</div></div>
+      <div class="point"><div class="label">避免</div><div>明确 continuation 恢复到哪个 executor（如 asio strand）、避免持锁 <code>co_await</code>、用 symmetric transfer + 调度器边界显式 schedule。</div></div>
+    </div>
+  </details>
+
+  <details class="qa">
+    <summary><span class="lvl pill red">高级</span>协程怎么和 io_uring / Reactor 对接？写一个 read awaiter 骨架</summary>
+    <div class="a">
+      <div class="point"><div class="label">骨架</div><div>
+<pre><span class="k">struct</span> <span class="t">ReadAwaiter</span> {
+    <span class="k">int</span> fd; <span class="k">void</span>* buf; <span class="t">size_t</span> len; <span class="t">ssize_t</span> result;
+    <span class="k">bool</span> <span class="f">await_ready</span>() { <span class="k">return</span> <span class="k">false</span>; }
+    <span class="k">void</span> <span class="f">await_suspend</span>(std::<span class="t">coroutine_handle</span>&lt;&gt; h) {
+        <span class="c">// 提交 io_uring SQE，user_data = h.address()</span>
+    }
+    <span class="t">ssize_t</span> <span class="f">await_resume</span>() { <span class="k">return</span> result; }
+};</pre>
+完成队列(CQE)回调里取出 handle 并 <code>resume()</code>。</div></div>
+    </div>
+  </details>
+
+  <details class="qa">
+    <summary><span class="lvl pill red">高级</span>协程 frame 能不堆分配吗？答出 HALO 之外还有什么手段</summary>
+    <div class="a">
+      <div class="point"><div class="label">手段</div><div>HALO（内联使逃逸分析成功）、自定义 promise 的 <code>operator new</code> 用内存池 / 栈缓冲、generator 的栈分配实现、保证不逃逸下的 -O2 优化 —— 本质都是消除 / 复用那次 <code>operator new</code>。</div></div>
+    </div>
+  </details>
+
+  <details class="qa">
+    <summary><span class="lvl pill red">高级</span>解释为什么 final_suspend 必须 noexcept，且通常返回 suspend_always</summary>
+    <div class="a">
+      <div class="point"><div class="label">noexcept</div><div>final_suspend 在协程结束清理阶段调用，此时若抛异常无处可逃 → <code>terminate</code>，标准强制 noexcept。</div></div>
+      <div class="point deep"><div class="label">suspend_always</div><div>让帧在结束后保留，等待者 / 调用者能安全取结果、读异常、再手动 destroy；若 suspend_never 帧会自毁，外部访问就悬空。</div></div>
+    </div>
+  </details>
 
   <h3 id="s17-4">17.4 速答示范（第 8 题：Symmetric Transfer）</h3>
   <div class="box ok">
