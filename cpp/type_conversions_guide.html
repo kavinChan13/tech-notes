@@ -399,6 +399,86 @@
       </g>
     </svg>
   </div>
+
+  <!-- ===== 交互式：我该用哪种 cast？决策树 ===== -->
+  <style>
+    .cpk{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:20px 22px 24px;margin:22px 0;}
+    .cpk-h{font-weight:700;color:var(--accent);font-size:1.02em;margin-bottom:4px;}
+    .cpk-sub{color:var(--text-dim);font-size:.85em;margin-bottom:16px;}
+    .cpk-q{font-size:1.02em;color:var(--text-bright);margin-bottom:14px;min-height:1.5em;font-weight:600;}
+    .cpk-opts{display:flex;flex-wrap:wrap;gap:10px;}
+    .cpk-opt{background:var(--bg2);border:1px solid var(--border-soft);border-radius:9px;padding:10px 16px;cursor:pointer;font-size:.9em;color:var(--text);transition:.18s;font-family:inherit;}
+    .cpk-opt:hover{border-color:var(--accent);background:rgba(56,189,248,.08);transform:translateY(-1px);}
+    .cpk-crumbs{font-size:.78em;color:var(--text-dim);margin-bottom:12px;min-height:1.2em;}
+    .cpk-crumbs span{color:var(--accent);}
+    .cpk-result{background:var(--bg2);border:1px solid var(--green);border-radius:10px;padding:16px 18px;}
+    .cpk-result .rt{font-family:'Cascadia Code',monospace;font-size:1.15em;font-weight:700;color:var(--green);margin-bottom:6px;}
+    .cpk-result.warn{border-color:var(--red);}
+    .cpk-result.warn .rt{color:var(--red);}
+    .cpk-result .rd{font-size:.88em;color:var(--text);line-height:1.65;}
+    .cpk-result pre{background:#0a1325;border:1px solid var(--border);border-radius:7px;padding:10px 12px;margin-top:10px;font-family:'Cascadia Code',monospace;font-size:.84em;overflow-x:auto;}
+    .cpk-restart{margin-top:14px;background:var(--bg2);color:var(--text);border:1px solid var(--border-soft);border-radius:8px;padding:7px 14px;font-size:.84em;cursor:pointer;font-family:inherit;}
+  </style>
+  <div class="cpk" id="cpk">
+    <div class="cpk-h">🧭 交互式决策树：我到底该用哪种 cast？</div>
+    <div class="cpk-sub">按你的真实场景一路点下去，给出推荐写法 + 注意事项。<strong>生活化类比</strong>：选 cast 就像选钥匙——能用最温和的（static）就别动撬棍（reinterpret）。</div>
+    <div class="cpk-crumbs" id="cpk-crumbs"></div>
+    <div id="cpk-stage"></div>
+  </div>
+  <script>
+  (function(){
+    var tree={
+      start:{q:"你想做哪一类转换？",opts:[
+        {l:"数值类型之间 (int↔double, enum↔int)",go:"num"},
+        {l:"指针/引用在继承体系内上下转",go:"poly"},
+        {l:"去掉 const / volatile 限定",go:"cv"},
+        {l:"把一段字节重新当成另一种类型看",go:"bits"}
+      ]},
+      num:{r:{t:"static_cast<T>(x)",d:"数值/枚举之间的转换用 static_cast——它在编译期检查转换是否合理，比 C 风格 (T)x 安全（不会意外触发 reinterpret/const 去除）。",
+        code:"double d = 3.9;\nint n = static_cast<int>(d);   // 3（截断，明确意图）"}},
+      poly:{q:"基类指针 → 派生类指针（向下转）吗？",opts:[
+        {l:"是，向下转 (Base* → Derived*)",go:"down"},
+        {l:"否，向上转 (Derived* → Base*)",go:"up"}
+      ]},
+      up:{r:{t:"static_cast / 隐式转换",d:"向上转（派生→基类）总是安全的，编译器允许隐式完成，无需写 cast。",
+        code:"Derived* d = ...;\nBase* b = d;                  // 隐式即可，安全"}},
+      down:{q:"运行时类型可能不是该派生类（需要安全检查）吗？",opts:[
+        {l:"需要安全检查 / 可能失败",go:"dyn"},
+        {l:"我 100% 确定类型，要极致性能",go:"sdown"}
+      ]},
+      dyn:{r:{t:"dynamic_cast<Derived*>(b)",d:"需要运行时校验时用 dynamic_cast：失败时指针返回 nullptr、引用抛 bad_cast。要求基类有虚函数（多态类型），有 RTTI 开销。",
+        code:"if (auto* d = dynamic_cast<Derived*>(b)) {\n    d->onlyInDerived();        // 安全：转换成功才进入\n}"}},
+      sdown:{r:{t:"static_cast<Derived*>(b)",d:"确定类型时 static_cast 向下转零开销，但若类型判断错了就是 UB。仅在你能 100% 保证实际类型时使用。",code:"Derived* d = static_cast<Derived*>(b);  // 你担保 b 真是 Derived"}},
+      cv:{r:{t:"const_cast<T>(x)",d:"const_cast 是唯一能增删 const/volatile 的 cast。⚠ 修改原本就是 const 的对象是 UB——它只该用于『对接老式非 const API，但对象本身可变』的场景。",
+        code:"void legacy(char* s);          // 老 API 忘了加 const\nconst char* msg = \"hi\";\n// legacy(const_cast<char*>(msg)); // 仅当 legacy 不写入才安全",warn:true}},
+      bits:{q:"两个类型大小相同、且都是可平凡复制 (trivially copyable) 吗？",opts:[
+        {l:"是，大小相同 (如 float ↔ uint32_t)",go:"bc"},
+        {l:"否 / 需要指针重解释 (如 char* ↔ Foo*)",go:"reint"}
+      ]},
+      bc:{r:{t:"std::bit_cast<To>(x)  (C++20)",d:"同大小、可平凡复制类型之间重解释字节，首选 bit_cast：不破坏严格别名规则、constexpr 可用、比 reinterpret_cast 安全得多。",
+        code:"float f = 1.5f;\nauto bits = std::bit_cast<uint32_t>(f);  // 安全读位模式"}},
+      reint:{r:{t:"reinterpret_cast<T>(x)",d:"最危险的 cast：纯粹按位重解释指针/整数，不做任何检查，极易违反严格别名规则导致 UB。仅在底层（硬件寄存器、序列化）且你完全清楚后果时使用。",
+        code:"auto addr = reinterpret_cast<uintptr_t>(ptr); // 指针→整数\n// 通过非兼容类型指针访问对象通常是 UB！",warn:true}}
+    };
+    var path=[];
+    var $=function(id){return document.getElementById(id);};
+    function render(key){
+      var node=tree[key]; var crumbs=$("cpk-crumbs"); var stage=$("cpk-stage");
+      crumbs.innerHTML = path.length? ("路径：" + path.map(function(p){return "<span>"+p+"</span>";}).join(" › ")) : "";
+      if(node.q){
+        var html='<div class="cpk-q">'+node.q+'</div><div class="cpk-opts">';
+        node.opts.forEach(function(o,idx){html+='<button class="cpk-opt" data-go="'+o.go+'" data-l="'+o.l.replace(/"/g,'&quot;')+'">'+o.l+'</button>';});
+        html+='</div>'; stage.innerHTML=html;
+        stage.querySelectorAll(".cpk-opt").forEach(function(b){b.onclick=function(){path.push(b.dataset.l);render(b.dataset.go);};});
+      } else {
+        var r=node.r;
+        stage.innerHTML='<div class="cpk-result'+(r.warn?" warn":"")+'"><div class="rt">✓ 推荐：'+r.t+'</div><div class="rd">'+r.d+'</div>'+(r.code?'<pre>'+r.code+'</pre>':'')+'</div><button class="cpk-restart" id="cpk-rst">↺ 重新选择</button>';
+        $("cpk-rst").onclick=function(){path=[];render("start");};
+      }
+    }
+    render("start");
+  })();
+  </script>
 </section>
 
 <!-- ================================================================

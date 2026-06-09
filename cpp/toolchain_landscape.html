@@ -355,6 +355,82 @@ opt -S -passes='inline,gvn,licm' hello.ll -o opt.ll
 <span class="cm"># 看 pass 详细 timing</span>
 clang -O2 -ftime-report hello.cpp</pre>
 
+  <!-- ===== 交互式：优化级别如何改写同一段代码 ===== -->
+  <style>
+    .opt{background:var(--ps-card);border:1px solid var(--ps-border);border-radius:14px;padding:20px 22px 24px;margin:18px 0;}
+    .opt-h{font-weight:700;color:var(--ps-accent);font-size:1.02em;margin-bottom:4px;}
+    .opt-sub{color:var(--ps-text-dim);font-size:.85em;margin-bottom:16px;}
+    .opt-tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px;}
+    .opt-tab{background:var(--ps-bg-2);border:1px solid var(--ps-border-soft);border-radius:8px;padding:7px 14px;color:var(--ps-text-dim);font-family:var(--ps-mono);font-size:.85em;font-weight:700;cursor:pointer;transition:.18s;}
+    .opt-tab.on{background:var(--ps-accent);color:#04122b;border-color:var(--ps-accent);}
+    .opt-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+    @media(max-width:680px){.opt-grid{grid-template-columns:1fr;}}
+    .opt-pane{background:var(--ps-card-2);border:1px solid var(--ps-border);border-radius:10px;overflow:hidden;}
+    .opt-pt{font-size:.78em;color:var(--ps-text-dim);text-transform:uppercase;letter-spacing:1px;padding:8px 14px;border-bottom:1px solid var(--ps-border);font-weight:700;}
+    .opt-code{padding:12px 14px;font-family:var(--ps-mono);font-size:.82em;line-height:1.6;white-space:pre;overflow-x:auto;color:var(--ps-text);min-height:150px;}
+    .opt-code .gk{color:#ff7b72;} .opt-code .gt{color:#79c0ff;} .opt-code .gn{color:#d2a8ff;} .opt-code .gc{color:#8b949e;}
+    .opt-meta{display:flex;gap:18px;flex-wrap:wrap;margin-top:14px;font-size:.84em;}
+    .opt-stat{color:var(--ps-text-dim);} .opt-stat b{color:var(--ps-green);font-family:var(--ps-mono);}
+    .opt-bar{height:10px;background:var(--ps-bg-2);border-radius:6px;overflow:hidden;margin-top:6px;}
+    .opt-bar>span{display:block;height:100%;background:linear-gradient(90deg,var(--ps-green),var(--ps-accent));transition:width .5s;}
+    .opt-note{font-size:.83em;color:var(--ps-text-dim);margin-top:12px;line-height:1.6;border-top:1px dashed var(--ps-border);padding-top:10px;}
+  </style>
+  <div class="opt" id="opt">
+    <div class="opt-h">🎚️ 交互式演示：同一段代码，不同 -O 级别编译器做了什么</div>
+    <div class="opt-sub">切换优化级别，观察编译器如何"看穿"代码：常量折叠、内联、死代码删除、向量化…… 右侧是近似汇编与指令数。<strong>生活化类比</strong>：-O0 是逐字照做的实习生，-O3 是会抄近路的老师傅。</div>
+    <div class="opt-tabs" id="opt-tabs">
+      <button class="opt-tab on" data-k="O0">-O0</button>
+      <button class="opt-tab" data-k="O1">-O1</button>
+      <button class="opt-tab" data-k="O2">-O2</button>
+      <button class="opt-tab" data-k="O3">-O3</button>
+    </div>
+    <div class="opt-grid">
+      <div class="opt-pane">
+        <div class="opt-pt">源代码（始终不变）</div>
+        <div class="opt-code"><span class="gk">int</span> <span class="gn">sum</span>() {
+  <span class="gk">int</span> s = <span class="gn">0</span>;
+  <span class="gk">for</span> (<span class="gk">int</span> i = <span class="gn">0</span>; i &lt; <span class="gn">4</span>; ++i)
+    s += i * <span class="gn">2</span>;
+  <span class="gk">return</span> s;          <span class="gc">// = 0+2+4+6 = 12</span>
+}</div>
+      </div>
+      <div class="opt-pane">
+        <div class="opt-pt">近似生成的汇编 / IR</div>
+        <div class="opt-code" id="opt-asm"></div>
+      </div>
+    </div>
+    <div class="opt-meta">
+      <span class="opt-stat">指令数：<b id="opt-ins">—</b></span>
+      <span class="opt-stat">关键 pass：<b id="opt-pass">—</b></span>
+    </div>
+    <div class="opt-bar"><span id="opt-fill" style="width:100%;"></span></div>
+    <div class="opt-note" id="opt-note"></div>
+  </div>
+  <script>
+  (function(){
+    var data={
+      O0:{asm:'<span class="gc">; 老老实实建栈帧 + 循环</span>\nsum:\n  push rbp\n  mov  [s], 0\n  mov  [i], 0\n.loop:\n  cmp  [i], 4\n  jge  .end\n  mov  eax, [i]\n  imul eax, 2\n  add  [s], eax\n  inc  [i]\n  jmp  .loop\n.end:\n  mov  eax, [s]\n  ret',
+        ins:16, pass:"无（直译）", w:100, note:"不优化：循环原样保留、变量进内存（方便调试时查看），指令最多但最贴近源码。"},
+      O1:{asm:'<span class="gc">; 变量进寄存器, 删栈访问</span>\nsum:\n  xor  eax, eax    ; s=0\n  xor  ecx, ecx    ; i=0\n.loop:\n  lea  edx, [ecx*2]\n  add  eax, edx\n  inc  ecx\n  cmp  ecx, 4\n  jne  .loop\n  ret',
+        ins:8, pass:"mem2reg, SimplifyCFG", w:55, note:"基本优化：变量提升到寄存器（mem2reg），循环还在但开销小了一半。"},
+      O2:{asm:'<span class="gc">; 循环被完全展开 + 常量传播</span>\nsum:\n  mov  eax, 12     ; 编译期算出结果!\n  ret',
+        ins:2, pass:"LoopUnroll, GVN, InstCombine", w:14, note:"生产级：循环次数已知 → 完全展开 → 常量折叠成 12，整个函数塌缩成一句 mov。"},
+      O3:{asm:'<span class="gc">; 与 O2 同结果, 更激进的内联/向量化预算</span>\nsum:\n  mov  eax, 12\n  ret',
+        ins:2, pass:"+ Vectorizer / 更狠 Unroll", w:14, note:"更激进：本例已无可压缩；O3 的额外预算主要对大循环 / 数值密集代码（向量化）见效，可能增大 binary。"}
+    };
+    var $=function(id){return document.getElementById(id);};
+    function show(k){
+      var d=data[k];
+      $("opt-asm").innerHTML=d.asm; $("opt-ins").textContent=d.ins;
+      $("opt-pass").textContent=d.pass; $("opt-fill").style.width=d.w+"%"; $("opt-note").textContent=d.note;
+    }
+    document.querySelectorAll("#opt-tabs .opt-tab").forEach(function(b){
+      b.onclick=function(){document.querySelectorAll("#opt-tabs .opt-tab").forEach(function(x){x.classList.remove("on");});b.classList.add("on");show(b.dataset.k);};
+    });
+    show("O0");
+  })();
+  </script>
+
   <h3>-O0 / -O1 / -O2 / -O3 / -Os / -Oz / -Ofast</h3>
 
   <table>

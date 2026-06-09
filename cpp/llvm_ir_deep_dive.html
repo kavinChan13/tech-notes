@@ -179,6 +179,87 @@ entry:
 
   <p>Optimizer 把 5 个 basic block + 多次 load/store 压缩成 3 行 + 1 个 <code>select</code>。这就是 <strong>SSA 优化的威力</strong>。</p>
 
+  <!-- ===== 交互式：源码 → IR → 优化 → 汇编 逐级演化 ===== -->
+  <style>
+    .irx{background:var(--ps-card);border:1px solid var(--ps-border);border-radius:14px;padding:20px 22px 24px;margin:18px 0;}
+    .irx-h{font-weight:700;color:var(--ps-accent);font-size:1.02em;margin-bottom:4px;}
+    .irx-sub{color:var(--ps-text-dim);font-size:.85em;margin-bottom:16px;}
+    .irx-steps{display:flex;gap:0;margin-bottom:16px;flex-wrap:wrap;}
+    .irx-step{flex:1;min-width:90px;text-align:center;position:relative;cursor:pointer;padding:8px 4px;}
+    .irx-step .dot{width:30px;height:30px;line-height:30px;border-radius:50%;margin:0 auto 6px;font-weight:700;background:var(--ps-bg-2);border:2px solid var(--ps-border);color:var(--ps-text-dim);transition:.3s;font-size:.85em;}
+    .irx-step .nm{font-size:.78em;color:var(--ps-text-dim);transition:.3s;}
+    .irx-step.on .dot{background:var(--ps-accent);border-color:var(--ps-accent);color:#04122b;transform:scale(1.12);}
+    .irx-step.on .nm{color:var(--ps-accent);font-weight:700;}
+    .irx-step.done .dot{border-color:var(--ps-green);color:var(--ps-green);}
+    .irx-step:not(:last-child)::after{content:"";position:absolute;top:23px;left:60%;width:80%;height:2px;background:var(--ps-border);}
+    .irx-pane{background:var(--ps-card-2);border:1px solid var(--ps-border);border-radius:10px;overflow:hidden;}
+    .irx-pt{padding:9px 14px;background:var(--ps-bg-2);border-bottom:1px solid var(--ps-border);font-size:.84em;}
+    .irx-pt b{color:var(--ps-accent);font-family:var(--ps-mono);}
+    .irx-pt .meta{color:var(--ps-text-dim);}
+    .irx-code{padding:14px 16px;font-family:var(--ps-mono);font-size:.82em;line-height:1.6;white-space:pre;overflow-x:auto;color:var(--ps-text);min-height:170px;}
+    .irx-code .c{color:#8b949e;} .irx-code .k{color:#ff7b72;} .irx-code .hl{background:rgba(74,222,128,.16);border-radius:3px;padding:0 2px;}
+    .irx-note{font-size:.84em;color:var(--ps-text-dim);margin-top:12px;line-height:1.6;border-top:1px dashed var(--ps-border);padding-top:10px;}
+    .irx-note b{color:var(--ps-text);}
+    .irx-ctrl{display:flex;gap:10px;margin-top:14px;}
+    .irx-btn{background:var(--ps-accent);color:#04122b;border:none;border-radius:8px;padding:8px 16px;font-weight:700;font-size:.85em;cursor:pointer;font-family:var(--ps-sans);}
+    .irx-btn.ghost{background:var(--ps-bg-2);color:var(--ps-text);border:1px solid var(--ps-border-soft);}
+  </style>
+  <div class="irx" id="irx">
+    <div class="irx-h">🧬 交互式演示：<code>max(a,b)</code> 从 C++ 一路降到汇编</div>
+    <div class="irx-sub">点每个阶段（或「下一步」），看同一段逻辑如何逐级"瘦身"。<strong>生活化类比</strong>：像把啰嗦的口述（O0 IR 的 load/store）整理成提纲（SSA），再精简成一句话（select），最后翻译成对方母语（汇编）。</div>
+    <div class="irx-steps" id="irx-steps">
+      <div class="irx-step" data-i="0"><div class="dot">C++</div><div class="nm">源码</div></div>
+      <div class="irx-step" data-i="1"><div class="dot">.ll</div><div class="nm">-O0 IR</div></div>
+      <div class="irx-step" data-i="2"><div class="dot">SSA</div><div class="nm">mem2reg</div></div>
+      <div class="irx-step" data-i="3"><div class="dot">opt</div><div class="nm">-O1 IR</div></div>
+      <div class="irx-step" data-i="4"><div class="dot">asm</div><div class="nm">x86-64</div></div>
+    </div>
+    <div class="irx-pane">
+      <div class="irx-pt"><b id="irx-fname">max.cpp</b> &nbsp;<span class="meta" id="irx-meta">人类源码</span></div>
+      <div class="irx-code" id="irx-code"></div>
+    </div>
+    <div class="irx-note" id="irx-note"></div>
+    <div class="irx-ctrl">
+      <button class="irx-btn" id="irx-next">下一步 →</button>
+      <button class="irx-btn ghost" id="irx-prev">← 上一步</button>
+    </div>
+  </div>
+  <script>
+  (function(){
+    var stages=[
+      {f:"max.cpp",m:"人类源码",
+       c:'<span class="k">int</span> max(<span class="k">int</span> a, <span class="k">int</span> b) {\n  <span class="k">if</span> (a &gt; b) <span class="k">return</span> a;\n  <span class="k">return</span> b;\n}',
+       n:"起点：一个带分支的小函数。下面看编译器内部怎么表示它。"},
+      {f:"max.ll  (-O0)",m:"原始 IR：变量都在栈上，full load/store",
+       c:'define i32 @max(i32 %0, i32 %1) {\n  %a = <span class="hl">alloca i32</span>            <span class="c">; a 在栈上</span>\n  %b = <span class="hl">alloca i32</span>\n  <span class="hl">store</span> i32 %0, ptr %a\n  <span class="hl">store</span> i32 %1, ptr %b\n  %3 = <span class="hl">load</span> i32, ptr %a\n  %4 = <span class="hl">load</span> i32, ptr %b\n  %5 = icmp sgt i32 %3, %4\n  br i1 %5, label %T, label %F\nT: ...  F: ...   <span class="c">; 5 个基本块</span>\n}',
+       n:"<b>-O0</b>：每个变量都 <code>alloca</code> 到栈，反复 <code>store/load</code>。忠实但啰嗦——高亮处全是内存往返。"},
+      {f:"max.ll  (mem2reg 后)",m:"关键 pass：把栈变量提升为 SSA 寄存器值",
+       c:'define i32 @max(i32 %a, i32 %b) {\n  <span class="c">; alloca / store / load 全部消失!</span>\n  %cmp = icmp sgt i32 %a, %b\n  br i1 %cmp, label %T, label %F\nT:\n  br label %end\nF:\n  br label %end\nend:\n  %r = <span class="hl">phi i32 [ %a, %T ], [ %b, %F ]</span>\n  ret i32 %r\n}',
+       n:"<b>mem2reg</b> 是 LLVM 最重要的 pass：删掉所有 alloca/load/store，值直接用 SSA 名字。汇合点用 <code>phi</code> 选择来自哪条前驱边的值。"},
+      {f:"max.ll  (-O1)",m:"SimplifyCFG + InstCombine：分支塌缩成 select",
+       c:'define i32 @max(i32 %a, i32 %b) {\nentry:\n  %cmp = icmp sgt i32 %a, %b\n  %r = <span class="hl">select i1 %cmp, i32 %a, i32 %b</span>\n  ret i32 %r\n}',
+       n:"分支 + phi 被识别为「二选一」，重写成无分支的 <code>select</code>。CFG 从 5 块塌成 1 块——更利于 CPU 流水线。"},
+      {f:"max  (x86-64 asm)",m:"后端：select → cmov 无分支指令",
+       c:'max:\n  cmp   edi, esi      <span class="c">; a ? b</span>\n  mov   eax, esi      <span class="c">; 默认取 b</span>\n  <span class="hl">cmovg eax, edi</span>      <span class="c">; a&gt;b 则取 a（无分支）</span>\n  ret',
+       n:"后端把 <code>select</code> 降成 <code>cmovg</code>（条件传送），<b>完全无跳转</b>——没有分支预测失败的风险。从 4 行源码到 4 条指令，一气呵成。"}
+    ];
+    var i=0;
+    var $=function(id){return document.getElementById(id);};
+    var steps=$("irx-steps").querySelectorAll(".irx-step");
+    function show(){
+      var s=stages[i];
+      $("irx-fname").textContent=s.f;$("irx-meta").textContent=s.m;$("irx-code").innerHTML=s.c;$("irx-note").innerHTML=s.n;
+      steps.forEach(function(st,k){st.classList.toggle("on",k===i);st.classList.toggle("done",k<i);});
+      $("irx-prev").disabled=i===0;$("irx-next").disabled=i===stages.length-1;
+      $("irx-next").style.opacity=i===stages.length-1?.4:1;$("irx-prev").style.opacity=i===0?.4:1;
+    }
+    $("irx-next").onclick=function(){if(i<stages.length-1){i++;show();}};
+    $("irx-prev").onclick=function(){if(i>0){i--;show();}};
+    steps.forEach(function(st){st.onclick=function(){i=parseInt(st.dataset.i,10);show();};});
+    show();
+  })();
+  </script>
+
   <h3>CFG（控制流图）</h3>
 
   <p>每个 Function 的 basic block 之间通过 <code>br</code> 指令连成 <strong>CFG</strong>：</p>

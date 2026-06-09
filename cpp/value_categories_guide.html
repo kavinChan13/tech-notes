@@ -529,6 +529,91 @@
     <br>② 如果是 glvalue：它是不是 <code>std::move(...)</code> 或返回 <code>T&amp;&amp;</code> 的结果? <strong>是 → xvalue</strong>；否 → lvalue
   </div>
 
+  <!-- ===== 交互式：值类别判定器 + 决策树 ===== -->
+  <style>
+    .vc{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:20px 22px 24px;margin:18px 0;}
+    .vc-h{font-weight:700;color:var(--accent);font-size:1.02em;margin-bottom:4px;}
+    .vc-sub{color:var(--text-dim);font-size:.85em;margin-bottom:16px;}
+    .vc-exprs{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px;}
+    .vc-ex{background:var(--bg2);border:1px solid var(--border-soft);border-radius:8px;padding:7px 13px;color:var(--text);font-family:'Cascadia Code',monospace;font-size:.84em;cursor:pointer;transition:.18s;}
+    .vc-ex:hover{border-color:var(--accent);background:rgba(56,189,248,.08);}
+    .vc-ex.sel{border-color:var(--accent);background:rgba(56,189,248,.15);color:var(--accent);}
+    .vc-flow{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
+    @media(max-width:680px){.vc-flow{grid-template-columns:1fr;}}
+    .vc-q{background:var(--bg2);border:1px solid var(--border-soft);border-radius:10px;padding:14px 16px;}
+    .vc-qrow{padding:8px 0;font-size:.86em;border-bottom:1px dashed var(--border);transition:.3s;color:var(--text-dim);}
+    .vc-qrow:last-child{border-bottom:none;}
+    .vc-qrow.on{color:var(--text-bright);}
+    .vc-qrow .ans{font-weight:700;float:right;}
+    .vc-qrow .ans.yes{color:var(--green);} .vc-qrow .ans.no{color:var(--red);}
+    .vc-res{background:var(--bg2);border:1px solid var(--border-soft);border-radius:10px;padding:16px;display:flex;flex-direction:column;justify-content:center;}
+    .vc-badge{display:inline-block;font-family:'Cascadia Code',monospace;font-weight:800;font-size:1.5em;padding:6px 18px;border-radius:10px;margin-bottom:10px;align-self:flex-start;transition:.3s;}
+    .b-lvalue{background:rgba(74,222,128,.18);color:var(--green);border:2px solid var(--green);}
+    .b-xvalue{background:rgba(192,132,252,.18);color:var(--purple);border:2px solid var(--purple);}
+    .b-prvalue{background:rgba(251,146,60,.18);color:var(--orange);border:2px solid var(--orange);}
+    .vc-agg{font-size:.82em;color:var(--text-dim);margin-bottom:8px;font-family:'Cascadia Code',monospace;}
+    .vc-why{font-size:.86em;color:var(--text);line-height:1.6;}
+  </style>
+  <div class="vc" id="vc">
+    <div class="vc-h">🔍 交互式判定器：点一个表达式，走一遍决策树</div>
+    <div class="vc-sub">选一个表达式，下面两道判定题会自动作答并给出值类别。<strong>生活化类比</strong>：lvalue 是"有户口的房子"（有地址、长住）；prvalue 是"路边临时摊"（没身份、用完即走）；xvalue 是"挂牌待拆的房子"（有地址但资源随时可搬走）。</div>
+    <div class="vc-exprs" id="vc-exprs">
+      <button class="vc-ex" data-id="x">x</button>
+      <button class="vc-ex" data-id="arr">arr[0]</button>
+      <button class="vc-ex" data-id="deref">*ptr</button>
+      <button class="vc-ex" data-id="lit">42</button>
+      <button class="vc-ex" data-id="add">a + b</button>
+      <button class="vc-ex" data-id="call">foo()  <span style="opacity:.6">(按值返回)</span></button>
+      <button class="vc-ex" data-id="move">std::move(x)</button>
+      <button class="vc-ex" data-id="refret">getRef()  <span style="opacity:.6">(返回 T&amp;)</span></button>
+      <button class="vc-ex" data-id="rvret">getRRef()  <span style="opacity:.6">(返回 T&amp;&amp;)</span></button>
+      <button class="vc-ex" data-id="str">"abc"</button>
+    </div>
+    <div class="vc-flow">
+      <div class="vc-q">
+        <div class="vc-qrow" id="vc-q1">① 有名字 / 能取地址 <code>&amp;e</code>？ <span class="ans" id="vc-a1">—</span></div>
+        <div class="vc-qrow" id="vc-q2">② 是 <code>std::move</code> 或返回 <code>T&amp;&amp;</code>（将亡）？ <span class="ans" id="vc-a2">—</span></div>
+      </div>
+      <div class="vc-res">
+        <span class="vc-badge" id="vc-badge" style="display:none"></span>
+        <div class="vc-agg" id="vc-agg"></div>
+        <div class="vc-why" id="vc-why">← 先选一个表达式</div>
+      </div>
+    </div>
+  </div>
+  <script>
+  (function(){
+    // q1: glvalue(有身份)? q2: 将亡(xvalue)?  仅当 q1=yes 才问 q2
+    var data={
+      x:{q1:true,q2:false,why:"<code>x</code> 是有名字的变量，能取地址 → glvalue；不是 move/将亡 → <b>lvalue</b>。"},
+      arr:{q1:true,q2:false,why:"<code>arr[0]</code> 指向数组中确定的元素，可取地址 → <b>lvalue</b>。"},
+      deref:{q1:true,q2:false,why:"<code>*ptr</code> 解引用得到一个有地址的对象 → <b>lvalue</b>。"},
+      lit:{q1:false,q2:false,why:"整数字面量 <code>42</code> 没有身份、不能取地址 → <b>prvalue</b>（纯临时值）。"},
+      add:{q1:false,q2:false,why:"<code>a + b</code> 的结果是一个新临时值，不和任何对象关联 → <b>prvalue</b>。"},
+      call:{q1:false,q2:false,why:"按值返回的 <code>foo()</code> 产生一个临时对象 → <b>prvalue</b>（C++17 起还会触发强制 copy elision）。"},
+      move:{q1:true,q2:true,why:"<code>std::move(x)</code> = <code>static_cast&lt;T&amp;&amp;&gt;</code>，有身份但标记为「可被偷」 → <b>xvalue</b>（将亡值）。"},
+      refret:{q1:true,q2:false,why:"返回 <code>T&amp;</code> 的函数结果是个有身份、长存的对象 → <b>lvalue</b>。"},
+      rvret:{q1:true,q2:true,why:"返回 <code>T&amp;&amp;</code> 的函数结果有身份但即将销毁、资源可窃取 → <b>xvalue</b>。"},
+      str:{q1:true,q2:false,why:'字符串字面量 <code>"abc"</code> 是个有静态地址的字符数组 → <b>lvalue</b>（易错点！数值字面量却是 prvalue）。'}
+    };
+    function classify(d){ if(!d.q1)return"prvalue"; return d.q2?"xvalue":"lvalue"; }
+    var $=function(id){return document.getElementById(id);};
+    function setAns(id,v,asked){var e=$(id);if(!asked){e.textContent="—";e.className="ans";return;}e.textContent=v?"是 ✓":"否 ✗";e.className="ans "+(v?"yes":"no");}
+    function show(id){
+      var d=data[id]; var cat=classify(d);
+      $("vc-q1").classList.add("on"); setAns("vc-a1",d.q1,true);
+      var askQ2=d.q1; $("vc-q2").classList.toggle("on",askQ2); setAns("vc-a2",d.q2,askQ2);
+      var b=$("vc-badge"); b.style.display="inline-block"; b.textContent=cat; b.className="vc-badge b-"+cat;
+      var agg = cat==="prvalue" ? "属于 rvalue（可移动），不属于 glvalue" : (cat==="xvalue" ? "同时属于 glvalue 和 rvalue（既有身份又可移动）" : "属于 glvalue（有身份），不是 rvalue");
+      $("vc-agg").textContent="聚合视角："+agg;
+      $("vc-why").innerHTML=d.why;
+    }
+    document.querySelectorAll("#vc-exprs .vc-ex").forEach(function(b){
+      b.onclick=function(){document.querySelectorAll("#vc-exprs .vc-ex").forEach(function(x){x.classList.remove("sel");});b.classList.add("sel");show(b.dataset.id);};
+    });
+  })();
+  </script>
+
   <h3 id="s2-4">2.4 实战识别</h3>
 
 <pre><span class="kw">int</span>  x = 42;
