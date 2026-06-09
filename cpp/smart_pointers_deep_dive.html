@@ -656,6 +656,97 @@ std::shared_ptr&lt;Big&gt; s = std::<span class="fn">move</span>(u);        <spa
     </svg>
   </div>
 
+  <!-- ===== 交互式：引用计数生命周期 ===== -->
+  <style>
+    .rc{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:20px 22px 24px;margin:18px 0;}
+    .rc-h{font-weight:700;color:var(--accent);font-size:1.02em;margin-bottom:4px;}
+    .rc-sub{color:var(--text-dim);font-size:.85em;margin-bottom:16px;}
+    .rc-stage{display:grid;grid-template-columns:1.1fr 1fr;gap:16px;align-items:start;}
+    @media(max-width:680px){.rc-stage{grid-template-columns:1fr;}}
+    .rc-cb{background:var(--bg2);border:2px solid var(--yellow);border-radius:12px;padding:16px;text-align:center;transition:.4s;}
+    .rc-cb.dead{border-color:var(--red);opacity:.5;}
+    .rc-cb .cbt{font-size:.8em;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px;font-weight:700;}
+    .rc-counts{display:flex;justify-content:center;gap:14px;}
+    .rc-cnt{flex:1;background:var(--card);border:1px solid var(--border-soft);border-radius:9px;padding:10px;}
+    .rc-cnt .n{font-family:'Cascadia Code',monospace;font-size:1.9em;font-weight:800;transition:.3s;}
+    .rc-cnt.use .n{color:var(--green);} .rc-cnt.weak .n{color:var(--purple);}
+    .rc-cnt .l{font-size:.74em;color:var(--text-dim);margin-top:2px;}
+    .rc-cnt .n.bump{animation:rcBump .45s;}
+    @keyframes rcBump{0%{transform:scale(1.4);}100%{transform:scale(1);}}
+    .rc-obj{margin-top:12px;font-size:.84em;font-family:'Cascadia Code',monospace;padding:8px;border-radius:8px;transition:.4s;}
+    .rc-obj.alive{background:rgba(251,146,60,.14);color:var(--orange);}
+    .rc-obj.dead{background:rgba(248,113,113,.14);color:var(--red);text-decoration:line-through;}
+    .rc-owners{display:flex;flex-direction:column;gap:6px;margin-top:8px;min-height:90px;}
+    .rc-owner{font-family:'Cascadia Code',monospace;font-size:.8em;padding:6px 10px;border-radius:7px;border:1px solid var(--border-soft);animation:rcIn .3s;}
+    .rc-owner.sh{background:rgba(74,222,128,.1);border-left:3px solid var(--green);}
+    .rc-owner.wk{background:rgba(192,132,252,.1);border-left:3px solid var(--purple);}
+    @keyframes rcIn{from{opacity:0;transform:translateX(-8px);}to{opacity:1;}}
+    .rc-ops{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;}
+    .rc-btn{background:var(--bg2);border:1px solid var(--border-soft);border-radius:8px;padding:7px 13px;color:var(--text);font-size:.83em;cursor:pointer;font-family:'Cascadia Code',monospace;transition:.18s;}
+    .rc-btn:hover:not(:disabled){border-color:var(--accent);background:rgba(56,189,248,.08);}
+    .rc-btn:disabled{opacity:.4;cursor:not-allowed;}
+    .rc-btn.rst{font-family:inherit;color:var(--text-dim);}
+    .rc-msg{font-size:.83em;color:var(--text-dim);margin-top:12px;min-height:2.4em;line-height:1.5;border-top:1px dashed var(--border);padding-top:10px;}
+  </style>
+  <div class="rc" id="rc">
+    <div class="rc-h">🔢 交互式演示：use_count / weak_count 怎么涨怎么落</div>
+    <div class="rc-sub">手动增减 shared / weak 所有者，观察控制块两个计数与对象生死。<strong>规则</strong>：use_count→0 析构<strong>对象</strong>；use_count 与 weak_count 都→0 才释放<strong>控制块</strong>。<strong>生活化类比</strong>：use_count 是"还有几个人拿着钥匙住在房子里"，归零就拆房；weak_count 是"还有几个人留着地址但不住"，连地址都没人要了才注销门牌。</div>
+    <div class="rc-stage">
+      <div>
+        <div class="rc-cb" id="rc-cb">
+          <div class="cbt">control_block</div>
+          <div class="rc-counts">
+            <div class="rc-cnt use"><div class="n" id="rc-use">0</div><div class="l">use_count</div></div>
+            <div class="rc-cnt weak"><div class="n" id="rc-weak">0</div><div class="l">weak_count</div></div>
+          </div>
+          <div class="rc-obj dead" id="rc-objbox">T 对象：尚未创建</div>
+        </div>
+        <div class="rc-ops">
+          <button class="rc-btn" id="rc-create">make_shared&lt;T&gt;()</button>
+          <button class="rc-btn" id="rc-copysh" disabled>copy shared_ptr</button>
+          <button class="rc-btn" id="rc-delsh" disabled>~shared_ptr</button>
+          <button class="rc-btn" id="rc-addwk" disabled>weak_ptr = sp</button>
+          <button class="rc-btn" id="rc-delwk" disabled>~weak_ptr</button>
+          <button class="rc-btn rst" id="rc-reset">↺ 重置</button>
+        </div>
+      </div>
+      <div>
+        <div style="font-size:.8em;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px;font-weight:700;margin-bottom:6px;">当前所有者</div>
+        <div class="rc-owners" id="rc-owners"></div>
+      </div>
+    </div>
+    <div class="rc-msg" id="rc-msg">点击 <code>make_shared&lt;T&gt;()</code> 开始。</div>
+  </div>
+  <script>
+  (function(){
+    var use=0, weak=0, objAlive=false, cbAlive=false, sid=0, wid=0;
+    var $=function(id){return document.getElementById(id);};
+    function bump(id){var e=$(id);e.classList.remove("bump");void e.offsetWidth;e.classList.add("bump");}
+    function render(msg){
+      $("rc-use").textContent=use; $("rc-weak").textContent=weak; bump("rc-use"); bump("rc-weak");
+      var ob=$("rc-objbox");
+      if(!cbAlive){ob.className="rc-obj dead";ob.textContent="T 对象：尚未创建 / 已释放";}
+      else if(objAlive){ob.className="rc-obj alive";ob.textContent="T 对象：存活 ✓";}
+      else {ob.className="rc-obj dead";ob.textContent="T 对象：已析构（use_count=0）";}
+      $("rc-cb").classList.toggle("dead",!cbAlive);
+      $("rc-copysh").disabled=!objAlive; $("rc-delsh").disabled=use<=0;
+      $("rc-addwk").disabled=!cbAlive; $("rc-delwk").disabled=weak<=0;
+      $("rc-create").disabled=cbAlive;
+      if(msg)$("rc-msg").innerHTML=msg;
+    }
+    function addOwner(cls,label){var d=document.createElement("div");d.className="rc-owner "+cls;d.textContent=label;d.dataset.k=cls;$("rc-owners").appendChild(d);}
+    function removeOwner(cls){var list=$("rc-owners").querySelectorAll(".rc-owner."+cls);if(list.length){list[list.length-1].remove();}}
+    function maybeFreeCB(){ if(use===0 && weak===0 && cbAlive){cbAlive=false;} }
+    $("rc-create").onclick=function(){use=1;weak=1;objAlive=true;cbAlive=true;sid=1;wid=0;$("rc-owners").innerHTML="";addOwner("sh","sp1  (shared)");render("创建：use_count=1，weak_count=1（注意：只要还有 shared，weak_count 至少为 1）。对象诞生。");};
+    $("rc-copysh").onclick=function(){use++;sid++;addOwner("sh","sp"+sid+"  (shared, 拷贝)");render("拷贝一个 shared_ptr → <b>use_count++ = "+use+"</b>。多个指针共享同一对象与控制块。");};
+    $("rc-delsh").onclick=function(){use--;removeOwner("sh");var m="销毁一个 shared_ptr → <b>use_count-- = "+use+"</b>。";if(use===0){objAlive=false;weak--; m+=" <b style='color:#f87171'>use_count=0 → 析构 T 对象！</b> 同时撤掉「shared 占的那 1 个 weak」，weak_count = "+weak+"。";maybeFreeCB();if(!cbAlive)m+=" weak_count 也归零 → <b>控制块一并释放</b>。";}render(m);};
+    $("rc-addwk").onclick=function(){weak++;wid++;addOwner("wk","wp"+wid+"  (weak)");render("创建一个 weak_ptr → <b>weak_count++ = "+weak+"</b>。weak 不影响对象存活，只盯着控制块。");};
+    $("rc-delwk").onclick=function(){weak--;removeOwner("wk");var m="销毁一个 weak_ptr → <b>weak_count-- = "+weak+"</b>。";maybeFreeCB();if(!cbAlive)m+=" use_count 与 weak_count 均为 0 → <b style='color:#f87171'>控制块释放</b>。";render(m);};
+    $("rc-reset").onclick=function(){use=0;weak=0;objAlive=false;cbAlive=false;$("rc-owners").innerHTML="";render("已重置。点击 <code>make_shared&lt;T&gt;()</code> 开始。");};
+    render();
+  })();
+  </script>
+
   <h3 id="s4-2">4.2 控制块字段解释</h3>
   <table>
     <tr><th>字段</th><th>类型</th><th>语义</th></tr>

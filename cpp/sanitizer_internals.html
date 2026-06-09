@@ -227,6 +227,83 @@ shadow_val = load_byte(shadow);
 
   <p>任何访问 [user, user+40) 外的字节立刻 hit poison shadow → ASan 报警 + stack trace。</p>
 
+  <!-- ===== 交互式：ASan shadow memory 越界/UAF 检查器 ===== -->
+  <style>
+    .asn{background:var(--ps-card);border:1px solid var(--ps-border);border-radius:14px;padding:20px 22px 24px;margin:18px 0;}
+    .asn-h{font-weight:700;color:var(--ps-accent);font-size:1.02em;margin-bottom:4px;}
+    .asn-sub{color:var(--ps-text-dim);font-size:.85em;margin-bottom:16px;}
+    .asn-mem{display:flex;flex-wrap:wrap;gap:3px;margin:14px 0;}
+    .asn-cell{width:34px;height:42px;border-radius:5px;display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer;font-family:var(--ps-mono);font-size:.62em;border:2px solid transparent;transition:.15s;position:relative;}
+    .asn-cell .idx{font-size:.85em;opacity:.7;}
+    .asn-cell.rz{background:rgba(248,113,113,.18);color:#fca5a5;}
+    .asn-cell.ok{background:rgba(74,222,128,.16);color:#86efac;}
+    .asn-cell.freed{background:rgba(192,132,252,.18);color:#d8b4fe;}
+    .asn-cell:hover{border-color:var(--ps-accent);transform:translateY(-2px);}
+    .asn-cell.hit{border-color:#fff;box-shadow:0 0 0 3px rgba(255,255,255,.25);}
+    .asn-legend{display:flex;gap:14px;flex-wrap:wrap;font-size:.76em;color:var(--ps-text-dim);margin-bottom:6px;}
+    .asn-legend i{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:4px;vertical-align:-1px;}
+    .asn-shadow{font-family:var(--ps-mono);font-size:.8em;color:var(--ps-text-dim);background:var(--ps-card-2);border:1px solid var(--ps-border);border-radius:8px;padding:8px 12px;margin:10px 0;}
+    .asn-out{border-radius:10px;padding:14px 16px;font-size:.86em;line-height:1.6;min-height:3.4em;transition:.3s;}
+    .asn-out.idle{background:var(--ps-bg-2);color:var(--ps-text-dim);}
+    .asn-out.pass{background:rgba(74,222,128,.12);border:1px solid var(--ps-green);color:#bbf7d0;}
+    .asn-out.fail{background:rgba(248,113,113,.12);border:1px solid var(--ps-red);color:#fecaca;}
+    .asn-out code{background:rgba(0,0,0,.3);}
+    .asn-ctrl{display:flex;gap:10px;margin-top:14px;flex-wrap:wrap;}
+    .asn-btn{background:var(--ps-bg-2);color:var(--ps-text);border:1px solid var(--ps-border-soft);border-radius:8px;padding:7px 14px;font-size:.84em;cursor:pointer;font-family:var(--ps-sans);}
+    .asn-btn.on{background:var(--ps-accent);color:#04122b;border-color:var(--ps-accent);font-weight:700;}
+  </style>
+  <div class="asn" id="asn">
+    <div class="asn-h">🛡️ 交互式演示：点一个字节，看 ASan 查 shadow 判生死</div>
+    <div class="asn-sub">这是一块 <code>new int[4]</code>（16 字节用户数据）外加左右 redzone。点任意格子模拟一次内存访问，ASan 会查它的 shadow 字节并裁决。先试试越界、再点「free 这块」后访问，复现 use-after-free。<strong>生活化类比</strong>：shadow 就像每段内存门口的"红绿灯"，ASan 每次进门前先看灯。</div>
+    <div class="asn-legend"><span><i style="background:rgba(248,113,113,.5)"></i>redzone (0xFA, 毒)</span><span><i style="background:rgba(74,222,128,.5)"></i>合法 (0x00)</span><span><i style="background:rgba(192,132,252,.5)"></i>已释放 (0xFD)</span></div>
+    <div class="asn-mem" id="asn-mem"></div>
+    <div class="asn-shadow" id="asn-shadow">shadow[访问的格子] = —</div>
+    <div class="asn-out idle" id="asn-out">点上方任意格子发起一次访问…</div>
+    <div class="asn-ctrl">
+      <button class="asn-btn" id="asn-free">🗑 free 这块内存</button>
+      <button class="asn-btn" id="asn-reset">↺ 重新分配</button>
+    </div>
+  </div>
+  <script>
+  (function(){
+    var N=24, userStart=4, userEnd=20; // 0..3 left rz, 4..19 user(16B), 20..23 right rz
+    var freed=false;
+    var mem=document.getElementById("asn-mem"), out=document.getElementById("asn-out"), sh=document.getElementById("asn-shadow");
+    function kind(i){ if(freed && i>=userStart && i<userEnd) return "freed"; if(i<userStart||i>=userEnd) return "rz"; return "ok"; }
+    function build(){
+      mem.innerHTML="";
+      for(var i=0;i<N;i++){
+        var k=kind(i), d=document.createElement("div");
+        d.className="asn-cell "+k; d.dataset.i=i;
+        var tag = k==="rz"?"RZ":(k==="freed"?"FREE":"ok");
+        d.innerHTML='<span class="idx">'+i+'</span><span>'+tag+'</span>';
+        d.onclick=function(){access(parseInt(this.dataset.i,10),this);};
+        mem.appendChild(d);
+      }
+    }
+    function access(i,el){
+      mem.querySelectorAll(".asn-cell").forEach(function(c){c.classList.remove("hit");});
+      el.classList.add("hit");
+      var k=kind(i);
+      var shadowByte = k==="rz" ? "0xFA" : (k==="freed" ? "0xFD" : "0x00");
+      sh.innerHTML='shadow_addr = (p &gt;&gt; 3) + 0x7fff8000 → <b style="color:var(--ps-text-bright)">shadow = '+shadowByte+'</b>';
+      if(k==="ok"){
+        out.className="asn-out pass";
+        out.innerHTML='✓ <b>访问合法</b>：shadow=0x00，整 8 字节可访问。读写放行，零报警。';
+      } else if(k==="rz"){
+        out.className="asn-out fail";
+        out.innerHTML='✗ <b style="color:#fca5a5">heap-buffer-'+(i<userStart?"underflow":"overflow")+'</b>：命中 redzone（shadow=0xFA 为负 → poison）。<br>ASan 调用 <code>__asan_report_store</code> → 打印地址、shadow、调用栈后 abort。';
+      } else {
+        out.className="asn-out fail";
+        out.innerHTML='✗ <b style="color:#d8b4fe">heap-use-after-free</b>：这块在 quarantine 里，shadow=0xFD。<br>虽然地址原本合法，但已 free → 仍被判定非法访问。';
+      }
+    }
+    document.getElementById("asn-free").onclick=function(){freed=true;this.classList.add("on");build();out.className="asn-out idle";out.innerHTML='已 <code>free</code>：用户区 shadow 全标 0xFD（quarantine）。现在再点用户区 → 复现 use-after-free。';};
+    document.getElementById("asn-reset").onclick=function(){freed=false;document.getElementById("asn-free").classList.remove("on");build();out.className="asn-out idle";out.innerHTML='已重新分配。点格子发起访问…';sh.innerHTML='shadow[访问的格子] = —';};
+    build();
+  })();
+  </script>
+
   <h3>Use-After-Free：Quarantine</h3>
 
   <p><strong>free() 不立即归还内存给 allocator</strong>。而是：</p>

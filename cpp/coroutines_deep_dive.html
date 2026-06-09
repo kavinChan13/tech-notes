@@ -551,6 +551,105 @@
   <div class="box ok">
     每个 <code>co_await</code> 都成为一个状态转移点。挂起 = 保存 state + 返回；恢复 = 进 switch case 接着跑。这就是<strong>"无栈协程" (stackless coroutine)</strong> —— 没有独立 stack，所有状态在 frame 里。
   </div>
+
+  <!-- ===== 交互式动画：挂起 / 恢复 状态机 ===== -->
+  <style>
+    .csm{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:20px 22px 24px;margin:22px 0;}
+    .csm-h{font-weight:700;color:var(--accent);font-size:1.02em;margin-bottom:4px;}
+    .csm-sub{color:var(--text-dim);font-size:.85em;margin-bottom:16px;}
+    .csm-stage svg{width:100%;height:200px;display:block;}
+    .csm-body{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:14px;}
+    @media(max-width:640px){.csm-body{grid-template-columns:1fr;}}
+    .csm-frame{background:var(--bg2);border:1px solid var(--border-soft);border-radius:10px;padding:14px 16px;}
+    .csm-frame .ft{font-size:.78em;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;font-weight:700;}
+    .csm-reg{display:flex;justify-content:space-between;font-family:'Cascadia Code',monospace;font-size:.86em;padding:4px 0;border-bottom:1px dashed var(--border);}
+    .csm-reg:last-child{border-bottom:none;}
+    .csm-reg .k{color:var(--text-dim);} .csm-reg .v{color:var(--green);font-weight:700;transition:.3s;}
+    .csm-reg .v.upd{color:var(--yellow);}
+    .csm-log{background:var(--bg2);border:1px solid var(--border-soft);border-radius:10px;padding:14px 16px;font-size:.86em;line-height:1.6;color:var(--text);}
+    .csm-log .tag{display:inline-block;font-size:.72em;font-weight:700;padding:2px 8px;border-radius:999px;margin-bottom:6px;}
+    .tag-coro{background:rgba(74,222,128,.15);color:var(--green);}
+    .tag-caller{background:rgba(56,189,248,.15);color:var(--accent);}
+    .tag-susp{background:rgba(248,113,113,.15);color:var(--red);}
+    .csm-ctrl{display:flex;gap:10px;align-items:center;margin-top:16px;flex-wrap:wrap;}
+    .csm-btn{background:var(--accent);color:#04122b;border:none;border-radius:8px;padding:8px 16px;font-weight:700;font-size:.85em;cursor:pointer;font-family:inherit;}
+    .csm-btn.ghost{background:var(--bg2);color:var(--text);border:1px solid var(--border-soft);}
+    .csm-pill{font-size:.8em;color:var(--text-dim);}
+    #csm-token{transition:transform .45s cubic-bezier(.5,.05,.3,1);}
+  </style>
+  <div class="csm" id="csm">
+    <div class="csm-h">▶ 交互式演示：协程如何"挂起 → 恢复"</div>
+    <div class="csm-sub">跟踪 <code>work()</code> 的控制权在<strong>调用方</strong>与<strong>协程帧</strong>之间来回跳转。<strong>生活化类比</strong>：协程像追剧按暂停——你暂停去做别的事（挂起），回来按播放从原处继续（恢复），进度记在书签里（<code>state</code>）。</div>
+    <div class="csm-stage">
+      <svg viewBox="0 0 720 200" preserveAspectRatio="xMidYMid meet">
+        <line x1="20" y1="50" x2="700" y2="50" stroke="#1e2a44" stroke-width="2"/>
+        <line x1="20" y1="150" x2="700" y2="150" stroke="#1e2a44" stroke-width="2"/>
+        <rect x="20" y="34" width="120" height="32" rx="6" fill="#0f2540" stroke="#38bdf8"/>
+        <text x="80" y="55" text-anchor="middle" fill="#7dd3fc" font-size="13" font-weight="bold">调用方</text>
+        <rect x="20" y="134" width="150" height="32" rx="6" fill="#16331f" stroke="#4ade80"/>
+        <text x="95" y="155" text-anchor="middle" fill="#86efac" font-size="13" font-weight="bold">协程帧 (堆上)</text>
+        <path id="csm-trail" d="" stroke="#475569" stroke-width="2" fill="none" stroke-dasharray="4 5" opacity=".6"/>
+        <g id="csm-token">
+          <circle r="13" fill="#facc15"/>
+          <text x="0" y="5" text-anchor="middle" fill="#1a1505" font-size="14" font-weight="bold">PC</text>
+        </g>
+      </svg>
+    </div>
+    <div class="csm-body">
+      <div class="csm-frame">
+        <div class="ft">work_frame (协程帧内容)</div>
+        <div class="csm-reg"><span class="k">state (PC)</span><span class="v" id="csm-state">0</span></div>
+        <div class="csm-reg"><span class="k">int x</span><span class="v" id="csm-x">?</span></div>
+        <div class="csm-reg"><span class="k">int y</span><span class="v" id="csm-y">?</span></div>
+        <div class="csm-reg"><span class="k">返回值</span><span class="v" id="csm-ret">—</span></div>
+      </div>
+      <div class="csm-log" id="csm-log"></div>
+    </div>
+    <div class="csm-ctrl">
+      <button class="csm-btn" id="csm-play">▶ 自动播放</button>
+      <button class="csm-btn ghost" id="csm-step">⏭ 单步</button>
+      <button class="csm-btn ghost" id="csm-reset">↺ 重置</button>
+      <span class="csm-pill" id="csm-pill">步骤 0 / 7</span>
+    </div>
+  </div>
+  <script>
+  (function(){
+    var X=[70,170,270,370,470,570,650], CALLER=50, CORO=150;
+    var steps=[
+      {x:0,lane:CALLER,tag:"tag-caller",t:"调用方调用 <code>work()</code> → 在<strong>堆</strong>上分配 work_frame，返回一个 handle。此刻协程体一行都还没跑。",state:0},
+      {x:1,lane:CORO,tag:"tag-coro",t:"调用方 <code>handle.resume()</code> → 进入 <code>case 0</code>：执行 <code>step1()</code>。",state:0},
+      {x:2,lane:CALLER,tag:"tag-susp",t:"step1 未就绪 → <strong>state=1</strong>，<code>await_suspend</code> 注册回调，<strong>挂起！</strong>控制权交回调用方（注意：x、y 仍未计算）。",state:1},
+      {x:3,lane:CALLER,tag:"tag-caller",t:"调用方此刻可以去做<strong>别的事</strong>（这正是协程不阻塞线程的精髓）。协程帧静静躺在堆上等待唤醒。",state:1},
+      {x:4,lane:CORO,tag:"tag-coro",t:"step1 完成，事件循环 <code>resume()</code> → 进入 <code>case 1</code>：<code>x = a1.await_resume()</code> 得到 42，启动 step2(x)。",state:1,x_v:42},
+      {x:5,lane:CALLER,tag:"tag-susp",t:"step2 未就绪 → <strong>state=2</strong>，再次<strong>挂起！</strong>控制权又回到调用方。",state:2},
+      {x:6,lane:CORO,tag:"tag-coro",t:"step2 完成 → <code>resume()</code> → <code>case 2</code>：<code>y = 8</code>，<code>co_return x+y = 50</code>，进入 final_suspend。",state:2,y_v:8,ret:50},
+      {x:6,lane:CALLER,tag:"tag-caller",t:"协程结束，调用方取走结果 <strong>50</strong> 并 <code>destroy()</code> 释放协程帧。生命周期完成 ✓",state:2,ret:50,done:true}
+    ];
+    var i=-1, playing=false, timer=null, trail="";
+    var $=function(id){return document.getElementById(id);};
+    function set(id,val,upd){var e=$(id);e.textContent=val;if(upd){e.classList.add("upd");setTimeout(function(){e.classList.remove("upd");},600);}}
+    function go(n){
+      i=n; var s=steps[i]; var px=X[s.x], py=s.lane;
+      $("csm-token").style.transform="translate("+px+"px,"+py+"px)";
+      if(i===0){trail="M"+px+" "+py;}else{trail+=" L"+px+" "+py;}
+      $("csm-trail").setAttribute("d",trail);
+      set("csm-state",s.state, true);
+      if(s.x_v!==undefined) set("csm-x",s.x_v,true);
+      if(s.y_v!==undefined) set("csm-y",s.y_v,true);
+      if(s.ret!==undefined) set("csm-ret",s.ret,true);
+      var label = s.tag==="tag-susp"?"⏸ 挂起":(s.lane===CORO?"▶ 协程运行中":"调用方");
+      $("csm-log").innerHTML='<span class="tag '+s.tag+'">'+label+'</span><br>'+s.t;
+      $("csm-pill").textContent="步骤 "+i+" / 7";
+      $("csm-play").textContent = playing ? "⏸ 暂停" : (s.done ? "↺ 重播" : "▶ 自动播放");
+    }
+    function reset(){playing=false;clearTimeout(timer);i=-1;trail="";["csm-x","csm-y"].forEach(function(id){$(id).textContent="?";});$("csm-ret").textContent="—";$("csm-state").textContent="0";$("csm-trail").setAttribute("d","");$("csm-token").style.transform="translate("+X[0]+"px,"+CALLER+"px)";$("csm-log").innerHTML='<span class="csm-pill">点击「单步」或「自动播放」开始…</span>';$("csm-pill").textContent="步骤 0 / 7";$("csm-play").textContent="▶ 自动播放";}
+    function auto(){ if(i>=steps.length-1){playing=false;go(i);return;} go(i+1); if(playing) timer=setTimeout(auto,1500); }
+    $("csm-play").onclick=function(){ if(playing){playing=false;clearTimeout(timer);go(i);return;} if(i>=steps.length-1)reset(); playing=true; auto(); };
+    $("csm-step").onclick=function(){ playing=false;clearTimeout(timer); if(i>=steps.length-1){reset();return;} go(i+1); };
+    $("csm-reset").onclick=reset;
+    reset();
+  })();
+  </script>
 </section>
 
 <!-- =============================== §3 =============================== -->

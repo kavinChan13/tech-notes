@@ -607,6 +607,85 @@
     </svg>
   </div>
 
+  <!-- ===== 交互式动画：栈展开 ===== -->
+  <style>
+    .unw{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:20px 22px 24px;margin:18px 0;}
+    .unw-h{font-weight:700;color:var(--accent);font-size:1.02em;margin-bottom:4px;}
+    .unw-sub{color:var(--text-dim);font-size:.85em;margin-bottom:16px;}
+    .unw-body{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
+    @media(max-width:680px){.unw-body{grid-template-columns:1fr;}}
+    .unw-stack{display:flex;flex-direction:column-reverse;gap:8px;}
+    .unw-frame{background:var(--bg2);border:1px solid var(--border-soft);border-left:4px solid var(--accent);border-radius:8px;padding:10px 14px;transition:.4s;position:relative;}
+    .unw-frame .fn{font-family:'Cascadia Code',monospace;font-weight:700;font-size:.9em;color:var(--text-bright);}
+    .unw-frame .loc{font-family:'Cascadia Code',monospace;font-size:.78em;color:var(--text-dim);margin-top:4px;}
+    .unw-frame.throwing{border-left-color:var(--red);background:rgba(248,113,113,.1);}
+    .unw-frame.unwinding{border-left-color:var(--orange);background:rgba(251,146,60,.12);}
+    .unw-frame.dtor .loc{color:var(--orange);}
+    .unw-frame.caught{border-left-color:var(--green);background:rgba(74,222,128,.12);}
+    .unw-frame.popped{opacity:.25;transform:translateX(28px) scale(.95);filter:grayscale(.6);}
+    .unw-frame .dx{position:absolute;right:12px;top:50%;transform:translateY(-50%);font-size:.74em;color:var(--orange);font-family:'Cascadia Code',monospace;opacity:0;transition:.3s;}
+    .unw-frame.dtor .dx{opacity:1;}
+    .unw-log{background:var(--bg2);border:1px solid var(--border-soft);border-radius:10px;padding:14px 16px;font-size:.85em;line-height:1.6;}
+    .unw-log .step{padding:4px 0;border-bottom:1px dashed var(--border);color:var(--text-dim);}
+    .unw-log .step.cur{color:var(--text-bright);font-weight:600;}
+    .unw-log .step:last-child{border-bottom:none;}
+    .unw-ctrl{display:flex;gap:10px;align-items:center;margin-top:16px;flex-wrap:wrap;}
+    .unw-btn{background:var(--accent);color:#04122b;border:none;border-radius:8px;padding:8px 16px;font-weight:700;font-size:.85em;cursor:pointer;font-family:inherit;}
+    .unw-btn.ghost{background:var(--bg2);color:var(--text);border:1px solid var(--border-soft);}
+    .unw-pill{font-size:.8em;color:var(--text-dim);}
+  </style>
+  <div class="unw" id="unw">
+    <div class="unw-h">▶ 交互式演示：异常抛出后，栈如何"逐帧展开"</div>
+    <div class="unw-sub"><code>h()</code> 抛出异常，运行时沿调用栈回退，<strong>逐帧析构每个局部 RAII 对象</strong>，直到 <code>main()</code> 的 catch 接住它。<strong>生活化类比</strong>：像下楼时逐层关灯锁门（析构），一直退到有人接应（catch）的楼层。</div>
+    <div class="unw-body">
+      <div class="unw-stack" id="unw-stack">
+        <div class="unw-frame" data-i="0"><div class="fn">main()</div><div class="loc">try { ... } catch (std::exception&amp; e)</div><div class="dx"></div></div>
+        <div class="unw-frame" data-i="1"><div class="fn">f()</div><div class="loc">Logger log;  // RAII</div><div class="dx">~Logger()</div></div>
+        <div class="unw-frame" data-i="2"><div class="fn">g()</div><div class="loc">std::lock_guard lk(mtx);  // RAII</div><div class="dx">~lock_guard()</div></div>
+        <div class="unw-frame" data-i="3"><div class="fn">h()</div><div class="loc">throw std::runtime_error("boom");</div><div class="dx"></div></div>
+      </div>
+      <div class="unw-log" id="unw-log"></div>
+    </div>
+    <div class="unw-ctrl">
+      <button class="unw-btn" id="unw-play">▶ 自动播放</button>
+      <button class="unw-btn ghost" id="unw-step">⏭ 单步</button>
+      <button class="unw-btn ghost" id="unw-reset">↺ 重置</button>
+      <span class="unw-pill" id="unw-pill">步骤 0 / 6</span>
+    </div>
+  </div>
+  <script>
+  (function(){
+    var frames=[].slice.call(document.querySelectorAll("#unw .unw-frame"));
+    var steps=[
+      {f:3,cls:"throwing",t:"<b>h()</b> 执行 <code>throw runtime_error(\"boom\")</code>：在异常区构造异常对象，启动栈展开。"},
+      {f:3,cls:"popped",pop:true,t:"<b>h()</b> 帧无局部对象需析构 → 弹出，回退到 <b>g()</b>。"},
+      {f:2,cls:"dtor",t:"进入 <b>g()</b> 帧：查 LSDA，发现局部 <code>lock_guard</code> → 调用 <code>~lock_guard()</code> 解锁。g 没有匹配 catch。"},
+      {f:2,cls:"popped",pop:true,t:"<b>g()</b> 帧清理完毕 → 弹出，回退到 <b>f()</b>。"},
+      {f:1,cls:"dtor",t:"进入 <b>f()</b> 帧：局部 <code>Logger</code> → 调用 <code>~Logger()</code> 刷日志。f 也没 catch。"},
+      {f:1,cls:"popped",pop:true,t:"<b>f()</b> 帧清理完毕 → 弹出，回退到 <b>main()</b>。"},
+      {f:0,cls:"caught",t:"✓ <b>main()</b> 的 <code>catch(std::exception&amp;)</code> 类型匹配 → 异常对象绑定到 e，进入 catch 块。展开结束，程序继续正常运行。"}
+    ];
+    var i=-1, playing=false, timer=null;
+    var $=function(id){return document.getElementById(id);};
+    function reset(){playing=false;clearTimeout(timer);i=-1;frames.forEach(function(f){f.className="unw-frame";});$("unw-log").innerHTML='<div class="unw-pill">点击「单步 / 自动播放」开始观察展开过程…</div>';$("unw-pill").textContent="步骤 0 / 7";$("unw-play").textContent="▶ 自动播放";}
+    function go(n){
+      i=n; var s=steps[i];
+      // clear transient classes (keep popped)
+      frames.forEach(function(f){["throwing","unwinding","dtor","caught"].forEach(function(c){f.classList.remove(c);});});
+      var fr=frames[s.f]; fr.classList.add(s.cls); if(s.pop)fr.classList.add("popped");
+      var log=steps.slice(0,i+1).map(function(st,k){return '<div class="step'+(k===i?" cur":"")+'">'+(k+1)+". "+st.t+'</div>';}).join("");
+      $("unw-log").innerHTML=log;
+      $("unw-pill").textContent="步骤 "+(i+1)+" / 7";
+      $("unw-play").textContent = playing ? "⏸ 暂停" : (i>=steps.length-1?"↺ 重播":"▶ 自动播放");
+    }
+    function auto(){ if(i>=steps.length-1){playing=false;go(i);return;} go(i+1); if(playing)timer=setTimeout(auto,1500); }
+    $("unw-play").onclick=function(){ if(playing){playing=false;clearTimeout(timer);go(i);return;} if(i>=steps.length-1)reset(); playing=true; auto(); };
+    $("unw-step").onclick=function(){ playing=false;clearTimeout(timer); if(i>=steps.length-1){reset();return;} go(i+1); };
+    $("unw-reset").onclick=reset;
+    reset();
+  })();
+  </script>
+
   <h3 id="s4-3">4.3 关键点：异常对象在哪里？</h3>
 
   <p>不是普通栈对象 — 否则栈展开就把它销毁了。标准只规定行为，实现常见做法：</p>
