@@ -60,6 +60,14 @@
   <p class="sub">Lock-free / Memory Order / 同步模式 — 从硬件内存模型到无锁数据结构的工程实现</p>
 </header>
 
+<style>
+  .analogy{display:flex;gap:14px;align-items:flex-start;background:linear-gradient(180deg,rgba(250,204,21,.08),rgba(250,204,21,.02));
+    border:1px solid rgba(250,204,21,.35);border-left:4px solid #facc15;border-radius:12px;padding:16px 18px;margin:18px 0;}
+  .analogy-icon{font-size:1.8em;line-height:1;flex-shrink:0;}
+  .analogy-body{font-size:.92em;line-height:1.65;color:var(--ps-text);}
+  .analogy-title{font-weight:700;color:#facc15;margin-bottom:6px;}
+</style>
+
 
 <section class="chapter" id="s1">
   <div class="ch-head">
@@ -407,7 +415,117 @@ T desired;
   </div>
 
   <h3>什么是 ABA</h3>
-  <p>线程 T1 读到 head = A → 准备 CAS 把 head 改成 A→next；同时 T2 pop A → push B → pop B → push A（不同地址但 reuse 同地址）。T1 的 CAS <strong>成功</strong>（它看到 A），但 head 真正含义已变 → 数据错乱 / use-after-free。</p>
+
+  <div class="box tip" style="border-left-color:#facc15;">
+    <strong>💡 一句话先懂</strong>：CAS 只会问「这个值<strong>还等于</strong>我上次看到的吗？」，它<strong>不会</strong>问「这中间有没有被人动过？」。如果一个值从 <code>A</code> 变成 <code>B</code> 又变回 <code>A</code>，CAS 看到的还是 <code>A</code>，于是<strong>误以为啥都没发生</strong>——这就是 ABA。
+  </div>
+
+  <div class="analogy">
+    <div class="analogy-icon">🅿️</div>
+    <div class="analogy-body">
+      <div class="analogy-title">生活化类比：停车位上的"同款红车"</div>
+      你把车停好，记住<strong>隔壁车位停着朋友的红色 Model 3</strong>。你去买杯咖啡，回来一看——隔壁<strong>还是一辆红色 Model 3</strong>，于是你判断"朋友还没走，一切照旧"。<br>
+      但其实这几分钟里：朋友<strong>开走了</strong> → 车位空了 → 来了个陌生人停了辆<strong>一模一样的红色 Model 3</strong>。车位"看起来"没变（红 Model 3 → 空 → 红 Model 3），可它的<strong>真实含义已经完全不同</strong>。你基于"还是朋友的车"做的任何决定（比如把东西放他车顶）都会出错。<br>
+      <strong>CAS 就是那个只看"还是不是红 Model 3"的你。</strong>在无锁栈里，"车"就是节点指针，而内存分配器<strong>复用了同一个地址</strong>，让被释放的节点地址又变回原值——CAS 被骗，导致 use-after-free。
+    </div>
+  </div>
+
+  <p><strong>更精确地说</strong>：线程 T1 读到 <code>head = A</code>，准备用 CAS 把 <code>head</code> 改成 <code>A-&gt;next</code>，但还没执行就被调度暂停；同时 T2 把 A 弹出并释放、又压入新节点、最后<strong>新节点复用了 A 原来的地址</strong>。等 T1 醒来执行 CAS，发现 <code>head</code> 的值确实还等于它记的 A 地址 → CAS <strong>成功</strong>，但此刻这个地址背后的对象早已不是当初那个 → 数据错乱 / use-after-free。</p>
+
+  <!-- ===== 交互式：ABA 竞态分步动画 ===== -->
+  <style>
+    .aba{background:var(--ps-card);border:1px solid var(--ps-border);border-radius:14px;padding:20px 22px 24px;margin:18px 0;}
+    .aba-h{font-weight:700;color:var(--ps-accent);font-size:1.02em;margin-bottom:4px;}
+    .aba-sub{color:var(--ps-text-dim);font-size:.85em;margin-bottom:16px;}
+    .aba-stage{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
+    @media(max-width:680px){.aba-stage{grid-template-columns:1fr;}}
+    .aba-col{background:var(--ps-bg-2);border:1px solid var(--ps-border-soft);border-radius:10px;padding:14px;}
+    .aba-col.t1{border-top:3px solid var(--ps-accent);} .aba-col.t2{border-top:3px solid var(--ps-purple);}
+    .aba-col .cn{font-weight:700;margin-bottom:10px;} .aba-col.t1 .cn{color:var(--ps-accent);} .aba-col.t2 .cn{color:var(--ps-purple);}
+    .aba-heap{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:8px 0 14px;font-family:var(--ps-mono);font-size:.85em;}
+    .aba-node{border:2px solid var(--ps-green);background:var(--ps-bg);border-radius:8px;padding:6px 12px;color:var(--ps-text);transition:.3s;position:relative;}
+    .aba-node.freed{border-color:var(--ps-red);border-style:dashed;color:var(--ps-text-dim);text-decoration:line-through;}
+    .aba-node.reuse{border-color:#facc15;box-shadow:0 0 0 4px rgba(250,204,21,.18);}
+    .aba-head{font-family:var(--ps-mono);font-size:.9em;margin-bottom:6px;}
+    .aba-head b{color:var(--ps-green);}
+    .aba-log{font-family:var(--ps-mono);font-size:.82em;line-height:1.55;min-height:5.5em;color:var(--ps-text);}
+    .aba-log .hl{color:#facc15;} .aba-log .bad{color:var(--ps-red);font-weight:700;} .aba-log .gd{color:var(--ps-green);}
+    .aba-ctrl{display:flex;gap:10px;align-items:center;margin-top:16px;flex-wrap:wrap;}
+    .aba-btn{background:var(--ps-accent);color:#04122b;border:none;border-radius:8px;padding:8px 16px;font-weight:700;font-size:.85em;cursor:pointer;font-family:var(--ps-sans);}
+    .aba-btn:disabled{opacity:.4;cursor:not-allowed;}
+    .aba-btn.ghost{background:var(--ps-bg-2);color:var(--ps-text);border:1px solid var(--ps-border-soft);}
+    .aba-step{font-size:.8em;color:var(--ps-text-dim);}
+    .aba-active{box-shadow:0 0 0 2px var(--ps-accent) inset;}
+  </style>
+  <div class="aba" id="aba">
+    <div class="aba-h">🎬 交互式演示：ABA 竞态如何骗过 CAS</div>
+    <div class="aba-sub">点「下一步」一帧一帧看。栈初始为 <code>head → A(@0x100) → B(@0x200)</code>。T1 想 pop 出 A，但中途被 T2 一通操作"还原现场"。</div>
+    <div class="aba-head">共享栈顶 <code>head</code> = <b id="aba-head">A (@0x100)</b></div>
+    <div class="aba-heap" id="aba-heap"></div>
+    <div class="aba-stage">
+      <div class="aba-col t1" id="aba-c1"><div class="cn">🧵 T1（被骗的线程）</div><div class="aba-log" id="aba-l1">待命…</div></div>
+      <div class="aba-col t2" id="aba-c2"><div class="cn">🧵 T2（捣乱的线程）</div><div class="aba-log" id="aba-l2">待命…</div></div>
+    </div>
+    <div class="aba-ctrl">
+      <button class="aba-btn" id="aba-next">下一步 ▶</button>
+      <button class="aba-btn ghost" id="aba-rst">↺ 重置</button>
+      <span class="aba-step" id="aba-stepn">第 0 / 6 步</span>
+    </div>
+  </div>
+  <script>
+  (function(){
+    var $=function(id){return document.getElementById(id);};
+    var step=0, TOTAL=6;
+    var steps=[
+      {head:'A (@0x100)', heap:[['A','@0x100','ok'],['B','@0x200','ok']],
+       l1:'读 <span class="hl">old = head = A(@0x100)</span>，打算 CAS(head: A→B)。<br>↓ 此刻被操作系统<span class="hl">暂停</span>。', l2:'等待时机…', who:1},
+      {head:'B (@0x200)', heap:[['A','@0x100','freed'],['B','@0x200','ok']],
+       l1:'😴 仍被挂起，手里记着 old=A(@0x100)。', l2:'pop A：head→B(@0x200)，<span class="bad">free A(@0x100)</span>。', who:2},
+      {head:'— (空)', heap:[['A','@0x100','freed'],['B','@0x200','freed']],
+       l1:'😴 仍被挂起…', l2:'pop B：head→空，<span class="bad">free B(@0x200)</span>。', who:2},
+      {head:'X (@0x100)', heap:[['X','@0x100','reuse'],['B','@0x200','freed']],
+       l1:'😴 仍被挂起…', l2:'push 新节点 X：分配器<span class="hl">复用了 @0x100</span>！head→X(@0x100)。<br>地址绕了一圈：A→空→<span class="hl">@0x100 又回来了</span>。', who:2},
+      {head:'X (@0x100)', heap:[['X','@0x100','reuse'],['B','@0x200','freed']],
+       l1:'⏰ 被唤醒，执行 <span class="hl">CAS(head, expected=@0x100, desired=@0x200)</span>。<br>当前 head=@0x100 == 我的 expected → <span class="gd">CAS 判定成功</span>。', l2:'…', who:1},
+      {head:'B (@0x200) 💥', heap:[['X','@0x100','reuse'],['B','@0x200','freed']],
+       l1:'<span class="bad">💥 灾难：head 被设成 @0x200，而 B 早已被 free！</span><br>下一次访问 head 就是 <span class="bad">use-after-free</span>。CAS 值相等≠语义相等。', l2:'（无辜地看着这一切发生）', who:1}
+    ];
+    function render(){
+      var prev = step===0 ? null : steps[step-1];
+      $('aba-stepn').textContent='第 '+step+' / '+TOTAL+' 步';
+      $('aba-next').disabled = step>=TOTAL;
+      if(step===0){
+        $('aba-head').textContent='A (@0x100)';
+        $('aba-l1').textContent='待命…'; $('aba-l2').textContent='待命…';
+        $('aba-heap').innerHTML='<span style="color:var(--ps-text-dim)">heap:</span>'+
+          '<span class="aba-node">A @0x100</span><span class="aba-node">B @0x200</span>';
+        $('aba-c1').classList.remove('aba-active');$('aba-c2').classList.remove('aba-active');
+        return;
+      }
+      var s=steps[step-1];
+      $('aba-head').textContent=s.head;
+      $('aba-l1').innerHTML=s.l1; $('aba-l2').innerHTML=s.l2;
+      var h='<span style="color:var(--ps-text-dim)">heap:</span>';
+      s.heap.forEach(function(n){
+        var cls=n[2]==='freed'?'aba-node freed':(n[2]==='reuse'?'aba-node reuse':'aba-node');
+        h+='<span class="'+cls+'">'+n[0]+' '+n[1]+'</span>';
+      });
+      $('aba-heap').innerHTML=h;
+      $('aba-c1').classList.toggle('aba-active', s.who===1);
+      $('aba-c2').classList.toggle('aba-active', s.who===2);
+    }
+    $('aba-next').onclick=function(){ if(step<TOTAL){step++; render();} };
+    $('aba-rst').onclick=function(){ step=0; render(); };
+    render();
+  })();
+  </script>
+
+  <h3>4 种解法 — 本质都在回答"这中间被动过吗？"</h3>
+  <p>四种方案思路不同，但都在补上 CAS 缺的那一问。一句话直觉：</p>
+  <ul>
+    <li><strong>Tagged Pointer</strong>：给指针配一个<strong>只增不减的版本号</strong>，每次改都 +1。地址能复用，但"地址+版本号"这对组合不会重复 → 一眼看出被动过。</li>
+    <li><strong>Hazard / EBR / RCU</strong>：干脆<strong>不让地址被复用</strong>——只要还有人可能引用旧节点，就<strong>推迟回收</strong>。地址不回收，就不可能变回来，ABA 从根上消失。</li>
+  </ul>
 
   <div class="grid-2">
     <div class="panel accent">
@@ -561,9 +679,116 @@ T desired;
 
   <p>多生产者 / 多消费者比 SPSC 难 <strong>10×</strong>。生产用现成库（folly / moodycamel），别自己写除非真懂。</p>
 
+  <div class="box tip" style="border-left-color:#facc15;">
+    <strong>💡 为什么难 10×？</strong> SPSC 里只有<strong>一个</strong>生产者动 <code>tail</code>、<strong>一个</strong>消费者动 <code>head</code>，两边各管各的，永不打架。MPMC 里<strong>多个</strong>生产者都想抢同一个 <code>tail</code>、多个消费者都想抢同一个 <code>head</code> → 必须用 CAS 协调，还要防 ABA、防"半写状态被别人读到"。
+  </div>
+
+  <div class="analogy">
+    <div class="analogy-icon">🎫</div>
+    <div class="analogy-body">
+      <div class="analogy-title">生活化类比：银行的取号机 + 柜台叫号屏</div>
+      银行大厅里只有<strong>一台取号机</strong>，每个人来都按一下，拿到一个<strong>永远递增的号码</strong>（01、02、03…）——这就是 <code>enqueue_pos</code> / <code>dequeue_pos</code>，用 <code>fetch_add</code> 实现，<strong>谁都不会拿到重复号</strong>，天然不打架。<br>
+      拿到号后，你走到"号 % 柜台数"对应的<strong>那个柜台</strong>，但要<strong>等柜台屏幕叫到你的号</strong>才能办。每个柜台头顶有块屏（这就是每个 slot 的 <code>sequence</code>），它像红绿灯一样告诉你：<strong>现在轮到几号来"存"、还是几号来"取"</strong>。<br>
+      于是抢号（全局递增计数）和真正干活（看柜台屏状态）<strong>解耦</strong>了——这正是 Vyukov 队列高效又正确的秘诀。
+    </div>
+  </div>
+
   <h3>MPMC 关键：Sequence Number</h3>
 
-  <p>Dmitry Vyukov 的 <strong>bounded MPMC queue</strong> 是经典实现。每个 slot 含 <code>data + sequence</code>，CAS 时检查 sequence 状态机：</p>
+  <p>Dmitry Vyukov 的 <strong>bounded MPMC queue</strong> 是经典实现。抢位置用一个全局递增计数（<code>fetch_add</code>，无 CAS、无 ABA）；每个 slot 自带一个 <code>sequence</code> 当"红绿灯"，靠它判断这格<strong>该写还是该读</strong>：</p>
+
+  <table>
+    <thead><tr><th>slot.seq 与我的号 pos 的关系</th><th>含义</th><th>我该做什么</th></tr></thead>
+    <tbody>
+      <tr><td><code>seq == pos</code></td><td>这格是空的，正等 pos 号生产者来写</td><td>✅ 生产者写入，然后 <code>seq = pos + 1</code></td></tr>
+      <tr><td><code>seq == pos + 1</code></td><td>这格有数据，正等 pos 号消费者来读</td><td>✅ 消费者读走，然后 <code>seq = pos + N</code>（让下一轮生产者就绪）</td></tr>
+      <tr><td><code>seq &lt; pos</code></td><td>还没轮到我（队列满 / 对端慢）</td><td>⏳ 自旋等待 / 返回"满或空"</td></tr>
+    </tbody>
+  </table>
+
+  <p><code>seq = pos + N</code> 这步很妙：它正好把这格的"下一次可写号"推进了一整圈（N 个），让 ring buffer 循环复用时红绿灯依然对得上。</p>
+
+  <!-- ===== 交互式：Vyukov 序列号红绿灯 ===== -->
+  <style>
+    .mpq{background:var(--ps-card);border:1px solid var(--ps-border);border-radius:14px;padding:20px 22px 24px;margin:18px 0;}
+    .mpq-h{font-weight:700;color:var(--ps-accent);font-size:1.02em;margin-bottom:4px;}
+    .mpq-sub{color:var(--ps-text-dim);font-size:.85em;margin-bottom:16px;}
+    .mpq-pos{display:flex;gap:18px;margin-bottom:14px;font-family:var(--ps-mono);font-size:.86em;flex-wrap:wrap;}
+    .mpq-pos b{color:var(--ps-accent);}
+    .mpq-ring{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px;}
+    @media(max-width:640px){.mpq-ring{grid-template-columns:repeat(2,1fr);}}
+    .mpq-slot{background:var(--ps-bg-2);border:2px solid var(--ps-border-soft);border-radius:10px;padding:10px;text-align:center;transition:.3s;}
+    .mpq-slot.act{border-color:#facc15;box-shadow:0 0 0 4px rgba(250,204,21,.16);}
+    .mpq-slot.w{border-color:var(--ps-purple);} .mpq-slot.r{border-color:var(--ps-green);}
+    .mpq-slot .si{font-size:.72em;color:var(--ps-text-dim);}
+    .mpq-slot .sd{font-family:var(--ps-mono);font-size:1.5em;font-weight:800;margin:4px 0;color:var(--ps-text);min-height:1.2em;}
+    .mpq-slot .sq{font-family:var(--ps-mono);font-size:.8em;}
+    .mpq-slot .sq b{color:#facc15;}
+    .mpq-log{font-family:var(--ps-mono);font-size:.82em;line-height:1.55;min-height:3.4em;color:var(--ps-text);}
+    .mpq-log .hl{color:#facc15;}.mpq-log .pr{color:var(--ps-purple);font-weight:700;}.mpq-log .co{color:var(--ps-green);font-weight:700;}
+    .mpq-ctrl{display:flex;gap:10px;align-items:center;margin-top:14px;flex-wrap:wrap;}
+    .mpq-btn{background:var(--ps-accent);color:#04122b;border:none;border-radius:8px;padding:8px 16px;font-weight:700;font-size:.85em;cursor:pointer;font-family:var(--ps-sans);}
+    .mpq-btn:disabled{opacity:.4;cursor:not-allowed;}
+    .mpq-btn.ghost{background:var(--ps-bg-2);color:var(--ps-text);border:1px solid var(--ps-border-soft);}
+    .mpq-step{font-size:.8em;color:var(--ps-text-dim);}
+  </style>
+  <div class="mpq" id="mpq">
+    <div class="mpq-h">🚦 交互式演示：序列号当"红绿灯"（N=4 环形）</div>
+    <div class="mpq-sub">初始每个 slot 的 <code>seq = 自己的下标</code>。点「下一步」看生产者/消费者如何靠 seq 判断该不该动这一格。</div>
+    <div class="mpq-pos">
+      <span>取号机 enqueue_pos = <b id="mpq-E">0</b></span>
+      <span>取号机 dequeue_pos = <b id="mpq-D">0</b></span>
+    </div>
+    <div class="mpq-ring" id="mpq-ring"></div>
+    <div class="mpq-log" id="mpq-log">待命…</div>
+    <div class="mpq-ctrl">
+      <button class="mpq-btn" id="mpq-next">下一步 ▶</button>
+      <button class="mpq-btn ghost" id="mpq-rst">↺ 重置</button>
+      <span class="mpq-step" id="mpq-stepn">第 0 / 5 步</span>
+    </div>
+  </div>
+  <script>
+  (function(){
+    var $=function(id){return document.getElementById(id);};
+    var N=4, step=0, TOTAL=5;
+    var init={E:0,D:0,seq:[0,1,2,3],data:['','','','']};
+    var st;
+    function clone(o){return JSON.parse(JSON.stringify(o));}
+    // each step: function mutating st + returns {log, act, mode}
+    var steps=[
+      function(){st.E=1; st.seq[0]=1; st.data[0]='x';
+        return {act:0,mode:'w',log:'<span class="pr">生产者 P1</span>：取号 pos=<span class="hl">0</span>(enqueue_pos→1)。slot0.seq(0)==pos(0)✅ → 写入 <b>x</b>，slot0.seq 置 pos+1=<span class="hl">1</span>（亮绿灯：可读）。'};},
+      function(){st.E=2; st.seq[1]=2; st.data[1]='y';
+        return {act:1,mode:'w',log:'<span class="pr">生产者 P2</span>：取号 pos=<span class="hl">1</span>(enqueue_pos→2)。slot1.seq(1)==1✅ → 写入 <b>y</b>，slot1.seq→<span class="hl">2</span>。两个生产者<strong>没有抢同一格</strong>，因为号不同。'};},
+      function(){st.D=1; st.seq[0]=0+N; st.data[0]='';
+        return {act:0,mode:'r',log:'<span class="co">消费者 C1</span>：取号 pos=<span class="hl">0</span>(dequeue_pos→1)。slot0.seq(1)==pos+1(1)✅ → 读走 <b>x</b>，slot0.seq→pos+N=<span class="hl">4</span>（推进一整圈，等下一轮的 4 号生产者）。'};},
+      function(){st.E=3; st.seq[2]=3; st.data[2]='z';
+        return {act:2,mode:'w',log:'<span class="pr">生产者 P3</span>：取号 pos=<span class="hl">2</span>(enqueue_pos→3)。slot2.seq(2)==2✅ → 写入 <b>z</b>，slot2.seq→<span class="hl">3</span>。'};},
+      function(){
+        return {act:0,mode:'w',log:'<span class="pr">生产者 P4</span>：取号 pos=<span class="hl">4</span>，落到 slot0（4 & 3 = 0）。slot0.seq(4)==pos(4)✅ → 这格<strong>循环复用</strong>成功，红绿灯依然对得上。这就是 <code>seq=pos+N</code> 的作用。'};}
+    ];
+    function render(r){
+      $('mpq-E').textContent=st.E; $('mpq-D').textContent=st.D;
+      $('mpq-stepn').textContent='第 '+step+' / '+TOTAL+' 步';
+      $('mpq-next').disabled = step>=TOTAL;
+      var h='';
+      for(var i=0;i<N;i++){
+        var cls='mpq-slot'+(r&&r.act===i?' act '+(r.mode):'');
+        h+='<div class="'+cls+'"><div class="si">slot '+i+'</div>'+
+           '<div class="sd">'+(st.data[i]||'·')+'</div>'+
+           '<div class="sq">seq=<b>'+st.seq[i]+'</b></div></div>';
+      }
+      $('mpq-ring').innerHTML=h;
+      $('mpq-log').innerHTML = r? r.log : '待命…';
+    }
+    function reset(){step=0; st=clone(init); render(null);}
+    $('mpq-next').onclick=function(){ if(step<TOTAL){var r=steps[step](); step++; render(r);} };
+    $('mpq-rst').onclick=reset;
+    reset();
+  })();
+  </script>
+
+  <p>下面是这套协议的核心代码（看完上面的动画再读，每行都对得上）：</p>
 
 <pre><span class="kw">struct</span> <span class="type">Slot</span> {
   <span class="kw">std</span>::atomic&lt;<span class="kw">size_t</span>&gt; sequence;
@@ -608,6 +833,104 @@ slot-&gt;sequence.store(pos + N, <span class="kw">std</span>::memory_order_relea
   </div>
 
   <p>Maged Michael 2002 提出（PODC 2002），是 <strong>lock-free 数据结构 + safe memory reclamation</strong> 的标准方案。</p>
+
+  <div class="box tip" style="border-left-color:#facc15;">
+    <strong>💡 它解决什么</strong>：无锁结构里，<strong>线程 A 正在读一个节点</strong>，线程 B 同时想 <code>delete</code> 它 → A 读到野指针（use-after-free）。Hazard Pointer 的办法是：读之前先<strong>公开声明"我正在用这个节点"</strong>，想删的人必须先<strong>检查有没有人在用</strong>，有人用就<strong>先别删、记下来过会儿再说</strong>。
+  </div>
+
+  <div class="analogy">
+    <div class="analogy-icon">🔖</div>
+    <div class="analogy-body">
+      <div class="analogy-title">生活化类比：健身房储物柜的"使用中"挂牌</div>
+      健身房清洁工（writer）每晚要清空没人用的储物柜。但他不能看柜子关着就直接撬开扔东西——万一里面有人的私物呢？<br>
+      规矩是：<strong>使用者（reader）用柜子前，先在柜门挂一个写着自己名字的"使用中"牌子</strong>（= 把节点指针写进自己的 hazard slot）。清洁工想清理某个柜子时，<strong>先扫一遍所有"使用中"挂牌</strong>：<br>
+      · 牌子上有这个柜子 → <strong>先别动</strong>，记到"待清理清单"（retired list），下次再来看；<br>
+      · 没人挂这个柜子 → <strong>安全清空</strong>。<br>
+      使用者用完<strong>把牌子摘掉</strong>（reset），下一轮清洁工扫描时就能放心回收了。
+    </div>
+  </div>
+
+  <!-- ===== 交互式：Hazard Pointer 保护/回收 ===== -->
+  <style>
+    .hzp{background:var(--ps-card);border:1px solid var(--ps-border);border-radius:14px;padding:20px 22px 24px;margin:18px 0;}
+    .hzp-h{font-weight:700;color:var(--ps-accent);font-size:1.02em;margin-bottom:4px;}
+    .hzp-sub{color:var(--ps-text-dim);font-size:.85em;margin-bottom:16px;}
+    .hzp-stage{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px;}
+    @media(max-width:680px){.hzp-stage{grid-template-columns:1fr;}}
+    .hzp-box{background:var(--ps-bg-2);border:1px solid var(--ps-border-soft);border-radius:10px;padding:14px;}
+    .hzp-box.rd{border-top:3px solid var(--ps-green);} .hzp-box.wr{border-top:3px solid var(--ps-purple);}
+    .hzp-box .bt{font-weight:700;margin-bottom:10px;} .hzp-box.rd .bt{color:var(--ps-green);}.hzp-box.wr .bt{color:var(--ps-purple);}
+    .hzp-tag{display:inline-block;font-family:var(--ps-mono);font-size:.84em;border:1.5px dashed var(--ps-border-soft);border-radius:8px;padding:5px 12px;color:var(--ps-text-dim);}
+    .hzp-tag.on{border-style:solid;border-color:#facc15;color:#facc15;background:rgba(250,204,21,.08);}
+    .hzp-retired{font-family:var(--ps-mono);font-size:.84em;min-height:1.4em;color:var(--ps-text);}
+    .hzp-node{display:inline-block;font-family:var(--ps-mono);font-size:.9em;border:2px solid var(--ps-green);border-radius:8px;padding:6px 14px;margin-top:6px;transition:.3s;}
+    .hzp-node.retired{border-color:#fb923c;color:#fb923c;border-style:dashed;}
+    .hzp-node.freed{border-color:var(--ps-red);color:var(--ps-text-dim);text-decoration:line-through;}
+    .hzp-node.safe{box-shadow:0 0 0 4px rgba(74,222,128,.18);}
+    .hzp-log{font-family:var(--ps-mono);font-size:.82em;line-height:1.55;min-height:3.4em;color:var(--ps-text);}
+    .hzp-log .gd{color:var(--ps-green);font-weight:700;}.hzp-log .bad{color:#fb923c;font-weight:700;}.hzp-log .hl{color:#facc15;}
+    .hzp-ctrl{display:flex;gap:10px;align-items:center;margin-top:14px;flex-wrap:wrap;}
+    .hzp-btn{background:var(--ps-accent);color:#04122b;border:none;border-radius:8px;padding:8px 16px;font-weight:700;font-size:.85em;cursor:pointer;font-family:var(--ps-sans);}
+    .hzp-btn:disabled{opacity:.4;cursor:not-allowed;}
+    .hzp-btn.ghost{background:var(--ps-bg-2);color:var(--ps-text);border:1px solid var(--ps-border-soft);}
+    .hzp-step{font-size:.8em;color:var(--ps-text-dim);}
+  </style>
+  <div class="hzp" id="hzp">
+    <div class="hzp-h">🔖 交互式演示：挂牌保护 → 推迟回收 → 安全释放</div>
+    <div class="hzp-sub">共享节点 <code>N</code> 被一个读者使用、一个写者想回收。点「下一步」看 hazard pointer 如何避免 use-after-free。</div>
+    <div style="text-align:center;margin-bottom:6px;">共享节点 <span class="hzp-node" id="hzp-node">N (live)</span></div>
+    <div class="hzp-stage">
+      <div class="hzp-box rd"><div class="bt">🧵 读者 (reader)</div>
+        <div>hazard slot：<span class="hzp-tag" id="hzp-tag">空（未挂牌）</span></div>
+      </div>
+      <div class="hzp-box wr"><div class="bt">🧵 写者 (writer)</div>
+        <div>待删清单 retired：<span class="hzp-retired" id="hzp-ret">[ ]</span></div>
+      </div>
+    </div>
+    <div class="hzp-log" id="hzp-log">待命…</div>
+    <div class="hzp-ctrl">
+      <button class="hzp-btn" id="hzp-next">下一步 ▶</button>
+      <button class="hzp-btn ghost" id="hzp-rst">↺ 重置</button>
+      <span class="hzp-step" id="hzp-stepn">第 0 / 5 步</span>
+    </div>
+  </div>
+  <script>
+  (function(){
+    var $=function(id){return document.getElementById(id);};
+    var step=0, TOTAL=5;
+    var steps=[
+      {node:'N (live)', ncls:'hzp-node', tag:'→ N', tagon:true, ret:'[ ]',
+       log:'<span style="color:var(--ps-green);font-weight:700">读者</span>：读到 head=N，先把 N 写进自己的 hazard slot（<span class="hl">挂牌"我在用 N"</span>），再开始使用。'},
+      {node:'N (retired)', ncls:'hzp-node retired', tag:'→ N', tagon:true, ret:'[ N ]',
+       log:'<span style="color:var(--ps-purple);font-weight:700">写者</span>：把 N 从结构里摘下，想回收。但按规矩<strong>不能立即 free</strong> → 先放进 <span class="bad">retired 待删清单</span>。'},
+      {node:'N (retired)', ncls:'hzp-node retired', tag:'→ N', tagon:true, ret:'[ N ]',
+       log:'<span style="color:var(--ps-purple);font-weight:700">写者 scan</span>：扫描所有 reader 的 hazard slot…… 发现<span class="bad">有人还挂着 N</span> → <strong>本轮不释放</strong>，N 继续留在清单里。'},
+      {node:'N (retired)', ncls:'hzp-node retired', tag:'空（未挂牌）', tagon:false, ret:'[ N ]',
+       log:'<span style="color:var(--ps-green);font-weight:700">读者</span>：用完了，<span class="hl">把牌子摘掉</span>（hazard slot 清空 / reset）。此刻起，N 不再被任何人引用。'},
+      {node:'N (freed)', ncls:'hzp-node freed', tag:'空（未挂牌）', tagon:false, ret:'[ ]',
+       log:'<span style="color:var(--ps-purple);font-weight:700">写者 scan</span>：再扫一遍 → <span class="gd">没人挂 N 了，安全 free！</span> 全程读者从未碰到野指针。'}
+    ];
+    function render(){
+      $('hzp-stepn').textContent='第 '+step+' / '+TOTAL+' 步';
+      $('hzp-next').disabled = step>=TOTAL;
+      if(step===0){
+        $('hzp-node').className='hzp-node'; $('hzp-node').textContent='N (live)';
+        $('hzp-tag').className='hzp-tag'; $('hzp-tag').textContent='空（未挂牌）';
+        $('hzp-ret').textContent='[ ]'; $('hzp-log').textContent='待命…';
+        return;
+      }
+      var s=steps[step-1];
+      var nc = s.ncls + (step===TOTAL?' safe':'');
+      $('hzp-node').className=nc; $('hzp-node').textContent=s.node;
+      $('hzp-tag').className='hzp-tag'+(s.tagon?' on':''); $('hzp-tag').textContent=s.tag;
+      $('hzp-ret').textContent=s.ret;
+      $('hzp-log').innerHTML=s.log;
+    }
+    $('hzp-next').onclick=function(){ if(step<TOTAL){step++; render();} };
+    $('hzp-rst').onclick=function(){ step=0; render(); };
+    render();
+  })();
+  </script>
 
   <h3>核心思想</h3>
   <ol>
