@@ -1,0 +1,1091 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>内存优化全景 · 从 C++ 进程内存到 AI 显存 体系化指南</title>
+<link rel="stylesheet" href="../assets/site-theme.css">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<style>
+/* ===== 本页专属：可视化与动画 ===== */
+/* 1. 延迟条形图：加载时横向生长 */
+.lat-chart{display:flex;flex-direction:column;gap:10px;margin:18px 0}
+.lat-row{display:grid;grid-template-columns:170px 1fr 90px;align-items:center;gap:12px;font-size:13px}
+.lat-row .lab{color:var(--text-dim);text-align:right;font-family:"JetBrains Mono",monospace;font-size:12px}
+.lat-bar-track{background:var(--bg-3);border-radius:6px;height:22px;overflow:hidden;border:1px solid var(--border)}
+.lat-bar{height:100%;border-radius:6px;transform:scaleX(0);transform-origin:left;transition:transform 1.1s cubic-bezier(.2,.8,.2,1)}
+.lat-chart.run .lat-bar{transform:scaleX(1)}
+.lat-row .val{font-family:"JetBrains Mono",monospace;font-size:12px;color:var(--accent-4)}
+.lat-bar.c1{background:linear-gradient(90deg,#34d399,#7dd3fc)}
+.lat-bar.c2{background:linear-gradient(90deg,#7dd3fc,#60a5fa)}
+.lat-bar.c3{background:linear-gradient(90deg,#60a5fa,#a78bfa)}
+.lat-bar.c4{background:linear-gradient(90deg,#a78bfa,#fb923c)}
+.lat-bar.c5{background:linear-gradient(90deg,#fb923c,#f87171)}
+
+/* 2. false sharing ping-pong 高亮 */
+@keyframes lineBounce{0%,100%{fill:#1e293b;stroke:#475569}45%,55%{fill:#3a1414;stroke:#f87171}}
+.fs-line{animation:lineBounce 2.4s ease-in-out infinite}
+
+/* 3. 内存碎片块依次出现 */
+@keyframes blkpop{from{opacity:0;transform:scale(.6)}to{opacity:1;transform:scale(1)}}
+.frag-blk{animation:blkpop .5s ease forwards;opacity:0}
+
+/* 4. 量化条对比 */
+.q-bars{display:flex;align-items:flex-end;gap:24px;justify-content:center;height:200px;margin:18px 0}
+.q-col{display:flex;flex-direction:column;align-items:center;gap:8px;width:90px}
+.q-fill{width:62px;border-radius:8px 8px 0 0;transform:scaleY(0);transform-origin:bottom;transition:transform 1s ease}
+.q-bars.run .q-fill{transform:scaleY(1)}
+.q-col .qn{font-family:"JetBrains Mono",monospace;font-size:12px;color:var(--accent-4)}
+.q-col .ql{font-size:12px;color:var(--text-dim)}
+
+/* 5. 训练显存堆叠 */
+.stack{display:flex;flex-direction:column;width:130px;border-radius:8px;overflow:hidden;border:1px solid var(--border)}
+.stack .seg{display:flex;align-items:center;justify-content:center;font-size:11px;color:#0a0e1a;font-weight:700;transform:scaleY(0);transform-origin:bottom;transition:transform .7s ease}
+.stack.run .seg{transform:scaleY(1)}
+
+/* 6. 三层徽章 */
+.layer-badge{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:99px;font-size:11px;font-family:"JetBrains Mono",monospace;font-weight:600}
+.layer-badge.cpp{background:rgba(125,211,252,.12);color:#7dd3fc;border:1px solid rgba(125,211,252,.3)}
+.layer-badge.sys{background:rgba(52,211,153,.12);color:#34d399;border:1px solid rgba(52,211,153,.3)}
+.layer-badge.ai{background:rgba(167,139,250,.12);color:#a78bfa;border:1px solid rgba(167,139,250,.3)}
+</style>
+</head>
+<body class="tn-shell-overlay">
+<!-- tn-nav:v1 -->
+<style>
+#tn-nav{position:fixed;top:14px;right:14px;z-index:99999;display:flex;gap:6px;align-items:center;
+  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;
+  font-size:12px;line-height:1;font-weight:500;}
+#tn-nav a,#tn-nav .tn-meta{display:inline-flex;align-items:center;gap:4px;
+  background:rgba(20,20,30,.85);color:#fff !important;text-decoration:none !important;
+  padding:7px 11px;border-radius:999px;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+  border:1px solid rgba(255,255,255,.10);box-shadow:0 2px 8px rgba(0,0,0,.18);
+  transition:background .15s,transform .15s;}
+#tn-nav a:hover{background:rgba(56,189,248,.92);transform:translateY(-1px);}
+#tn-nav .tn-meta{background:rgba(20,20,30,.55);cursor:default;}
+@media (max-width:640px){#tn-nav{top:8px;right:8px;font-size:11px;gap:4px;}
+  #tn-nav a,#tn-nav .tn-meta{padding:5px 9px;}}
+@media print{#tn-nav{display:none;}}
+</style>
+<div id="tn-nav">
+  <a href="../index.html" title="返回主页">&larr; 主页</a>
+  <a href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库">📁 Repo</a>
+  <a href="https://github.com/kavinChan13/tech-notes/blob/main/perf-debug/memory_optimization_guide.html" target="_blank" rel="noopener" title="本文源码">📝 Source</a>
+  <span class="tn-meta" title="预计阅读时长">⏱ 55 min</span>
+</div>
+<!-- /tn-nav:v1 -->
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>Memory Optimization · Map</h2>
+    <nav>
+      <ol>
+        <li><a href="#ch0" class="active">全景 · 三层内存地图</a></li>
+        <li><a href="#ch1">内存层级与延迟</a>
+          <ol>
+            <li><a href="#s1-1">金字塔与延迟数字</a></li>
+            <li><a href="#s1-2">优化的两条主线</a></li>
+          </ol>
+        </li>
+        <li><a href="#ch2">C++ 进程内存</a>
+          <ol>
+            <li><a href="#s2-1">对象布局与对齐</a></li>
+            <li><a href="#s2-2">False Sharing</a></li>
+            <li><a href="#s2-3">分配器与内存池</a></li>
+            <li><a href="#s2-4">内存碎片</a></li>
+            <li><a href="#s2-5">SSO / SBO 小对象优化</a></li>
+            <li><a href="#s2-6">智能指针控制块</a></li>
+          </ol>
+        </li>
+        <li><a href="#ch3">系统级内存</a>
+          <ol>
+            <li><a href="#s3-1">虚拟内存与页表</a></li>
+            <li><a href="#s3-2">NUMA</a></li>
+            <li><a href="#s3-3">大页 / TLB</a></li>
+            <li><a href="#s3-4">cgroup / OOM</a></li>
+            <li><a href="#s3-5">零拷贝 / mmap</a></li>
+          </ol>
+        </li>
+        <li><a href="#ch4">AI 显存优化</a>
+          <ol>
+            <li><a href="#s4-1">训练显存账本</a></li>
+            <li><a href="#s4-2">KV-Cache</a></li>
+            <li><a href="#s4-3">PagedAttention</a></li>
+            <li><a href="#s4-4">量化</a></li>
+            <li><a href="#s4-5">FlashAttention 分块</a></li>
+            <li><a href="#s4-6">ZeRO 三阶段分片</a></li>
+          </ol>
+        </li>
+        <li><a href="#ch5">工具速查与决策</a></li>
+        <li><a href="#ch6">面试题集（分层）</a></li>
+        <li><a href="#ch7">覆盖盲区与下一步</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+<main>
+
+<header class="hero">
+  <div class="badge">Cross-Cutting · 横切专题 · C++ → System → AI</div>
+  <h1>内存优化全景</h1>
+  <p class="sub">一张图、一条主线，把 <strong>C++ 进程内存</strong> · <strong>Linux 系统内存</strong> · <strong>AI 显存</strong> 三层的优化手段串起来。每个知识点都配可视化图解，并指回本库对应的深度文档。</p>
+  <div class="meta">
+    <span>难度 ★★★★☆</span>
+    <span>3 层主线</span>
+    <span>15+ 图解动画</span>
+    <span>15 道分层面试题</span>
+    <span>前置：cpp_memory_model · os_fundamentals</span>
+  </div>
+</header>
+
+<!-- ============= ch0 全景 ============= -->
+<section class="chapter" id="ch0">
+  <div class="ch-head">
+    <div class="num">00</div>
+    <div class="t">
+      <h2>全景 · 三层内存地图</h2>
+      <p class="sub">内存优化不是一篇文档，而是横跨三层的横切主题</p>
+      <div class="sub">先看清"我在哪一层"，再决定用什么手段</div>
+    </div>
+  </div>
+
+  <p class="lead">"内存优化"这个词在不同语境下指的根本不是一回事：嵌入式工程师想的是<em>对齐和碎片</em>，SRE 想的是 <em>OOM 和 cgroup</em>，AI 工程师想的是 <em>显存和 KV-Cache</em>。这一页把它们放在同一张地图上 —— 自顶向下分成三层，每层都有自己的瓶颈、手段和工具。</p>
+
+  <div class="svg-wrap">
+<svg viewBox="0 0 1100 540" xmlns="http://www.w3.org/2000/svg" style="font-family:inherit">
+  <defs>
+    <marker id="a-cy" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#7dd3fc"/></marker>
+    <marker id="a-gr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#34d399"/></marker>
+    <marker id="a-vi" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#a78bfa"/></marker>
+  </defs>
+
+  <!-- C++ 层 -->
+  <rect x="20" y="30" width="340" height="480" rx="14" fill="#0d1b2c" stroke="#1f3a5a"/>
+  <text x="190" y="62" text-anchor="middle" fill="#7dd3fc" font-size="16" font-weight="700">① C++ / 进程内存</text>
+  <text x="190" y="82" text-anchor="middle" fill="#64748b" font-size="11">瓶颈：cache miss · 分配抖动 · 碎片</text>
+  <g font-size="12" fill="#cbd5e1">
+    <rect x="40" y="100" width="300" height="34" rx="6" fill="#0e1a2c" stroke="#2a4566"/><text x="190" y="122" text-anchor="middle">对象布局 / 对齐 / padding</text>
+    <rect x="40" y="144" width="300" height="34" rx="6" fill="#0e1a2c" stroke="#2a4566"/><text x="190" y="166" text-anchor="middle">SSO / SBO 小对象优化</text>
+    <rect x="40" y="188" width="300" height="34" rx="6" fill="#0e1a2c" stroke="#2a4566"/><text x="190" y="210" text-anchor="middle">分配器 / 内存池 / arena / pmr</text>
+    <rect x="40" y="232" width="300" height="34" rx="6" fill="#0e1a2c" stroke="#2a4566"/><text x="190" y="254" text-anchor="middle">jemalloc / tcmalloc / mimalloc</text>
+    <rect x="40" y="276" width="300" height="34" rx="6" fill="#0e1a2c" stroke="#2a4566"/><text x="190" y="298" text-anchor="middle">false sharing / cache 友好布局</text>
+    <rect x="40" y="320" width="300" height="34" rx="6" fill="#0e1a2c" stroke="#2a4566"/><text x="190" y="342" text-anchor="middle">RAII / 移动语义 / 智能指针</text>
+    <rect x="40" y="364" width="300" height="34" rx="6" fill="#0e1a2c" stroke="#2a4566"/><text x="190" y="386" text-anchor="middle">容器内存陷阱（reserve / 碎片）</text>
+    <rect x="40" y="408" width="300" height="34" rx="6" fill="#0e1a2c" stroke="#2a4566"/><text x="190" y="430" text-anchor="middle">无锁内存回收（HP / RCU）</text>
+  </g>
+  <text x="190" y="478" text-anchor="middle" fill="#64748b" font-size="11">工具：pahole · perf c2c · ASan · heaptrack</text>
+
+  <!-- arrow -->
+  <path d="M362,270 C380,270 382,270 398,270" stroke="#7dd3fc" stroke-width="2" fill="none" marker-end="url(#a-cy)"/>
+
+  <!-- 系统层 -->
+  <rect x="400" y="30" width="320" height="480" rx="14" fill="#0d2218" stroke="#1e5a44"/>
+  <text x="560" y="62" text-anchor="middle" fill="#34d399" font-size="16" font-weight="700">② Linux 系统内存</text>
+  <text x="560" y="82" text-anchor="middle" fill="#64748b" font-size="11">瓶颈：page fault · TLB · OOM · NUMA</text>
+  <g font-size="12" fill="#cbd5e1">
+    <rect x="420" y="100" width="280" height="34" rx="6" fill="#0f2418" stroke="#1e6048"/><text x="560" y="122" text-anchor="middle">虚拟内存 / 页表 / MMU</text>
+    <rect x="420" y="144" width="280" height="34" rx="6" fill="#0f2418" stroke="#1e6048"/><text x="560" y="166" text-anchor="middle">TLB / Page Fault / 延迟分配</text>
+    <rect x="420" y="188" width="280" height="34" rx="6" fill="#0f2418" stroke="#1e6048"/><text x="560" y="210" text-anchor="middle">NUMA / first-touch / 绑核</text>
+    <rect x="420" y="232" width="280" height="34" rx="6" fill="#0f2418" stroke="#1e6048"/><text x="560" y="254" text-anchor="middle">HugePages / THP</text>
+    <rect x="420" y="276" width="280" height="34" rx="6" fill="#0f2418" stroke="#1e6048"/><text x="560" y="298" text-anchor="middle">Buddy / SLUB / Page Cache</text>
+    <rect x="420" y="320" width="280" height="34" rx="6" fill="#0f2418" stroke="#1e6048"/><text x="560" y="342" text-anchor="middle">cgroup v2 / OOM killer</text>
+    <rect x="420" y="364" width="280" height="34" rx="6" fill="#0f2418" stroke="#1e6048"/><text x="560" y="386" text-anchor="middle">零拷贝 / mmap / DMA</text>
+    <rect x="420" y="408" width="280" height="34" rx="6" fill="#0f2418" stroke="#1e6048"/><text x="560" y="430" text-anchor="middle">mlock / 实时内存确定性</text>
+  </g>
+  <text x="560" y="478" text-anchor="middle" fill="#64748b" font-size="11">工具：numastat · /proc/meminfo · slabtop · bpftrace</text>
+
+  <path d="M722,270 C740,270 742,270 758,270" stroke="#34d399" stroke-width="2" fill="none" marker-end="url(#a-gr)"/>
+
+  <!-- AI 层 -->
+  <rect x="760" y="30" width="320" height="480" rx="14" fill="#1a1430" stroke="#3a2a66"/>
+  <text x="920" y="62" text-anchor="middle" fill="#a78bfa" font-size="16" font-weight="700">③ AI 显存 / 大模型</text>
+  <text x="920" y="82" text-anchor="middle" fill="#64748b" font-size="11">瓶颈：HBM 容量 · 带宽 · OOM</text>
+  <g font-size="12" fill="#e9d5ff">
+    <rect x="780" y="100" width="280" height="34" rx="6" fill="#1a1238" stroke="#5b3a96"/><text x="920" y="122" text-anchor="middle">训练显存账本（7–10× weight）</text>
+    <rect x="780" y="144" width="280" height="34" rx="6" fill="#1a1238" stroke="#5b3a96"/><text x="920" y="166" text-anchor="middle">ZeRO / FSDP / 并行分片</text>
+    <rect x="780" y="188" width="280" height="34" rx="6" fill="#1a1238" stroke="#5b3a96"/><text x="920" y="210" text-anchor="middle">Activation Checkpointing</text>
+    <rect x="780" y="232" width="280" height="34" rx="6" fill="#1a1238" stroke="#5b3a96"/><text x="920" y="254" text-anchor="middle">KV-Cache / GQA / MLA</text>
+    <rect x="780" y="276" width="280" height="34" rx="6" fill="#1a1238" stroke="#5b3a96"/><text x="920" y="298" text-anchor="middle">PagedAttention / vLLM</text>
+    <rect x="780" y="320" width="280" height="34" rx="6" fill="#1a1238" stroke="#5b3a96"/><text x="920" y="342" text-anchor="middle">量化 INT8 / INT4 / FP8</text>
+    <rect x="780" y="364" width="280" height="34" rx="6" fill="#1a1238" stroke="#5b3a96"/><text x="920" y="386" text-anchor="middle">FlashAttention / GPU 内存层级</text>
+    <rect x="780" y="408" width="280" height="34" rx="6" fill="#1a1238" stroke="#5b3a96"/><text x="920" y="430" text-anchor="middle">长上下文 / MoE 显存</text>
+  </g>
+  <text x="920" y="478" text-anchor="middle" fill="#64748b" font-size="11">工具：nvidia-smi · torch memory snapshot</text>
+</svg>
+    <div class="svg-caption">图 0 · 三层内存地图：同一个"内存优化"问题，在 C++ / 系统 / AI 三层有完全不同的瓶颈、手段与工具。本文按这三层组织。</div>
+  </div>
+
+  <div class="info">
+    本文是<strong>横切索引 + 图解</strong>，每个主题只讲"是什么 + 为什么 + 一张图"，深入细节请跳转标注的源文档（如 <code>★ 见 low_latency_guide.html</code>）。
+  </div>
+</section>
+
+<!-- ============= ch1 层级与延迟 ============= -->
+<section class="chapter" id="ch1">
+  <div class="ch-head">
+    <div class="num">01</div>
+    <div class="t">
+      <h2>内存层级与延迟</h2>
+      <p class="sub">所有内存优化的第一性原理：越近越快越小越贵</p>
+      <div class="sub">理解延迟数量级差，才知道优化往哪使劲</div>
+    </div>
+  </div>
+
+  <h3 id="s1-1">1.1 金字塔与延迟数字</h3>
+  <p>无论 C++ 还是 GPU，内存都是一座<strong>金字塔</strong>：顶层快、小、贵（寄存器 / SRAM），底层慢、大、便宜（DRAM / HBM / 磁盘）。优化的本质就是 —— <em>让热数据尽量待在金字塔上层</em>。</p>
+
+  <div class="svg-wrap">
+<svg viewBox="0 0 900 420" xmlns="http://www.w3.org/2000/svg" style="font-family:inherit">
+  <!-- pyramid layers -->
+  <polygon points="430,30 470,30 490,90 410,90" fill="#34d399" opacity="0.9"/>
+  <text x="450" y="68" text-anchor="middle" fill="#0a0e1a" font-size="12" font-weight="700">寄存器</text>
+  <polygon points="408,92 492,92 522,162 378,162" fill="#7dd3fc" opacity="0.85"/>
+  <text x="450" y="132" text-anchor="middle" fill="#0a0e1a" font-size="12" font-weight="700">L1/L2/L3 Cache · SRAM</text>
+  <polygon points="376,164 524,164 560,254 340,254" fill="#60a5fa" opacity="0.8"/>
+  <text x="450" y="214" text-anchor="middle" fill="#0a0e1a" font-size="13" font-weight="700">DRAM / HBM（显存）</text>
+  <polygon points="338,256 562,256 600,356 300,356" fill="#a78bfa" opacity="0.75"/>
+  <text x="450" y="312" text-anchor="middle" fill="#0a0e1a" font-size="13" font-weight="700">SSD / 磁盘 / 远端</text>
+
+  <!-- side labels -->
+  <text x="630" y="64" fill="#34d399" font-size="12">~0.3 ns · 几 KB</text>
+  <text x="630" y="130" fill="#7dd3fc" font-size="12">1–10 ns · 几 MB</text>
+  <text x="630" y="212" fill="#60a5fa" font-size="12">~100 ns · 几十 GB</text>
+  <text x="630" y="310" fill="#a78bfa" font-size="12">10 µs–10 ms · TB 级</text>
+
+  <text x="150" y="64" fill="#64748b" font-size="12" text-anchor="start">快 · 小 · 贵</text>
+  <text x="150" y="310" fill="#64748b" font-size="12" text-anchor="start">慢 · 大 · 便宜</text>
+  <path d="M120,80 L120,300" stroke="#475569" stroke-width="1.5" marker-end="url(#a-cy)"/>
+  <defs><marker id="a-cy" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#475569"/></marker></defs>
+</svg>
+    <div class="svg-caption">图 1.1 · 内存金字塔。C++ 的优化目标是把热数据留在 Cache；GPU 的 FlashAttention 同理 —— 把数据从 HBM 搬到 SRAM 后反复复用。</div>
+  </div>
+
+  <p>下面这张<strong>动画条形图</strong>把延迟数量级"画"出来 —— 注意条长是<em>对数感知</em>的近似，重点是体会 <code>malloc</code>、<code>page fault</code> 这些"抖动源"和 cache 命中之间的鸿沟（向下滚动触发动画）：</p>
+
+  <div class="lat-chart" id="latChart">
+    <div class="lat-row"><span class="lab">L1 cache 命中</span><div class="lat-bar-track"><div class="lat-bar c1" style="width:6%"></div></div><span class="val">~1 ns</span></div>
+    <div class="lat-row"><span class="lab">L3 cache 命中</span><div class="lat-bar-track"><div class="lat-bar c2" style="width:14%"></div></div><span class="val">~10 ns</span></div>
+    <div class="lat-row"><span class="lab">DRAM 访问</span><div class="lat-bar-track"><div class="lat-bar c3" style="width:30%"></div></div><span class="val">~100 ns</span></div>
+    <div class="lat-row"><span class="lab">malloc 小块</span><div class="lat-bar-track"><div class="lat-bar c4" style="width:42%"></div></div><span class="val">50–200 ns 抖</span></div>
+    <div class="lat-row"><span class="lab">page fault (minor)</span><div class="lat-bar-track"><div class="lat-bar c5" style="width:70%"></div></div><span class="val">~5 µs 抖</span></div>
+    <div class="lat-row"><span class="lab">page fault (major)</span><div class="lat-bar-track"><div class="lat-bar c5" style="width:100%"></div></div><span class="val">~ms 极抖</span></div>
+  </div>
+
+  <div class="tip">优化排序原则：<strong>先消除"抖动大"的操作</strong>（malloc / page fault / 锁竞争），再优化"稳定但慢"的（cache miss）。均值低不代表 P99 低。</div>
+
+  <h3 id="s1-2">1.2 优化的两条主线</h3>
+  <div class="grid cols-2">
+    <div class="card">
+      <h4>主线 A · 减少分配 / 搬运</h4>
+      <ul>
+        <li>对象池 / arena / 预分配 → 免运行时 <code>malloc</code></li>
+        <li>移动语义 / SSO → 免拷贝</li>
+        <li>零拷贝 / mmap → 免内核态搬运</li>
+        <li>KV-Cache / FlashAttention → 免重复计算/搬运</li>
+      </ul>
+    </div>
+    <div class="card green">
+      <h4>主线 B · 提升局部性 / 命中率</h4>
+      <ul>
+        <li>cache 友好布局（SoA / 对齐 / 紧凑）</li>
+        <li>避免 false sharing</li>
+        <li>大页减 TLB miss · NUMA 本地访问</li>
+        <li>量化 / 紧凑数据结构 → 装得下、读得快</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ============= ch2 C++ ============= -->
+<section class="chapter" id="ch2">
+  <div class="ch-head">
+    <div class="num">02</div>
+    <div class="t">
+      <h2><span class="layer-badge cpp">① C++ LAYER</span> 进程内存优化</h2>
+      <p class="sub">对象布局 · false sharing · 分配器 · 碎片</p>
+      <div class="sub">从单个对象的字节，到整个堆的形态</div>
+    </div>
+  </div>
+
+  <h3 id="s2-1">2.1 对象布局与对齐</h3>
+  <p>编译器为满足<strong>对齐要求</strong>会在成员之间插入 padding（空洞）。同样的字段，<em>声明顺序不同，对象大小能差 30%+</em>。把大字段排前面、小字段聚一起，就能挤掉空洞。</p>
+
+  <div class="svg-wrap">
+<svg viewBox="0 0 980 300" xmlns="http://www.w3.org/2000/svg" style="font-family:inherit">
+  <!-- bad layout -->
+  <text x="40" y="40" fill="#f87171" font-size="14" font-weight="700">✗ 顺序不当 · 24 字节（含 15B 空洞）</text>
+  <g font-size="11">
+    <rect x="40" y="55" width="40" height="40" fill="#1e3a5f" stroke="#7dd3fc"/><text x="60" y="80" text-anchor="middle" fill="#cbd5e1">c</text>
+    <rect x="80" y="55" width="280" height="40" fill="#3a1414" stroke="#f87171" stroke-dasharray="4,3"/><text x="220" y="80" text-anchor="middle" fill="#f87171">padding 7B</text>
+    <rect x="360" y="55" width="160" height="40" fill="#1e3a5f" stroke="#7dd3fc"/><text x="440" y="80" text-anchor="middle" fill="#cbd5e1">double d (8B)</text>
+    <rect x="520" y="55" width="80" height="40" fill="#1e3a5f" stroke="#7dd3fc"/><text x="560" y="80" text-anchor="middle" fill="#cbd5e1">int i</text>
+    <rect x="600" y="55" width="40" height="40" fill="#1e3a5f" stroke="#7dd3fc"/><text x="620" y="80" text-anchor="middle" fill="#cbd5e1">c2</text>
+    <rect x="640" y="55" width="120" height="40" fill="#3a1414" stroke="#f87171" stroke-dasharray="4,3"/><text x="700" y="80" text-anchor="middle" fill="#f87171">padding 3B</text>
+  </g>
+  <text x="40" y="120" fill="#64748b" font-size="11">struct { char c; double d; int i; char c2; };</text>
+
+  <!-- good layout -->
+  <text x="40" y="180" fill="#34d399" font-size="14" font-weight="700">✓ 大→小重排 · 16 字节（仅 2B 空洞）</text>
+  <g font-size="11">
+    <rect x="40" y="195" width="160" height="40" fill="#0f2418" stroke="#34d399"/><text x="120" y="220" text-anchor="middle" fill="#cbd5e1">double d (8B)</text>
+    <rect x="200" y="195" width="80" height="40" fill="#0f2418" stroke="#34d399"/><text x="240" y="220" text-anchor="middle" fill="#cbd5e1">int i</text>
+    <rect x="280" y="195" width="40" height="40" fill="#0f2418" stroke="#34d399"/><text x="300" y="220" text-anchor="middle" fill="#cbd5e1">c</text>
+    <rect x="320" y="195" width="40" height="40" fill="#0f2418" stroke="#34d399"/><text x="340" y="220" text-anchor="middle" fill="#cbd5e1">c2</text>
+    <rect x="360" y="195" width="80" height="40" fill="#1a2c1a" stroke="#475569" stroke-dasharray="4,3"/><text x="400" y="220" text-anchor="middle" fill="#64748b">pad 2B</text>
+  </g>
+  <text x="40" y="260" fill="#64748b" font-size="11">struct { double d; int i; char c; char c2; };  // 省 33%</text>
+</svg>
+    <div class="svg-caption">图 2.1 · 字段重排消除 padding：同样 4 个字段，从 24B 降到 16B。用 <code>pahole</code> 可直接看出空洞位置。</div>
+  </div>
+  <p><span class="layer-badge cpp">见</span> <a href="../cpp/object_model.html">cpp/object_model.html</a>（布局/EBO/pahole）· <a href="../cpp/memory_model.html">cpp/memory_model.html</a></p>
+
+  <h3 id="s2-2">2.2 False Sharing（伪共享）</h3>
+  <p>两个线程改的是<em>不同变量</em>，但它们恰好落在<strong>同一条 64B cache line</strong> 上 —— 每次写都让对方的缓存行失效，在两个核之间来回弹（ping-pong），性能暴跌。下图红色高亮就是被反复争抢的那条 cache line：</p>
+
+  <div class="svg-wrap">
+<svg viewBox="0 0 900 280" xmlns="http://www.w3.org/2000/svg" style="font-family:inherit">
+  <!-- core A -->
+  <rect x="40" y="60" width="160" height="90" rx="10" fill="#0d1b2c" stroke="#7dd3fc" stroke-width="2"/>
+  <text x="120" y="95" text-anchor="middle" fill="#7dd3fc" font-size="14" font-weight="700">Core 0</text>
+  <text x="120" y="120" text-anchor="middle" fill="#94a3b8" font-size="11">写 counter[0]</text>
+  <!-- core B -->
+  <rect x="700" y="60" width="160" height="90" rx="10" fill="#1a1430" stroke="#a78bfa" stroke-width="2"/>
+  <text x="780" y="95" text-anchor="middle" fill="#a78bfa" font-size="14" font-weight="700">Core 1</text>
+  <text x="780" y="120" text-anchor="middle" fill="#94a3b8" font-size="11">写 counter[1]</text>
+  <!-- shared cache line -->
+  <rect class="fs-line" x="360" y="70" width="180" height="70" rx="8" stroke-width="2"/>
+  <text x="450" y="100" text-anchor="middle" fill="#e4e9f5" font-size="12" font-weight="700">同一 cache line</text>
+  <text x="450" y="122" text-anchor="middle" fill="#94a3b8" font-size="11">[counter0 | counter1]</text>
+  <!-- bouncing ball -->
+  <circle r="9" fill="#f87171">
+    <animate attributeName="cx" values="210;350;210" dur="2.4s" repeatCount="indefinite" calcMode="spline" keyTimes="0;0.5;1" keySplines="0.4 0 0.6 1;0.4 0 0.6 1"/>
+    <animate attributeName="cy" values="105;105;105" dur="2.4s" repeatCount="indefinite"/>
+  </circle>
+  <circle r="9" fill="#f87171">
+    <animate attributeName="cx" values="690;550;690" dur="2.4s" repeatCount="indefinite" calcMode="spline" keyTimes="0;0.5;1" keySplines="0.4 0 0.6 1;0.4 0 0.6 1"/>
+    <animate attributeName="cy" values="105;105;105" dur="2.4s" repeatCount="indefinite"/>
+  </circle>
+  <text x="450" y="200" text-anchor="middle" fill="#fbbf24" font-size="13" font-weight="700">解决：alignas(64) 把热变量隔到各自独立的 cache line</text>
+  <text x="450" y="225" text-anchor="middle" fill="#64748b" font-size="11">或用 std::hardware_destructive_interference_size</text>
+</svg>
+    <div class="svg-caption">图 2.2 · False sharing 动画：两核反复让对方缓存行失效（红块闪烁 = 失效）。<code>perf c2c</code> 可定位。</div>
+  </div>
+  <p><span class="layer-badge cpp">见</span> <a href="../cpp/memory_model.html">cpp/memory_model.html §13</a> · <a href="performance_guide.html">performance_guide.html</a> · <a href="low_latency_guide.html">low_latency_guide.html</a></p>
+
+  <h3 id="s2-3">2.3 分配器与内存池</h3>
+  <p>默认 <code>std::allocator</code>（底层 malloc）有全局锁、延迟不确定、会触发 brk/mmap 突变。热路径上应换成<strong>专用分配策略</strong>：</p>
+
+  <table>
+    <thead><tr><th>策略</th><th>分配开销</th><th>释放</th><th>适用</th></tr></thead>
+    <tbody>
+      <tr><td>std::allocator (malloc)</td><td class="cell-bad">50–200 ns + 抖</td><td>同左</td><td>通用</td></tr>
+      <tr><td>jemalloc / tcmalloc / mimalloc</td><td class="cell-mid">更稳</td><td>更稳</td><td>多线程服务</td></tr>
+      <tr><td><strong>monotonic / arena</strong></td><td class="cell-ok">几 ns（指针推进）</td><td class="cell-ok">0（整体释放）</td><td>请求级短生命周期</td></tr>
+      <tr><td><strong>对象池 / slab</strong></td><td class="cell-ok">~10 ns（free list）</td><td class="cell-ok">~10 ns</td><td>固定大小对象</td></tr>
+      <tr><td><strong>栈 / SBO inline</strong></td><td class="cell-ok">0</td><td class="cell-ok">0</td><td>小对象</td></tr>
+    </tbody>
+  </table>
+
+  <div class="flow-row"><span class="step">arena</span><span class="arrow">→</span><span class="desc">一个请求开始时分配一大块，期间所有小对象在块内"指针推进"，请求结束整块一次性丢弃 —— 零碎释放、零碎片。</span></div>
+  <p><span class="layer-badge cpp">见</span> <a href="low_latency_guide.html">low_latency_guide.html §3–8</a>（pmr / arena / 对象池 / 零分配）· <a href="../cpp/coroutines_deep_dive.html">协程帧分配器</a></p>
+
+  <h3 id="s2-4">2.4 内存碎片</h3>
+  <p>反复 malloc/free 不同大小后，空闲内存被切成<strong>许多无法利用的小洞</strong>：明明总空闲够，却分不出一块连续的大内存。这就是为什么 <code>free</code> 之后 RSS 不降 —— 碎片把堆"锁住"了。</p>
+
+  <div class="svg-wrap">
+<svg viewBox="0 0 900 220" xmlns="http://www.w3.org/2000/svg" style="font-family:inherit">
+  <text x="40" y="35" fill="#94a3b8" font-size="12">一段堆内存：绿=占用，灰=空闲洞</text>
+  <g>
+    <rect class="frag-blk" style="animation-delay:.1s" x="40" y="55" width="90" height="50" rx="4" fill="#0f2418" stroke="#34d399"/>
+    <rect class="frag-blk" style="animation-delay:.25s" x="135" y="55" width="50" height="50" rx="4" fill="#161b2e" stroke="#475569"/>
+    <rect class="frag-blk" style="animation-delay:.4s" x="190" y="55" width="120" height="50" rx="4" fill="#0f2418" stroke="#34d399"/>
+    <rect class="frag-blk" style="animation-delay:.55s" x="315" y="55" width="40" height="50" rx="4" fill="#161b2e" stroke="#475569"/>
+    <rect class="frag-blk" style="animation-delay:.7s" x="360" y="55" width="70" height="50" rx="4" fill="#0f2418" stroke="#34d399"/>
+    <rect class="frag-blk" style="animation-delay:.85s" x="435" y="55" width="60" height="50" rx="4" fill="#161b2e" stroke="#475569"/>
+    <rect class="frag-blk" style="animation-delay:1s" x="500" y="55" width="100" height="50" rx="4" fill="#0f2418" stroke="#34d399"/>
+    <rect class="frag-blk" style="animation-delay:1.15s" x="605" y="55" width="55" height="50" rx="4" fill="#161b2e" stroke="#475569"/>
+    <rect class="frag-blk" style="animation-delay:1.3s" x="665" y="55" width="80" height="50" rx="4" fill="#0f2418" stroke="#34d399"/>
+  </g>
+  <path d="M135,130 L605,130" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="5,4"/>
+  <text x="370" y="155" text-anchor="middle" fill="#fbbf24" font-size="12">总空闲 ≈ 205B，但最大连续块只有 60B → 无法满足一次 100B 分配</text>
+  <text x="40" y="195" fill="#64748b" font-size="11">对策：arena/池统一生命周期 · 切 jemalloc/tcmalloc · malloc_trim 归还 · 紧凑数据结构</text>
+</svg>
+    <div class="svg-caption">图 2.4 · 外部碎片：空闲总量足够但不连续。这是"RSS 不下降"最常见的非泄漏成因。</div>
+  </div>
+  <p><span class="layer-badge cpp">见</span> <a href="memory_leak_guide.html">memory_leak_guide.html</a>（假泄漏诊断矩阵 / glibc malloc 内部）</p>
+
+  <h3 id="s2-5">2.5 SSO / SBO 小对象优化</h3>
+  <p><code>std::string</code>、<code>std::function</code> 这些类型，如果数据足够小，会直接<strong>内嵌进对象自己的栈空间</strong>（SSO / SBO），完全不碰堆 —— 短字符串场景下省掉一次 malloc + 一次 free + 提升 cache 局部性。只有超过阈值才退化为堆分配。</p>
+
+  <div class="svg-wrap">
+<svg viewBox="0 0 920 270" xmlns="http://www.w3.org/2000/svg" style="font-family:inherit">
+  <!-- small: inline -->
+  <text x="40" y="35" fill="#34d399" font-size="13" font-weight="700">✓ 短字符串 "hello" · 内嵌在对象里（零堆分配）</text>
+  <rect x="40" y="50" width="380" height="70" rx="8" fill="#0d1b2c" stroke="#34d399"/>
+  <text x="60" y="75" fill="#7dd3fc" font-size="11">string 对象（栈上 / 容器内）</text>
+  <rect x="60" y="85" width="340" height="26" rx="4" fill="#0f2418" stroke="#1e6048"/>
+  <text x="230" y="103" text-anchor="middle" fill="#cbd5e1" font-size="11">[ h e l l o \0 … 内联 buffer ]</text>
+
+  <!-- large: heap -->
+  <text x="480" y="35" fill="#fb923c" font-size="13" font-weight="700">⚠ 长字符串 · 超阈值 → 堆分配</text>
+  <rect x="480" y="50" width="200" height="70" rx="8" fill="#0d1b2c" stroke="#7dd3fc"/>
+  <text x="500" y="75" fill="#7dd3fc" font-size="11">string 对象</text>
+  <rect x="500" y="85" width="160" height="26" rx="4" fill="#1e3a5f"/>
+  <text x="580" y="103" text-anchor="middle" fill="#cbd5e1" font-size="10">ptr · size · cap</text>
+  <rect x="740" y="60" width="150" height="50" rx="8" fill="#3a1414" stroke="#f87171"/>
+  <text x="815" y="90" text-anchor="middle" fill="#f87171" font-size="11">堆上 char[ ]</text>
+  <defs><marker id="a-h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#f87171"/></marker></defs>
+  <path d="M662,98 C700,98 710,85 738,85" stroke="#f87171" stroke-width="1.6" fill="none" marker-end="url(#a-h)"/>
+
+  <text x="40" y="165" fill="#94a3b8" font-size="12">典型 SSO 阈值：libstdc++ 15B · libc++ 22B（含结尾 \0）</text>
+  <text x="40" y="195" fill="#64748b" font-size="11">同理：std::function / any / variant 的 SBO；folly::fbstring 更激进；EASTL fixed_vector 直接栈存储</text>
+  <text x="40" y="222" fill="#64748b" font-size="11">副作用：SSO 命中时"移动"≈"拷贝"（数据本就在对象内，无指针可偷）</text>
+</svg>
+    <div class="svg-caption">图 2.5 · SSO/SBO：小对象内嵌、零堆分配；超阈值才落堆。</div>
+  </div>
+  <p><span class="layer-badge cpp">见</span> <a href="../cpp/object_model.html">object_model.html</a>（SBO/launder）· <a href="../stl/stl_containers_ppt.html">stl_containers</a> · <a href="modern_libs_guide.html">modern_libs_guide.html</a></p>
+
+  <h3 id="s2-6">2.6 智能指针控制块</h3>
+  <p><code>shared_ptr</code> 的成本藏在<strong>控制块</strong>里。<code>make_shared</code> 把控制块和对象<em>合并成一次分配</em>（更快、cache 更友好）；但代价是只要还有 <code>weak_ptr</code> 存活，<strong>整块内存（含已析构对象的空间）都不归还</strong>。</p>
+
+  <div class="svg-wrap">
+<svg viewBox="0 0 920 240" xmlns="http://www.w3.org/2000/svg" style="font-family:inherit">
+  <!-- two allocations -->
+  <text x="40" y="35" fill="#fb923c" font-size="13" font-weight="700">shared_ptr(new T) · 两次分配</text>
+  <rect x="40" y="50" width="150" height="60" rx="8" fill="#0d1b2c" stroke="#7dd3fc"/>
+  <text x="115" y="75" text-anchor="middle" fill="#cbd5e1" font-size="11">控制块</text>
+  <text x="115" y="95" text-anchor="middle" fill="#64748b" font-size="10">strong/weak/deleter</text>
+  <rect x="240" y="50" width="120" height="60" rx="8" fill="#1e3a5f" stroke="#7dd3fc"/>
+  <text x="300" y="85" text-anchor="middle" fill="#cbd5e1" font-size="11">对象 T</text>
+  <text x="200" y="135" fill="#64748b" font-size="10">两次 malloc · 分散 · cache 不友好</text>
+
+  <!-- one allocation -->
+  <text x="500" y="35" fill="#34d399" font-size="13" font-weight="700">make_shared · 单次分配</text>
+  <rect x="500" y="50" width="300" height="60" rx="8" fill="#0d2218" stroke="#34d399"/>
+  <line x1="650" y1="50" x2="650" y2="110" stroke="#1e6048" stroke-dasharray="3,3"/>
+  <text x="575" y="75" text-anchor="middle" fill="#cbd5e1" font-size="11">控制块</text>
+  <text x="725" y="75" text-anchor="middle" fill="#cbd5e1" font-size="11">对象 T</text>
+  <text x="650" y="98" text-anchor="middle" fill="#64748b" font-size="10">一整块连续内存</text>
+  <text x="500" y="135" fill="#34d399" font-size="10">一次 malloc · 连续 · cache 友好 ✓</text>
+  <text x="500" y="175" fill="#f87171" font-size="11">⚠ 陷阱：weak_ptr 存活 → 整块（含大对象空间）不释放</text>
+  <text x="500" y="200" fill="#64748b" font-size="10">大对象 + 长 weak：改回 shared_ptr(new T) 分离分配</text>
+
+  <text x="40" y="175" fill="#94a3b8" font-size="11">引用计数 +1 用 relaxed，-1 用 release（+末次 acquire）</text>
+  <text x="40" y="200" fill="#64748b" font-size="10">栈对象 &gt; unique_ptr &gt; shared_ptr（按开销升序选用）</text>
+</svg>
+    <div class="svg-caption">图 2.6 · 控制块布局与 make_shared 权衡。</div>
+  </div>
+  <p><span class="layer-badge cpp">见</span> <a href="../cpp/smart_pointers_deep_dive.html">smart_pointers_deep_dive.html</a>（控制块/aliasing/intrusive_ptr）</p>
+</section>
+
+<!-- ============= ch3 系统 ============= -->
+<section class="chapter" id="ch3">
+  <div class="ch-head">
+    <div class="num">03</div>
+    <div class="t">
+      <h2><span class="layer-badge sys">② SYSTEM LAYER</span> 系统级内存优化</h2>
+      <p class="sub">虚拟内存 · NUMA · 大页 · cgroup / OOM</p>
+      <div class="sub">从进程的"假"地址，到物理 DRAM 的真实代价</div>
+    </div>
+  </div>
+
+  <h3 id="s3-1">3.1 虚拟内存与页表</h3>
+  <p>每个进程看到的都是<strong>连续的虚拟地址</strong>，但物理内存是零散的页。MMU 通过<em>多级页表</em>把虚拟页翻译成物理页，<strong>TLB</strong> 缓存这个翻译。第一次访问某页才真正分配物理页（延迟分配 / 缺页）。</p>
+
+  <div class="svg-wrap">
+<svg viewBox="0 0 920 300" xmlns="http://www.w3.org/2000/svg" style="font-family:inherit">
+  <defs><marker id="a-g2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#34d399"/></marker></defs>
+  <!-- virtual -->
+  <rect x="40" y="50" width="180" height="200" rx="10" fill="#0d1b2c" stroke="#7dd3fc"/>
+  <text x="130" y="78" text-anchor="middle" fill="#7dd3fc" font-size="13" font-weight="700">虚拟地址空间</text>
+  <rect x="60" y="95" width="140" height="34" rx="4" fill="#1e3a5f"/><text x="130" y="117" text-anchor="middle" fill="#cbd5e1" font-size="11">页 V0</text>
+  <rect x="60" y="135" width="140" height="34" rx="4" fill="#1e3a5f"/><text x="130" y="157" text-anchor="middle" fill="#cbd5e1" font-size="11">页 V1</text>
+  <rect x="60" y="175" width="140" height="34" rx="4" fill="#1e3a5f"/><text x="130" y="197" text-anchor="middle" fill="#cbd5e1" font-size="11">页 V2</text>
+  <!-- MMU+TLB -->
+  <rect x="360" y="100" width="180" height="100" rx="10" fill="#0f2418" stroke="#34d399" stroke-width="2"/>
+  <text x="450" y="135" text-anchor="middle" fill="#34d399" font-size="14" font-weight="700">MMU + 页表</text>
+  <text x="450" y="160" text-anchor="middle" fill="#94a3b8" font-size="11">TLB 缓存翻译</text>
+  <text x="450" y="180" text-anchor="middle" fill="#64748b" font-size="10">miss → 走多级页表（慢）</text>
+  <!-- physical -->
+  <rect x="700" y="40" width="180" height="220" rx="10" fill="#1a1430" stroke="#a78bfa"/>
+  <text x="790" y="68" text-anchor="middle" fill="#a78bfa" font-size="13" font-weight="700">物理内存</text>
+  <rect x="720" y="85" width="140" height="30" rx="4" fill="#2a1f4a"/><text x="790" y="105" text-anchor="middle" fill="#cbd5e1" font-size="11">帧 #7</text>
+  <rect x="720" y="125" width="140" height="30" rx="4" fill="#2a1f4a"/><text x="790" y="145" text-anchor="middle" fill="#cbd5e1" font-size="11">帧 #2</text>
+  <rect x="720" y="165" width="140" height="30" rx="4" fill="#2a1f4a"/><text x="790" y="185" text-anchor="middle" fill="#cbd5e1" font-size="11">帧 #9</text>
+  <rect x="720" y="205" width="140" height="30" rx="4" fill="#161b2e" stroke="#475569" stroke-dasharray="3,3"/><text x="790" y="225" text-anchor="middle" fill="#64748b" font-size="10">未分配（缺页才给）</text>
+  <!-- arrows -->
+  <path d="M220,112 C290,112 300,140 358,140" stroke="#34d399" stroke-width="1.8" fill="none" marker-end="url(#a-g2)"/>
+  <path d="M540,150 C620,150 640,100 698,100" stroke="#34d399" stroke-width="1.8" fill="none" marker-end="url(#a-g2)"/>
+</svg>
+    <div class="svg-caption">图 3.1 · 虚拟→物理翻译。优化点：大页减少页表层级和 TLB miss；<code>mlock</code> 锁页防换出；预触（pre-touch）避免运行时缺页尖刺。</div>
+  </div>
+  <p><span class="layer-badge sys">见</span> <a href="../system/os_fundamentals.html">system/os_fundamentals.html</a> · <a href="../system/numa_memory_advanced.html">system/numa_memory_advanced.html</a></p>
+
+  <h3 id="s3-2">3.2 NUMA</h3>
+  <p>多路 CPU 服务器上，内存被分给不同 socket（NUMA node）。CPU 访问<strong>本地内存</strong>快，访问<strong>另一个 node 的远程内存</strong>要走 QPI/UPI，慢 30–50%。无意识跨 node 访问是隐形性能杀手。</p>
+
+  <div class="svg-wrap">
+<svg viewBox="0 0 880 260" xmlns="http://www.w3.org/2000/svg" style="font-family:inherit">
+  <!-- node 0 -->
+  <rect x="40" y="40" width="320" height="180" rx="12" fill="#0d2218" stroke="#34d399"/>
+  <text x="200" y="68" text-anchor="middle" fill="#34d399" font-size="14" font-weight="700">NUMA Node 0</text>
+  <rect x="70" y="85" width="120" height="50" rx="6" fill="#0f2418" stroke="#1e6048"/><text x="130" y="115" text-anchor="middle" fill="#cbd5e1" font-size="12">CPU 0–15</text>
+  <rect x="210" y="85" width="120" height="50" rx="6" fill="#1a2c1a" stroke="#1e6048"/><text x="270" y="115" text-anchor="middle" fill="#cbd5e1" font-size="12">本地 DRAM</text>
+  <path d="M190,110 L208,110" stroke="#34d399" stroke-width="3"/>
+  <text x="200" y="160" text-anchor="middle" fill="#34d399" font-size="11">本地访问 ~100 ns ✓</text>
+  <!-- node 1 -->
+  <rect x="520" y="40" width="320" height="180" rx="12" fill="#1a1430" stroke="#a78bfa"/>
+  <text x="680" y="68" text-anchor="middle" fill="#a78bfa" font-size="14" font-weight="700">NUMA Node 1</text>
+  <rect x="550" y="85" width="120" height="50" rx="6" fill="#1a1238" stroke="#5b3a96"/><text x="610" y="115" text-anchor="middle" fill="#cbd5e1" font-size="12">CPU 16–31</text>
+  <rect x="690" y="85" width="120" height="50" rx="6" fill="#241a40" stroke="#5b3a96"/><text x="750" y="115" text-anchor="middle" fill="#cbd5e1" font-size="12">本地 DRAM</text>
+  <!-- remote -->
+  <path d="M130,140 C130,235 610,235 610,140" stroke="#f87171" stroke-width="2.5" fill="none" stroke-dasharray="7,5"/>
+  <text x="440" y="252" text-anchor="middle" fill="#f87171" font-size="12" font-weight="700">远程访问跨 UPI · +30–50% 延迟 ✗</text>
+</svg>
+    <div class="svg-caption">图 3.2 · NUMA：让线程和它的数据待在同一 node。手段：first-touch 分配、<code>numactl --membind</code>、CPU pinning、IRQ 亲和。</div>
+  </div>
+
+  <h3 id="s3-3">3.3 大页 / TLB</h3>
+  <div class="grid cols-2">
+    <div class="card amber">
+      <h4>4KB 普通页</h4>
+      <ul><li>1GB 数据 = 262144 个页表项</li><li>TLB 装不下 → 频繁 miss → 走页表</li><li>随机访问大数据集时延迟抖</li></ul>
+    </div>
+    <div class="card green">
+      <h4>2MB / 1GB 大页</h4>
+      <ul><li>同样 1GB 只需 512 / 1 个项</li><li>TLB 命中率飙升 → 减少翻译开销</li><li>数据库 / vLLM / 低延迟服务常开</li></ul>
+    </div>
+  </div>
+  <div class="warn">THP（透明大页）有 page collapse 尖刺，DB/Redis 常建议设 <code>madvise</code> 或 <code>never</code>，改用显式 HugePages。</div>
+
+  <h3 id="s3-4">3.4 cgroup / OOM</h3>
+  <p>容器里最反直觉的坑：<strong>page cache 也算进 <code>memory.current</code></strong>，于是"看起来没满却被 OOM kill"。理解 cgroup v2 的内存计数是排障关键。</p>
+  <div class="flow-row"><span class="step" style="color:#f87171">OOM</span><span class="arrow">→</span><span class="desc">查 <code>dmesg</code> 看 oom_score → 区分 anon（真用量）vs cached（可回收）→ 调 <code>memory.high</code> 限流而非直接 kill</span></div>
+  <p><span class="layer-badge sys">见</span> <a href="../system/numa_memory_advanced.html">numa_memory_advanced.html</a>（NUMA/大页/cgroup 最全）· <a href="../system/incident_playbook.html">incident_playbook.html</a>（OOM 排障剧本）</p>
+
+  <h3 id="s3-5">3.5 零拷贝 / mmap</h3>
+  <p>传统"读文件再发网络"要在<strong>内核缓冲区 ↔ 用户缓冲区</strong>之间来回拷贝 4 次、切换上下文多次。零拷贝（<code>sendfile</code> / <code>splice</code> / <code>mmap</code>）让数据<em>不经过用户态</em>，直接在内核里从 Page Cache 走到网卡 —— 大文件传输 / 高吞吐服务的关键。</p>
+
+  <div class="svg-wrap">
+<svg viewBox="0 0 920 320" xmlns="http://www.w3.org/2000/svg" style="font-family:inherit">
+  <defs><marker id="a-r2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#f87171"/></marker>
+  <marker id="a-g3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#34d399"/></marker></defs>
+
+  <!-- traditional -->
+  <text x="40" y="32" fill="#f87171" font-size="13" font-weight="700">✗ read + write · 4 次拷贝 · 2 次上下文切换</text>
+  <rect x="40" y="48" width="120" height="46" rx="6" fill="#1a2238" stroke="#475569"/><text x="100" y="76" text-anchor="middle" fill="#cbd5e1" font-size="11">磁盘</text>
+  <rect x="200" y="48" width="140" height="46" rx="6" fill="#0f2418" stroke="#1e6048"/><text x="270" y="70" text-anchor="middle" fill="#cbd5e1" font-size="11">内核 Page Cache</text>
+  <rect x="380" y="48" width="140" height="46" rx="6" fill="#1e3a5f" stroke="#7dd3fc"/><text x="450" y="70" text-anchor="middle" fill="#cbd5e1" font-size="11">用户 buffer</text>
+  <rect x="560" y="48" width="140" height="46" rx="6" fill="#0f2418" stroke="#1e6048"/><text x="630" y="70" text-anchor="middle" fill="#cbd5e1" font-size="11">内核 socket buf</text>
+  <rect x="740" y="48" width="120" height="46" rx="6" fill="#1a2238" stroke="#475569"/><text x="800" y="76" text-anchor="middle" fill="#cbd5e1" font-size="11">网卡</text>
+  <path d="M160,71 L198,71" stroke="#f87171" stroke-width="2" fill="none" marker-end="url(#a-r2)"/>
+  <path d="M340,71 L378,71" stroke="#f87171" stroke-width="2" fill="none" marker-end="url(#a-r2)"/>
+  <path d="M520,71 L558,71" stroke="#f87171" stroke-width="2" fill="none" marker-end="url(#a-r2)"/>
+  <path d="M700,71 L738,71" stroke="#f87171" stroke-width="2" fill="none" marker-end="url(#a-r2)"/>
+  <text x="450" y="118" text-anchor="middle" fill="#f87171" font-size="11">DMA → CPU拷 → CPU拷 → DMA（中间两次 CPU 拷贝是浪费）</text>
+
+  <!-- zero copy -->
+  <text x="40" y="180" fill="#34d399" font-size="13" font-weight="700">✓ sendfile · 数据不进用户态 · 0 次 CPU 拷贝</text>
+  <rect x="40" y="196" width="120" height="46" rx="6" fill="#1a2238" stroke="#475569"/><text x="100" y="224" text-anchor="middle" fill="#cbd5e1" font-size="11">磁盘</text>
+  <rect x="260" y="196" width="200" height="46" rx="6" fill="#0d2218" stroke="#34d399"/><text x="360" y="218" text-anchor="middle" fill="#cbd5e1" font-size="11">内核 Page Cache</text><text x="360" y="234" text-anchor="middle" fill="#64748b" font-size="10">(仅传 fd/描述符给网卡)</text>
+  <rect x="740" y="196" width="120" height="46" rx="6" fill="#1a2238" stroke="#475569"/><text x="800" y="224" text-anchor="middle" fill="#cbd5e1" font-size="11">网卡</text>
+  <path d="M160,219 L258,219" stroke="#34d399" stroke-width="2" fill="none" marker-end="url(#a-g3)"/>
+  <path d="M460,219 L738,219" stroke="#34d399" stroke-width="2" fill="none" marker-end="url(#a-g3)"/>
+  <text x="450" y="278" text-anchor="middle" fill="#34d399" font-size="11">DMA → (SG-DMA) → 网卡，全程在内核，用户态零参与</text>
+</svg>
+    <div class="svg-caption">图 3.5 · 零拷贝。其他手段：<code>mmap</code> 把文件映射进地址空间免 read 拷贝；io_uring 注册 buffer + <code>SEND_ZC</code>；<code>MSG_ZEROCOPY</code>。</div>
+  </div>
+  <p><span class="layer-badge sys">见</span> <a href="../system/io_linux_kernel_guide.html">io_linux_kernel_guide.html</a>（零拷贝/mmap/io_uring 最全）· <a href="../system/networking_guide.html">networking_guide.html</a></p>
+</section>
+
+<!-- ============= ch4 AI ============= -->
+<section class="chapter" id="ch4">
+  <div class="ch-head">
+    <div class="num">04</div>
+    <div class="t">
+      <h2><span class="layer-badge ai">③ AI LAYER</span> 显存 / 大模型内存优化</h2>
+      <p class="sub">训练显存账本 · KV-Cache · PagedAttention · 量化</p>
+      <div class="sub">同样的"装不下"问题，换成了 HBM</div>
+    </div>
+  </div>
+
+  <h3 id="s4-1">4.1 训练显存账本</h3>
+  <p>训练一个模型，显存远不止"模型权重"。还有梯度、优化器状态（Adam 的 m/v，FP32）、以及前向激活值。加起来约 <strong>7–10× 权重大小</strong> —— 这就是为什么 70B 模型单卡放不下。</p>
+
+  <div class="svg-wrap">
+    <div style="display:flex;align-items:flex-end;gap:50px;justify-content:center;height:280px">
+      <div style="text-align:center">
+        <div class="stack run" id="memStack" style="height:230px">
+          <div class="seg" style="background:#7dd3fc;height:11.5%" title="weight">权重 1×</div>
+          <div class="seg" style="background:#60a5fa;height:11.5%">梯度 1×</div>
+          <div class="seg" style="background:#a78bfa;height:23%">优化器 2×</div>
+          <div class="seg" style="background:#fbbf24;height:54%">激活值 ~5×</div>
+        </div>
+        <div style="color:#94a3b8;font-size:12px;margin-top:8px">朴素训练 ≈ 9×</div>
+      </div>
+      <div style="color:#64748b;font-size:34px">→</div>
+      <div style="text-align:center">
+        <div class="stack run" style="height:230px">
+          <div class="seg" style="background:#7dd3fc;height:18%">分片权重</div>
+          <div class="seg" style="background:#60a5fa;height:15%">分片梯度</div>
+          <div class="seg" style="background:#a78bfa;height:22%">分片优化器</div>
+          <div class="seg" style="background:#34d399;height:25%">重算激活</div>
+          <div class="seg" style="background:#161b2e;height:20%;color:#64748b">省下</div>
+        </div>
+        <div style="color:#34d399;font-size:12px;margin-top:8px">ZeRO-3 + 检查点</div>
+      </div>
+    </div>
+    <div class="svg-caption">图 4.1 · 显存账本（动画堆叠条）。左：朴素训练激活值占大头。右：ZeRO-3 分片 + Activation Checkpointing 大幅压缩。</div>
+  </div>
+
+  <table>
+    <thead><tr><th>手段</th><th>省什么</th><th>代价</th></tr></thead>
+    <tbody>
+      <tr><td>ZeRO-1/2/3 · FSDP</td><td>优化器/梯度/权重跨卡分片</td><td>通信增加</td></tr>
+      <tr><td>Activation Checkpointing</td><td class="cell-ok">激活值显存 ~-50%</td><td class="cell-mid">算力 +30%（重算）</td></tr>
+      <tr><td>混合精度 BF16</td><td>权重/激活减半</td><td>需注意溢出</td></tr>
+      <tr><td>CPU/NVMe offload</td><td>把状态搬到 CPU 内存</td><td>带宽瓶颈</td></tr>
+    </tbody>
+  </table>
+  <p><span class="layer-badge ai">见</span> <a href="../ai-infra/distributed_training.html">ai-infra/distributed_training.html</a> · <a href="../ai-native/llm_training.html">ai-native/llm_training.html</a></p>
+
+  <h3 id="s4-2">4.2 KV-Cache</h3>
+  <p>推理时为避免重复计算，每生成一个 token 都把它的 Key/Value 缓存下来。问题是：<strong>KV-Cache 随序列长度线性增长</strong>，长上下文 + 高并发下它才是显存第一杀手（而非权重）。</p>
+
+  <div class="svg-wrap">
+<svg viewBox="0 0 880 240" xmlns="http://www.w3.org/2000/svg" style="font-family:inherit">
+  <line x1="80" y1="190" x2="820" y2="190" stroke="#475569" stroke-width="1.5"/>
+  <line x1="80" y1="40" x2="80" y2="190" stroke="#475569" stroke-width="1.5"/>
+  <text x="60" y="50" fill="#94a3b8" font-size="11" text-anchor="end">显存</text>
+  <text x="820" y="210" fill="#94a3b8" font-size="11" text-anchor="end">序列长度 →</text>
+  <!-- growing KV bar -->
+  <rect x="100" y="120" height="70" rx="3" fill="url(#kvg)">
+    <animate attributeName="width" values="0;680" dur="3s" repeatCount="indefinite"/>
+  </rect>
+  <defs><linearGradient id="kvg" x1="0" x2="1"><stop offset="0%" stop-color="#a78bfa"/><stop offset="100%" stop-color="#f87171"/></linearGradient></defs>
+  <text x="120" y="110" fill="#a78bfa" font-size="12">KV-Cache 线性增长</text>
+  <rect x="100" y="160" width="680" height="30" rx="3" fill="#1e3a5f" opacity="0.5"/>
+  <text x="120" y="180" fill="#7dd3fc" font-size="11">模型权重（固定）</text>
+  <text x="440" y="30" text-anchor="middle" fill="#fbbf24" font-size="12" font-weight="700">长上下文下 KV-Cache 反超权重，成为 OOM 主因</text>
+</svg>
+    <div class="svg-caption">图 4.2 · KV-Cache 随序列增长（动画）。压缩手段：MHA→GQA/MQA→MLA 缩减 KV 头数、KV 量化 INT8/INT4。</div>
+  </div>
+
+  <h3 id="s4-3">4.3 PagedAttention（vLLM）</h3>
+  <p>传统推理给每个请求<strong>静态预留</strong>最大长度的 KV 空间 → 60–70% 浪费。PagedAttention 借鉴 OS 虚拟内存：把 KV 切成固定大小的 <strong>block</strong>，按需分配、用 block table 索引 —— 显存利用率从 ~30% 提到 ~96%。</p>
+
+  <div class="svg-wrap">
+<svg viewBox="0 0 900 250" xmlns="http://www.w3.org/2000/svg" style="font-family:inherit">
+  <!-- static -->
+  <text x="40" y="35" fill="#f87171" font-size="13" font-weight="700">✗ 静态预分配（按最大长度）</text>
+  <rect x="40" y="50" width="380" height="40" rx="4" fill="#0f2418" stroke="#34d399"/>
+  <rect x="180" y="50" width="240" height="40" rx="4" fill="#3a1414" stroke="#f87171" stroke-dasharray="4,3"/>
+  <text x="110" y="75" text-anchor="middle" fill="#cbd5e1" font-size="11">实际用 35%</text>
+  <text x="300" y="75" text-anchor="middle" fill="#f87171" font-size="11">预留浪费 65%</text>
+  <!-- paged -->
+  <text x="40" y="140" fill="#34d399" font-size="13" font-weight="700">✓ PagedAttention（按 block 分配）</text>
+  <g>
+    <rect x="40" y="155" width="44" height="40" rx="4" fill="#0f2418" stroke="#34d399"/>
+    <rect x="90" y="155" width="44" height="40" rx="4" fill="#0f2418" stroke="#34d399"/>
+    <rect x="140" y="155" width="44" height="40" rx="4" fill="#0f2418" stroke="#34d399"/>
+    <rect x="190" y="155" width="44" height="40" rx="4" fill="#0f2418" stroke="#34d399"/>
+    <rect x="240" y="155" width="44" height="40" rx="4" fill="#0f2418" stroke="#34d399"/>
+    <text x="320" y="180" fill="#34d399" font-size="11">… 用多少给多少</text>
+  </g>
+  <text x="40" y="232" fill="#64748b" font-size="11">block table 像页表一样把逻辑 token 位置映射到物理 block · 还能 prefix 共享</text>
+</svg>
+    <div class="svg-caption">图 4.3 · PagedAttention = KV-Cache 的"虚拟内存"。配合 Continuous Batching 让吞吐倍增。</div>
+  </div>
+  <p><span class="layer-badge ai">见</span> <a href="../ai-infra/inference_serving.html">ai-infra/inference_serving.html</a> · <a href="../ai-native/transformer_llm_architecture.html">transformer_llm_architecture.html</a></p>
+
+  <h3 id="s4-4">4.4 量化</h3>
+  <p>把权重/KV 从 FP16 降到 INT8、INT4，显存直接<strong>÷2 ~ ÷4</strong>，还因为是 memory-bound 而提速。代价是可能掉点（尤其 reasoning / 长上下文）。</p>
+
+  <div class="svg-wrap">
+    <div class="q-bars run" id="qBars">
+      <div class="q-col"><span class="qn">100%</span><div class="q-fill" style="height:160px;background:linear-gradient(180deg,#f87171,#fb923c)"></div><span class="ql">FP16 (16bit)</span></div>
+      <div class="q-col"><span class="qn">50%</span><div class="q-fill" style="height:80px;background:linear-gradient(180deg,#fbbf24,#a78bfa)"></div><span class="ql">INT8 (8bit)</span></div>
+      <div class="q-col"><span class="qn">25%</span><div class="q-fill" style="height:40px;background:linear-gradient(180deg,#7dd3fc,#34d399)"></div><span class="ql">INT4 (4bit)</span></div>
+    </div>
+    <div class="svg-caption">图 4.4 · 量化对显存的影响（动画柱）。方法：GPTQ / AWQ / SmoothQuant（权重）· KV-Cache 量化 · QLoRA（INT4 base + FP16 LoRA）。</div>
+  </div>
+  <p><span class="layer-badge ai">见</span> <a href="../ai-infra/quantization.html">ai-infra/quantization.html</a> · <a href="../ai-infra/cuda_for_cpp.html">cuda_for_cpp.html</a>（GPU 内存层级 / FlashAttention）</p>
+
+  <h3 id="s4-5">4.5 FlashAttention 分块</h3>
+  <p>标准 attention 要在 HBM（大而慢）里实例化一个 <code>n×n</code> 的注意力矩阵 —— 序列一长就爆显存、且反复读写 HBM。FlashAttention 把 Q/K/V <strong>切成小块（tiling）</strong>搬进 SRAM（小而快），用 <em>online softmax</em> 边算边累积，<strong>从不完整存下 n×n 矩阵</strong> —— 显存从 O(n²) 降到 O(n)，还更快。</p>
+
+  <div class="svg-wrap">
+<svg viewBox="0 0 920 290" xmlns="http://www.w3.org/2000/svg" style="font-family:inherit">
+  <!-- standard -->
+  <text x="40" y="32" fill="#f87171" font-size="13" font-weight="700">✗ 标准 Attention · 在 HBM 存整个 n×n</text>
+  <rect x="40" y="48" width="170" height="170" rx="6" fill="#3a1414" stroke="#f87171"/>
+  <text x="125" y="125" text-anchor="middle" fill="#f87171" font-size="13">n × n 矩阵</text>
+  <text x="125" y="148" text-anchor="middle" fill="#94a3b8" font-size="10">O(n²) 显存</text>
+  <text x="125" y="240" text-anchor="middle" fill="#64748b" font-size="10">反复读写慢速 HBM</text>
+
+  <!-- flash -->
+  <text x="320" y="32" fill="#34d399" font-size="13" font-weight="700">✓ FlashAttention · 分块进 SRAM，只存累积结果</text>
+  <g>
+    <rect x="320" y="48" width="44" height="44" rx="4" fill="#0d2218" stroke="#34d399"/>
+    <rect x="368" y="48" width="44" height="44" rx="4" fill="#0d2218" stroke="#34d399"/>
+    <rect x="416" y="48" width="44" height="44" rx="4" fill="#142c1f" stroke="#1e6048"/>
+    <rect x="320" y="96" width="44" height="44" rx="4" fill="#142c1f" stroke="#1e6048"/>
+    <rect x="368" y="96" width="44" height="44" rx="4" fill="#0d2218" stroke="#34d399"/>
+    <rect x="416" y="96" width="44" height="44" rx="4" fill="#0d2218" stroke="#34d399"/>
+  </g>
+  <text x="390" y="165" text-anchor="middle" fill="#7dd3fc" font-size="11">逐块加载到 SRAM</text>
+  <defs><marker id="a-g4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#34d399"/></marker></defs>
+  <path d="M470,110 C540,110 560,110 620,110" stroke="#34d399" stroke-width="2" fill="none" marker-end="url(#a-g4)"/>
+  <text x="545" y="100" text-anchor="middle" fill="#34d399" font-size="10">online softmax</text>
+  <rect x="630" y="80" width="240" height="60" rx="8" fill="#1a1430" stroke="#a78bfa"/>
+  <text x="750" y="106" text-anchor="middle" fill="#a78bfa" font-size="12">累积输出 O(n)</text>
+  <text x="750" y="126" text-anchor="middle" fill="#64748b" font-size="10">边算边修正，无需存整矩阵</text>
+  <text x="320" y="245" fill="#64748b" font-size="11">收益：训练能上更长序列；推理 prefill 更省显存、更快（HBM 读写大减）</text>
+  <text x="320" y="268" fill="#64748b" font-size="10">同源思想：把热数据从 HBM 搬到 SRAM 后反复复用（见 §1 内存金字塔）</text>
+</svg>
+    <div class="svg-caption">图 4.5 · FlashAttention 分块 + online softmax：不实例化 n×n，显存 O(n²)→O(n)。</div>
+  </div>
+  <p><span class="layer-badge ai">见</span> <a href="../ai-native/transformer_llm_architecture.html">transformer_llm_architecture.html</a> · <a href="../ai-native/li-hongyi-ml-2026/08-flash-attention_video_note.html">李宏毅 · FlashAttention</a></p>
+
+  <h3 id="s4-6">4.6 ZeRO 三阶段分片</h3>
+  <p>数据并行（DDP）每张卡都存一份<em>完整</em>的权重+梯度+优化器状态 → 极度浪费。ZeRO 的核心是：这些状态本来就重复，<strong>把它们切片分到各卡，用时再 AllGather 临时聚合</strong>。逐阶段切得更狠，单卡显存逐级下降。</p>
+
+  <div class="svg-wrap">
+<svg viewBox="0 0 940 250" xmlns="http://www.w3.org/2000/svg" style="font-family:inherit">
+  <!-- legend -->
+  <rect x="40" y="20" width="14" height="14" fill="#7dd3fc"/><text x="60" y="32" fill="#94a3b8" font-size="11">权重</text>
+  <rect x="120" y="20" width="14" height="14" fill="#60a5fa"/><text x="140" y="32" fill="#94a3b8" font-size="11">梯度</text>
+  <rect x="200" y="20" width="14" height="14" fill="#a78bfa"/><text x="220" y="32" fill="#94a3b8" font-size="11">优化器状态</text>
+  <text x="700" y="32" fill="#34d399" font-size="11">绿色虚线 = 已分片，仅存 1/N</text>
+
+  <!-- DDP -->
+  <text x="40" y="68" fill="#f87171" font-size="12" font-weight="700">DDP</text>
+  <rect x="120" y="52" width="60" height="24" fill="#1e3a5f" stroke="#7dd3fc"/>
+  <rect x="185" y="52" width="60" height="24" fill="#1e2f4f" stroke="#60a5fa"/>
+  <rect x="250" y="52" width="120" height="24" fill="#2a1f4a" stroke="#a78bfa"/>
+  <text x="390" y="69" fill="#64748b" font-size="10">每卡全量 → 最浪费</text>
+
+  <!-- ZeRO-1 -->
+  <text x="40" y="108" fill="#fbbf24" font-size="12" font-weight="700">ZeRO-1</text>
+  <rect x="120" y="92" width="60" height="24" fill="#1e3a5f" stroke="#7dd3fc"/>
+  <rect x="185" y="92" width="60" height="24" fill="#1e2f4f" stroke="#60a5fa"/>
+  <rect x="250" y="92" width="120" height="24" fill="#142c1f" stroke="#34d399" stroke-dasharray="4,3"/>
+  <text x="390" y="109" fill="#64748b" font-size="10">优化器状态分片</text>
+
+  <!-- ZeRO-2 -->
+  <text x="40" y="148" fill="#fbbf24" font-size="12" font-weight="700">ZeRO-2</text>
+  <rect x="120" y="132" width="60" height="24" fill="#1e3a5f" stroke="#7dd3fc"/>
+  <rect x="185" y="132" width="60" height="24" fill="#142c1f" stroke="#34d399" stroke-dasharray="4,3"/>
+  <rect x="250" y="132" width="120" height="24" fill="#142c1f" stroke="#34d399" stroke-dasharray="4,3"/>
+  <text x="390" y="149" fill="#64748b" font-size="10">+ 梯度分片</text>
+
+  <!-- ZeRO-3 -->
+  <text x="40" y="188" fill="#34d399" font-size="12" font-weight="700">ZeRO-3</text>
+  <rect x="120" y="172" width="60" height="24" fill="#142c1f" stroke="#34d399" stroke-dasharray="4,3"/>
+  <rect x="185" y="172" width="60" height="24" fill="#142c1f" stroke="#34d399" stroke-dasharray="4,3"/>
+  <rect x="250" y="172" width="120" height="24" fill="#142c1f" stroke="#34d399" stroke-dasharray="4,3"/>
+  <text x="390" y="189" fill="#34d399" font-size="10">+ 权重也分片（= FSDP）</text>
+
+  <!-- arrow down -->
+  <path d="M620,55 L620,190" stroke="#475569" stroke-width="1.5" marker-end="url(#a-d)"/>
+  <defs><marker id="a-d" viewBox="0 0 10 10" refX="5" refY="9" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,0 L5,10 z" fill="#475569"/></marker></defs>
+  <text x="635" y="125" fill="#64748b" font-size="11">单卡显存逐级↓</text>
+  <text x="635" y="145" fill="#64748b" font-size="10">代价：通信量↑</text>
+</svg>
+    <div class="svg-caption">图 4.6 · ZeRO 三阶段：逐步把优化器状态→梯度→权重切片分到各卡。ZeRO-3 ≈ PyTorch FSDP。</div>
+  </div>
+  <p><span class="layer-badge ai">见</span> <a href="../ai-infra/distributed_training.html">distributed_training.html</a>（ZeRO/FSDP/TP/PP 全景）</p>
+</section>
+
+<!-- ============= ch5 工具 ============= -->
+<section class="chapter" id="ch5">
+  <div class="ch-head">
+    <div class="num">05</div>
+    <div class="t">
+      <h2>工具速查与决策</h2>
+      <p class="sub">什么问题，用什么工具，看什么指标</p>
+      <div class="sub">把散落各篇的工具汇成一张表</div>
+    </div>
+  </div>
+
+  <table>
+    <thead><tr><th>场景</th><th>首选工具</th><th>看什么</th><th>出处</th></tr></thead>
+    <tbody>
+      <tr><td>内存泄漏（开发）</td><td>ASan + LSan</td><td>越界 / UAF / 未释放</td><td><a href="sanitizers_guide.html">P06</a></td></tr>
+      <tr><td>内存泄漏（生产）</td><td>heaptrack · jemalloc prof</td><td>分配调用栈</td><td><a href="memory_leak_guide.html">P03</a></td></tr>
+      <tr><td>RSS 涨但非泄漏</td><td>malloc_trim · 切 allocator</td><td>碎片 / capacity</td><td><a href="memory_leak_guide.html">P03</a></td></tr>
+      <tr><td>cache miss / false sharing</td><td>perf c2c · perf stat</td><td>cache-misses · ping-pong</td><td><a href="performance_guide.html">P01</a></td></tr>
+      <tr><td>对象 padding / 布局</td><td>pahole</td><td>offset / hole</td><td><a href="../cpp/object_model.html">C02</a></td></tr>
+      <tr><td>热路径分配抖动</td><td>strace brk/mmap · massif</td><td>运行时分配次数</td><td><a href="low_latency_guide.html">P02</a></td></tr>
+      <tr><td>NUMA 访问</td><td>numastat · numa_maps</td><td>本地 vs 远程命中</td><td><a href="../system/numa_memory_advanced.html">N07</a></td></tr>
+      <tr><td>系统内存构成</td><td>/proc/meminfo · slabtop</td><td>Anon/Cached/Slab</td><td><a href="../system/numa_memory_advanced.html">N07</a></td></tr>
+      <tr><td>OOM / 容器内存</td><td>dmesg · bpftrace · cgroup</td><td>oom_score · page cache</td><td><a href="../system/incident_playbook.html">N08</a></td></tr>
+      <tr><td>GPU 显存（推理）</td><td>nvidia-smi · gpu-mem-util</td><td>KV-Cache 占用</td><td><a href="../ai-infra/inference_serving.html">Y02</a></td></tr>
+    </tbody>
+  </table>
+
+  <h3>选型决策树</h3>
+  <div class="kmap">
+    <div class="kmap-title">从症状出发</div>
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <div><span class="dt-node start">RSS 一直涨</span> <span style="color:#64748b">→</span> <span class="dt-node">先 ASan/LSan 排真泄漏</span> <span style="color:#64748b">→ 无</span> <span class="dt-node action">查碎片/capacity → arena/切 allocator</span></div>
+      <div><span class="dt-node start">P99 延迟抖</span> <span style="color:#64748b">→</span> <span class="dt-node">strace 看 brk/mmap</span> <span style="color:#64748b">→</span> <span class="dt-node action">对象池/预分配/mlock</span></div>
+      <div><span class="dt-node start">多核不扩展</span> <span style="color:#64748b">→</span> <span class="dt-node">perf c2c</span> <span style="color:#64748b">→</span> <span class="dt-node action">alignas(64) 消除 false sharing</span></div>
+      <div><span class="dt-node start">训练 OOM</span> <span style="color:#64748b">→</span> <span class="dt-node">算显存账本</span> <span style="color:#64748b">→</span> <span class="dt-node action">ZeRO/检查点/BF16/offload</span></div>
+      <div><span class="dt-node start">推理 OOM</span> <span style="color:#64748b">→</span> <span class="dt-node">KV-Cache 占用</span> <span style="color:#64748b">→</span> <span class="dt-node action">PagedAttention/GQA/量化</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============= ch6 面试题集 ============= -->
+<section class="chapter" id="ch6">
+  <div class="ch-head">
+    <div class="num">06</div>
+    <div class="t">
+      <h2>面试题集（分层）</h2>
+      <p class="sub">三层主线的高频题 · 标准答案 + 加分点 + 陷阱</p>
+      <div class="sub">点开每题查看要点，覆盖 C++ / 系统 / AI</div>
+    </div>
+  </div>
+
+  <h3>基础</h3>
+
+  <details class="qa">
+    <summary><span class="lvl pill cyan">基础</span>栈分配和堆分配有什么区别？为什么栈快？</summary>
+    <div class="a">
+      <div class="point"><div class="label">栈</div><div>移动栈指针即完成分配/释放，生命周期随作用域，几乎零开销，且天然 cache 友好；缺点是容量小（典型 1–8MB）、大小需编译期可知。</div></div>
+      <div class="point"><div class="label">堆</div><div>走 malloc，需维护空闲链表、可能加锁、可能触发 brk/mmap，延迟不确定且会碎片化。</div></div>
+      <div class="point deep"><div class="label">延伸</div><div>能用栈/SBO 就别用堆；热路径用对象池/arena 把堆分配"摊销"掉。</div></div>
+    </div>
+  </details>
+
+  <details class="qa">
+    <summary><span class="lvl pill cyan">基础</span>什么是内存对齐？为什么调整字段顺序能省内存？</summary>
+    <div class="a">
+      <div class="point"><div class="label">对齐</div><div>每种类型要求其地址是自身大小的整数倍，编译器为此插入 padding（空洞）。</div></div>
+      <div class="point"><div class="label">省内存</div><div>把大字段排前、小字段聚一起可减少空洞；同样字段不同顺序大小能差 30%+。用 <code>pahole</code> 看空洞。</div></div>
+    </div>
+  </details>
+
+  <details class="qa">
+    <summary><span class="lvl pill cyan">基础</span>程序 RSS 一直涨，就一定是内存泄漏吗？</summary>
+    <div class="a">
+      <div class="point bad"><div class="label">不一定</div><div>常见非泄漏成因：内存碎片、容器 capacity 只增不减、allocator/thread arena 缓存、page cache 增长、预热填充。</div></div>
+      <div class="point"><div class="label">区分</div><div>先 ASan/LSan 排真泄漏；再用 <code>malloc_trim</code> / 切 allocator / 静止观察 判断是否碎片或缓存。看 USS 比看 RSS 更准。</div></div>
+    </div>
+  </details>
+
+  <details class="qa">
+    <summary><span class="lvl pill cyan">基础</span>虚拟内存和物理内存的关系？Page Fault 是什么？</summary>
+    <div class="a">
+      <div class="point"><div class="label">关系</div><div>进程看到连续虚拟地址，MMU 经页表翻译到零散物理页，TLB 缓存翻译。malloc 通常只分配虚拟地址，首次写才真正给物理页（延迟分配）。</div></div>
+      <div class="point"><div class="label">Page Fault</div><div>minor：首次访问已映射页（~µs）；major：需从磁盘/swap 换入（~ms，极抖）。低延迟系统用 <code>mlock</code>/预触消除。</div></div>
+    </div>
+  </details>
+
+  <h3>中级</h3>
+
+  <details class="qa">
+    <summary><span class="lvl pill amber">中级</span>什么是 false sharing？如何定位和解决？</summary>
+    <div class="a">
+      <div class="point bad"><div class="label">现象</div><div>多个线程改各自的变量，但它们落在同一 64B cache line 上，写操作互相让对方缓存行失效，在核间 ping-pong，多核反而不扩展。</div></div>
+      <div class="point"><div class="label">定位</div><div><code>perf c2c</code> 看 cache line 争抢热点。</div></div>
+      <div class="point"><div class="label">解决</div><div><code>alignas(64)</code> 或 <code>std::hardware_destructive_interference_size</code> 把热变量隔到独立 cache line；或 per-thread 局部聚合。</div></div>
+    </div>
+  </details>
+
+  <details class="qa">
+    <summary><span class="lvl pill amber">中级</span>monotonic/arena、对象池、std::pmr 分别适合什么场景？</summary>
+    <div class="a">
+      <div class="point"><div class="label">arena</div><div>一次请求内大量短命小对象：指针推进分配、请求结束整块释放，零碎片零零碎释放。</div></div>
+      <div class="point"><div class="label">对象池/slab</div><div>固定大小对象反复创建销毁：free list 复用，~10ns。</div></div>
+      <div class="point deep"><div class="label">pmr</div><div>C++17 多态分配器，让同一容器类型在运行时切换内存来源（如挂 monotonic_buffer_resource 用栈 buffer 做零堆分配）。</div></div>
+    </div>
+  </details>
+
+  <details class="qa">
+    <summary><span class="lvl pill amber">中级</span>NUMA 是什么？没意识到 NUMA 会有什么后果？怎么优化？</summary>
+    <div class="a">
+      <div class="point"><div class="label">NUMA</div><div>多 socket 机器上内存分属不同 node，本地访问快，跨 node 远程访问慢 30–50%。</div></div>
+      <div class="point bad"><div class="label">后果</div><div>线程在 node0、数据在 node1（如内存由其他线程 first-touch），所有访问走 UPI，吞吐/延迟劣化且抖动。</div></div>
+      <div class="point"><div class="label">优化</div><div>first-touch 让用数据的线程分配它；<code>numactl --membind/--cpunodebind</code>、CPU pinning、IRQ 亲和、NVMe 与 node 对齐。</div></div>
+    </div>
+  </details>
+
+  <details class="qa">
+    <summary><span class="lvl pill amber">中级</span>容器明明没满，为什么进程被 OOM kill 了？</summary>
+    <div class="a">
+      <div class="point deep"><div class="label">关键</div><div>cgroup v2 的 <code>memory.current</code> 把 page cache 也算进去；应用 anon 内存没满，但 anon + cached 触达 <code>memory.max</code> 就会 OOM。</div></div>
+      <div class="point"><div class="label">排查</div><div><code>dmesg</code> 看 oom_score；区分 anon（真用量）/ cached（可回收）；用 <code>memory.high</code> 限流回收而非硬 kill。</div></div>
+    </div>
+  </details>
+
+  <details class="qa">
+    <summary><span class="lvl pill amber">中级</span>大页（HugePage）为什么能提速？THP 又为什么常被建议关掉？</summary>
+    <div class="a">
+      <div class="point"><div class="label">提速</div><div>2MB/1GB 页让同样数据需要的页表项大减 → TLB 命中率高 → 翻译开销小，随机访问大数据集尤其受益。</div></div>
+      <div class="point warn"><div class="label">THP 坑</div><div>透明大页的 page collapse 会带来不可预测的延迟尖刺，DB/Redis 常设 <code>madvise</code> 或 <code>never</code>，改用显式 HugePages。</div></div>
+    </div>
+  </details>
+
+  <h3>高级（体现深度）</h3>
+
+  <details class="qa">
+    <summary><span class="lvl pill red">高级</span>make_shared 一定比 shared_ptr(new T) 好吗？什么时候不要用？</summary>
+    <div class="a">
+      <div class="point"><div class="label">好处</div><div>控制块+对象单次分配，少一次 malloc、cache 更友好，还异常安全。</div></div>
+      <div class="point bad"><div class="label">陷阱</div><div>对象与控制块同块内存；strong 归零对象析构后，只要还有 <code>weak_ptr</code>，整块（含大对象空间）都不释放。</div></div>
+      <div class="point"><div class="label">结论</div><div>大对象 + 长生命周期 weak_ptr 观察者场景，改回 <code>shared_ptr(new T)</code> 分离分配。</div></div>
+    </div>
+  </details>
+
+  <details class="qa">
+    <summary><span class="lvl pill red">高级</span>LLM 推理时显存被什么占满？为什么 PagedAttention 能提升利用率？</summary>
+    <div class="a">
+      <div class="point"><div class="label">占用</div><div>长上下文 + 高并发下，KV-Cache（随序列线性增长）才是第一杀手，常超过权重本身。</div></div>
+      <div class="point bad"><div class="label">老做法</div><div>给每个请求按最大长度静态预留 KV → 60–70% 浪费。</div></div>
+      <div class="point deep"><div class="label">PagedAttention</div><div>借鉴 OS 虚拟内存：KV 切成固定 block、按需分配、block table 索引，还能 prefix 共享 → 利用率 ~30% 提到 ~96%，配合 continuous batching 吞吐倍增。</div></div>
+    </div>
+  </details>
+
+  <details class="qa">
+    <summary><span class="lvl pill red">高级</span>训练 70B 模型单卡放不下，显存都花在哪？有哪些手段省？</summary>
+    <div class="a">
+      <div class="point"><div class="label">账本</div><div>权重 + 梯度 + 优化器状态（Adam 的 m/v，FP32）+ 前向激活值 ≈ 7–10× 权重，激活值常占大头。</div></div>
+      <div class="point"><div class="label">手段</div><div>ZeRO-1/2/3 或 FSDP 分片；Activation Checkpointing（省激活 ~50%、算力 +30%）；BF16 混合精度；TP/PP/EP 并行；CPU/NVMe offload。</div></div>
+      <div class="point deep"><div class="label">权衡</div><div>分片和重算都是"用通信/算力换显存"，要结合带宽和 batch 调。</div></div>
+    </div>
+  </details>
+
+  <details class="qa">
+    <summary><span class="lvl pill red">高级</span>FlashAttention 为什么既省显存又更快？它的核心 trick 是什么？</summary>
+    <div class="a">
+      <div class="point"><div class="label">省显存</div><div>不在 HBM 实例化整个 n×n 注意力矩阵，显存 O(n²)→O(n)。</div></div>
+      <div class="point deep"><div class="label">更快</div><div>attention 是 memory-bound，瓶颈在 HBM 读写。FlashAttention 把 Q/K/V 分块（tiling）搬进 SRAM、用 online softmax 边算边累积，大幅减少 HBM 往返 —— 本质和 C++ 的"提升 cache 局部性"同源。</div></div>
+    </div>
+  </details>
+
+  <details class="qa">
+    <summary><span class="lvl pill red">高级</span>量化能省显存，代价是什么？哪些场景要谨慎？</summary>
+    <div class="a">
+      <div class="point"><div class="label">收益</div><div>FP16→INT8/INT4，显存 ÷2~÷4，且 decode 是 memory-bound 故还提速。</div></div>
+      <div class="point warn"><div class="label">代价</div><div>可能掉点，reasoning 任务、长上下文 KV 累积误差尤其敏感；calibration 域偏移、kernel 未真正启用都是坑。</div></div>
+      <div class="point"><div class="label">方法</div><div>权重：GPTQ/AWQ/SmoothQuant；KV：INT8/INT4 量化；训练微调：QLoRA（INT4 base + FP16 LoRA + Paged Optimizer）。</div></div>
+    </div>
+  </details>
+
+  <h3>速答示范（false sharing）</h3>
+  <div class="tip">
+    <strong>问：</strong>两个原子计数器在多线程下越加越慢，为什么？怎么改？<br>
+    <strong>答：</strong>大概率是 <strong>false sharing</strong> —— 两个计数器虽是不同变量，但相邻、落在同一条 64B cache line 上。每个核写自己的计数器都会让另一个核缓存的整条 line 失效，触发 MESI 一致性流量，在核间反复 ping-pong。用 <code>perf c2c</code> 能看到对应 cache line 的 HITM 热点。修复：给每个计数器 <code>alignas(64)</code>（或用 <code>hardware_destructive_interference_size</code>）让它们独占 cache line；更好的是 per-thread 局部累加、最后再汇总，连原子操作都省了。
+  </div>
+</section>
+
+<!-- ============= ch7 盲区 ============= -->
+<section class="chapter" id="ch7">
+  <div class="ch-head">
+    <div class="num">07</div>
+    <div class="t">
+      <h2>覆盖盲区与下一步</h2>
+      <p class="sub">本库已扎实之处，与尚缺的部分</p>
+      <div class="sub">诚实标注边界，方便后续补全</div>
+    </div>
+  </div>
+
+  <p>三层主线（C++ 底层 / Linux 系统 / AI 显存）已经覆盖得相当完整。仍有以下系统性空白，按建议优先级排列：</p>
+
+  <div class="grid cols-2">
+    <div class="card danger">
+      <h4>🔴 高优先 · GC 语言内存调优</h4>
+      <p>全库基本只有 C++/裸内存视角。缺 JVM（G1/ZGC、堆外内存）、Go（GC、逃逸分析、<code>GOMEMLIMIT</code>、<code>sync.Pool</code>）、Python（引用计数、<code>__slots__</code>、<code>tracemalloc</code>）。覆盖面广、面试高频。</p>
+    </div>
+    <div class="card danger">
+      <h4>🔴 高优先 · PyTorch 框架级显存</h4>
+      <p>算法层讲透了，但缺框架运行时：CUDA caching allocator、<code>expandable_segments</code>、显存碎片排查、<code>memory_summary()</code> / snapshot、<code>pin_memory</code>。训练/推理 OOM 实战必备。</p>
+    </div>
+    <div class="card amber">
+      <h4>🟡 中优先 · 工具方法论闭环</h4>
+      <p>本页 §05 已做初步整合，但尚无 deep dive 把 ASan/heaptrack/massif/pprof/bpftrace 串成完整排障方法论。</p>
+    </div>
+    <div class="card">
+      <h4>⚪ 低优先 · 新硬件 / 跨语言</h4>
+      <p>CXL、持久内存（PMEM）、分层内存、内核内存压缩（zram/zswap）、内存安全硬件（MTE）；Apache Arrow 列式内存与零拷贝跨语言。</p>
+    </div>
+  </div>
+
+  <div class="info" style="margin-top:24px">
+    <strong>关联阅读</strong>（本库已有）：<br>
+    • <a href="performance_guide.html">performance_guide.html</a> — cache 友好 / 分配优化 / SIMD<br>
+    • <a href="low_latency_guide.html">low_latency_guide.html</a> — 分配器 / 内存池 / 零分配 / NUMA 实战<br>
+    • <a href="memory_leak_guide.html">memory_leak_guide.html</a> — glibc malloc 内部 / 假泄漏诊断 / 工具<br>
+    • <a href="../system/numa_memory_advanced.html">numa_memory_advanced.html</a> — NUMA / 大页 / cgroup / OOM 最全<br>
+    • <a href="../ai-infra/inference_serving.html">inference_serving.html</a> · <a href="../ai-infra/quantization.html">quantization.html</a> — AI 显存深潜
+  </div>
+</section>
+
+<footer>
+  <div class="made">— 内存优化全景 · 横跨 C++ / 系统 / AI 三主线 · 单文件 · 无 CDN —</div>
+  <div style="margin-top:8px;color:var(--text-mute)">与 <code>performance_guide · low_latency_guide · memory_leak_guide · numa_memory_advanced</code> 形成内存主题套件</div>
+</footer>
+
+</main>
+</div>
+
+<script>
+// 1. 进度条
+const progress = document.getElementById('progress');
+const updateProgress = () => {
+  const h = document.documentElement;
+  const max = h.scrollHeight - h.clientHeight;
+  progress.style.width = (h.scrollTop / max * 100) + '%';
+};
+window.addEventListener('scroll', updateProgress, {passive:true});
+updateProgress();
+
+// 2. TOC 高亮
+const tocLinks = document.querySelectorAll('aside.toc nav a[href^="#"]');
+const sections = [...tocLinks].map(a => ({a, el: document.getElementById(a.getAttribute('href').slice(1))})).filter(x => x.el);
+const onScroll = () => {
+  const y = window.scrollY + 100;
+  let cur = null;
+  for (const s of sections) if (s.el.offsetTop <= y) cur = s;
+  tocLinks.forEach(a => a.classList.remove('active'));
+  if (cur) cur.a.classList.add('active');
+};
+window.addEventListener('scroll', onScroll, {passive:true});
+
+// 3. 平滑滚动
+tocLinks.forEach(a => a.addEventListener('click', e => {
+  const target = document.querySelector(a.getAttribute('href'));
+  if (target) { e.preventDefault(); target.scrollIntoView({behavior:'smooth', block:'start'}); history.pushState(null,'',a.getAttribute('href')); }
+}));
+
+// 4. fade-in + 触发各类条形动画
+const io = new IntersectionObserver(entries => {
+  entries.forEach(e => {
+    if (e.isIntersecting) {
+      e.target.style.opacity = '1';
+      e.target.style.transform = 'translateY(0)';
+      if (e.target.classList.contains('lat-chart') || e.target.classList.contains('q-bars')) e.target.classList.add('run');
+      io.unobserve(e.target);
+    }
+  });
+}, {threshold:0.15});
+document.querySelectorAll('.card, .svg-wrap, table, .lat-chart, .q-bars').forEach(el => {
+  el.style.opacity = '0';
+  el.style.transform = 'translateY(12px)';
+  el.style.transition = 'opacity .5s ease, transform .5s ease';
+  io.observe(el);
+});
+
+console.log('%c 内存优化全景 · Memory Optimization ', 'background:linear-gradient(90deg,#7dd3fc,#a78bfa);color:#0a0e1a;font-weight:700;padding:4px 12px;border-radius:4px');
+</script>
+
+<button class="back-top" id="backTop" onclick="window.scrollTo({top:0,behavior:'smooth'})">↑</button>
+<script>
+(function(){var btn=document.getElementById('backTop');if(!btn)return;function tg(){btn.classList.toggle('show',window.scrollY>400);}window.addEventListener('scroll',tg,{passive:true});tg();})();
+</script>
+<script src="../assets/site-theme.js" defer></script>
+</body>
+</html>
