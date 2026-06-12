@@ -1,0 +1,2692 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Valgrind 完全指南 · 从动态二进制翻译到生产排查工具箱</title>
+<link rel="stylesheet" href="../assets/site-theme.css">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+</head>
+<body class="tn-shell-overlay">
+<!-- tn-nav:v1 -->
+<style>
+#tn-nav{position:fixed;top:14px;right:14px;z-index:99999;display:flex;gap:6px;align-items:center;
+  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;
+  font-size:12px;line-height:1;font-weight:500;}
+#tn-nav a,#tn-nav .tn-meta{display:inline-flex;align-items:center;gap:4px;
+  background:rgba(20,20,30,.85);color:#fff !important;text-decoration:none !important;
+  padding:7px 11px;border-radius:999px;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+  border:1px solid rgba(255,255,255,.10);box-shadow:0 2px 8px rgba(0,0,0,.18);
+  transition:background .15s,transform .15s;}
+#tn-nav a:hover{background:rgba(56,189,248,.92);transform:translateY(-1px);}
+#tn-nav .tn-meta{background:rgba(20,20,30,.55);cursor:default;}
+@media (max-width:640px){#tn-nav{top:8px;right:8px;font-size:11px;gap:4px;}
+  #tn-nav a,#tn-nav .tn-meta{padding:5px 9px;}}
+@media print{#tn-nav{display:none;}}
+</style>
+<div id="tn-nav">
+  <a href="../index.html" title="&#x8FD4;&#x56DE;&#x4E3B;&#x9875;">&larr; &#x4E3B;&#x9875;</a>
+  <a href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub &#x4ED3;&#x5E93;">&#x1F4C1; Repo</a>
+  <a href="https://github.com/kavinChan13/tech-notes/blob/main/perf-debug/valgrind_guide.html" target="_blank" rel="noopener" title="&#x672C;&#x6587;&#x6E90;&#x7801;">&#x1F4DD; Source</a>
+  <span class="tn-meta" title="&#x9884;&#x8BA1;&#x9605;&#x8BFB;&#x65F6;&#x957F;">&#x23F1; 78 min</span>
+</div>
+<!-- /tn-nav:v1 -->
+
+<style>
+/* page-specific extras */
+.tool-card{background:linear-gradient(180deg,var(--bg-card),var(--bg-card-2));border:1px solid var(--border);border-radius:14px;padding:18px 20px;position:relative;overflow:hidden}
+.tool-card::before{content:"";position:absolute;top:0;left:0;right:0;height:2px;background:var(--bar,linear-gradient(90deg,transparent,var(--accent),transparent))}
+.tool-card .tc-head{display:flex;align-items:baseline;gap:10px;margin-bottom:8px}
+.tool-card .tc-head .num{font-family:"JetBrains Mono",monospace;color:var(--text-mute);font-size:11px;letter-spacing:1px}
+.tool-card .tc-head .name{font-size:18px;font-weight:700;color:var(--text)}
+.tool-card .tc-head .tag{font-size:11px;padding:2px 7px;border-radius:99px;font-family:"JetBrains Mono",monospace;letter-spacing:.5px}
+.tool-card .one-liner{font-size:13px;color:var(--text-dim);line-height:1.65}
+.tool-card .meta-row{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;font-size:11px}
+.tool-card .meta-row span{padding:3px 8px;border-radius:4px;background:var(--bg-2);color:var(--text-dim);border:1px solid var(--border)}
+
+@keyframes flow-dash{to{stroke-dashoffset:-40}}
+.flow-anim{stroke-dasharray:6 4;animation:flow-dash 1.6s linear infinite}
+
+@keyframes pulse-fade{0%,100%{opacity:.35}50%{opacity:1}}
+.pulse{animation:pulse-fade 1.8s ease-in-out infinite}
+
+.kv{display:grid;grid-template-columns:120px 1fr;gap:6px 14px;font-size:13px;margin:8px 0}
+.kv .k{color:var(--accent);font-family:"JetBrains Mono",monospace;font-size:12px}
+.kv .v{color:var(--text-dim)}
+
+.case-tile{background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:18px 20px;margin:14px 0;position:relative;border-left:4px solid var(--accent-2)}
+.case-tile h4{margin:0 0 6px;color:var(--text);font-size:15px}
+.case-tile .case-meta{font-family:"JetBrains Mono",monospace;font-size:11px;color:var(--accent-2);letter-spacing:1px;margin-bottom:8px;text-transform:uppercase}
+.case-tile .case-row{display:flex;gap:10px;margin:6px 0;font-size:13px}
+.case-tile .case-row .lbl{flex:0 0 80px;color:var(--accent);font-weight:600;font-size:12px}
+.case-tile .case-row .body{flex:1;color:var(--text-dim);line-height:1.7}
+
+.toolbar{display:flex;gap:6px;margin:12px 0;flex-wrap:wrap}
+.toolbar .pill{cursor:default}
+</style>
+
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>Valgrind · Roadmap</h2>
+    <nav>
+      <ol>
+        <li><a href="#ch0" class="active">先修地图</a></li>
+        <li><a href="#ch1">Valgrind 是什么</a>
+          <ol>
+            <li><a href="#s1-1">项目历史</a></li>
+            <li><a href="#s1-2">六工具家族</a></li>
+            <li><a href="#s1-3">何时该用</a></li>
+          </ol>
+        </li>
+        <li><a href="#ch2">DBT 核心原理</a>
+          <ol>
+            <li><a href="#s2-1">指令流对比</a></li>
+            <li><a href="#s2-2">VEX IR</a></li>
+            <li><a href="#s2-3">Coregrind 架构</a></li>
+            <li><a href="#s2-4">Shadow memory</a></li>
+            <li><a href="#s2-5">syscall 拦截</a></li>
+            <li><a href="#s2-6">为什么慢</a></li>
+          </ol>
+        </li>
+        <li><a href="#ch3">Memcheck 实战</a>
+          <ol>
+            <li><a href="#s3-1">能检测什么</a></li>
+            <li><a href="#s3-2">完整命令行</a></li>
+            <li><a href="#s3-3">报告解读</a></li>
+            <li><a href="#s3-4">A-bit / V-bit 原理</a></li>
+            <li><a href="#s3-5">vs ASan/LSan</a></li>
+          </ol>
+        </li>
+        <li><a href="#ch4">Helgrind &amp; DRD</a>
+          <ol>
+            <li><a href="#s4-1">Helgrind 原理</a></li>
+            <li><a href="#s4-2">DRD 原理</a></li>
+            <li><a href="#s4-3">报告解读</a></li>
+            <li><a href="#s4-4">vs TSan</a></li>
+          </ol>
+        </li>
+        <li><a href="#ch5">Massif 堆画像</a>
+          <ol>
+            <li><a href="#s5-1">用法</a></li>
+            <li><a href="#s5-2">ms_print 解读</a></li>
+            <li><a href="#s5-3">vs heaptrack/jeprof</a></li>
+          </ol>
+        </li>
+        <li><a href="#ch6">Callgrind &amp; Cachegrind</a>
+          <ol>
+            <li><a href="#s6-1">Callgrind</a></li>
+            <li><a href="#s6-2">Cachegrind</a></li>
+            <li><a href="#s6-3">vs perf/vtune</a></li>
+          </ol>
+        </li>
+        <li><a href="#ch7">高级实战</a>
+          <ol>
+            <li><a href="#s7-1">suppression</a></li>
+            <li><a href="#s7-2">Client Requests</a></li>
+            <li><a href="#s7-3">vgdb 联调</a></li>
+          </ol>
+        </li>
+        <li><a href="#ch8">性能与生产权衡</a></li>
+        <li><a href="#ch9">工具选型决策树</a>
+          <ol>
+            <li><a href="#s9-1">大决策图</a></li>
+            <li><a href="#s9-2">真实事故 5 例</a></li>
+          </ol>
+        </li>
+        <li><a href="#ch10">面试专题</a>
+          <ol>
+            <li><a href="#s10-1">L4 初级</a></li>
+            <li><a href="#s10-2">L5 中级</a></li>
+            <li><a href="#s10-3">L6 高级</a></li>
+            <li><a href="#s10-4">L7 专家</a></li>
+          </ol>
+        </li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+
+    <!-- ============= HERO ============= -->
+    <header class="hero">
+      <div class="badge">P13 · GUIDE · Dynamic Binary Instrumentation · Production Triage</div>
+      <h1>Valgrind 完全指南</h1>
+      <p class="sub">从 <strong>动态二进制翻译 (DBT)</strong> 到 <strong>VEX IR / Coregrind</strong>，从 <strong>Memcheck 的 A-bit / V-bit 蝴蝶图</strong> 到 <strong>Helgrind / DRD / Massif / Callgrind / Cachegrind 全套工具</strong>，再到 <strong>suppression 工程化 · vgdb 联调 · 与 Sanitizer / eBPF / heaptrack 的选型决策</strong> —— 这不是一篇 manpage 翻译，而是站在 <em>memory_leak_guide · sanitizers_guide · sanitizer_internals · crash_debugging_guide · deadlock_debugging_guide</em> 已有体系之上的一份「<strong>原理 + 工程实战 + 选型决策</strong>」深度笔记。</p>
+      <div class="meta">
+        <span>11 章节</span>
+        <span>22+ SVG 图</span>
+        <span>13 道分层面试题</span>
+        <span>5 个真实事故案例</span>
+        <span>覆盖 6 个子工具</span>
+        <span>无 CDN 依赖 · 单文件</span>
+      </div>
+    </header>
+
+    <!-- ============= CH0 ============= -->
+    <section class="chapter" id="ch0">
+      <div class="ch-head">
+        <div class="num">00</div>
+        <div class="t">
+          <h2>已有知识地图 · 本文如何站在它们之上</h2>
+          <p class="sub">Knowledge Prerequisites — 不重复已讲，只做关联与深入</p>
+        </div>
+      </div>
+
+      <p class="lead">在你打开这一页之前，仓库已经有 5 篇文档分别从不同角度提到过 Valgrind —— 它们构成本文的<strong>先修知识基底</strong>。本章先把"已经讲过的"明确标出来，本文从下一章起，<em>不再重复</em>那些内容，而是把它们<em>串成一条"DBT 内核 → 6 工具家族 → 工程化排查决策"的完整链路</em>。</p>
+
+      <div class="kmap">
+        <div class="kmap-title">已有文档 · 已掌握的知识点 (Prerequisite Layer)</div>
+        <div class="grid cols-3">
+          <div class="card">
+            <h4><a href="./memory_leak_guide.html">memory_leak_guide.html</a></h4>
+            <p style="font-size:13px;color:var(--text-dim)">已覆盖：</p>
+            <ul style="font-size:12.5px">
+              <li>Memcheck 命令、"definitely lost" 4 类</li>
+              <li>排查决策树（什么时候<strong>不要</strong>用 Valgrind）</li>
+              <li>ASan vs Valgrind 性能对比的<em>结论层</em></li>
+            </ul>
+            <p style="font-size:12.5px;color:var(--accent-3);margin-top:8px">→ 本文补：<strong>原理层</strong>、其他 5 个工具、生产工程化</p>
+          </div>
+          <div class="card violet">
+            <h4><a href="./sanitizers_guide.html">sanitizers_guide.html</a></h4>
+            <p style="font-size:13px;color:var(--text-dim)">已覆盖：</p>
+            <ul style="font-size:12.5px">
+              <li>5 大 Sanitizer 用法</li>
+              <li>§9.5 LSan vs Valgrind 对比表</li>
+              <li>"何时用 Valgrind 替代 MSan"</li>
+            </ul>
+            <p style="font-size:12.5px;color:var(--accent-3);margin-top:8px">→ 本文补：Valgrind <strong>反方视角</strong>、Helgrind/DRD/Massif</p>
+          </div>
+          <div class="card green">
+            <h4><a href="../cpp/sanitizer_internals.html">sanitizer_internals.html</a></h4>
+            <p style="font-size:13px;color:var(--text-dim)">已覆盖：</p>
+            <ul style="font-size:12.5px">
+              <li>"为什么需要 Sanitizer · 跟 Valgrind 区别"章</li>
+              <li>Sanitizer = 编译期插桩；Valgrind = DBT</li>
+              <li>"10× faster" 的机制对比</li>
+            </ul>
+            <p style="font-size:12.5px;color:var(--accent-3);margin-top:8px">→ 本文补：<strong>DBT 内部结构</strong>（VEX IR / Coregrind）</p>
+          </div>
+          <div class="card amber">
+            <h4><a href="./crash_debugging_guide.html">crash_debugging_guide.html</a></h4>
+            <p style="font-size:13px;color:var(--text-dim)">已覆盖：</p>
+            <ul style="font-size:12.5px">
+              <li>§5.3 Memcheck/Helgrind/Callgrind 命令速记</li>
+              <li>UAF / double free 用 ASan 还是 Valgrind</li>
+            </ul>
+            <p style="font-size:12.5px;color:var(--accent-3);margin-top:8px">→ 本文补：<strong>报告解读</strong>、suppression、vgdb</p>
+          </div>
+          <div class="card">
+            <h4><a href="./deadlock_debugging_guide.html">deadlock_debugging_guide.html</a></h4>
+            <p style="font-size:13px;color:var(--text-dim)">已覆盖：</p>
+            <ul style="font-size:12.5px">
+              <li>§3.4 Helgrind / DRD 命令</li>
+              <li>"锁序反转"实战示例</li>
+            </ul>
+            <p style="font-size:12.5px;color:var(--accent-3);margin-top:8px">→ 本文补：vector clock 原理、误报治理</p>
+          </div>
+          <div class="card danger">
+            <h4><a href="../system/observability_ebpf.html">observability_ebpf.html</a></h4>
+            <p style="font-size:13px;color:var(--text-dim)">已覆盖：</p>
+            <ul style="font-size:12.5px">
+              <li>memleak-bpfcc <strong>替代</strong> Valgrind 的生产理由</li>
+              <li>"Valgrind 跑不了 production"</li>
+            </ul>
+            <p style="font-size:12.5px;color:var(--accent-3);margin-top:8px">→ 本文补：<em>什么时候 Valgrind 反而是唯一选项</em></p>
+          </div>
+        </div>
+      </div>
+
+      <h3>本文的"知识增量"边界</h3>
+
+      <div class="grid cols-2">
+        <div class="card green">
+          <h4>✓ 本文会深入讲</h4>
+          <ul style="font-size:13px">
+            <li>Valgrind 的 <strong>DBT (Dynamic Binary Translation) 内核</strong>：VEX IR 流水线、Coregrind 调度器、tool plugin 架构</li>
+            <li>Memcheck 的 <strong>shadow memory 双层模型</strong>：A-bit (allocation) + V-bit (validity) 蝴蝶图</li>
+            <li><strong>Helgrind</strong> 的 happens-before lockset 算法、<strong>DRD</strong> 的 vector clock 优化</li>
+            <li><strong>Massif / Callgrind / Cachegrind</strong> 的工作机制与可视化</li>
+            <li><strong>suppression 文件工程化</strong>（生成、维护、CI 集成）</li>
+            <li><strong>vgdb</strong> 与 GDB 联调</li>
+            <li><strong>Client Requests 宏</strong>（让被测程序与 Valgrind 通信）</li>
+          </ul>
+        </div>
+        <div class="card amber">
+          <h4>✗ 本文不会重复</h4>
+          <ul style="font-size:13px">
+            <li>"什么是内存泄漏"（去 <a href="./memory_leak_guide.html">memory_leak_guide</a>）</li>
+            <li>"什么是 data race / 死锁"（去 <a href="./deadlock_debugging_guide.html">deadlock_debugging_guide</a>）</li>
+            <li>"什么是 cache miss / 分支预测"（去 <a href="./performance_guide.html">performance_guide</a>）</li>
+            <li>ASan / TSan / UBSan 用法（去 <a href="./sanitizers_guide.html">sanitizers_guide</a>）</li>
+            <li>eBPF 替代方案细节（去 <a href="../system/observability_ebpf.html">observability_ebpf</a>）</li>
+            <li>core dump / GDB 基础（去 <a href="./crash_debugging_guide.html">crash_debugging_guide</a>）</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="info">
+        <strong>你能从本文获得的"硬核能力"</strong>：① 看到任何 Valgrind 报告，能在 1 分钟内说出"哪个工具 + 哪类问题 + 修复方向"；② 给团队制定 suppression 治理规则；③ 在面试/Tech Talk 里能解释清楚"为什么 Valgrind 慢 10-30×"的<em>机制层</em>原因（不是只说"动态翻译"四个字）；④ 能判断哪些场景<em>非 Valgrind 不可</em>（无源码 / 嵌入式 / MSan 不可用）。
+      </div>
+
+      <h3>阅读路径建议</h3>
+
+      <div class="timeline">
+        <div class="tl-item">
+          <div class="tl-time">PATH A · 上手即用 · 30 min</div>
+          <div class="tl-title">命令党路径</div>
+          <div class="tl-body">CH1 → CH3 → CH7（suppression）→ CH9（决策树）。跳过原理章，直奔命令与排查决策。</div>
+        </div>
+        <div class="tl-item">
+          <div class="tl-time">PATH B · 全脑路径 · 78 min</div>
+          <div class="tl-title">完整阅读</div>
+          <div class="tl-body">CH0 → CH10 顺序读完。每章 7~10 分钟。</div>
+        </div>
+        <div class="tl-item">
+          <div class="tl-time">PATH C · 面试冲刺 · 25 min</div>
+          <div class="tl-title">面试速通</div>
+          <div class="tl-body">CH2 (DBT 原理) → CH3.4 (A/V-bit) → CH4 (Helgrind 原理) → CH10 (面试题)。聚焦"为什么 / 怎么做到"。</div>
+        </div>
+        <div class="tl-item">
+          <div class="tl-time">PATH D · 工程治理 · 35 min</div>
+          <div class="tl-title">Tech Lead 路径</div>
+          <div class="tl-body">CH7 (suppression / vgdb / Client Requests) → CH8 (生产权衡) → CH9 (5 个真实事故案例)。聚焦工程化决策。</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============= CH1 ============= -->
+    <section class="chapter" id="ch1">
+      <div class="ch-head">
+        <div class="num">01</div>
+        <div class="t">
+          <h2>Valgrind 是什么 · 一图看懂六工具家族</h2>
+          <p class="sub">DBT 框架 + 6 个独立工具 · Memcheck 只是其中一个</p>
+        </div>
+      </div>
+
+      <p class="lead">很多 C++ 工程师把 "Valgrind" 等同于 "Memcheck"，但 Valgrind 实际是一个 <strong>动态二进制插桩 (DBI / DBT) 框架</strong>，自带 6 个官方工具。Memcheck 只是其中名气最大的那个。理解这个分层关系，是看懂后面所有原理章节的前提。</p>
+
+      <h3 id="s1-1">1.1 项目历史 · 为什么诞生</h3>
+
+      <div class="timeline">
+        <div class="tl-item">
+          <div class="tl-time">2002</div>
+          <div class="tl-title">Julian Seward 起步</div>
+          <div class="tl-body">最初叫 <code>Valgrind</code>（北欧神话中通往瓦尔哈拉的<em>大门</em>），目标只有一个：在<strong>不重编不修改源码</strong>的前提下查 C/C++ 程序的内存错误。这是当时主流（Purify 等）做不到的——它们都需要二进制重写或链接器介入。</div>
+        </div>
+        <div class="tl-item">
+          <div class="tl-time">2004 · v3.0</div>
+          <div class="tl-title">VEX IR 引入</div>
+          <div class="tl-body">把"指令翻译"从 Memcheck 中抽出来，独立成 <strong>VEX IR</strong>（中间表示）。从此 Valgrind 变成一个<em>框架</em>：核心 (Coregrind) 负责翻译/调度，工具 (tools) 只插桩业务逻辑。这才有了后续的 Helgrind / Massif / Callgrind。</div>
+        </div>
+        <div class="tl-item">
+          <div class="tl-time">2007 · v3.3</div>
+          <div class="tl-title">DRD / Massif 加入</div>
+          <div class="tl-body">DRD（Bart Van Assche）作为 Helgrind 的"科学派"对照实现；Massif 作为堆使用画像工具进入主线。</div>
+        </div>
+        <div class="tl-item">
+          <div class="tl-time">2012 · 关键拐点</div>
+          <div class="tl-title">Sanitizer 横空出世</div>
+          <div class="tl-body">Google 发布 ASan / TSan / MSan —— 编译期插桩，比 Valgrind 快 10×。Valgrind 在"日常 CI"场景被快速边缘化。但<u>Valgrind 没消失</u>，因为它有一个杀手级特性：<strong>不需要重编</strong>。</div>
+        </div>
+        <div class="tl-item">
+          <div class="tl-time">至今 · v3.x 维护期</div>
+          <div class="tl-title">仍在更新 · 由 Mark Wielaard (Red Hat) 等维护</div>
+          <div class="tl-body">2024 Q4 仍有 v3.24 发布（aarch64 / RISC-V 改进、新内核 syscall 支持）。在<strong>第三方闭源 .so / 嵌入式 / 老编译器</strong>场景仍是主力。</div>
+        </div>
+      </div>
+
+      <h3 id="s1-2">1.2 六工具家族 · 一张图看懂</h3>
+
+      <div class="svg-wrap">
+<svg viewBox="0 0 980 540" xmlns="http://www.w3.org/2000/svg" style="font-family:inherit">
+  <defs>
+    <marker id="ar1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#7dd3fc"/></marker>
+    <linearGradient id="grad-core" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1a2138"/><stop offset="100%" stop-color="#0f1424"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Outer: Valgrind framework -->
+  <rect x="20" y="20" width="940" height="500" rx="14" fill="#0a0e1a" stroke="#2a3556" stroke-dasharray="6 4"/>
+  <text x="40" y="45" fill="#94a3b8" font-size="12" letter-spacing="2">VALGRIND FRAMEWORK</text>
+
+  <!-- Coregrind core -->
+  <rect x="340" y="220" width="300" height="100" rx="12" fill="url(#grad-core)" stroke="#7dd3fc" stroke-width="2"/>
+  <text x="490" y="248" text-anchor="middle" fill="#7dd3fc" font-size="16" font-weight="700">Coregrind 核心</text>
+  <text x="490" y="270" text-anchor="middle" fill="#cbd5e1" font-size="12">• VEX IR 翻译  • JIT  • syscall 拦截</text>
+  <text x="490" y="290" text-anchor="middle" fill="#cbd5e1" font-size="12">• 信号/线程调度  • 客户机栈管理</text>
+  <text x="490" y="308" text-anchor="middle" fill="#94a3b8" font-size="11">所有工具共享这一层</text>
+
+  <!-- 6 tools surround -->
+  <!-- Memcheck (default) -->
+  <rect x="60" y="80" width="220" height="110" rx="10" fill="#1a2138" stroke="#f87171" stroke-width="2"/>
+  <text x="170" y="105" text-anchor="middle" fill="#f87171" font-size="14" font-weight="700">Memcheck</text>
+  <text x="170" y="123" text-anchor="middle" fill="#fbbf24" font-size="10" font-family="JetBrains Mono">DEFAULT TOOL</text>
+  <text x="170" y="143" text-anchor="middle" fill="#cbd5e1" font-size="11">未初始化读 / OOB</text>
+  <text x="170" y="160" text-anchor="middle" fill="#cbd5e1" font-size="11">UAF / Double-free</text>
+  <text x="170" y="177" text-anchor="middle" fill="#cbd5e1" font-size="11">memory leak (4 类)</text>
+
+  <!-- Cachegrind -->
+  <rect x="380" y="60" width="220" height="100" rx="10" fill="#1a2138" stroke="#a78bfa" stroke-width="2"/>
+  <text x="490" y="84" text-anchor="middle" fill="#a78bfa" font-size="14" font-weight="700">Cachegrind</text>
+  <text x="490" y="105" text-anchor="middle" fill="#cbd5e1" font-size="11">L1i / L1d / LL cache 模拟</text>
+  <text x="490" y="122" text-anchor="middle" fill="#cbd5e1" font-size="11">分支预测错失统计</text>
+  <text x="490" y="142" text-anchor="middle" fill="#94a3b8" font-size="10">行级精度 · 但不算时间</text>
+
+  <!-- Callgrind -->
+  <rect x="700" y="80" width="220" height="110" rx="10" fill="#1a2138" stroke="#34d399" stroke-width="2"/>
+  <text x="810" y="105" text-anchor="middle" fill="#34d399" font-size="14" font-weight="700">Callgrind</text>
+  <text x="810" y="125" text-anchor="middle" fill="#cbd5e1" font-size="11">调用图 + cycle 统计</text>
+  <text x="810" y="142" text-anchor="middle" fill="#cbd5e1" font-size="11">扩展自 Cachegrind</text>
+  <text x="810" y="160" text-anchor="middle" fill="#cbd5e1" font-size="11">配 KCachegrind 可视化</text>
+
+  <!-- Helgrind -->
+  <rect x="60" y="350" width="220" height="110" rx="10" fill="#1a2138" stroke="#fb923c" stroke-width="2"/>
+  <text x="170" y="376" text-anchor="middle" fill="#fb923c" font-size="14" font-weight="700">Helgrind</text>
+  <text x="170" y="396" text-anchor="middle" fill="#cbd5e1" font-size="11">data race 检测</text>
+  <text x="170" y="413" text-anchor="middle" fill="#cbd5e1" font-size="11">锁序反转 (lockset)</text>
+  <text x="170" y="430" text-anchor="middle" fill="#cbd5e1" font-size="11">误用 pthread API</text>
+  <text x="170" y="448" text-anchor="middle" fill="#94a3b8" font-size="10">happens-before</text>
+
+  <!-- DRD -->
+  <rect x="380" y="380" width="220" height="100" rx="10" fill="#1a2138" stroke="#fbbf24" stroke-width="2"/>
+  <text x="490" y="405" text-anchor="middle" fill="#fbbf24" font-size="14" font-weight="700">DRD</text>
+  <text x="490" y="425" text-anchor="middle" fill="#cbd5e1" font-size="11">data race · vector clock</text>
+  <text x="490" y="442" text-anchor="middle" fill="#cbd5e1" font-size="11">condition_variable 检查</text>
+  <text x="490" y="460" text-anchor="middle" fill="#94a3b8" font-size="10">对 cv 比 Helgrind 准</text>
+
+  <!-- Massif -->
+  <rect x="700" y="350" width="220" height="110" rx="10" fill="#1a2138" stroke="#60a5fa" stroke-width="2"/>
+  <text x="810" y="376" text-anchor="middle" fill="#60a5fa" font-size="14" font-weight="700">Massif</text>
+  <text x="810" y="396" text-anchor="middle" fill="#cbd5e1" font-size="11">堆使用画像（不是查泄漏）</text>
+  <text x="810" y="413" text-anchor="middle" fill="#cbd5e1" font-size="11">峰值 + over-time 曲线</text>
+  <text x="810" y="430" text-anchor="middle" fill="#cbd5e1" font-size="11">每个采样点的栈聚合</text>
+  <text x="810" y="448" text-anchor="middle" fill="#94a3b8" font-size="10">heaptrack 之前唯一选择</text>
+
+  <!-- Connections -->
+  <line x1="280" y1="135" x2="340" y2="240" stroke="#7dd3fc" stroke-width="1.5" marker-end="url(#ar1)"/>
+  <line x1="490" y1="160" x2="490" y2="220" stroke="#7dd3fc" stroke-width="1.5" marker-end="url(#ar1)"/>
+  <line x1="700" y1="135" x2="640" y2="240" stroke="#7dd3fc" stroke-width="1.5" marker-end="url(#ar1)"/>
+  <line x1="280" y1="405" x2="340" y2="300" stroke="#7dd3fc" stroke-width="1.5" marker-end="url(#ar1)"/>
+  <line x1="490" y1="380" x2="490" y2="320" stroke="#7dd3fc" stroke-width="1.5" marker-end="url(#ar1)"/>
+  <line x1="700" y1="405" x2="640" y2="300" stroke="#7dd3fc" stroke-width="1.5" marker-end="url(#ar1)"/>
+
+  <!-- Bottom labels -->
+  <text x="490" y="500" text-anchor="middle" fill="#94a3b8" font-size="11">每个工具仅实现 <tspan fill="#7dd3fc" font-family="JetBrains Mono" font-size="11">VG_(track_*)</tspan> 回调，不重写翻译器</text>
+</svg>
+        <div class="svg-caption">图 1.1 · Valgrind 是个<strong>框架</strong>。Coregrind 提供 DBT 翻译能力，6 个工具作为 <em>plugin</em> 各自实现一组 hook 回调。这一层抽象让"再加一个新工具"成本极低。</div>
+      </div>
+
+      <div class="grid cols-2">
+        <div class="tool-card" style="--bar:linear-gradient(90deg,transparent,#f87171,transparent)">
+          <div class="tc-head"><span class="num">01 / DEFAULT</span><span class="name">Memcheck</span><span class="pill red">最常用</span></div>
+          <div class="one-liner">每一字节都跟踪 <strong>是否已分配 (A-bit)</strong> + <strong>每位是否已初始化 (V-bit)</strong>。任何"读未初始化、读已释放、写已释放、堆越界"都能精确报点。</div>
+          <div class="meta-row"><span>慢 10-30×</span><span>内存 2-3×</span><span>不需要重编</span></div>
+        </div>
+        <div class="tool-card" style="--bar:linear-gradient(90deg,transparent,#fb923c,transparent)">
+          <div class="tc-head"><span class="num">02 / RACE</span><span class="name">Helgrind</span><span class="pill amber">data race</span></div>
+          <div class="one-liner">对每个共享内存位置维护 <strong>lockset</strong>（保护它的锁集合）+ <strong>happens-before</strong> 关系。两个线程访问同一字节，若 lockset 交集为空且无 hb 关系 → 报 race。</div>
+          <div class="meta-row"><span>慢 20-100×</span><span>内存 5×</span><span>误报偏多</span></div>
+        </div>
+        <div class="tool-card" style="--bar:linear-gradient(90deg,transparent,#fbbf24,transparent)">
+          <div class="tc-head"><span class="num">03 / RACE</span><span class="name">DRD</span><span class="pill amber">vector clock</span></div>
+          <div class="one-liner">基于 <strong>vector clock</strong> 的 happens-before，比 Helgrind 的 lockset 更精确，对 condition_variable / barrier 检测更准。但不能检测锁序反转。</div>
+          <div class="meta-row"><span>慢 20-50×</span><span>内存 4×</span><span>误报偏少</span></div>
+        </div>
+        <div class="tool-card" style="--bar:linear-gradient(90deg,transparent,#60a5fa,transparent)">
+          <div class="tc-head"><span class="num">04 / HEAP</span><span class="name">Massif</span><span class="pill cyan">heap profile</span></div>
+          <div class="one-liner">不查泄漏，查 <strong>"什么时候、谁、占了多少堆"</strong>。每隔一段时间采一次堆快照，最后用 <code>ms_print</code> 打印 ASCII 曲线 + top 调用栈。</div>
+          <div class="meta-row"><span>慢 10-20×</span><span>内存 1.5×</span><span>有 ms_print</span></div>
+        </div>
+        <div class="tool-card" style="--bar:linear-gradient(90deg,transparent,#34d399,transparent)">
+          <div class="tc-head"><span class="num">05 / PERF</span><span class="name">Callgrind</span><span class="pill green">profiler</span></div>
+          <div class="one-liner">扩展自 Cachegrind。每条指令计数，附带<strong>调用图</strong>。配 <code>kcachegrind</code> 出可视化（火焰图前身）。<em>注意</em>：算的是 instruction count，不是 wall-clock time。</div>
+          <div class="meta-row"><span>慢 10-30×</span><span>内存 3×</span><span>kcachegrind GUI</span></div>
+        </div>
+        <div class="tool-card" style="--bar:linear-gradient(90deg,transparent,#a78bfa,transparent)">
+          <div class="tc-head"><span class="num">06 / PERF</span><span class="name">Cachegrind</span><span class="pill violet">cache sim</span></div>
+          <div class="one-liner"><strong>软件模拟</strong> CPU L1i / L1d / LL cache + 分支预测。报告每行代码的 miss 数。优势：<em>结果稳定可重现</em>（不像 perf 受其他进程干扰）。</div>
+          <div class="meta-row"><span>慢 20-100×</span><span>内存 2×</span><span>结果可重现</span></div>
+        </div>
+      </div>
+
+      <div class="info">
+        <strong>三个"亲戚"工具</strong>（不是官方 6 工具，但同源）：① <code>Lackey</code> 例子工具（教学用）；② <code>None</code> 空工具（只跑 DBT，测核心开销）；③ <code>DHAT</code>（Dynamic Heap Analysis Tool，v3.15 起，比 Massif 维度更多）。日常基本用不到，知道存在即可。
+      </div>
+
+      <h3 id="s1-3">1.3 何时该用 / 何时别用 · 决策表</h3>
+
+      <table>
+        <thead><tr><th>场景</th><th>推荐</th><th>不推荐</th><th>原因</th></tr></thead>
+        <tbody>
+          <tr><td>查内存错误 / 泄漏（CI 默认）</td><td class="cell-ok">ASan + LSan</td><td class="cell-bad">Valgrind</td><td>ASan 快 10×，CI 跑得起</td></tr>
+          <tr><td>查 data race（CI 默认）</td><td class="cell-ok">TSan</td><td class="cell-bad">Helgrind</td><td>TSan 快 5×，误报少</td></tr>
+          <tr><td><strong>第三方闭源 .so 内存越界</strong></td><td class="cell-ok">Valgrind Memcheck</td><td>—</td><td>不需要重编</td></tr>
+          <tr><td><strong>嵌入式 / 老编译器（无 ASan）</strong></td><td class="cell-ok">Valgrind</td><td>—</td><td>ASan 在 GCC 4.8 之前没有</td></tr>
+          <tr><td><strong>MSan 不可用（依赖未插桩）</strong></td><td class="cell-ok">Valgrind Memcheck</td><td>—</td><td>Memcheck 顺便查未初始化</td></tr>
+          <tr><td>查 cache miss（开发期）</td><td class="cell-ok">perf / vtune</td><td class="cell-bad">Cachegrind</td><td>perf 用真实 PMU，更准</td></tr>
+          <tr><td><strong>对比两次重构的 cache 行为</strong></td><td class="cell-ok">Cachegrind</td><td>—</td><td>Cachegrind 结果可<em>重现</em></td></tr>
+          <tr><td>查堆峰值 / 使用画像</td><td class="cell-ok">heaptrack / Massif</td><td>—</td><td>heaptrack 更友好</td></tr>
+          <tr><td><strong>跑 CI 集成测试 (集群规模)</strong></td><td class="cell-ok">ASan/TSan</td><td class="cell-bad">Valgrind</td><td>慢 30× 跑不完</td></tr>
+          <tr><td><strong>线上生产环境</strong></td><td class="cell-ok">eBPF / heaptrack attach</td><td class="cell-bad">Valgrind</td><td>需要重启 + 高损耗</td></tr>
+          <tr><td>低频偶现 bug（不能复现）</td><td class="cell-ok">eBPF + 日志</td><td class="cell-bad">Valgrind</td><td>跑慢可能让 bug 不复现</td></tr>
+          <tr><td><strong>线下深度排查 + 不重编</strong></td><td class="cell-ok">Valgrind</td><td>—</td><td>这是它的"主场"</td></tr>
+        </tbody>
+      </table>
+
+      <div class="tip">
+        <strong>一句话原则</strong>：能重编 → 上 Sanitizer；不能重编 / 跑 production → 上 eBPF/heaptrack；<em>剩下那个"不能重编 + 不在 production"的窄缝</em>，就是 Valgrind 的主场。这个主场看起来小，但企业里大量第三方闭源 SDK / 嵌入式 / 老 toolchain 都落在这里。
+      </div>
+    </section>
+
+    <!-- ============= CH2 ============= -->
+    <section class="chapter" id="ch2">
+      <div class="ch-head">
+        <div class="num">02</div>
+        <div class="t">
+          <h2>核心原理 · DBT (Dynamic Binary Translation)</h2>
+          <p class="sub">VEX IR · Coregrind · Shadow memory · syscall 拦截 · 为什么慢 10-30×</p>
+        </div>
+      </div>
+
+      <p class="lead">这是<strong>整个 Valgrind 体系最关键的一章</strong>。理解了 DBT 就理解了：<em>Valgrind 为什么不需要重编、为什么慢这么多、为什么"插一个新 hook"如此简单</em>。其他章节都建立在这一章的认知之上。</p>
+
+      <h3 id="s2-1">2.1 一图对比：原生执行 vs Valgrind 执行</h3>
+
+      <p>所有"为什么慢"的疑问，都从下面这张<strong>指令流对比图</strong>开始。</p>
+
+      <div class="svg-wrap">
+<svg viewBox="0 0 980 380" xmlns="http://www.w3.org/2000/svg" style="font-family:inherit">
+  <defs>
+    <marker id="arx" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#34d399"/></marker>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#fb923c"/></marker>
+  </defs>
+
+  <!-- Native path (top) -->
+  <text x="20" y="30" fill="#34d399" font-size="13" font-weight="700">原生执行 (native)</text>
+  <rect x="20" y="50" width="140" height="50" rx="6" fill="#0f2418" stroke="#34d399"/>
+  <text x="90" y="73" text-anchor="middle" fill="#cbd5e1" font-size="12">a.out 二进制</text>
+  <text x="90" y="90" text-anchor="middle" fill="#94a3b8" font-size="10">x86_64 指令</text>
+
+  <line x1="160" y1="75" x2="220" y2="75" stroke="#34d399" stroke-width="2" marker-end="url(#arx)"/>
+
+  <rect x="220" y="50" width="160" height="50" rx="6" fill="#0f2418" stroke="#34d399"/>
+  <text x="300" y="73" text-anchor="middle" fill="#cbd5e1" font-size="12">CPU 直接执行</text>
+  <text x="300" y="90" text-anchor="middle" fill="#94a3b8" font-size="10">~ 1 cycle/inst</text>
+
+  <line x1="380" y1="75" x2="440" y2="75" stroke="#34d399" stroke-width="2" marker-end="url(#arx)"/>
+
+  <rect x="440" y="50" width="120" height="50" rx="6" fill="#0a1a14" stroke="#34d399"/>
+  <text x="500" y="80" text-anchor="middle" fill="#34d399" font-size="14" font-weight="700">结果输出</text>
+
+  <text x="800" y="80" fill="#34d399" font-size="13" font-weight="700">基线: 1×</text>
+
+  <!-- Valgrind path (bottom) -->
+  <text x="20" y="160" fill="#fb923c" font-size="13" font-weight="700">Valgrind 执行 (DBT)</text>
+
+  <rect x="20" y="180" width="140" height="50" rx="6" fill="#1a1408" stroke="#fb923c"/>
+  <text x="90" y="203" text-anchor="middle" fill="#cbd5e1" font-size="12">a.out 二进制</text>
+  <text x="90" y="220" text-anchor="middle" fill="#94a3b8" font-size="10">完全相同</text>
+
+  <line x1="160" y1="205" x2="200" y2="205" stroke="#fb923c" stroke-width="2" marker-end="url(#arr)"/>
+
+  <!-- Coregrind box -->
+  <rect x="200" y="160" width="540" height="170" rx="10" fill="#1a1408" stroke="#fb923c" stroke-width="2"/>
+  <text x="470" y="180" text-anchor="middle" fill="#fb923c" font-size="13" font-weight="700">Coregrind 在合成 CPU 上跑</text>
+
+  <!-- Translation steps inside coregrind -->
+  <rect x="220" y="195" width="100" height="40" rx="6" fill="#0a0e1a" stroke="#a78bfa"/>
+  <text x="270" y="215" text-anchor="middle" fill="#a78bfa" font-size="11" font-weight="700">① 译码</text>
+  <text x="270" y="228" text-anchor="middle" fill="#cbd5e1" font-size="9">x86 → VEX IR</text>
+
+  <line x1="320" y1="215" x2="345" y2="215" stroke="#fb923c" stroke-width="1.5" marker-end="url(#arr)" class="flow-anim"/>
+
+  <rect x="345" y="195" width="100" height="40" rx="6" fill="#0a0e1a" stroke="#7dd3fc"/>
+  <text x="395" y="215" text-anchor="middle" fill="#7dd3fc" font-size="11" font-weight="700">② 插桩</text>
+  <text x="395" y="228" text-anchor="middle" fill="#cbd5e1" font-size="9">tool 加 hook</text>
+
+  <line x1="445" y1="215" x2="470" y2="215" stroke="#fb923c" stroke-width="1.5" marker-end="url(#arr)" class="flow-anim"/>
+
+  <rect x="470" y="195" width="100" height="40" rx="6" fill="#0a0e1a" stroke="#fbbf24"/>
+  <text x="520" y="215" text-anchor="middle" fill="#fbbf24" font-size="11" font-weight="700">③ 优化</text>
+  <text x="520" y="228" text-anchor="middle" fill="#cbd5e1" font-size="9">simplify IR</text>
+
+  <line x1="570" y1="215" x2="595" y2="215" stroke="#fb923c" stroke-width="1.5" marker-end="url(#arr)" class="flow-anim"/>
+
+  <rect x="595" y="195" width="120" height="40" rx="6" fill="#0a0e1a" stroke="#34d399"/>
+  <text x="655" y="215" text-anchor="middle" fill="#34d399" font-size="11" font-weight="700">④ 反编译</text>
+  <text x="655" y="228" text-anchor="middle" fill="#cbd5e1" font-size="9">VEX → x86</text>
+
+  <!-- Cache -->
+  <rect x="290" y="260" width="350" height="50" rx="6" fill="#0a0e1a" stroke="#60a5fa"/>
+  <text x="465" y="282" text-anchor="middle" fill="#60a5fa" font-size="12" font-weight="700">Translation Cache</text>
+  <text x="465" y="300" text-anchor="middle" fill="#94a3b8" font-size="10">已翻译的 superblock 缓存（命中率 ~ 95%）</text>
+
+  <line x1="340" y1="240" x2="380" y2="260" stroke="#60a5fa" stroke-width="1.5" stroke-dasharray="3 3"/>
+
+  <line x1="740" y1="215" x2="780" y2="215" stroke="#fb923c" stroke-width="2" marker-end="url(#arr)"/>
+  <rect x="780" y="190" width="120" height="50" rx="6" fill="#1a0e0a" stroke="#fb923c"/>
+  <text x="840" y="215" text-anchor="middle" fill="#fb923c" font-size="14" font-weight="700">结果输出</text>
+  <text x="840" y="230" text-anchor="middle" fill="#cbd5e1" font-size="10">+ 错误报告</text>
+
+  <text x="800" y="350" fill="#fb923c" font-size="13" font-weight="700">~ 10-30× 慢</text>
+  <text x="20" y="360" fill="#94a3b8" font-size="11">关键差异：CPU 不直接看二进制；它看的是<tspan fill="#fb923c">合成出来的、被插桩过的</tspan>等价代码。</text>
+
+  <!-- 动画：原生路径上飞快的令牌（1.1s 跑完） -->
+  <circle r="5" cy="75" fill="#34d399">
+    <animate attributeName="cx" values="165;555" dur="1.1s" repeatCount="indefinite"/>
+    <animate attributeName="opacity" values="0;1;1;0" dur="1.1s" repeatCount="indefinite"/>
+  </circle>
+  <!-- 动画：DBT 流水线里缓慢爬行的令牌（4s 才跑完，对比"慢"） -->
+  <circle r="5" fill="#fb923c">
+    <animateMotion dur="4s" repeatCount="indefinite"
+      path="M165,205 L205,205 L222,215 L320,215 L347,215 L445,215 L472,215 L570,215 L597,215 L715,215 L778,215"/>
+    <animate attributeName="opacity" values="0;1;1;1;0" dur="4s" repeatCount="indefinite"/>
+  </circle>
+  <!-- Translation Cache 呼吸高亮 -->
+  <rect x="290" y="260" width="350" height="50" rx="6" fill="none" stroke="#60a5fa" stroke-width="2">
+    <animate attributeName="opacity" values="0;0.8;0" dur="2.4s" repeatCount="indefinite"/>
+  </rect>
+</svg>
+        <div class="svg-caption">图 2.1 · 原生 vs Valgrind 指令流。Coregrind 把每个 superblock（基本块组）翻译成 VEX IR → 让 tool 插桩 → 再降回 host x86 → 进 cache。<strong>下次执行同一段代码就走 cache，不再翻译</strong>。这也是为什么"启动 1 秒、稳态后还能跑"。</div>
+      </div>
+
+      <div class="grid cols-3">
+        <div class="stat"><div class="v">1×</div><div class="l">native baseline</div></div>
+        <div class="stat"><div class="v">10-30×</div><div class="l">memcheck 减速</div></div>
+        <div class="stat"><div class="v">95%</div><div class="l">translation cache 命中</div></div>
+      </div>
+
+      <h3 id="s2-2">2.2 VEX IR · 让"加新工具"成本极低的中间表示</h3>
+
+      <p>VEX 是 Valgrind 自己定义的<strong>体系结构无关中间表示</strong>。你可以理解成"Valgrind 的 LLVM IR"，但它的设计目标完全不同：<strong>不是为了优化，是为了<em>方便插桩</em></strong>。</p>
+
+      <p>核心思想：<u>把 x86 的复杂指令拆成一组只读/只写一次的 micro-op，每个 micro-op 都是一个独立 statement</u>。这样 tool 想在"读内存之前插一个 hook"就只要拦截 IR 里的 <code>LoadStmt</code>，不用懂 x86 编码细节。</p>
+
+      <pre><code><span class="c">// x86 原指令（一条复杂指令）</span>
+movq  %rax, (%rbx)        <span class="c">; store rax to memory at rbx</span>
+
+<span class="c">// VEX IR (拆成 3 条 statement)</span>
+t1 = GET:I64(rax)         <span class="c">; 读寄存器</span>
+t2 = GET:I64(rbx)         <span class="c">; 读寄存器</span>
+STle(t2) = t1             <span class="c">; little-endian store</span>
+
+<span class="c">// 插桩后（Memcheck 在 store 前后加 hook）</span>
+t1 = GET:I64(rax)
+t2 = GET:I64(rbx)
+DIRTY helperc_STOREV64(t2, t1)   <span class="c">; ← Memcheck 插的 hook：标记 t2 处 8 字节为已定义</span>
+STle(t2) = t1</code></pre>
+
+      <div class="grid cols-2">
+        <div class="card">
+          <h4>VEX IR 的 4 类 Statement</h4>
+          <ul style="font-size:13px">
+            <li><code>IRStmt_Put</code> / <code>IRStmt_Get</code> · 读写寄存器（含 EFLAGS）</li>
+            <li><code>IRStmt_WrTmp</code> · 给 tmp 赋值（VEX 里寄存器叫 tmp）</li>
+            <li><code>IRStmt_Store</code> · 写内存（前面例子的 STle）</li>
+            <li><code>IRStmt_Dirty</code> · 调用 C 写的 helper（这是 tool 主要的插桩点）</li>
+          </ul>
+        </div>
+        <div class="card violet">
+          <h4>体系结构无关的好处</h4>
+          <ul style="font-size:13px">
+            <li><strong>同一份 tool 代码</strong>跑在 x86 / ARM / aarch64 / RISC-V / s390x</li>
+            <li>新加 ISA 只要写"前端译码 (frontend)" + "后端反编译 (backend)"</li>
+            <li>Memcheck / Helgrind 等工具<em>完全不知道</em>底下是什么 CPU</li>
+            <li>对比 ASan：每加一个新架构都要重写 instrumentation pass</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="info">
+        <strong>VEX 命名由来</strong>：来自 <em>"Verifiable EXecutable"</em>（最早的设计目标含验证），但后续演化成纯翻译框架。Julian Seward 在 2004 论文 <a href="https://valgrind.org/docs/valgrind2007.pdf">"Valgrind: A Framework for Heavyweight Dynamic Binary Instrumentation"</a> 里给出了完整设计动机。</div>
+
+      <h3 id="s2-3">2.3 Coregrind 架构 · 工具是"插件"</h3>
+
+      <p>Coregrind 是 Valgrind 的核心。它给每个工具暴露一组 <code>VG_(track_*)</code> 回调，工具只要"按需注册感兴趣的事件"。这是<strong>整个项目能扩展出 6 个工具的根本原因</strong>。</p>
+
+      <div class="svg-wrap">
+<svg viewBox="0 0 980 480" xmlns="http://www.w3.org/2000/svg" style="font-family:inherit">
+  <defs>
+    <marker id="arz" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#7dd3fc"/></marker>
+  </defs>
+
+  <!-- Coregrind big box -->
+  <rect x="40" y="40" width="900" height="280" rx="14" fill="#0f1424" stroke="#7dd3fc" stroke-width="2"/>
+  <text x="490" y="70" text-anchor="middle" fill="#7dd3fc" font-size="16" font-weight="700">Coregrind 核心 (~ 200K LOC)</text>
+
+  <!-- Subsystems -->
+  <rect x="70" y="100" width="160" height="80" rx="8" fill="#1a2138" stroke="#a78bfa"/>
+  <text x="150" y="125" text-anchor="middle" fill="#a78bfa" font-size="12" font-weight="700">VEX Frontend</text>
+  <text x="150" y="143" text-anchor="middle" fill="#cbd5e1" font-size="10.5">x86 / ARM / RV → IR</text>
+  <text x="150" y="158" text-anchor="middle" fill="#94a3b8" font-size="10">守护"输入正确性"</text>
+
+  <rect x="250" y="100" width="160" height="80" rx="8" fill="#1a2138" stroke="#34d399"/>
+  <text x="330" y="125" text-anchor="middle" fill="#34d399" font-size="12" font-weight="700">Instrumentation</text>
+  <text x="330" y="143" text-anchor="middle" fill="#cbd5e1" font-size="10.5">tool 在此插 hook</text>
+  <text x="330" y="158" text-anchor="middle" fill="#94a3b8" font-size="10">→ 调用 tool callback</text>
+
+  <rect x="430" y="100" width="160" height="80" rx="8" fill="#1a2138" stroke="#fbbf24"/>
+  <text x="510" y="125" text-anchor="middle" fill="#fbbf24" font-size="12" font-weight="700">VEX Backend</text>
+  <text x="510" y="143" text-anchor="middle" fill="#cbd5e1" font-size="10.5">IR → x86/ARM</text>
+  <text x="510" y="158" text-anchor="middle" fill="#94a3b8" font-size="10">寄存器分配 + JIT</text>
+
+  <rect x="610" y="100" width="160" height="80" rx="8" fill="#1a2138" stroke="#60a5fa"/>
+  <text x="690" y="125" text-anchor="middle" fill="#60a5fa" font-size="12" font-weight="700">Scheduler</text>
+  <text x="690" y="143" text-anchor="middle" fill="#cbd5e1" font-size="10.5">线程调度 + 信号</text>
+  <text x="690" y="158" text-anchor="middle" fill="#94a3b8" font-size="10">合成 CPU 状态机</text>
+
+  <rect x="790" y="100" width="120" height="80" rx="8" fill="#1a2138" stroke="#f87171"/>
+  <text x="850" y="125" text-anchor="middle" fill="#f87171" font-size="12" font-weight="700">syscall 拦截</text>
+  <text x="850" y="143" text-anchor="middle" fill="#cbd5e1" font-size="10.5">所有 syscall 走</text>
+  <text x="850" y="158" text-anchor="middle" fill="#cbd5e1" font-size="10.5">Coregrind 转发</text>
+
+  <!-- 2nd row: support -->
+  <rect x="70" y="200" width="220" height="80" rx="8" fill="#0a0e1a" stroke="#2a3556"/>
+  <text x="180" y="225" text-anchor="middle" fill="#94a3b8" font-size="11">Translation Cache</text>
+  <text x="180" y="243" text-anchor="middle" fill="#94a3b8" font-size="10">最多 N 个 superblock</text>
+  <text x="180" y="258" text-anchor="middle" fill="#94a3b8" font-size="10">LRU 淘汰</text>
+
+  <rect x="320" y="200" width="220" height="80" rx="8" fill="#0a0e1a" stroke="#2a3556"/>
+  <text x="430" y="225" text-anchor="middle" fill="#94a3b8" font-size="11">Memory Manager</text>
+  <text x="430" y="243" text-anchor="middle" fill="#94a3b8" font-size="10">m_mallocfree.c</text>
+  <text x="430" y="258" text-anchor="middle" fill="#94a3b8" font-size="10">提供给 tool 的私有堆</text>
+
+  <rect x="570" y="200" width="220" height="80" rx="8" fill="#0a0e1a" stroke="#2a3556"/>
+  <text x="680" y="225" text-anchor="middle" fill="#94a3b8" font-size="11">Stack &amp; Stack-Trace</text>
+  <text x="680" y="243" text-anchor="middle" fill="#94a3b8" font-size="10">unwind: DWARF / FP</text>
+  <text x="680" y="258" text-anchor="middle" fill="#94a3b8" font-size="10">--num-callers=N</text>
+
+  <!-- Tool plugin layer -->
+  <rect x="40" y="350" width="900" height="100" rx="14" fill="#1a2138" stroke="#34d399" stroke-width="2"/>
+  <text x="490" y="378" text-anchor="middle" fill="#34d399" font-size="14" font-weight="700">Tool Plugin Layer · 实现 VG_(track_*) 回调</text>
+
+  <rect x="70" y="395" width="120" height="40" rx="6" fill="#0f2418" stroke="#f87171"/>
+  <text x="130" y="420" text-anchor="middle" fill="#f87171" font-size="12" font-weight="700">memcheck</text>
+  <rect x="200" y="395" width="120" height="40" rx="6" fill="#0f2418" stroke="#fb923c"/>
+  <text x="260" y="420" text-anchor="middle" fill="#fb923c" font-size="12" font-weight="700">helgrind</text>
+  <rect x="330" y="395" width="100" height="40" rx="6" fill="#0f2418" stroke="#fbbf24"/>
+  <text x="380" y="420" text-anchor="middle" fill="#fbbf24" font-size="12" font-weight="700">drd</text>
+  <rect x="440" y="395" width="100" height="40" rx="6" fill="#0f2418" stroke="#60a5fa"/>
+  <text x="490" y="420" text-anchor="middle" fill="#60a5fa" font-size="12" font-weight="700">massif</text>
+  <rect x="550" y="395" width="120" height="40" rx="6" fill="#0f2418" stroke="#34d399"/>
+  <text x="610" y="420" text-anchor="middle" fill="#34d399" font-size="12" font-weight="700">callgrind</text>
+  <rect x="680" y="395" width="120" height="40" rx="6" fill="#0f2418" stroke="#a78bfa"/>
+  <text x="740" y="420" text-anchor="middle" fill="#a78bfa" font-size="12" font-weight="700">cachegrind</text>
+  <rect x="810" y="395" width="120" height="40" rx="6" fill="#1a1408" stroke="#94a3b8" stroke-dasharray="3 3"/>
+  <text x="870" y="420" text-anchor="middle" fill="#94a3b8" font-size="11">your-tool</text>
+
+  <!-- Connection from tool layer to Coregrind subsystems -->
+  <line x1="490" y1="350" x2="490" y2="320" stroke="#34d399" stroke-width="2" marker-end="url(#arz)"/>
+  <text x="510" y="338" fill="#94a3b8" font-size="10">注册回调</text>
+</svg>
+        <div class="svg-caption">图 2.2 · Coregrind 架构。<strong>核心子系统 5 大块</strong> + <strong>插件层</strong>。每个 tool 是个独立的 .so，通过 <code>VG_(track_new_mem_heap)</code> / <code>VG_(track_die_mem_heap)</code> / <code>VG_(track_post_mem_write)</code> 等 ~30 个回调与核心通信。</div>
+      </div>
+
+      <pre><code><span class="c">// 一个最小的 tool（Lackey 简化版）骨架：</span>
+<span class="c">// 完整代码在 valgrind 源码 lackey/lk_main.c</span>
+
+<span class="k">static</span> <span class="t">void</span> <span class="f">my_post_mem_write</span>(<span class="t">CorePart</span> part, <span class="t">ThreadId</span> tid,
+                               <span class="t">Addr</span> a, <span class="t">SizeT</span> len) {
+    <span class="c">// 每次内存被写入都会调到这里</span>
+    <span class="c">// Memcheck 在这里把 V-bit 标记为"已定义"</span>
+    <span class="f">VG_</span>(printf)(<span class="s">"write %lu bytes at %p\n"</span>, len, (<span class="t">void</span>*)a);
+}
+
+<span class="k">static</span> <span class="t">void</span> <span class="f">my_pre_clo_init</span>(<span class="t">void</span>) {
+    <span class="f">VG_</span>(track_post_mem_write)(<span class="f">my_post_mem_write</span>);
+    <span class="c">// 只关心写内存？只注册这一个回调，剩下全 0 开销。</span>
+}
+<span class="f">VG_DETERMINE_INTERFACE_VERSION</span>(<span class="f">my_pre_clo_init</span>)</code></pre>
+
+      <div class="tip">
+        <strong>关键设计哲学</strong>：tool 写起来"像写普通 C"，看起来在调用回调。但实际上：tool 的代码会被<strong>静态链到 Coregrind 二进制</strong>（不是动态加载），运行时<em>合成 CPU 上跑客户机代码 + tool callback</em>。这是为什么 Valgrind 不需要 host 系统装任何 tool runtime。</div>
+
+      <h3 id="s2-4">2.4 Shadow memory · A-bit + V-bit 双层影子</h3>
+
+      <p>Memcheck 能精确报"读未初始化内存"<strong>到位级精度</strong>，全靠 shadow memory。它的设计是 Valgrind 最经典的算法贡献之一。</p>
+
+      <div class="svg-wrap">
+<svg viewBox="0 0 980 420" xmlns="http://www.w3.org/2000/svg" style="font-family:inherit">
+  <defs>
+    <linearGradient id="ramG" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#1a2138"/><stop offset="100%" stop-color="#0f1424"/>
+    </linearGradient>
+  </defs>
+
+  <text x="490" y="30" text-anchor="middle" fill="#7dd3fc" font-size="15" font-weight="700">用户内存 (1 字节) ↔ Shadow (1 A-bit + 8 V-bits)</text>
+
+  <!-- User memory row -->
+  <text x="60" y="80" fill="#cbd5e1" font-size="13" font-weight="700">User Mem</text>
+  <text x="60" y="98" fill="#94a3b8" font-size="11">int x = ?? (4 bytes)</text>
+
+  <g transform="translate(180,60)">
+    <rect x="0" y="0" width="60" height="50" fill="url(#ramG)" stroke="#7dd3fc"/>
+    <text x="30" y="22" text-anchor="middle" fill="#cbd5e1" font-size="11">byte 0</text>
+    <text x="30" y="38" text-anchor="middle" fill="#fbbf24" font-size="10">0xCC</text>
+    <rect x="60" y="0" width="60" height="50" fill="url(#ramG)" stroke="#7dd3fc"/>
+    <text x="90" y="22" text-anchor="middle" fill="#cbd5e1" font-size="11">byte 1</text>
+    <text x="90" y="38" text-anchor="middle" fill="#fbbf24" font-size="10">0xCC</text>
+    <rect x="120" y="0" width="60" height="50" fill="url(#ramG)" stroke="#7dd3fc"/>
+    <text x="150" y="22" text-anchor="middle" fill="#cbd5e1" font-size="11">byte 2</text>
+    <text x="150" y="38" text-anchor="middle" fill="#fbbf24" font-size="10">0xCC</text>
+    <rect x="180" y="0" width="60" height="50" fill="url(#ramG)" stroke="#7dd3fc"/>
+    <text x="210" y="22" text-anchor="middle" fill="#cbd5e1" font-size="11">byte 3</text>
+    <text x="210" y="38" text-anchor="middle" fill="#fbbf24" font-size="10">0xCC</text>
+  </g>
+
+  <!-- Arrows down -->
+  <line x1="210" y1="120" x2="210" y2="160" stroke="#7dd3fc" stroke-width="1.5"/>
+  <line x1="270" y1="120" x2="270" y2="160" stroke="#7dd3fc" stroke-width="1.5"/>
+  <line x1="330" y1="120" x2="330" y2="160" stroke="#7dd3fc" stroke-width="1.5"/>
+  <line x1="390" y1="120" x2="390" y2="160" stroke="#7dd3fc" stroke-width="1.5"/>
+
+  <!-- A-bit row -->
+  <text x="60" y="195" fill="#34d399" font-size="13" font-weight="700">A-bit</text>
+  <text x="60" y="213" fill="#94a3b8" font-size="11">已分配?</text>
+
+  <g transform="translate(180,170)">
+    <rect x="0" y="0" width="60" height="50" fill="rgba(52,211,153,.1)" stroke="#34d399"/>
+    <text x="30" y="22" text-anchor="middle" fill="#34d399" font-size="14" font-weight="700">1</text>
+    <text x="30" y="40" text-anchor="middle" fill="#94a3b8" font-size="9">addressable</text>
+    <rect x="60" y="0" width="60" height="50" fill="rgba(52,211,153,.1)" stroke="#34d399"/>
+    <text x="90" y="22" text-anchor="middle" fill="#34d399" font-size="14" font-weight="700">1</text>
+    <text x="90" y="40" text-anchor="middle" fill="#94a3b8" font-size="9">addressable</text>
+    <rect x="120" y="0" width="60" height="50" fill="rgba(52,211,153,.1)" stroke="#34d399"/>
+    <text x="150" y="22" text-anchor="middle" fill="#34d399" font-size="14" font-weight="700">1</text>
+    <text x="150" y="40" text-anchor="middle" fill="#94a3b8" font-size="9">addressable</text>
+    <rect x="180" y="0" width="60" height="50" fill="rgba(52,211,153,.1)" stroke="#34d399"/>
+    <text x="210" y="22" text-anchor="middle" fill="#34d399" font-size="14" font-weight="700">1</text>
+    <text x="210" y="40" text-anchor="middle" fill="#94a3b8" font-size="9">addressable</text>
+  </g>
+
+  <!-- V-bit row -->
+  <text x="60" y="290" fill="#f87171" font-size="13" font-weight="700">V-bits</text>
+  <text x="60" y="308" fill="#94a3b8" font-size="11">每位是否</text>
+  <text x="60" y="322" fill="#94a3b8" font-size="11">已定义?</text>
+
+  <g transform="translate(180,260)">
+    <rect x="0" y="0" width="60" height="60" fill="rgba(248,113,113,.08)" stroke="#f87171"/>
+    <text x="30" y="20" text-anchor="middle" fill="#f87171" font-size="11" font-weight="700">8 V-bits</text>
+    <text x="30" y="38" text-anchor="middle" fill="#cbd5e1" font-family="JetBrains Mono" font-size="11">11111111</text>
+    <text x="30" y="55" text-anchor="middle" fill="#94a3b8" font-size="9">all undef</text>
+    <rect x="60" y="0" width="60" height="60" fill="rgba(248,113,113,.08)" stroke="#f87171"/>
+    <text x="90" y="38" text-anchor="middle" fill="#cbd5e1" font-family="JetBrains Mono" font-size="11">11111111</text>
+    <text x="90" y="55" text-anchor="middle" fill="#94a3b8" font-size="9">all undef</text>
+    <rect x="120" y="0" width="60" height="60" fill="rgba(248,113,113,.08)" stroke="#f87171"/>
+    <text x="150" y="38" text-anchor="middle" fill="#cbd5e1" font-family="JetBrains Mono" font-size="11">11111111</text>
+    <text x="150" y="55" text-anchor="middle" fill="#94a3b8" font-size="9">all undef</text>
+    <rect x="180" y="0" width="60" height="60" fill="rgba(248,113,113,.08)" stroke="#f87171"/>
+    <text x="210" y="38" text-anchor="middle" fill="#cbd5e1" font-family="JetBrains Mono" font-size="11">11111111</text>
+    <text x="210" y="55" text-anchor="middle" fill="#94a3b8" font-size="9">all undef</text>
+  </g>
+
+  <!-- Right side: legend -->
+  <rect x="500" y="60" width="430" height="320" rx="10" fill="#0a0e1a" stroke="#2a3556"/>
+  <text x="520" y="85" fill="#7dd3fc" font-size="13" font-weight="700">语义规则</text>
+
+  <text x="520" y="115" fill="#34d399" font-size="12" font-weight="600">A-bit (1 bit / byte)</text>
+  <text x="520" y="135" fill="#cbd5e1" font-size="11.5">  • 1 = 该字节"可寻址"</text>
+  <text x="520" y="153" fill="#cbd5e1" font-size="11.5">  • 0 = 越界 / 已 free / 未 mmap → 报 SEGV-like</text>
+
+  <text x="520" y="185" fill="#f87171" font-size="12" font-weight="600">V-bit (8 bits / byte)</text>
+  <text x="520" y="205" fill="#cbd5e1" font-size="11.5">  • 0 = 该位"已定义"（可读）</text>
+  <text x="520" y="223" fill="#cbd5e1" font-size="11.5">  • 1 = 该位"未定义"（读了就报错）</text>
+  <text x="520" y="241" fill="#94a3b8" font-size="11">  注意：V-bit 沿着<tspan fill="#f87171">每一位</tspan>跟踪，不是字节</text>
+
+  <text x="520" y="270" fill="#fbbf24" font-size="12" font-weight="600">事件触发</text>
+  <text x="520" y="290" fill="#cbd5e1" font-size="11.5">  malloc(N) → A=1, V=undef (全部 N 字节)</text>
+  <text x="520" y="308" fill="#cbd5e1" font-size="11.5">  free(p)   → A=0, V 标 NoAccess</text>
+  <text x="520" y="326" fill="#cbd5e1" font-size="11.5">  写 x = 5  → V=defined (该位置 8 位)</text>
+  <text x="520" y="344" fill="#cbd5e1" font-size="11.5">  读 x      → 检查 A=1 ∧ V=defined</text>
+  <text x="520" y="365" fill="#fb923c" font-size="11">  位级追踪：读 0xFFAA 的低 4 位定义、高 4 位未定义都能查</text>
+</svg>
+        <div class="svg-caption">图 2.3 · Memcheck 双层影子内存。<strong>1 字节用户内存 ↔ 1 个 A-bit + 8 个 V-bits</strong>。这是为什么 Memcheck 内存开销 ~ 2-3×（每用户字节多用 9 位）。Shadow 自己在 Coregrind 私有堆里，二级页表式管理。</div>
+      </div>
+
+      <pre><code><span class="c">// 一个经典的"V-bit 位级追踪"例子：</span>
+<span class="c">// 读 char 时，如果只赋值了 high nibble，会精确报"低 4 位 undef"</span>
+<span class="t">struct</span> <span class="t">Bits</span> { <span class="t">unsigned</span> hi:<span class="n">4</span>; <span class="t">unsigned</span> lo:<span class="n">4</span>; };
+<span class="t">Bits</span> b;
+b.hi = <span class="n">3</span>;            <span class="c">// 写：V-bits = 1111_0000  (低 4 位仍 undef)</span>
+<span class="t">int</span> x = b.lo;       <span class="c">// 读：低 4 位 undef → Memcheck 报 "use of uninitialized value"</span></code></pre>
+
+      <div class="info">
+        <strong>对比 ASan</strong>：ASan 的 shadow 是 <em>1 字节 shadow / 8 字节用户内存</em>（粒度=8B），<strong>不能查未初始化</strong>，只查"是否 addressable + 是否 redzone/quarantine"。这就是为什么"Memcheck 能查 uninit、ASan 不能"——shadow 模型粒度不同。MSan 才补回了 V-bit。</div>
+
+      <h3 id="s2-5">2.5 syscall 拦截 · 客户机如何与内核对话</h3>
+
+      <p>客户机程序调用 <code>read(fd, buf, n)</code> 时，<strong>不能直接执行 syscall</strong> —— 因为内核会把数据写入 <code>buf</code>，但 Memcheck 必须知道这件事，才能把那 n 个字节的 V-bit 标为 "defined"。Coregrind 的解决办法：<strong>所有 syscall 走它的 wrapper</strong>。</p>
+
+      <pre><code><span class="c">// 客户机原代码：</span>
+<span class="t">int</span> n = read(fd, buf, <span class="n">100</span>);
+
+<span class="c">// 翻译后实际跑的伪代码（Coregrind 包装）：</span>
+<span class="c">// 1. 进入 wrapper</span>
+<span class="f">VG_</span>(client_syscall)(SYS_read, fd, buf, <span class="n">100</span>);
+   <span class="c">// 1a. PRE_HOOK: 通知 Memcheck "buf 即将被写入 100 字节"</span>
+   <span class="f">VG_</span>(track_pre_mem_write)(buf, <span class="n">100</span>);
+   <span class="c">// 1b. 真正发 syscall（host 系统的 syscall）</span>
+   ssize_t r = real_syscall(SYS_read, fd, buf, <span class="n">100</span>);
+   <span class="c">// 1c. POST_HOOK: 通知 Memcheck "实际写了 r 字节，把 V-bit 标 defined"</span>
+   <span class="f">VG_</span>(track_post_mem_write)(buf, r);</code></pre>
+
+      <div class="grid cols-2">
+        <div class="card">
+          <h4>每个 syscall 都有 PRE / POST 两个 hook</h4>
+          <p style="font-size:13px;color:var(--text-dim)">Coregrind 维护一个 <code>SyscallInfo</code> 表，每个 syscall 有专门的 wrapper。比如：</p>
+          <ul style="font-size:12.5px">
+            <li><code>read</code> → POST 后标 buf 为 defined</li>
+            <li><code>write</code> → PRE 前检查 buf 全部 defined，否则报"writing uninit data"</li>
+            <li><code>mmap</code> → 把新映射区标 A=1, V=defined</li>
+            <li><code>munmap</code> → 把对应区域标 A=0</li>
+            <li><code>brk</code> → 调整 heap 边界</li>
+          </ul>
+        </div>
+        <div class="card violet">
+          <h4>意外好处：Memcheck 知道你在<em>"写未初始化数据到 socket"</em></h4>
+          <p style="font-size:13px;color:var(--text-dim)">这是 Memcheck 比 ASan 更全面的一点：</p>
+          <pre style="font-size:11.5px;margin-top:6px"><code><span class="t">struct</span> Header h;
+h.magic = <span class="n">0xCAFE</span>;       <span class="c">// 只填 magic</span>
+write(sock, &amp;h, <span class="k">sizeof</span> h);
+<span class="c">// → Memcheck: "syscall write writing uninit byte at offset 4"</span>
+<span class="c">//   信息泄露漏洞预警</span></code></pre>
+        </div>
+      </div>
+
+      <h3 id="s2-6">2.6 为什么慢 10-30× · 一张性能 breakdown 图</h3>
+
+      <p>这是面试高频题。答案不是简单"动态翻译"四个字，而是<strong>多个开销叠加</strong>。</p>
+
+      <div class="svg-wrap">
+<svg viewBox="0 0 980 380" xmlns="http://www.w3.org/2000/svg" style="font-family:inherit">
+  <defs>
+    <linearGradient id="bd1" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" stop-color="#7dd3fc"/><stop offset="100%" stop-color="#a78bfa"/></linearGradient>
+  </defs>
+
+  <text x="490" y="30" text-anchor="middle" fill="#7dd3fc" font-size="15" font-weight="700">Memcheck 总减速 = 25× （典型）= 5 个开销叠乘</text>
+
+  <!-- 5 horizontal bars showing slowdown components -->
+  <text x="20" y="80" fill="#cbd5e1" font-size="12">① IR 翻译 + JIT 摊销</text>
+  <rect x="200" y="65" width="80" height="22" fill="#a78bfa">
+    <animate attributeName="width" values="0;80;80" keyTimes="0;0.12;1" dur="6s" repeatCount="indefinite"/>
+  </rect>
+  <text x="285" y="82" fill="#94a3b8" font-size="11">~ 1.5×（cache 命中后接近 0）</text>
+
+  <text x="20" y="115" fill="#cbd5e1" font-size="12">② 合成 CPU 解释</text>
+  <rect x="200" y="100" width="180" height="22" fill="#7dd3fc">
+    <animate attributeName="width" values="0;0;180;180" keyTimes="0;0.12;0.26;1" dur="6s" repeatCount="indefinite"/>
+  </rect>
+  <text x="385" y="117" fill="#94a3b8" font-size="11">~ 3-5× （每条 inst 多走几条 host inst）</text>
+
+  <text x="20" y="150" fill="#cbd5e1" font-size="12">③ Memcheck 插桩 (V-bit 检查)</text>
+  <rect x="200" y="135" width="320" height="22" fill="#fb923c">
+    <animate attributeName="width" values="0;0;320;320" keyTimes="0;0.26;0.42;1" dur="6s" repeatCount="indefinite"/>
+  </rect>
+  <text x="525" y="152" fill="#94a3b8" font-size="11">~ 6-8× （每个 load/store 都查 shadow）</text>
+
+  <text x="20" y="185" fill="#cbd5e1" font-size="12">④ Shadow memory 访问</text>
+  <rect x="200" y="170" width="200" height="22" fill="#fbbf24">
+    <animate attributeName="width" values="0;0;200;200" keyTimes="0;0.42;0.56;1" dur="6s" repeatCount="indefinite"/>
+  </rect>
+  <text x="405" y="187" fill="#94a3b8" font-size="11">~ 2× （shadow 自己也要 cache，挤掉真实数据）</text>
+
+  <text x="20" y="220" fill="#cbd5e1" font-size="12">⑤ Stack-trace 抓取</text>
+  <rect x="200" y="205" width="80" height="22" fill="#34d399">
+    <animate attributeName="width" values="0;0;80;80" keyTimes="0;0.56;0.68;1" dur="6s" repeatCount="indefinite"/>
+  </rect>
+  <text x="285" y="222" fill="#94a3b8" font-size="11">~ 1.2× （--num-callers 越大越慢）</text>
+
+  <text x="20" y="270" fill="#f87171" font-size="13" font-weight="700">总计 ≈ 1.5 × 4 × 7 × 2 × 1.2 ≈ 100×</text>
+  <text x="20" y="290" fill="#94a3b8" font-size="11">实测 10-30× 是因为大部分代码并非纯算术，I/O 等待 / sleep / syscall 不被减速</text>
+
+  <!-- Comparison bars -->
+  <text x="20" y="335" fill="#cbd5e1" font-size="12">实测 (SPEC CPU2017):</text>
+  <rect x="200" y="320" width="20" height="20" fill="#34d399"/>
+  <text x="225" y="335" fill="#94a3b8" font-size="10">native = 1×</text>
+  <rect x="290" y="320" width="40" height="20" fill="#fbbf24"/>
+  <text x="335" y="335" fill="#94a3b8" font-size="10">ASan = 2×</text>
+  <rect x="380" y="320" width="80" height="20" fill="#fb923c"/>
+  <text x="465" y="335" fill="#94a3b8" font-size="10">TSan = 5×</text>
+  <rect x="510" y="320" width="240" height="20" fill="#f87171"/>
+  <text x="755" y="335" fill="#94a3b8" font-size="10">Valgrind = 12-25×</text>
+</svg>
+        <div class="svg-caption">图 2.4 · Memcheck 性能开销分解。<strong>结论</strong>：3 + 4 项是 dominate 因素（V-bit 检查 + shadow 访问），加起来 ~ 12-15×。这也意味着<em>关掉 origin tracking、减小 --num-callers、用 None tool 来跑都能加速 30%+</em>。</div>
+      </div>
+
+      <details class="qa">
+        <summary><span class="lvl" style="background:rgba(167,139,250,.2);color:#a78bfa">L5 MID</span> <strong>"动态翻译"具体翻什么？为什么不像 QEMU 那么慢？</strong></summary>
+        <div class="a">
+          <div class="point"><span class="label">答案</span><div>QEMU 是<em>跨架构</em>翻译（x86 → ARM 等），需要语义对齐每条指令；Valgrind 是<em>同架构</em>翻译（x86 → x86），只是中间套一层 IR 让 tool 插桩。<strong>所以 QEMU 慢 50-100×，Valgrind 只慢 4-5×（不带 tool）</strong>。Memcheck 多出来的减速来自插桩本身。</div></div>
+          <div class="point deep"><span class="label">深挖</span><div>Valgrind 与 DynamoRIO / Pin 的对比：DynamoRIO 是 Hewlett-Packard 的产品，在线生成 trace 比 Valgrind 快（~ 2× native + tool overhead）；但 DynamoRIO 没有 IR 抽象，写新 tool 比 Valgrind 难。<em>Valgrind 选了"易扩展"的工程取舍</em>。</div></div>
+        </div>
+      </details>
+    </section>
+
+    <!-- ============= CH3 ============= -->
+    <section class="chapter" id="ch3">
+      <div class="ch-head">
+        <div class="num">03</div>
+        <div class="t">
+          <h2>Memcheck 实战 · 从命令到报告再到原理</h2>
+          <p class="sub">能查什么 · 完整命令 · 跑一个 buggy 程序 · 报告解读 · A/V-bit 蝴蝶图</p>
+        </div>
+      </div>
+
+      <p class="lead">前两章铺完了"Valgrind 是什么"和"DBT 怎么工作"。从这一章开始进入<strong>每个工具</strong>。Memcheck 是默认工具（不带 <code>--tool=</code> 参数就是它），也是<em>最值得花时间深入理解</em>的那一个——它的 A/V-bit 模型决定了"它能查什么、不能查什么"。</p>
+
+      <h3 id="s3-1">3.1 Memcheck 能检测什么</h3>
+
+      <table>
+        <thead><tr><th>错误类型</th><th>典型代码</th><th>Memcheck 能查?</th><th>ASan 能查?</th></tr></thead>
+        <tbody>
+          <tr><td>读未初始化内存（<em>uninit read</em>）</td><td><code>int x; printf("%d", x);</code></td><td class="cell-ok">✓ 位级</td><td class="cell-bad">✗（要 MSan）</td></tr>
+          <tr><td>堆越界读 / 写</td><td><code>int* p = malloc(40); p[10] = 1;</code></td><td class="cell-ok">✓</td><td class="cell-ok">✓</td></tr>
+          <tr><td>栈越界 / use-after-return</td><td><code>int* dangling();</code></td><td class="cell-mid">✗（不查栈）</td><td class="cell-ok">✓</td></tr>
+          <tr><td>全局变量越界</td><td><code>arr[N+1] = 0;</code></td><td class="cell-mid">✗</td><td class="cell-ok">✓</td></tr>
+          <tr><td>Use-After-Free (UAF)</td><td><code>free(p); *p;</code></td><td class="cell-ok">✓</td><td class="cell-ok">✓</td></tr>
+          <tr><td>Double Free</td><td><code>free(p); free(p);</code></td><td class="cell-ok">✓</td><td class="cell-ok">✓</td></tr>
+          <tr><td>mismatched delete</td><td><code>int* p = new int[3]; delete p;</code></td><td class="cell-ok">✓</td><td class="cell-ok">✓</td></tr>
+          <tr><td>memcpy/strcpy 重叠</td><td><code>memcpy(p, p+1, 10);</code></td><td class="cell-ok">✓</td><td class="cell-mid">部分</td></tr>
+          <tr><td>memory leak（4 类）</td><td>分配后失去指针</td><td class="cell-ok">✓</td><td class="cell-ok">✓（要 LSan）</td></tr>
+          <tr><td>data race</td><td>多线程共享变量</td><td class="cell-bad">✗（用 Helgrind/DRD）</td><td class="cell-bad">✗（用 TSan）</td></tr>
+          <tr><td>栈溢出（递归过深）</td><td>无限递归</td><td class="cell-mid">部分</td><td class="cell-ok">✓</td></tr>
+        </tbody>
+      </table>
+
+      <div class="warn">
+        <strong>关键边界</strong>：Memcheck <u>不查栈/全局变量越界</u>。原因：栈/.bss 是 OS 一次性分给进程的合法内存，从 A-bit 角度看就是 1，越界的字节也是 A=1。要查这些必须用 ASan 的 redzone 机制（编译期插桩才能做到）。
+      </div>
+
+      <h3 id="s3-2">3.2 完整命令行 · 黄金参数集</h3>
+
+      <pre><code><span class="c"># 标准排查内存错误的"黄金组合"</span>
+valgrind \
+  --tool=memcheck \                <span class="c"># 默认工具，省略也行</span>
+  --leak-check=full \              <span class="c"># 详细列出每个 leak（不写就只给 summary）</span>
+  --show-leak-kinds=all \          <span class="c"># 4 种 leak 都报：definitely / indirectly / possibly / reachable</span>
+  --track-origins=yes \            <span class="c"># 追溯 uninit value 的来源（多花 50% 时间但值得）</span>
+  --num-callers=<span class="n">30</span> \             <span class="c"># 栈最多 30 帧（默认 12，不够）</span>
+  --keep-stacktraces=alloc-and-free \  <span class="c"># UAF 报告同时显示分配栈+释放栈</span>
+  --read-var-info=yes \            <span class="c"># 读 DWARF 变量名，报告里显示真实变量名</span>
+  --error-exitcode=<span class="n">1</span> \           <span class="c"># 有错就 exit 1（CI 必备）</span>
+  --xml=yes --xml-file=vg.xml \    <span class="c"># 输出 XML 给 CI parser</span>
+  ./your-program arg1 arg2
+
+<span class="c"># 调试期可加上：</span>
+  --vgdb=yes --vgdb-error=<span class="n">0</span> \    <span class="c"># 第一次出错就停下来等 GDB（vgdb 联调）</span>
+  --suppressions=valgrind.supp \   <span class="c"># 抑制规则文件</span>
+  --gen-suppressions=all           <span class="c"># 把每个错误的 suppression 模板打印出来（写规则用）</span></code></pre>
+
+      <details class="qa">
+        <summary><strong>常用环境变量</strong> · <code>VALGRIND_OPTS</code> 与 <code>.valgrindrc</code></summary>
+        <div class="a">
+          <div class="point"><span class="label">VALGRIND_OPTS</span><div>把全套参数写到环境变量，CI 复用：<code>export VALGRIND_OPTS="--leak-check=full --error-exitcode=1"</code></div></div>
+          <div class="point"><span class="label">.valgrindrc</span><div>3 处会被读取：<code>~/.valgrindrc</code>（用户级）、<code>./.valgrindrc</code>（项目级）、命令行参数（最高优先级）。建议项目根放 <code>.valgrindrc</code> 写共用参数。</div></div>
+        </div>
+      </details>
+
+      <h3 id="s3-3">3.3 跑一个 buggy 程序 · 报告解读全套</h3>
+
+      <p>下面这个 50 行程序<strong>故意塞了 6 类错误</strong>。这是教学界常用的 Memcheck 教学例。逐个看 Memcheck 怎么报。</p>
+
+      <pre><code><span class="c">// buggy.c</span>
+<span class="c">// 编译: gcc -g -O0 buggy.c -o buggy</span>
+<span class="c">// 跑:   valgrind --leak-check=full --track-origins=yes --num-callers=20 ./buggy</span>
+
+<span class="k">#include</span> <span class="s">&lt;stdio.h&gt;</span>
+<span class="k">#include</span> <span class="s">&lt;stdlib.h&gt;</span>
+<span class="k">#include</span> <span class="s">&lt;string.h&gt;</span>
+
+<span class="t">int</span>* <span class="f">leak_func</span>() {
+    <span class="t">int</span>* p = <span class="f">malloc</span>(<span class="k">sizeof</span>(<span class="t">int</span>) * <span class="n">10</span>);    <span class="c">// ① 没 free → leak</span>
+    p[<span class="n">0</span>] = <span class="n">42</span>;
+    <span class="k">return</span> p;
+}
+
+<span class="t">int</span> <span class="f">main</span>() {
+    <span class="t">int</span> x;
+    <span class="f">printf</span>(<span class="s">"%d\n"</span>, x);              <span class="c">// ② uninit read</span>
+
+    <span class="t">int</span>* arr = <span class="f">malloc</span>(<span class="n">40</span>);
+    arr[<span class="n">10</span>] = <span class="n">5</span>;                       <span class="c">// ③ heap OOB write (索引到 #10，但只有 10 个 int)</span>
+    <span class="t">int</span> y = arr[<span class="n">11</span>];                  <span class="c">// ④ heap OOB read</span>
+
+    <span class="f">free</span>(arr);
+    arr[<span class="n">0</span>] = <span class="n">7</span>;                        <span class="c">// ⑤ UAF</span>
+    <span class="f">free</span>(arr);                          <span class="c">// ⑥ double free</span>
+
+    <span class="t">int</span>* leaked = <span class="f">leak_func</span>();        <span class="c">// 调用泄漏函数（① 计入这里）</span>
+    <span class="k">return</span> y + leaked[<span class="n">0</span>];
+}</code></pre>
+
+      <p>Memcheck 输出（节选 + 标注）：</p>
+
+      <pre><code><span class="c">==12345== Memcheck, a memory error detector</span>
+<span class="c">==12345== Copyright (C) 2002-2024, and GNU GPL'd, by Julian Seward et al.</span>
+<span class="c">==12345== Command: ./buggy</span>
+<span class="c">==12345==</span>
+
+<span class="bad">==12345== <span style="color:#f87171">Use of uninitialised value of size 4</span>
+==12345==    at 0x4F4D6F0: __vfprintf_internal (vfprintf-internal.c:...)
+==12345==    by 0x10918F: main (buggy.c:<span style="color:#fbbf24">15</span>)            <span class="c"># ← ② 行号精确</span>
+==12345==  <span style="color:#a78bfa">Uninitialised value was created by a stack allocation</span>
+==12345==    at 0x10915E: main (buggy.c:<span style="color:#fbbf24">14</span>)            <span class="c"># ← --track-origins=yes 才有这行</span></span>
+
+<span class="bad">==12345== <span style="color:#f87171">Invalid write of size 4</span>
+==12345==    at 0x1091CE: main (buggy.c:<span style="color:#fbbf24">18</span>)            <span class="c"># ← ③ heap OOB write</span>
+==12345==  Address 0x4a4d068 is 0 bytes after a block of size 40 alloc'd
+==12345==    at 0x484486F: malloc (vg_replace_malloc.c:...)
+==12345==    by 0x10919E: main (buggy.c:<span style="color:#fbbf24">17</span>)</span>
+
+<span class="bad">==12345== <span style="color:#f87171">Invalid write of size 4</span>
+==12345==    at 0x1091F6: main (buggy.c:<span style="color:#fbbf24">22</span>)            <span class="c"># ← ⑤ UAF</span>
+==12345==  Address 0x4a4d040 is 0 bytes inside a block of size 40 free'd
+==12345==    at 0x4845E2F: free (vg_replace_malloc.c:...)
+==12345==    by 0x1091ED: main (buggy.c:<span style="color:#fbbf24">21</span>)            <span class="c"># ← --keep-stacktraces=alloc-and-free 才有"释放栈"</span>
+==12345==  Block was alloc'd at
+==12345==    at 0x484486F: malloc (...)
+==12345==    by 0x10919E: main (buggy.c:<span style="color:#fbbf24">17</span>)</span>
+
+<span class="bad">==12345== <span style="color:#f87171">Invalid free() / delete / delete[] / realloc()</span>
+==12345==    at 0x4845E2F: free (...)
+==12345==    by 0x10920C: main (buggy.c:<span style="color:#fbbf24">23</span>)            <span class="c"># ← ⑥ double free</span>
+==12345==  Address 0x4a4d040 is 0 bytes inside a block of size 40 free'd
+==12345==    at 0x4845E2F: free (...)
+==12345==    by 0x1091ED: main (buggy.c:<span style="color:#fbbf24">21</span>)</span>
+
+<span class="c">==12345==</span>
+<span class="c">==12345== HEAP SUMMARY:</span>
+<span class="c">==12345==     in use at exit: <span style="color:#f87171">40 bytes in 1 blocks</span></span>
+<span class="c">==12345==   total heap usage: 2 allocs, 1 frees, 80 bytes allocated</span>
+<span class="c">==12345==</span>
+<span class="bad">==12345== <span style="color:#f87171">40 bytes in 1 blocks are definitely lost</span> in loss record 1 of 1
+==12345==    at 0x484486F: malloc (...)
+==12345==    by 0x109130: leak_func (buggy.c:<span style="color:#fbbf24">8</span>)         <span class="c"># ← ① 泄漏</span>
+==12345==    by 0x10921A: main (buggy.c:<span style="color:#fbbf24">25</span>)</span>
+
+<span class="c">==12345== ERROR SUMMARY: 6 errors from 5 contexts (suppressed: 0 from 0)</span></code></pre>
+
+      <div class="grid cols-2">
+        <div class="card green">
+          <h4>报告字段速查</h4>
+          <ul style="font-size:13px">
+            <li><code>==PID==</code> · 输出行前缀，方便从 stdout 里 grep 出来</li>
+            <li><code>at 0x...</code> · 出错指令地址 + 函数名 + 文件:行号</li>
+            <li><code>by 0x...</code> · 调用栈上一帧（多帧组成栈，从顶到底）</li>
+            <li><code>Address 0x... is N bytes after/inside a block</code> · 关键诊断信息</li>
+            <li><code>alloc'd at</code> / <code>free'd at</code> · 谁分的、谁释的（要 <code>--keep-stacktraces</code>）</li>
+          </ul>
+        </div>
+        <div class="card amber">
+          <h4>常见误读</h4>
+          <ul style="font-size:13px">
+            <li>"<strong>0 bytes after a block</strong>" 字面看像没问题，<u>实际意思是"紧跟在合法块的下一字节"</u> → 越界 1 字节</li>
+            <li>"<strong>still reachable</strong>" 不一定是泄漏 —— 进程退出时 OS 反正会回收。Google abseil 故意这么用（leaky singleton）</li>
+            <li>uninit read 没显示 origin → 说明<u>没开 <code>--track-origins=yes</code></u></li>
+            <li>报"<code>at ???</code>"无符号 → 没编 <code>-g</code> 或 strip 了</li>
+          </ul>
+        </div>
+      </div>
+
+      <h4>4 类 leak · "definitely / indirectly / possibly / reachable" 一图分清</h4>
+
+      <div class="svg-wrap">
+<svg viewBox="0 0 980 420" xmlns="http://www.w3.org/2000/svg" style="font-family:inherit">
+  <defs>
+    <marker id="ar4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#7dd3fc"/></marker>
+  </defs>
+
+  <!-- 4 panels for 4 leak types -->
+  <!-- 1. definitely lost -->
+  <rect x="20" y="40" width="225" height="170" rx="10" fill="#1a0e0e" stroke="#f87171" stroke-width="2"/>
+  <text x="132" y="65" text-anchor="middle" fill="#f87171" font-size="13" font-weight="700">① Definitely Lost</text>
+  <text x="132" y="83" text-anchor="middle" fill="#fca5a5" font-size="10.5">"我都找不到了"</text>
+
+  <circle cx="60" cy="130" r="14" fill="#a78bfa" stroke="#cbd5e1"/>
+  <text x="60" y="135" text-anchor="middle" fill="#0a0e1a" font-size="11" font-weight="700">root</text>
+  <circle cx="170" cy="130" r="14" fill="#1a2138" stroke="#f87171" stroke-dasharray="2 2"/>
+  <text x="170" y="135" text-anchor="middle" fill="#f87171" font-size="11" font-weight="700">heap</text>
+  <text x="115" y="125" text-anchor="middle" fill="#94a3b8" font-size="10">无路可达</text>
+
+  <text x="132" y="180" text-anchor="middle" fill="#cbd5e1" font-size="11">→ <tspan fill="#f87171" font-weight="700">必修</tspan>：典型代码 bug</text>
+  <text x="132" y="200" text-anchor="middle" fill="#94a3b8" font-size="10">malloc 后直接丢指针</text>
+
+  <!-- 2. indirectly lost -->
+  <rect x="265" y="40" width="225" height="170" rx="10" fill="#1a0e08" stroke="#fb923c" stroke-width="2"/>
+  <text x="377" y="65" text-anchor="middle" fill="#fb923c" font-size="13" font-weight="700">② Indirectly Lost</text>
+  <text x="377" y="83" text-anchor="middle" fill="#fdba74" font-size="10.5">"父亲丢了，连带儿子"</text>
+
+  <circle cx="295" cy="130" r="14" fill="#1a2138" stroke="#f87171" stroke-dasharray="2 2"/>
+  <text x="295" y="135" text-anchor="middle" fill="#f87171" font-size="10" font-weight="700">parent</text>
+  <line x1="309" y1="130" x2="345" y2="130" stroke="#fb923c" marker-end="url(#ar4)"/>
+  <circle cx="365" cy="130" r="14" fill="#1a2138" stroke="#fb923c" stroke-dasharray="2 2"/>
+  <text x="365" y="135" text-anchor="middle" fill="#fb923c" font-size="10" font-weight="700">child</text>
+  <text x="425" y="135" fill="#fb923c" font-size="10">(definitely)</text>
+
+  <text x="377" y="180" text-anchor="middle" fill="#cbd5e1" font-size="11">→ 修了父亲，儿子自动消失</text>
+  <text x="377" y="200" text-anchor="middle" fill="#94a3b8" font-size="10">linked list 节点</text>
+
+  <!-- 3. possibly lost -->
+  <rect x="510" y="40" width="225" height="170" rx="10" fill="#1a1408" stroke="#fbbf24" stroke-width="2"/>
+  <text x="622" y="65" text-anchor="middle" fill="#fbbf24" font-size="13" font-weight="700">③ Possibly Lost</text>
+  <text x="622" y="83" text-anchor="middle" fill="#fde68a" font-size="10.5">"指针偏到块中间了"</text>
+
+  <circle cx="540" cy="130" r="14" fill="#a78bfa"/>
+  <text x="540" y="135" text-anchor="middle" fill="#0a0e1a" font-size="11" font-weight="700">root</text>
+  <line x1="554" y1="130" x2="630" y2="130" stroke="#fbbf24" marker-end="url(#ar4)"/>
+  <text x="595" y="120" text-anchor="middle" fill="#94a3b8" font-size="10">指向块中间</text>
+  <rect x="650" y="115" width="60" height="30" fill="#1a2138" stroke="#fbbf24"/>
+  <text x="680" y="135" text-anchor="middle" fill="#fbbf24" font-size="10">heap</text>
+  <line x1="660" y1="115" x2="660" y2="145" stroke="#fbbf24" stroke-dasharray="2 2"/>
+
+  <text x="622" y="180" text-anchor="middle" fill="#cbd5e1" font-size="11">→ <tspan fill="#fbbf24">可能</tspan>是 union/对齐</text>
+  <text x="622" y="200" text-anchor="middle" fill="#94a3b8" font-size="10">C++ 多继承 vtable 偏移</text>
+
+  <!-- 4. still reachable -->
+  <rect x="755" y="40" width="200" height="170" rx="10" fill="#0a1414" stroke="#34d399" stroke-width="2"/>
+  <text x="855" y="65" text-anchor="middle" fill="#34d399" font-size="13" font-weight="700">④ Still Reachable</text>
+  <text x="855" y="83" text-anchor="middle" fill="#86efac" font-size="10.5">"还指着，但没释放"</text>
+
+  <circle cx="785" cy="130" r="14" fill="#a78bfa"/>
+  <text x="785" y="135" text-anchor="middle" fill="#0a0e1a" font-size="11" font-weight="700">root</text>
+  <line x1="799" y1="130" x2="830" y2="130" stroke="#34d399" marker-end="url(#ar4)"/>
+  <circle cx="850" cy="130" r="14" fill="#1a2138" stroke="#34d399"/>
+  <text x="850" y="135" text-anchor="middle" fill="#34d399" font-size="10" font-weight="700">heap</text>
+
+  <text x="855" y="180" text-anchor="middle" fill="#cbd5e1" font-size="11">→ <tspan fill="#34d399">不一定是 bug</tspan></text>
+  <text x="855" y="200" text-anchor="middle" fill="#94a3b8" font-size="10">leaky singleton</text>
+
+  <!-- Bottom: decision flow -->
+  <text x="20" y="260" fill="#7dd3fc" font-size="13" font-weight="700">报告里如何挑出 bug?</text>
+
+  <rect x="20" y="280" width="940" height="120" rx="8" fill="#0f1424" stroke="#2a3556"/>
+
+  <text x="40" y="310" fill="#f87171" font-size="12" font-weight="700">优先级 P0</text>
+  <text x="40" y="328" fill="#cbd5e1" font-size="11">每一个 ① definitely lost <tspan fill="#f87171" font-weight="700">都要修</tspan>。这是真泄漏。</text>
+  <text x="40" y="350" fill="#fb923c" font-size="12" font-weight="700">优先级 P1</text>
+  <text x="40" y="368" fill="#cbd5e1" font-size="11">② indirectly lost 是 ① 的连带，修好 ① 自动消失。</text>
+
+  <text x="500" y="310" fill="#fbbf24" font-size="12" font-weight="700">优先级 P2 · 警惕</text>
+  <text x="500" y="328" fill="#cbd5e1" font-size="11">③ possibly lost 90% 是 union / std::deque 内部 / vtable 偏移导致的<tspan fill="#fbbf24">误报</tspan>。</text>
+  <text x="500" y="350" fill="#34d399" font-size="12" font-weight="700">优先级 P3 · 通常忽略</text>
+  <text x="500" y="368" fill="#cbd5e1" font-size="11">④ still reachable 默认就忽略。<tspan fill="#34d399">除非数量持续增长</tspan>，那就是真泄漏 (L2 类型)。</text>
+</svg>
+        <div class="svg-caption">图 3.1 · 4 类 leak 分类。<strong>修复优先级 P0 → P3</strong>。<code>--show-leak-kinds=all</code> 把 4 类都列出来；<code>=definite</code> 只列 ①。CI 里建议<u>只 fail on definitely + indirectly</u>。</div>
+      </div>
+
+      <pre><code><span class="c"># CI 推荐：只在 definitely+indirectly leak 时失败</span>
+valgrind --leak-check=full \
+         --show-leak-kinds=definite,indirect \
+         --error-exitcode=<span class="n">1</span> ./prog</code></pre>
+
+      <h3 id="s3-4">3.4 A-bit / V-bit 实战 · 蝴蝶图与状态转换</h3>
+
+      <p>第 2 章讲了"shadow 是什么"，这一节讲<strong>每个事件如何转换 A/V-bit</strong>。看完这张图，再看任何 Memcheck 报告都能在脑子里推出"为什么 Memcheck 这么报"。</p>
+
+      <div class="svg-wrap">
+<svg viewBox="0 0 980 480" xmlns="http://www.w3.org/2000/svg" style="font-family:inherit">
+  <defs>
+    <marker id="arq" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#7dd3fc"/></marker>
+    <marker id="arq2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#f87171"/></marker>
+  </defs>
+
+  <!-- 4 states (A,V) -->
+  <g>
+    <rect x="50" y="60" width="200" height="100" rx="12" fill="#0a0e1a" stroke="#94a3b8"/>
+    <text x="150" y="85" text-anchor="middle" fill="#94a3b8" font-size="13" font-weight="700">NoAccess</text>
+    <text x="150" y="106" text-anchor="middle" fill="#94a3b8" font-size="11">A=0</text>
+    <text x="150" y="124" text-anchor="middle" fill="#94a3b8" font-size="10">未 mmap / 已 free / 越界</text>
+    <text x="150" y="143" text-anchor="middle" fill="#f87171" font-size="10">读写都报"Invalid"</text>
+  </g>
+
+  <g>
+    <rect x="380" y="60" width="220" height="100" rx="12" fill="#1a1408" stroke="#fb923c"/>
+    <text x="490" y="85" text-anchor="middle" fill="#fb923c" font-size="13" font-weight="700">Undefined</text>
+    <text x="490" y="106" text-anchor="middle" fill="#fdba74" font-size="11">A=1, V=undefined</text>
+    <text x="490" y="124" text-anchor="middle" fill="#94a3b8" font-size="10">malloc / 栈分配 / 未初始化全局</text>
+    <text x="490" y="143" text-anchor="middle" fill="#fb923c" font-size="10">读 → 报"uninitialised value"</text>
+  </g>
+
+  <g>
+    <rect x="730" y="60" width="200" height="100" rx="12" fill="#0a1414" stroke="#34d399"/>
+    <text x="830" y="85" text-anchor="middle" fill="#34d399" font-size="13" font-weight="700">Defined</text>
+    <text x="830" y="106" text-anchor="middle" fill="#86efac" font-size="11">A=1, V=defined</text>
+    <text x="830" y="124" text-anchor="middle" fill="#94a3b8" font-size="10">已写入 / 全局静态 / calloc</text>
+    <text x="830" y="143" text-anchor="middle" fill="#34d399" font-size="10">读写都正常</text>
+  </g>
+
+  <!-- Transitions -->
+  <!-- NoAccess -> Undefined  via malloc -->
+  <path d="M250 100 Q 315 50 380 100" stroke="#7dd3fc" fill="none" marker-end="url(#arq)"/>
+  <text x="315" y="50" text-anchor="middle" fill="#7dd3fc" font-size="11">malloc / mmap</text>
+
+  <!-- Undefined -> Defined via write -->
+  <path d="M600 100 Q 665 50 730 100" stroke="#7dd3fc" fill="none" marker-end="url(#arq)"/>
+  <text x="665" y="50" text-anchor="middle" fill="#7dd3fc" font-size="11">写入</text>
+
+  <!-- Defined -> NoAccess via free -->
+  <path d="M730 130 Q 490 220 250 130" stroke="#f87171" fill="none" marker-end="url(#arq2)"/>
+  <text x="490" y="225" text-anchor="middle" fill="#f87171" font-size="11">free / munmap</text>
+
+  <!-- self loop NoAccess (read/write) -->
+  <path d="M50 130 Q 10 130 50 150" stroke="#f87171" fill="none" marker-end="url(#arq2)"/>
+  <text x="20" y="180" fill="#f87171" font-size="10">读/写报错</text>
+
+  <!-- self loop Undefined (read) -->
+  <path d="M380 145 Q 360 175 410 175" stroke="#f87171" fill="none" marker-end="url(#arq2)"/>
+  <text x="380" y="195" fill="#f87171" font-size="10">读报"uninit"</text>
+
+  <!-- Bottom: special transitions -->
+  <text x="490" y="280" text-anchor="middle" fill="#a78bfa" font-size="13" font-weight="700">特殊事件</text>
+
+  <text x="40" y="320" fill="#7dd3fc" font-size="11.5" font-weight="700">calloc(n)</text>
+  <text x="40" y="338" fill="#cbd5e1" font-size="11">→ NoAccess → Defined（直接跳过 Undefined，因为内核保证清零）</text>
+
+  <text x="40" y="365" fill="#7dd3fc" font-size="11.5" font-weight="700">栈帧创建（push rbp）</text>
+  <text x="40" y="383" fill="#cbd5e1" font-size="11">→ NoAccess → Undefined（栈往下扩展，新空间没初始化）</text>
+
+  <text x="40" y="410" fill="#7dd3fc" font-size="11.5" font-weight="700">memcpy(dst, src, n)</text>
+  <text x="40" y="428" fill="#cbd5e1" font-size="11">→ dst 的 V-bits = src 的 V-bits（<tspan fill="#fb923c">"未定义被传染"</tspan>，origin 也带过去）</text>
+
+  <text x="500" y="320" fill="#7dd3fc" font-size="11.5" font-weight="700">VALGRIND_MAKE_MEM_DEFINED(p, n)</text>
+  <text x="500" y="338" fill="#cbd5e1" font-size="11">→ 强制把 V-bits 标 defined（人为消除误报）</text>
+
+  <text x="500" y="365" fill="#7dd3fc" font-size="11.5" font-weight="700">VALGRIND_MAKE_MEM_NOACCESS(p, n)</text>
+  <text x="500" y="383" fill="#cbd5e1" font-size="11">→ 自定义 allocator 用：把空闲块标 NoAccess</text>
+
+  <text x="500" y="410" fill="#7dd3fc" font-size="11.5" font-weight="700">syscall read(fd, buf, n)</text>
+  <text x="500" y="428" fill="#cbd5e1" font-size="11">→ buf 范围 V-bits 标 defined（按 read 实际返回字节数）</text>
+
+  <!-- 动画：一个字节沿"生命周期"在三态间循环流转 -->
+  <circle r="6" fill="#e4e9f5" stroke="#7dd3fc" stroke-width="1.5">
+    <animateMotion dur="6s" repeatCount="indefinite" rotate="0"
+      path="M250,100 Q315,50 380,100 L600,100 Q665,50 730,100 L730,130 Q490,220 250,130 L250,100"/>
+  </circle>
+  <text x="150" y="200" text-anchor="middle" fill="#64748b" font-size="10" font-style="italic">⬤ 跟随一个字节的生命周期：malloc → write → free</text>
+</svg>
+        <div class="svg-caption">图 3.2 · A/V-bit 状态机。这是 Memcheck 的"心智模型"：3 个状态、~ 6 种转换。Coregrind 给每个事件钩了对应回调，Memcheck 在回调里改 shadow。</div>
+      </div>
+
+      <h4>"未定义传染"机制 · 为什么 <code>--track-origins</code> 这么有用</h4>
+
+      <p>Memcheck 不仅追踪"该位是否未定义"，还追踪"<em>这个未定义来自哪里</em>"（开 <code>--track-origins=yes</code> 后）。原理：每 4 字节 V-bits 旁边再附一个 <strong>origin tag</strong>（32-bit），指向"分配栈"。值在赋值/算术运算时跟着流动。</p>
+
+      <pre><code><span class="t">int</span> <span class="f">f</span>() {
+    <span class="t">int</span> x;          <span class="c">// 行号 2: x 的 V-bits=undef, origin=alloc-site</span>
+    <span class="k">return</span> x + <span class="n">1</span>;   <span class="c">// 算术：result 仍 undef，origin 跟着传</span>
+}
+<span class="t">int</span> <span class="f">main</span>() {
+    <span class="t">int</span> y = <span class="f">f</span>();    <span class="c">// y = undef，origin 仍指向 f() 行 2</span>
+    <span class="f">printf</span>(<span class="s">"%d"</span>, y);<span class="c">// 报"uninit"，origin 显示行号 2 ✓</span>
+}</code></pre>
+
+      <div class="info">
+        <strong>性能代价</strong>：origin tracking 让 Memcheck 慢 ~ 50%（多写 4 字节 / 4 用户字节）。<u>建议只在调试时开</u>，CI 默认不开。报告里没"Uninitialised value was created by..."这行，就是没开。
+      </div>
+
+      <h3 id="s3-5">3.5 Memcheck vs ASan/LSan · 一锤定音对比</h3>
+
+      <table>
+        <thead><tr><th>维度</th><th>Memcheck</th><th>ASan + LSan</th></tr></thead>
+        <tbody>
+          <tr><td>实现机制</td><td>DBT 运行时翻译</td><td>编译期插桩 + shadow</td></tr>
+          <tr><td>需重编?</td><td class="cell-ok">否</td><td class="cell-bad">是</td></tr>
+          <tr><td>运行时减速</td><td class="cell-bad">10-30×</td><td class="cell-ok">2-3×</td></tr>
+          <tr><td>查 uninit memory</td><td class="cell-ok">✓ 位级</td><td class="cell-bad">✗（要 MSan 单独跑）</td></tr>
+          <tr><td>查栈/全局变量越界</td><td class="cell-bad">✗</td><td class="cell-ok">✓</td></tr>
+          <tr><td>查 use-after-return</td><td class="cell-bad">✗</td><td class="cell-ok">✓</td></tr>
+          <tr><td>查 syscall 写入 uninit</td><td class="cell-ok">✓</td><td class="cell-bad">✗</td></tr>
+          <tr><td>fd / file 泄漏</td><td class="cell-ok">--track-fds=yes</td><td class="cell-bad">✗</td></tr>
+          <tr><td>跑生产环境</td><td class="cell-bad">不能</td><td class="cell-mid">canary 可</td></tr>
+          <tr><td>第三方闭源 .so</td><td class="cell-ok">✓</td><td class="cell-bad">✗</td></tr>
+          <tr><td>误报率</td><td class="cell-mid">中（需 suppressions）</td><td class="cell-ok">低</td></tr>
+        </tbody>
+      </table>
+
+      <div class="tip">
+        <strong>实战建议</strong>：① 日常 CI 用 ASan + LSan（快）；② 发现 ASan/LSan 漏抓的怀疑点，本地用 Memcheck 复跑（更全面）；③ 第三方 .so 必须用 Memcheck；④ <strong>两者结果不一致</strong>时通常 Memcheck 更准（除栈/全局越界）。</div>
+    </section>
+
+    <!-- ============= CH4 ============= -->
+    <section class="chapter" id="ch4">
+      <div class="ch-head">
+        <div class="num">04</div>
+        <div class="t">
+          <h2>Helgrind &amp; DRD · 数据竞争与死锁检测</h2>
+          <p class="sub">happens-before 关系 · lockset 算法 · vector clock · 与 TSan 的对比</p>
+        </div>
+      </div>
+
+      <p class="lead">Helgrind 与 DRD 是两个独立的<strong>多线程错误检测</strong>工具。两者目标重合 80%，但用了不同算法 —— Helgrind 偏 lockset + happens-before 混合，DRD 是纯 vector clock。理解差异之后，就知道"为什么有时一个工具报、另一个不报"。</p>
+
+      <h3 id="s4-1">4.1 Helgrind · lockset + happens-before 混合算法</h3>
+
+      <p>Helgrind 用两套互补的算法。<strong>lockset</strong> 主要查"两个线程访问共享变量但没共同的锁"；<strong>happens-before</strong> 主要补 lockset 漏报（条件变量、原子操作等同步原语建立的"非锁"序）。</p>
+
+      <div class="svg-wrap">
+<svg viewBox="0 0 980 380" xmlns="http://www.w3.org/2000/svg" style="font-family:inherit">
+  <defs>
+    <marker id="arr4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#7dd3fc"/></marker>
+    <marker id="arr4r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#f87171"/></marker>
+  </defs>
+
+  <text x="490" y="30" text-anchor="middle" fill="#fb923c" font-size="15" font-weight="700">Helgrind 的 lockset 算法 · 工作示意</text>
+
+  <!-- Two threads as columns -->
+  <text x="160" y="70" text-anchor="middle" fill="#7dd3fc" font-size="13" font-weight="700">Thread A</text>
+  <text x="800" y="70" text-anchor="middle" fill="#a78bfa" font-size="13" font-weight="700">Thread B</text>
+
+  <!-- Shared variable in middle -->
+  <rect x="430" y="55" width="120" height="40" rx="6" fill="#1a2138" stroke="#fbbf24" stroke-width="2"/>
+  <text x="490" y="80" text-anchor="middle" fill="#fbbf24" font-size="13" font-weight="700">int counter</text>
+
+  <!-- Thread A timeline -->
+  <line x1="160" y1="100" x2="160" y2="320" stroke="#7dd3fc" stroke-width="2"/>
+  <!-- Thread B timeline -->
+  <line x1="800" y1="100" x2="800" y2="320" stroke="#a78bfa" stroke-width="2"/>
+
+  <!-- Thread A events -->
+  <rect x="80" y="120" width="160" height="35" rx="4" fill="#0f1424" stroke="#34d399"/>
+  <text x="160" y="142" text-anchor="middle" fill="#34d399" font-size="11">lock(mu1)</text>
+  <text x="270" y="142" fill="#94a3b8" font-size="10">LS = {mu1}</text>
+
+  <rect x="80" y="170" width="160" height="35" rx="4" fill="#0f1424" stroke="#fbbf24"/>
+  <text x="160" y="192" text-anchor="middle" fill="#fbbf24" font-size="11">counter++</text>
+  <text x="270" y="192" fill="#94a3b8" font-size="10">access(counter, LS={mu1})</text>
+
+  <rect x="80" y="220" width="160" height="35" rx="4" fill="#0f1424" stroke="#34d399"/>
+  <text x="160" y="242" text-anchor="middle" fill="#34d399" font-size="11">unlock(mu1)</text>
+  <text x="270" y="242" fill="#94a3b8" font-size="10">LS = {}</text>
+
+  <!-- Thread B events -->
+  <rect x="720" y="170" width="160" height="35" rx="4" fill="#0f1424" stroke="#34d399"/>
+  <text x="800" y="192" text-anchor="middle" fill="#34d399" font-size="11">lock(mu2)</text>
+  <text x="600" y="192" fill="#94a3b8" font-size="10">LS = {mu2}</text>
+
+  <rect x="720" y="220" width="160" height="35" rx="4" fill="#1a0e0e" stroke="#f87171"/>
+  <text x="800" y="242" text-anchor="middle" fill="#f87171" font-size="11">counter++ ⚠</text>
+  <text x="600" y="242" fill="#f87171" font-size="10">access(counter, LS={mu2})</text>
+
+  <rect x="720" y="270" width="160" height="35" rx="4" fill="#0f1424" stroke="#34d399"/>
+  <text x="800" y="292" text-anchor="middle" fill="#34d399" font-size="11">unlock(mu2)</text>
+
+  <!-- Race finding -->
+  <rect x="280" y="320" width="420" height="40" rx="6" fill="#1a0e0e" stroke="#f87171" stroke-width="2"/>
+  <text x="490" y="338" text-anchor="middle" fill="#f87171" font-size="12" font-weight="700">交集 {mu1} ∩ {mu2} = ∅ → 报 RACE</text>
+  <text x="490" y="352" text-anchor="middle" fill="#fca5a5" font-size="10.5">"两个线程访问 counter 但没有共同的锁保护"</text>
+
+  <!-- 动画：① A 访问 counter → ② B 访问 counter → ③ RACE 闪烁 -->
+  <line x1="240" y1="187" x2="448" y2="84" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="4 3" opacity="0">
+    <animate attributeName="opacity" values="0;0;1;1;1;0" keyTimes="0;0.15;0.3;0.85;0.95;1" dur="5s" repeatCount="indefinite"/>
+  </line>
+  <line x1="720" y1="237" x2="535" y2="90" stroke="#f87171" stroke-width="1.5" stroke-dasharray="4 3" opacity="0">
+    <animate attributeName="opacity" values="0;0;0;1;1;0" keyTimes="0;0.4;0.5;0.6;0.95;1" dur="5s" repeatCount="indefinite"/>
+  </line>
+  <rect x="280" y="320" width="420" height="40" rx="6" fill="none" stroke="#fbbf24" stroke-width="2.5" opacity="0">
+    <animate attributeName="opacity" values="0;0;0;1;0;1;0" keyTimes="0;0.6;0.68;0.74;0.82;0.9;1" dur="5s" repeatCount="indefinite"/>
+  </rect>
+</svg>
+        <div class="svg-caption">图 4.1 · Helgrind 的 lockset 算法。<strong>对每个共享地址，记录"访问它时持有的锁集合 (LS)"</strong>。两次访问的 LS 交集为空 → 报 race。<u>简单暴力但可能误报</u>（用 atomic / barrier 同步时漏算了 happens-before）。</div>
+      </div>
+
+      <h4>Helgrind 还会查的另外两类问题</h4>
+
+      <div class="grid cols-3">
+        <div class="card amber">
+          <h4>① pthread API 误用</h4>
+          <ul style="font-size:12.5px">
+            <li>unlock 一个没 lock 的 mutex</li>
+            <li>destroy 一个仍被持有的 mutex</li>
+            <li>signal 一个没 wait 的 cond</li>
+            <li>对 PTHREAD_MUTEX_DEFAULT 做递归 lock</li>
+          </ul>
+          <p style="font-size:11.5px;color:var(--text-mute)">本质：基于 pthread API 状态机做不变式检查</p>
+        </div>
+        <div class="card violet">
+          <h4>② 锁序反转 (lock order inversion)</h4>
+          <ul style="font-size:12.5px">
+            <li>线程 A：lock(M1) → lock(M2)</li>
+            <li>线程 B：lock(M2) → lock(M1)</li>
+            <li>→ 即使<u>当前没死锁</u>，Helgrind 也报 "lock order violated"</li>
+          </ul>
+          <p style="font-size:11.5px;color:var(--text-mute)">原理：维护全局 lock graph，检测 cycle</p>
+        </div>
+        <div class="card green">
+          <h4>③ data race</h4>
+          <ul style="font-size:12.5px">
+            <li>就是图 4.1 那种情况</li>
+            <li>对每个内存位置维护"上次访问的 LS + tid"</li>
+            <li>新访问 LS 与旧 LS 交集 = ∅ → race</li>
+          </ul>
+          <p style="font-size:11.5px;color:var(--text-mute)">最常用，最贵（每个 load/store 都查）</p>
+        </div>
+      </div>
+
+      <h3 id="s4-2">4.2 DRD · 纯 vector clock 实现</h3>
+
+      <p>DRD（Bart Van Assche 维护）是 Helgrind 的"科学派"对照实现。它<strong>完全用 vector clock</strong>建立 happens-before 关系，不用 lockset。优势：condition_variable / barrier / atomic / pthread_join 等同步语义建立的 hb 关系处理得更精准。</p>
+
+      <pre><code><span class="c">// DRD 的核心数据结构（伪代码）：</span>
+<span class="c">// 每个线程维护一个 N-元 vector clock</span>
+<span class="t">vector_clock</span> { <span class="t">int</span> ts[<span class="n">N</span>]; };  <span class="c">// N = 线程数</span>
+
+<span class="c">// 每个内存位置维护"上次读 / 上次写"的 vector clock</span>
+<span class="t">struct</span> <span class="t">MemAccess</span> {
+    <span class="t">vector_clock</span> last_read;
+    <span class="t">vector_clock</span> last_write;
+    <span class="t">int</span> last_writer_tid;
+};
+
+<span class="c">// 同步事件 (lock release, cv signal, atomic store-release):</span>
+<span class="c">//   把"自己的 vc"传递给 acquirer，acquirer 取每个槽位 max</span>
+
+<span class="c">// 数据访问 (load/store):</span>
+<span class="c">//   if (!happens_before(prev_access, my_vc)) → 报 race</span>
+<span class="t">bool</span> <span class="f">happens_before</span>(<span class="t">vc</span> a, <span class="t">vc</span> b) {
+    <span class="k">for</span> (<span class="t">int</span> i = <span class="n">0</span>; i &lt; <span class="n">N</span>; i++)
+        <span class="k">if</span> (a.ts[i] &gt; b.ts[i]) <span class="k">return</span> <span class="k">false</span>;
+    <span class="k">return</span> <span class="k">true</span>;
+}</code></pre>
+
+      <div class="info">
+        <strong>vector clock 的精彩之处</strong>：它能识别"任意同步原语建立的序"，不局限于锁。<em>例</em>：用 <code>atomic&lt;int&gt;.store(release)</code> + <code>atomic&lt;int&gt;.load(acquire)</code> 同步两个线程时，DRD 能正确识别为已同步、不报 race；Helgrind 的 lockset 在这里漏报或误报。
+      </div>
+
+      <h4>Helgrind vs DRD · 选哪个</h4>
+
+      <table>
+        <thead><tr><th>场景</th><th>用 Helgrind</th><th>用 DRD</th></tr></thead>
+        <tbody>
+          <tr><td>纯 mutex 同步的代码</td><td class="cell-ok">优</td><td class="cell-ok">优</td></tr>
+          <tr><td>用了 condition_variable</td><td class="cell-mid">误报多</td><td class="cell-ok">推荐</td></tr>
+          <tr><td>用了 atomic + memory_order</td><td class="cell-bad">大量误报</td><td class="cell-ok">推荐</td></tr>
+          <tr><td>检测锁序反转</td><td class="cell-ok">独有</td><td class="cell-bad">不能</td></tr>
+          <tr><td>检测 pthread API 误用</td><td class="cell-ok">较全</td><td class="cell-mid">较少</td></tr>
+          <tr><td>性能开销</td><td class="cell-mid">20-100×</td><td class="cell-mid">20-50×</td></tr>
+        </tbody>
+      </table>
+
+      <div class="tip">
+        <strong>推荐 workflow</strong>：① 先用 <code>--tool=helgrind</code> 跑（检测锁序 + API 误用）；② 再用 <code>--tool=drd</code> 跑（确认 race 没误报）。两个工具结果取交集 → 真 race 高置信。
+      </div>
+
+      <h3 id="s4-3">4.3 Helgrind 报告解读 · 锁序反转实战</h3>
+
+      <pre><code><span class="c">// 一段会触发 Helgrind 的锁序反转代码</span>
+<span class="t">std::mutex</span> mu1, mu2;
+
+<span class="t">void</span> <span class="f">thread_a</span>() {
+    <span class="t">std::lock_guard</span>&lt;<span class="t">std::mutex</span>&gt; g1(mu1);   <span class="c">// lock M1 first</span>
+    <span class="t">std::lock_guard</span>&lt;<span class="t">std::mutex</span>&gt; g2(mu2);   <span class="c">// then M2</span>
+    <span class="c">/* ... */</span>
+}
+
+<span class="t">void</span> <span class="f">thread_b</span>() {
+    <span class="t">std::lock_guard</span>&lt;<span class="t">std::mutex</span>&gt; g1(mu2);   <span class="c">// lock M2 first ⚠</span>
+    <span class="t">std::lock_guard</span>&lt;<span class="t">std::mutex</span>&gt; g2(mu1);   <span class="c">// then M1   → 反向</span>
+    <span class="c">/* ... */</span>
+}</code></pre>
+
+      <p>跑 <code>valgrind --tool=helgrind --history-level=full ./prog</code> 输出：</p>
+
+      <pre><code><span class="bad">==1234== <span style="color:#f87171">Thread #2: lock order "0xCAFE before 0xBABE" violated</span>
+==1234==
+==1234== Observed (incorrect) order is: acquisition of lock at 0xBABE
+==1234==    at 0x483F4F4: pthread_mutex_lock (...)
+==1234==    by 0x10923A: thread_b (main.cc:<span style="color:#fbbf24">15</span>)        <span class="c"># ← M2 先</span>
+==1234==
+==1234==  followed by a later acquisition of lock at 0xCAFE
+==1234==    at 0x483F4F4: pthread_mutex_lock (...)
+==1234==    by 0x109261: thread_b (main.cc:<span style="color:#fbbf24">16</span>)        <span class="c"># ← M1 后</span>
+==1234==
+==1234== Required order was established by acquisition of lock at 0xCAFE
+==1234==    at 0x483F4F4: pthread_mutex_lock (...)
+==1234==    by 0x10920F: thread_a (main.cc:<span style="color:#fbbf24">9</span>)         <span class="c"># ← Thread A 已经定下"先 M1"</span>
+==1234==
+==1234==  followed by a later acquisition of lock at 0xBABE
+==1234==    at 0x483F4F4: pthread_mutex_lock (...)
+==1234==    by 0x109236: thread_a (main.cc:<span style="color:#fbbf24">10</span>)        <span class="c"># ← Thread A 已经定下"再 M2"</span></span></code></pre>
+
+      <div class="warn">
+        <strong>关键</strong>：即使<u>当前没死锁</u>（A 没等到 M2、B 没等到 M1，正好错开了），Helgrind 也会报 —— 因为<em>潜在死锁</em>是迟早的事。这是 Helgrind 比 GDB 强的地方：GDB 只能在死锁<em>发生后</em>诊断；Helgrind 在死锁<em>发生前</em>就能预警。
+      </div>
+
+      <h3 id="s4-4">4.4 vs TSan · 三者对比终结篇</h3>
+
+      <table>
+        <thead><tr><th>维度</th><th>Helgrind</th><th>DRD</th><th>TSan (ThreadSanitizer)</th></tr></thead>
+        <tbody>
+          <tr><td>实现</td><td>DBT + lockset+hb</td><td>DBT + 纯 vector clock</td><td>编译期插桩 + FastTrack</td></tr>
+          <tr><td>需重编</td><td class="cell-ok">否</td><td class="cell-ok">否</td><td class="cell-bad">是</td></tr>
+          <tr><td>减速</td><td class="cell-bad">20-100×</td><td class="cell-bad">20-50×</td><td class="cell-mid">5-15×</td></tr>
+          <tr><td>data race</td><td class="cell-ok">✓</td><td class="cell-ok">✓ 更准</td><td class="cell-ok">✓ 最快</td></tr>
+          <tr><td>锁序反转</td><td class="cell-ok">✓</td><td class="cell-bad">✗</td><td class="cell-mid">部分</td></tr>
+          <tr><td>condition_variable</td><td class="cell-mid">误报多</td><td class="cell-ok">优</td><td class="cell-ok">优</td></tr>
+          <tr><td>atomic / mem_order</td><td class="cell-bad">误报</td><td class="cell-ok">优</td><td class="cell-ok">优</td></tr>
+          <tr><td>pthread API 误用</td><td class="cell-ok">最全</td><td class="cell-mid">中</td><td class="cell-mid">中</td></tr>
+          <tr><td>第三方闭源 .so</td><td class="cell-ok">✓</td><td class="cell-ok">✓</td><td class="cell-bad">✗</td></tr>
+          <tr><td>跑 CI 推荐?</td><td class="cell-bad">太慢</td><td class="cell-bad">太慢</td><td class="cell-ok">默认推荐</td></tr>
+        </tbody>
+      </table>
+
+      <div class="tip">
+        <strong>选型口诀</strong>：① 能重编 → TSan（CI 默认）；② 不能重编 + 想查锁序反转 → Helgrind；③ 不能重编 + cv/atomic 重 → DRD；④ TSan 报了你怀疑误报 → 用 DRD 复验（基于 vector clock 的语义最严格）。
+      </div>
+    </section>
+
+    <!-- ============= CH5 ============= -->
+    <section class="chapter" id="ch5">
+      <div class="ch-head">
+        <div class="num">05</div>
+        <div class="t">
+          <h2>Massif · 堆使用画像</h2>
+          <p class="sub">不是查泄漏 · 查"什么时候、谁、占了多少堆" · ms_print 输出解读</p>
+        </div>
+      </div>
+
+      <p class="lead">Massif 容易被误解成"另一个查泄漏的工具"。其实它的目标完全不同：<strong>给你一张"程序运行过程中堆使用的时间序列图"</strong>。每隔一定间隔采一次堆快照，记录"现在共占多少堆 + top 10 调用栈各占多少"。在 heaptrack 出现之前，它是 Linux 上唯一能做这件事的工具。</p>
+
+      <h3 id="s5-1">5.1 用法 · 一条命令两段输出</h3>
+
+      <pre><code><span class="c"># 跑：</span>
+valgrind --tool=massif \
+         --time-unit=B \              <span class="c"># 时间轴 = bytes-allocated（最直观）</span>
+         --detailed-freq=<span class="n">1</span> \         <span class="c"># 每个采样点都记详细栈</span>
+         --max-snapshots=<span class="n">100</span> \       <span class="c"># 最多 100 个采样点（默认 100，太密 → 调小）</span>
+         --threshold=<span class="n">1.0</span> \           <span class="c"># 调用栈贡献 &lt; 1% 的不展开</span>
+         ./your-program
+
+<span class="c"># 输出：massif.out.&lt;PID&gt;</span>
+
+<span class="c"># 文本可视化：</span>
+ms_print massif.out.<span class="n">12345</span>
+
+<span class="c"># 图形可视化：</span>
+massif-visualizer massif.out.<span class="n">12345</span>     <span class="c"># Qt GUI</span></code></pre>
+
+      <h4>关键开关详解</h4>
+
+      <table>
+        <thead><tr><th>选项</th><th>作用</th><th>典型值</th></tr></thead>
+        <tbody>
+          <tr><td><code>--time-unit=</code></td><td>时间轴单位</td><td><code>B</code> bytes alloc / <code>i</code> instructions / <code>ms</code> 真实时间</td></tr>
+          <tr><td><code>--pages-as-heap=yes</code></td><td>把 mmap 也算进堆</td><td>查"jemalloc/tcmalloc 内部用的 mmap"必备</td></tr>
+          <tr><td><code>--stacks=yes</code></td><td>把栈也算进画像</td><td>查"递归吃光栈"</td></tr>
+          <tr><td><code>--detailed-freq=N</code></td><td>每 N 个采样点记一次详细栈</td><td>1 (全记) ~ 10 (省内存)</td></tr>
+          <tr><td><code>--threshold=X</code></td><td>调用栈贡献 &lt; X% 不展开</td><td>1.0 (默认) ~ 0.1 (更细)</td></tr>
+          <tr><td><code>--peak-inaccuracy=X</code></td><td>峰值精度</td><td>1.0 (默认)，CI 可设 0.5</td></tr>
+        </tbody>
+      </table>
+
+      <h3 id="s5-2">5.2 ms_print 输出解读</h3>
+
+      <p>典型 <code>ms_print</code> 输出（节选）：</p>
+
+      <pre><code>--------------------------------------------------------------------------------
+Command:            ./myapp
+Massif arguments:   --time-unit=B
+ms_print arguments: massif.out.12345
+--------------------------------------------------------------------------------
+
+    MB
+<span style="color:#7dd3fc">8.500^                                                                       :::</span>
+<span style="color:#7dd3fc">     |                                                                  ::::::: </span>
+<span style="color:#7dd3fc">     |                                                          ::::::::::::::: </span>
+<span style="color:#7dd3fc">     |                                                  :::::::::::::::::::::::</span>
+<span style="color:#7dd3fc">     |                                       ::::::::::::::::::::::::::::::::::</span>
+<span style="color:#fbbf24">     |                            ::::::::::::::::::::::::::::::::::::::::::::</span>     ← peak
+<span style="color:#34d399">     |                  ::::::::::::::::::::::::::::::::::::::::::::::::::::::</span>
+<span style="color:#34d399">     |          ::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::</span>
+<span style="color:#94a3b8">     |    :::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::</span>
+<span style="color:#94a3b8">     |::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::</span>
+   0 +----------------------------------------------------------------------&gt;<span class="t">GB</span>
+     0                                                                       1.234
+
+Number of snapshots: 96
+ Detailed snapshots: [3, 9, 18 (peak), 36, 48, 72, 90]
+
+--------------------------------------------------------------------------------
+  n        time(B)         total(B)   useful-heap(B) extra-heap(B)    stacks(B)
+--------------------------------------------------------------------------------
+  18    <span style="color:#fbbf24">524,288,000</span>      <span style="color:#fbbf24">8,912,256</span>        <span style="color:#34d399">8,388,608</span>       <span style="color:#94a3b8">523,648</span>            <span class="n">0</span>
+                                                                            <span style="color:#94a3b8">↑ allocator overhead</span>
+99.99% (8,912,256B) (heap allocations) malloc/new/new[]
+->94.12% (8,388,608B) <span style="color:#7dd3fc">0x10A0F8: load_data (data.cc:42)</span>     <span class="c">← 88% 来自 load_data!</span>
+| ->94.12% (8,388,608B) 0x1099B7: main (main.cc:25)
+| 
+->5.88% (523,648B) other (cumulated &lt; 1%)</code></pre>
+
+      <div class="grid cols-2">
+        <div class="card">
+          <h4>读图三步法</h4>
+          <ol style="font-size:13px">
+            <li><strong>找 peak</strong>：看哪个采样点 = 峰值（图里写 "(peak)"）</li>
+            <li><strong>读 peak 那行表</strong>：useful-heap = 程序<u>真用</u>的；extra-heap = allocator overhead；stacks = 栈占用</li>
+            <li><strong>看 peak 详细栈</strong>：top 调用栈各占多少（按 % 排序）</li>
+          </ol>
+          <p style="font-size:12px;color:var(--text-mute)">→ 90% 的优化机会都在 top 1-2 个栈</p>
+        </div>
+        <div class="card violet">
+          <h4>"useful" vs "extra" 的意义</h4>
+          <ul style="font-size:13px">
+            <li>useful 远大于 extra → 程序<em>真</em>用了这么多内存，要从代码层减</li>
+            <li>extra 占比高（&gt; 30%）→ allocator 碎片严重，考虑切 jemalloc / tcmalloc</li>
+            <li>stacks 持续增长 → 递归调用层次太深，要展平</li>
+          </ul>
+        </div>
+      </div>
+
+      <h3 id="s5-3">5.3 Massif vs heaptrack vs jeprof · 选型对比</h3>
+
+      <table>
+        <thead><tr><th>维度</th><th>Massif</th><th>heaptrack</th><th>jeprof (jemalloc)</th></tr></thead>
+        <tbody>
+          <tr><td>原理</td><td>DBT 拦截 malloc</td><td>LD_PRELOAD libheaptrack</td><td>jemalloc 自带采样</td></tr>
+          <tr><td>需重编</td><td class="cell-ok">否</td><td class="cell-ok">否</td><td class="cell-mid">需链 jemalloc</td></tr>
+          <tr><td>减速</td><td class="cell-bad">10-20×</td><td class="cell-mid">10-20%</td><td class="cell-ok">&lt; 2%</td></tr>
+          <tr><td>输出</td><td>ms_print 文本 / massif-visualizer</td><td>heaptrack_gui (GUI)</td><td>pprof / FlameGraph</td></tr>
+          <tr><td>线上 attach</td><td class="cell-bad">不能</td><td class="cell-ok">可（heaptrack -p PID）</td><td class="cell-ok">SIGUSR 触发 dump</td></tr>
+          <tr><td>diff 两个时间点</td><td class="cell-bad">不能</td><td class="cell-ok">heaptrack_print --diff</td><td class="cell-ok">jeprof --base</td></tr>
+          <tr><td>低频采样模式</td><td class="cell-bad">无</td><td class="cell-mid">有</td><td class="cell-ok">原生</td></tr>
+          <tr><td>第三方闭源 .so</td><td class="cell-ok">✓</td><td class="cell-ok">✓</td><td class="cell-mid">需链 jemalloc</td></tr>
+        </tbody>
+      </table>
+
+      <div class="tip">
+        <strong>选型口诀</strong>：① 线下 + 一次性看堆形态 → Massif（5 分钟出图）；② 线下需要 diff → heaptrack；③ 线上 / 长跑 / 大流量 → jeprof（如果用了 jemalloc）。<u>Massif 已经被 heaptrack 在大多数场景替代</u>，但<em>不能装第三方工具</em>的环境（嵌入式、隔离网）Massif 仍然有用——它已经在 Valgrind 里了。
+      </div>
+
+      <div class="info">
+        <strong>关联阅读</strong>：内存使用画像的<em>方法论层</em>（什么时候用、看什么指标）见 <a href="./memory_leak_guide.html#ch7">memory_leak_guide §7 工具深度对比</a>；本节只讲 Massif <em>工具操作层</em>。
+      </div>
+    </section>
+
+    <!-- ============= CH6 ============= -->
+    <section class="chapter" id="ch6">
+      <div class="ch-head">
+        <div class="num">06</div>
+        <div class="t">
+          <h2>Callgrind &amp; Cachegrind · 调用图与 cache 模拟</h2>
+          <p class="sub">指令计数 profiler · L1/LL cache 模拟 · 与 perf/vtune 的本质差异</p>
+        </div>
+      </div>
+
+      <p class="lead">这两个是 Valgrind 家族里的"<strong>性能分析工具</strong>"。它们给的不是 wall-clock 时间，而是<strong>指令数 + cache miss 数 + 分支错失数</strong>。优势：<em>结果完全可重现</em>（不像 perf 受其他进程干扰）。劣势：<em>不算时间</em>（一条 LOAD 在 cache 命中时 1 cycle，miss 时 200 cycles，但 Cachegrind 都算 1 inst）。</p>
+
+      <h3 id="s6-1">6.1 Callgrind · 调用图 + 指令计数</h3>
+
+      <pre><code><span class="c"># 跑：</span>
+valgrind --tool=callgrind \
+         --dump-instr=yes \         <span class="c"># 指令级精度（不只是行级）</span>
+         --collect-jumps=yes \      <span class="c"># 收集分支信息</span>
+         --cache-sim=yes \          <span class="c"># 同时启用 cache 模拟（融合 Cachegrind）</span>
+         --branch-sim=yes \         <span class="c"># 分支预测模拟</span>
+         ./prog
+
+<span class="c"># 输出：callgrind.out.&lt;PID&gt;</span>
+
+<span class="c"># 文本可视化：</span>
+callgrind_annotate --auto=yes callgrind.out.<span class="n">12345</span> | <span class="f">less</span>
+
+<span class="c"># 图形可视化（强烈推荐）：</span>
+kcachegrind callgrind.out.<span class="n">12345</span></code></pre>
+
+      <div class="svg-wrap">
+<svg viewBox="0 0 980 360" xmlns="http://www.w3.org/2000/svg" style="font-family:inherit">
+  <defs>
+    <marker id="cg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#7dd3fc"/></marker>
+  </defs>
+
+  <text x="490" y="30" text-anchor="middle" fill="#34d399" font-size="15" font-weight="700">Callgrind 输出 · 调用图 + 各节点 cycle 占比</text>
+
+  <!-- main -->
+  <rect x="430" y="60" width="120" height="50" rx="8" fill="#1a2138" stroke="#7dd3fc" stroke-width="2"/>
+  <text x="490" y="82" text-anchor="middle" fill="#7dd3fc" font-size="13" font-weight="700">main</text>
+  <text x="490" y="100" text-anchor="middle" fill="#cbd5e1" font-size="11">100% (10⁹ inst)</text>
+
+  <!-- Callees -->
+  <line x1="490" y1="110" x2="200" y2="160" stroke="#7dd3fc" marker-end="url(#cg)"/>
+  <line x1="490" y1="110" x2="490" y2="160" stroke="#7dd3fc" marker-end="url(#cg)"/>
+  <line x1="490" y1="110" x2="780" y2="160" stroke="#7dd3fc" marker-end="url(#cg)"/>
+
+  <rect x="120" y="160" width="180" height="60" rx="8" fill="#1a2138" stroke="#a78bfa"/>
+  <text x="210" y="182" text-anchor="middle" fill="#a78bfa" font-size="13" font-weight="700">parse_input</text>
+  <text x="210" y="200" text-anchor="middle" fill="#cbd5e1" font-size="11">28% · 2.8×10⁸</text>
+  <text x="210" y="215" text-anchor="middle" fill="#94a3b8" font-size="10">L1d miss: 12%</text>
+
+  <rect x="400" y="160" width="180" height="60" rx="8" fill="#1a1408" stroke="#fbbf24"/>
+  <text x="490" y="182" text-anchor="middle" fill="#fbbf24" font-size="13" font-weight="700">compute</text>
+  <text x="490" y="200" text-anchor="middle" fill="#cbd5e1" font-size="11">62% · 6.2×10⁸ ⚠</text>
+  <text x="490" y="215" text-anchor="middle" fill="#94a3b8" font-size="10">L1d miss: 4%</text>
+
+  <rect x="700" y="160" width="160" height="60" rx="8" fill="#1a2138" stroke="#34d399"/>
+  <text x="780" y="182" text-anchor="middle" fill="#34d399" font-size="13" font-weight="700">write_output</text>
+  <text x="780" y="200" text-anchor="middle" fill="#cbd5e1" font-size="11">10% · 10⁸</text>
+  <text x="780" y="215" text-anchor="middle" fill="#94a3b8" font-size="10">L1d miss: 1%</text>
+
+  <!-- compute callees -->
+  <line x1="490" y1="220" x2="380" y2="270" stroke="#7dd3fc" marker-end="url(#cg)"/>
+  <line x1="490" y1="220" x2="600" y2="270" stroke="#7dd3fc" marker-end="url(#cg)"/>
+
+  <rect x="290" y="270" width="180" height="60" rx="8" fill="#1a0e0e" stroke="#f87171" stroke-width="2"/>
+  <text x="380" y="292" text-anchor="middle" fill="#f87171" font-size="13" font-weight="700">matmul ⚠ HOT</text>
+  <text x="380" y="310" text-anchor="middle" fill="#cbd5e1" font-size="11">52% · 5.2×10⁸</text>
+  <text x="380" y="325" text-anchor="middle" fill="#fb923c" font-size="10">→ 这是优化主战场</text>
+
+  <rect x="540" y="270" width="160" height="60" rx="8" fill="#1a2138" stroke="#94a3b8"/>
+  <text x="620" y="292" text-anchor="middle" fill="#94a3b8" font-size="13">misc</text>
+  <text x="620" y="310" text-anchor="middle" fill="#cbd5e1" font-size="11">10%</text>
+</svg>
+        <div class="svg-caption">图 6.1 · Callgrind 调用图。每个节点：函数名 + 累计指令占比 + cache miss 率。<strong>从 main 一路展开，找 hot 节点</strong>。kcachegrind GUI 还能 zoom in 到指令级，看 inner loop 的 cycle 分布。</div>
+      </div>
+
+      <div class="warn">
+        <strong>关键陷阱</strong>：Callgrind 的 "cycle" <u>不是 wall-clock cycle</u>。它假设每条 inst = 1 cycle（除非开 <code>--cache-sim</code> 才把 miss penalty 算进去）。<em>真要看墙钟时间，用 perf record</em>；Callgrind 的优势是<strong>"逻辑层"分析</strong> + <strong>结果可重现</strong>。
+      </div>
+
+      <h3 id="s6-2">6.2 Cachegrind · 软件模拟 cache 行为</h3>
+
+      <p>Cachegrind 在 <strong>合成 CPU 上模拟一个 cache 模型</strong>：L1i / L1d / LL（last-level，通常对应 L2 或 L3）。每次 load/store 都算"命中还是 miss"，最后报告每行代码的 miss 数。</p>
+
+      <pre><code>valgrind --tool=cachegrind \
+         --I1=<span class="n">32768,8,64</span> \         <span class="c"># L1i: 32KB, 8-way, 64B line</span>
+         --D1=<span class="n">32768,8,64</span> \         <span class="c"># L1d: 32KB, 8-way, 64B line</span>
+         --LL=<span class="n">8388608,16,64</span> \      <span class="c"># LL: 8MB, 16-way, 64B line</span>
+         ./prog
+
+<span class="c"># 默认：自动检测当前 CPU 的 cache config（cpuid）</span>
+<span class="c"># 但你可以传任意 config 来"模拟另一个 CPU"</span>
+
+cg_annotate --auto=yes cachegrind.out.<span class="n">12345</span> &gt; report.txt</code></pre>
+
+      <pre><code><span class="c">// 报告样例（节选）：</span>
+                Ir         I1mr      ILmr           Dr        D1mr       DLmr           Dw        D1mw       DLmw
+
+  <span class="n">10,000,000</span>            <span class="n">0</span>         <span class="n">0</span>    <span class="n">5,000,000</span>           <span class="n">0</span>          <span class="n">0</span>    <span class="n">5,000,000</span>           <span class="n">0</span>          <span class="n">0</span>  <span class="c">// vector::push_back 内联展开</span>
+   <span class="n">2,500,000</span>           <span class="n">12</span>         <span class="n">0</span>    <span class="n">2,000,000</span>     <span class="n">312,500</span>     <span class="n">125,000</span>      <span class="n">500,000</span>     <span class="n">125,000</span>     <span class="n">100,000</span>  <span class="c">// hot loop 行 ⚠</span>
+
+<span class="c">// 列含义：
+//   Ir   = instructions retired
+//   I1mr = L1i miss
+//   ILmr = LL miss (instructions)
+//   Dr   = data reads
+//   D1mr = L1d miss (read)
+//   DLmr = LL miss (read)
+//   Dw   = data writes
+//   D1mw = L1d miss (write)
+//   DLmw = LL miss (write)</span></code></pre>
+
+      <div class="grid cols-2">
+        <div class="card amber">
+          <h4>Cachegrind 的局限</h4>
+          <ul style="font-size:13px">
+            <li>只有 3 级 cache，<u>不模 TLB</u></li>
+            <li>不模 prefetcher（现代 CPU 有 4 个 prefetch unit）</li>
+            <li>不模 store buffer / write combining</li>
+            <li>分支预测模型简化（仅 2-bit saturating counter）</li>
+            <li>不算 SMT / hyperthreading 干扰</li>
+          </ul>
+        </div>
+        <div class="card green">
+          <h4>但它仍然有用</h4>
+          <ul style="font-size:13px">
+            <li>对比两个版本的<em>相对</em> miss 数（重构验证）</li>
+            <li>结果<u>稳定可重现</u>（适合 CI 性能 baseline）</li>
+            <li>不需要 PMU 权限（Docker / Cloud VM 友好）</li>
+            <li>支持模拟"另一个 CPU 的 cache"做选型预估</li>
+          </ul>
+        </div>
+      </div>
+
+      <h3 id="s6-3">6.3 vs perf / vtune · 决策表</h3>
+
+      <table>
+        <thead><tr><th>场景</th><th>推荐工具</th><th>理由</th></tr></thead>
+        <tbody>
+          <tr><td>查"哪个函数最慢"（wall-clock）</td><td class="cell-ok">perf record + flame graph</td><td>真实采样，最准</td></tr>
+          <tr><td>查"哪个函数 cache miss 多"</td><td class="cell-ok">perf stat -e LLC-load-misses</td><td>真 PMU 计数</td></tr>
+          <tr><td><strong>对比"重构前后哪个 cache 友好"</strong></td><td class="cell-ok">Cachegrind</td><td><em>结果可重现</em>，cherry-pick 单条优化的影响</td></tr>
+          <tr><td><strong>没 PMU 权限的容器/VM</strong></td><td class="cell-ok">Cachegrind</td><td>纯软件模拟</td></tr>
+          <tr><td>分析极复杂的 inner loop</td><td class="cell-ok">vtune</td><td>uOps、port utilization、Top-Down</td></tr>
+          <tr><td><strong>调试期粗看调用图分布</strong></td><td class="cell-ok">Callgrind + kcachegrind</td><td>GUI 友好，能 drill-down 到指令级</td></tr>
+          <tr><td>生产 / 长跑</td><td class="cell-ok">perf record (sampling)</td><td>低开销 (~ 1%)</td></tr>
+        </tbody>
+      </table>
+
+      <div class="info">
+        <strong>常被忽略的用法</strong>：很多 C++ 库的 micro-benchmark 报告会用 Cachegrind 给出"L1d miss 减少 N%"的结论。这是<u>比 perf 更可信的指标</u>，因为 perf 在 noisy 机器上误差 ±10%，Cachegrind 是 0 误差（同一份代码同一份数据 miss 数永远一样）。
+      </div>
+    </section>
+
+    <!-- ============= CH7 ============= -->
+    <section class="chapter" id="ch7">
+      <div class="ch-head">
+        <div class="num">07</div>
+        <div class="t">
+          <h2>高级实战 · suppression / Client Requests / vgdb</h2>
+          <p class="sub">误报治理 · 让被测程序与 Valgrind 通信 · 在 Valgrind 中调 GDB</p>
+        </div>
+      </div>
+
+      <p class="lead">"会跑命令"只是入门。把 Valgrind 用到工程级别，必须掌握 3 个高级技能：① 用 <strong>suppression 文件</strong>把已知误报压下去（否则 CI 会被淹）；② 用 <strong>Client Requests 宏</strong>让被测代码主动告诉 Valgrind "这里别管"或"这里检查一下"；③ 用 <strong>vgdb</strong> 在 Valgrind 内挂 GDB 联调（出错点的现场检查）。</p>
+
+      <h3 id="s7-1">7.1 Suppression · 误报治理工程化</h3>
+
+      <h4>为什么需要 suppression</h4>
+
+      <p>在真实项目里，跑 Memcheck 经常会看到几十上百条来自<u>系统库 / 第三方 lib / 编译器优化</u>的"看似 bug 但其实是误报"的报告。比如：</p>
+
+      <ul>
+        <li>glibc 的 <code>__GI___libc_init_first</code> 在内部用了 unitialized memory 但行为安全</li>
+        <li>libstdc++ 的 std::deque 内部 union 触发 "possibly lost"</li>
+        <li>动态加载器 ld.so 在第一次解析 PLT 时的"reachable" 块</li>
+        <li>C++ 静态初始化（ICU、abseil、protobuf）的 leaky singleton</li>
+      </ul>
+
+      <p>不压下去 → CI 报错率 100% → 团队学会忽略报告 → <strong>真 bug 也被忽略</strong>。这是 suppression 治理的真实痛点。</p>
+
+      <h4>suppression 文件格式</h4>
+
+      <pre><code><span class="c">// project.supp</span>
+{
+   <span class="t">deque-internal-union</span>            <span class="c">// suppression 名（自起，便于追溯）</span>
+   <span class="t">Memcheck:Cond</span>                    <span class="c">// 错误类型（必须）</span>
+   <span class="c">// 调用栈匹配规则（从顶到底）：</span>
+   fun:_M_initialize_map               <span class="c">// fun: 函数名</span>
+   fun:std::deque*::*deque*            <span class="c">// 通配符 *</span>
+   <span class="c">// ...</span>
+   obj:/usr/lib/x86_64-linux-gnu/libstdc++.so.6  <span class="c">// obj: 共享库路径</span>
+   ...
+}
+
+{
+   <span class="t">leaky-abseil-singleton</span>
+   <span class="t">Memcheck:Leak</span>
+   match-leak-kinds: reachable        <span class="c">// 仅匹配 still reachable 类</span>
+   fun:malloc
+   fun:absl::base_internal::*
+   ...
+}</code></pre>
+
+      <h4>错误类型（Memcheck）速查</h4>
+
+      <table>
+        <thead><tr><th>类型</th><th>对应错误</th></tr></thead>
+        <tbody>
+          <tr><td><code>Memcheck:Addr1/2/4/8/16</code></td><td>非法读写（按字节数）</td></tr>
+          <tr><td><code>Memcheck:Cond</code></td><td>条件分支用了 uninit value</td></tr>
+          <tr><td><code>Memcheck:Value4/8</code></td><td>uninit value 用于运算</td></tr>
+          <tr><td><code>Memcheck:Leak</code></td><td>memory leak（配 match-leak-kinds 过滤 4 类）</td></tr>
+          <tr><td><code>Memcheck:Free</code></td><td>非法 free / double free / mismatched delete</td></tr>
+          <tr><td><code>Memcheck:Param</code></td><td>syscall 参数用了 uninit memory</td></tr>
+          <tr><td><code>Memcheck:Overlap</code></td><td>memcpy/strcpy 重叠</td></tr>
+          <tr><td><code>Helgrind:Race</code></td><td>data race（Helgrind）</td></tr>
+          <tr><td><code>Drd:Race</code></td><td>data race（DRD）</td></tr>
+        </tbody>
+      </table>
+
+      <h4>自动生成 suppression</h4>
+
+      <pre><code><span class="c"># 跑时加 --gen-suppressions=all，每个错误旁边会打印对应模板：</span>
+valgrind --leak-check=full --gen-suppressions=all ./prog <span class="n">2</span>&gt; vg.log
+
+<span class="c"># 输出节选：</span>
+==12345== <span style="color:#f87171">40 bytes in 1 blocks are still reachable</span> ...
+==12345==
+==12345== {
+==12345==    <span style="color:#fbbf24">&lt;insert_a_suppression_name_here&gt;</span>
+==12345==    Memcheck:Leak
+==12345==    match-leak-kinds: reachable
+==12345==    fun:malloc
+==12345==    fun:_GLOBAL__sub_I_logger.cc
+==12345==    obj:/usr/lib/.../libabsl_log.so
+==12345==    fun:call_init.part.0
+==12345==    ...
+==12345== }
+
+<span class="c"># 把这些拷出来，重命名 suppression name，放到 project.supp 里</span></code></pre>
+
+      <h4>工程化治理建议</h4>
+
+      <div class="grid cols-2">
+        <div class="card green">
+          <h4>✓ 推荐做法</h4>
+          <ul style="font-size:13px">
+            <li>项目根放 <code>valgrind.supp</code>（业务自己的）+ <code>third-party.supp</code>（库的）</li>
+            <li>每条 suppression 都<em>注释来源</em>（哪个版本的库、为什么是误报）</li>
+            <li>定期 review（季度）：库升级后旧 suppression 可能失效</li>
+            <li>CI 用 <code>--suppressions=project.supp --error-exitcode=1</code></li>
+            <li>同时保留 <code>--gen-suppressions=all</code> 输出，PR diff 时检查是否新增</li>
+          </ul>
+        </div>
+        <div class="card amber">
+          <h4>✗ 反模式</h4>
+          <ul style="font-size:13px">
+            <li>用大通配符 <code>...</code> 配整段栈（容易把<em>真 bug</em> 也吃掉）</li>
+            <li>所有 suppression 名字都叫 <code>fix-later</code>（永远 fix 不了）</li>
+            <li>把项目自己代码的 leak 也加 suppression（应该修 bug）</li>
+            <li>不写注释（半年后没人记得为什么压下去）</li>
+            <li>把 suppression 写在源码里 而不是单独文件（不能版本管理）</li>
+          </ul>
+        </div>
+      </div>
+
+      <h3 id="s7-2">7.2 Client Requests · 让被测程序"主动通信"</h3>
+
+      <p>Client Requests 是一组宏（在 <code>&lt;valgrind/valgrind.h&gt;</code> / <code>&lt;valgrind/memcheck.h&gt;</code> / <code>&lt;valgrind/helgrind.h&gt;</code>），允许被测程序<strong>主动告诉 Valgrind "这块内存的状态"</strong>。原理：宏展开成一段特殊的 x86 指令序列（"魔法指令"），native CPU 执行就是 NOP，但在 Valgrind 翻译时被识别为客户机请求。</p>
+
+      <pre><code><span class="k">#include</span> <span class="s">&lt;valgrind/memcheck.h&gt;</span>
+
+<span class="c">// === 自定义 allocator 的 5 个核心宏 ===</span>
+
+<span class="c">// 告诉 Memcheck "这是个新分配的块"</span>
+<span class="f">VALGRIND_MALLOCLIKE_BLOCK</span>(addr, size, redzone_size, is_zeroed);
+
+<span class="c">// 告诉 Memcheck "这块被释放了"</span>
+<span class="f">VALGRIND_FREELIKE_BLOCK</span>(addr, redzone_size);
+
+<span class="c">// 强制把范围标 NoAccess（自定义 allocator 的空闲块）</span>
+<span class="f">VALGRIND_MAKE_MEM_NOACCESS</span>(addr, size);
+
+<span class="c">// 强制标 Defined（人为消除"误报"）</span>
+<span class="f">VALGRIND_MAKE_MEM_DEFINED</span>(addr, size);
+
+<span class="c">// 检查范围内全部已定义，否则报错</span>
+<span class="f">VALGRIND_CHECK_MEM_IS_DEFINED</span>(addr, size);
+
+<span class="c">// 检查 Valgrind 是否在跑（用于条件编译热路径）</span>
+<span class="t">int</span> in_vg = <span class="f">RUNNING_ON_VALGRIND</span>;</code></pre>
+
+      <h4>典型用例 1 · 自定义 pool allocator</h4>
+
+      <pre><code><span class="c">// 自己写的 slab allocator：从一个大 mmap 块里切小块</span>
+<span class="t">class</span> <span class="t">Pool</span> {
+    <span class="t">void</span>* arena;          <span class="c">// mmap 一大块</span>
+    <span class="t">size_t</span> size;
+public:
+    <span class="t">Pool</span>(<span class="t">size_t</span> n) {
+        arena = <span class="f">mmap</span>(...);
+        <span class="c">// 默认 mmap 后是 Defined。我们想让 Memcheck 把整块标 NoAccess，</span>
+        <span class="c">// 这样未通过 alloc() 拿到的访问会被 Memcheck 抓到。</span>
+        <span class="f">VALGRIND_MAKE_MEM_NOACCESS</span>(arena, n);
+    }
+
+    <span class="t">void</span>* <span class="f">alloc</span>(<span class="t">size_t</span> sz) {
+        <span class="t">void</span>* p = pick_free_slot(sz);
+        <span class="f">VALGRIND_MEMPOOL_ALLOC</span>(arena, p, sz);  <span class="c">// 标这块 Undefined（已分配但未写）</span>
+        <span class="k">return</span> p;
+    }
+
+    <span class="t">void</span> <span class="f">dealloc</span>(<span class="t">void</span>* p) {
+        <span class="f">VALGRIND_MEMPOOL_FREE</span>(arena, p);        <span class="c">// 标这块 NoAccess</span>
+        return_to_freelist(p);
+    }
+};
+
+<span class="c">// 这样 Memcheck 就能查出"用户在 free 后还在访问 pool 里的块"。</span>
+<span class="c">// 没有这些宏的话，Memcheck 看到整块 mmap 都是 Defined，啥都查不到。</span></code></pre>
+
+      <h4>典型用例 2 · 让 Helgrind 知道"自己实现的同步原语"</h4>
+
+      <pre><code><span class="k">#include</span> <span class="s">&lt;valgrind/helgrind.h&gt;</span>
+
+<span class="c">// 自己写的 spinlock，Helgrind 不认识它，会误报 race。</span>
+<span class="t">void</span> <span class="f">my_lock</span>(<span class="t">my_lock_t</span>* l) {
+    <span class="k">while</span> (atomic_test_and_set(&amp;l-&gt;flag));
+    <span class="f">ANNOTATE_RWLOCK_ACQUIRED</span>(l, <span class="n">1</span>);   <span class="c">// 告诉 Helgrind "这是 acquire"</span>
+}
+<span class="t">void</span> <span class="f">my_unlock</span>(<span class="t">my_lock_t</span>* l) {
+    <span class="f">ANNOTATE_RWLOCK_RELEASED</span>(l, <span class="n">1</span>);   <span class="c">// 告诉 Helgrind "这是 release"</span>
+    atomic_clear(&amp;l-&gt;flag);
+}
+
+<span class="c">// 现在 Helgrind 能正确建立 happens-before 关系，不再误报。</span></code></pre>
+
+      <div class="tip">
+        <strong>性能成本</strong>：在 native 跑时，所有 CLIENT REQUEST 宏都是<em>几条 NOP-like 指令</em>，&lt; 1ns 开销。在 Valgrind 跑时才被识别。所以可以放心地<u>留在生产代码里</u>，不需要 #ifdef。
+      </div>
+
+      <h3 id="s7-3">7.3 vgdb · 在 Valgrind 中用 GDB</h3>
+
+      <p>跑 Memcheck 时遇到错误，往往想"<u>停下来检查现场变量</u>"。vgdb 让这件事变成可能：Valgrind 内置 gdbserver，让外部 GDB 连进去。</p>
+
+      <pre><code><span class="c"># Terminal 1: 跑被测程序，让它在第一个错误时停下</span>
+valgrind --vgdb=yes --vgdb-error=<span class="n">0</span> ./prog
+<span class="c"># 输出："TO CONTROL THIS PROCESS USING vgdb (which you probably</span>
+<span class="c">#       don't want to do, unless you know exactly what you're doing,</span>
+<span class="c">#       or are doing some strange experiment):"</span>
+<span class="c">#       "  /usr/lib/.../bin/vgdb --pid=12345 ..."</span>
+
+<span class="c"># Terminal 2: 启 GDB，连过去</span>
+gdb ./prog
+(gdb) <span class="t">target remote</span> | vgdb --pid=<span class="n">12345</span>
+(gdb) <span class="t">backtrace</span>          <span class="c"># 看现场调用栈</span>
+(gdb) <span class="t">print</span> *some_var     <span class="c"># 看变量值</span>
+(gdb) <span class="t">monitor</span> leak_check full   <span class="c"># 触发 Memcheck 的 leak check（不退出程序）</span>
+(gdb) <span class="t">monitor</span> get_vbits 0xADDR  <span class="c"># 看某地址的 V-bits</span>
+(gdb) <span class="t">continue</span>           <span class="c"># 继续跑到下一个错误</span></code></pre>
+
+      <h4>vgdb 的 monitor 命令（Memcheck 专属）</h4>
+
+      <table>
+        <thead><tr><th>命令</th><th>作用</th></tr></thead>
+        <tbody>
+          <tr><td><code>monitor leak_check full</code></td><td>立即跑一次 leak check，不结束程序</td></tr>
+          <tr><td><code>monitor block_list</code></td><td>列出当前所有未释放的 heap 块</td></tr>
+          <tr><td><code>monitor who_points_at 0xADDR</code></td><td>找谁指向给定地址（查谁泄漏）</td></tr>
+          <tr><td><code>monitor get_vbits 0xADDR len</code></td><td>看某段内存的 V-bits</td></tr>
+          <tr><td><code>monitor make_memory defined 0xADDR len</code></td><td>动态把某段标 Defined</td></tr>
+          <tr><td><code>monitor xtmemory dump.kcg</code></td><td>导出当前的"全部分配栈"给 kcachegrind</td></tr>
+        </tbody>
+      </table>
+
+      <div class="info">
+        <strong>"长跑泄漏 attach 排查"实战</strong>：跑了几小时怀疑泄漏 → 不想重启 → 在 GDB 里 <code>monitor leak_check full</code> 立即看 → <code>monitor block_list</code> 看哪些没释放 → 选可疑块 <code>monitor who_points_at</code> 找引用源。这个工作流是 Valgrind 在生产排查里少有的几个还能用的场景。
+      </div>
+    </section>
+
+    <!-- ============= CH8 ============= -->
+    <section class="chapter" id="ch8">
+      <div class="ch-head">
+        <div class="num">08</div>
+        <div class="t">
+          <h2>性能优化与生产权衡</h2>
+          <p class="sub">让它跑快一点 · 何时绝对不能用 · 替代方案矩阵</p>
+        </div>
+      </div>
+
+      <p class="lead">在第 2 章我们看了"为什么慢"，这一章看"<strong>能不能让它没那么慢</strong>"。结论：通过参数调优可以让 Memcheck 减速从 25× 降到 ~ 8×（约 3× 提速）。但即便这样，也不可能在生产环境跑。所以最重要的还是<em>知道什么时候<strong>不该</strong>用 Valgrind</em>。</p>
+
+      <h3>8.1 加速技巧 · 把 25× 降到 8×</h3>
+
+      <table>
+        <thead><tr><th>开关</th><th>作用</th><th>提速</th><th>代价</th></tr></thead>
+        <tbody>
+          <tr><td><code>--track-origins=no</code></td><td>关掉 uninit value 来源追溯</td><td class="cell-ok">~ 1.5×</td><td>报告里没"created by"行</td></tr>
+          <tr><td><code>--num-callers=8</code></td><td>栈帧数从 30 降到 8</td><td class="cell-ok">~ 1.2×</td><td>调用栈短，定位难</td></tr>
+          <tr><td><code>--read-var-info=no</code></td><td>关掉 DWARF 变量名解析</td><td class="cell-ok">~ 1.1×</td><td>报告显示寄存器名而非变量名</td></tr>
+          <tr><td><code>--keep-stacktraces=alloc</code></td><td>不存 free 栈（只 alloc）</td><td class="cell-ok">~ 1.15×</td><td>UAF 报告没释放栈</td></tr>
+          <tr><td><code>--free-fill=no</code></td><td>不填充 free 后的内存</td><td class="cell-ok">~ 1.1×</td><td>UAF 报告 value 不易识别</td></tr>
+          <tr><td><code>--vex-iropt-level=0</code></td><td>关掉 IR 优化</td><td class="cell-bad">变慢</td><td>不要用</td></tr>
+          <tr><td><code>--smc-check=stack</code></td><td>只检测栈上自修改代码</td><td class="cell-ok">~ 1.05×</td><td>JIT 代码可能漏检</td></tr>
+          <tr><td><code>--errors-for-leak-kinds=definite</code></td><td>只 fail definitely lost</td><td>—</td><td>仅 CI 决策用，不影响速度</td></tr>
+        </tbody>
+      </table>
+
+      <pre><code><span class="c"># 极速模式（损失精度换速度）：</span>
+valgrind --tool=memcheck \
+         --track-origins=no \
+         --num-callers=<span class="n">8</span> \
+         --read-var-info=no \
+         --keep-stacktraces=alloc \
+         --free-fill=no \
+         ./prog
+<span class="c"># 减速 ~ 8× （vs 全开 ~ 25×）</span>
+
+<span class="c"># 完整精度模式（CI 默认）：</span>
+valgrind --leak-check=full \
+         --show-leak-kinds=all \
+         --track-origins=yes \
+         --num-callers=<span class="n">30</span> \
+         --keep-stacktraces=alloc-and-free \
+         ./prog
+<span class="c"># 减速 ~ 25-30×</span></code></pre>
+
+      <div class="tip">
+        <strong>实战平衡点</strong>：CI 跑全套用完整精度（值得多花时间）；本地 reproduce 排查用"中间档"——开 origins 但 num-callers=15。极速模式只在<em>"测试本身就跑很久 + bug 已经定位到一段代码"</em>时用。
+      </div>
+
+      <h3>8.2 为什么不能用 Valgrind 跑生产 · 6 个理由</h3>
+
+      <div class="grid cols-3">
+        <div class="card danger">
+          <h4>① 减速 10-30×</h4>
+          <p style="font-size:13px;color:var(--text-dim)">100 QPS 服务变 4 QPS。SLA 必崩，超时全部命中，调用方反复重试压死服务。</p>
+        </div>
+        <div class="card danger">
+          <h4>② 内存涨 2-3×</h4>
+          <p style="font-size:13px;color:var(--text-dim)">shadow memory 自己要内存。原本 4GB 服务变 12GB，cgroup 直接 OOM-kill。</p>
+        </div>
+        <div class="card danger">
+          <h4>③ 改时序行为</h4>
+          <p style="font-size:13px;color:var(--text-dim)">原本会触发的 race condition 在 Valgrind 下时序变了不复现。<em>反过来 Valgrind 内部串行化又可能<strong>制造</strong>原本不存在的 bug</em>。</p>
+        </div>
+        <div class="card danger">
+          <h4>④ JIT / self-modifying code</h4>
+          <p style="font-size:13px;color:var(--text-dim)">JVM / V8 / .NET 等 JIT 引擎反复改自己生成的代码。Valgrind 要不停清 translation cache，性能再差 3-5×，且容易出错。</p>
+        </div>
+        <div class="card danger">
+          <h4>⑤ syscall 兼容性</h4>
+          <p style="font-size:13px;color:var(--text-dim)">新 syscall 进内核 (io_uring / cachestat / pidfd_send_signal) 后 Valgrind 要等几个版本才支持。生产用了新 API 直接报"Unhandled syscall"罢工。</p>
+        </div>
+        <div class="card danger">
+          <h4>⑥ 不能 attach</h4>
+          <p style="font-size:13px;color:var(--text-dim)">必须从一开始就在 Valgrind 下启动。<u>已经在跑的进程不能 attach</u>。生产环境很少能容忍重启。</p>
+        </div>
+      </div>
+
+      <h3>8.3 替代方案矩阵 · 一图选对工具</h3>
+
+      <div class="svg-wrap">
+<svg viewBox="0 0 980 380" xmlns="http://www.w3.org/2000/svg" style="font-family:inherit">
+  <defs>
+    <linearGradient id="ax" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" stop-color="#0a0e1a"/><stop offset="100%" stop-color="#1a2138"/></linearGradient>
+  </defs>
+
+  <!-- 2D plot: x = 性能损耗, y = 是否需要重编 -->
+  <rect x="80" y="50" width="820" height="280" rx="10" fill="url(#ax)" stroke="#2a3556"/>
+
+  <!-- Axes -->
+  <line x1="80" y1="330" x2="900" y2="330" stroke="#94a3b8" stroke-width="1.5"/>
+  <line x1="80" y1="330" x2="80" y2="50" stroke="#94a3b8" stroke-width="1.5"/>
+  <text x="490" y="360" text-anchor="middle" fill="#cbd5e1" font-size="12">性能损耗 (越往右越慢) →</text>
+  <text x="50" y="190" text-anchor="middle" fill="#cbd5e1" font-size="12" transform="rotate(-90 50 190)">需要重编 ↑</text>
+
+  <!-- Axis ticks -->
+  <text x="160" y="345" text-anchor="middle" fill="#94a3b8" font-size="10">~ 1%</text>
+  <text x="320" y="345" text-anchor="middle" fill="#94a3b8" font-size="10">~ 10%</text>
+  <text x="480" y="345" text-anchor="middle" fill="#94a3b8" font-size="10">2-3×</text>
+  <text x="640" y="345" text-anchor="middle" fill="#94a3b8" font-size="10">5-15×</text>
+  <text x="820" y="345" text-anchor="middle" fill="#94a3b8" font-size="10">20-50×</text>
+
+  <text x="65" y="80" text-anchor="end" fill="#94a3b8" font-size="10">需要</text>
+  <text x="65" y="280" text-anchor="end" fill="#94a3b8" font-size="10">不需要</text>
+
+  <!-- Tools placed -->
+  <!-- eBPF / bpftrace -->
+  <circle cx="160" cy="280" r="22" fill="#0a1414" stroke="#34d399" stroke-width="2"/>
+  <text x="160" y="285" text-anchor="middle" fill="#34d399" font-size="11" font-weight="700">eBPF</text>
+  <text x="160" y="318" text-anchor="middle" fill="#94a3b8" font-size="10">production OK</text>
+
+  <!-- jeprof -->
+  <circle cx="240" cy="280" r="20" fill="#0a1414" stroke="#34d399" stroke-width="2"/>
+  <text x="240" y="285" text-anchor="middle" fill="#34d399" font-size="10">jeprof</text>
+
+  <!-- heaptrack -->
+  <circle cx="340" cy="280" r="22" fill="#0f1424" stroke="#60a5fa" stroke-width="2"/>
+  <text x="340" y="285" text-anchor="middle" fill="#60a5fa" font-size="11" font-weight="700">heaptrack</text>
+  <text x="340" y="318" text-anchor="middle" fill="#94a3b8" font-size="10">canary OK</text>
+
+  <!-- ASan -->
+  <circle cx="500" cy="100" r="24" fill="#1a1408" stroke="#fbbf24" stroke-width="2"/>
+  <text x="500" y="100" text-anchor="middle" fill="#fbbf24" font-size="11" font-weight="700">ASan</text>
+  <text x="500" y="115" text-anchor="middle" fill="#fbbf24" font-size="10">+LSan</text>
+
+  <!-- TSan -->
+  <circle cx="640" cy="100" r="24" fill="#1a1408" stroke="#fb923c" stroke-width="2"/>
+  <text x="640" y="100" text-anchor="middle" fill="#fb923c" font-size="11" font-weight="700">TSan</text>
+  <text x="640" y="115" text-anchor="middle" fill="#fb923c" font-size="10">CI 友好</text>
+
+  <!-- MSan -->
+  <circle cx="600" cy="160" r="22" fill="#1a1408" stroke="#fb923c" stroke-width="2"/>
+  <text x="600" y="165" text-anchor="middle" fill="#fb923c" font-size="11" font-weight="700">MSan</text>
+
+  <!-- Valgrind Memcheck -->
+  <circle cx="820" cy="280" r="28" fill="#1a0e0e" stroke="#f87171" stroke-width="2.5"/>
+  <text x="820" y="278" text-anchor="middle" fill="#f87171" font-size="12" font-weight="700">Valgrind</text>
+  <text x="820" y="293" text-anchor="middle" fill="#f87171" font-size="11" font-weight="700">Memcheck</text>
+  <text x="820" y="318" text-anchor="middle" fill="#94a3b8" font-size="10">线下深查</text>
+
+  <!-- Helgrind -->
+  <circle cx="820" cy="220" r="22" fill="#1a0e0e" stroke="#fb923c" stroke-width="2"/>
+  <text x="820" y="225" text-anchor="middle" fill="#fb923c" font-size="11" font-weight="700">Helgrind</text>
+
+  <!-- Quadrant labels -->
+  <text x="200" y="70" fill="#34d399" font-size="11" opacity="0.7">"production 友好"</text>
+  <text x="500" y="80" fill="#fbbf24" font-size="11" opacity="0.7">"CI 友好 (重编)"</text>
+  <text x="780" y="200" fill="#f87171" font-size="11" opacity="0.7">"线下专用"</text>
+
+  <text x="100" y="340" fill="#7dd3fc" font-size="11" font-style="italic">↑ 选最左下：production；选中上：CI；选最右下：第三方 .so / 嵌入式</text>
+</svg>
+        <div class="svg-caption">图 8.1 · 二维选型空间。<strong>横轴=性能损耗</strong>、<strong>纵轴=是否需要重编</strong>。Valgrind 占据"最右下角"——不需要重编、但跑得很慢。这是它的<em>独占象限</em>，也是它至今没被淘汰的原因。</div>
+      </div>
+
+      <div class="info">
+        <strong>跨参考</strong>：内存泄漏排查的<em>线上线下决策树</em>更详细的版本见 <a href="./memory_leak_guide.html#ch6">memory_leak_guide §6 排查方法论</a>。本节聚焦"性能权衡"，那一节聚焦"流程方法论"，互补。
+      </div>
+    </section>
+
+    <!-- ============= CH9 ============= -->
+    <section class="chapter" id="ch9">
+      <div class="ch-head">
+        <div class="num">09</div>
+        <div class="t">
+          <h2>工具选型决策树 · 5 个真实事故案例</h2>
+          <p class="sub">把 Valgrind 放进 12-工具技术栈里 · 何时它是唯一答案</p>
+        </div>
+      </div>
+
+      <p class="lead">前面 8 章把 Valgrind 全套讲完了。这一章把它<strong>放回真实工程的大决策树里</strong>——和 ASan / TSan / heaptrack / eBPF / perf 一起，看在不同场景下谁是赢家。然后用 5 个有代表性的真实事故案例，告诉你<em>"为什么有时候 Valgrind 真的是唯一答案"</em>。</p>
+
+      <h3 id="s9-1">9.1 大决策树 · "我有问题，该用什么"</h3>
+
+      <div class="svg-wrap">
+<svg viewBox="0 0 1360 720" xmlns="http://www.w3.org/2000/svg" style="font-family:inherit">
+  <defs>
+    <marker id="dt9" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#7dd3fc"/></marker>
+    <marker id="dt9b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#a78bfa"/></marker>
+  </defs>
+
+  <!-- Root -->
+  <rect x="475" y="20" width="290" height="50" rx="10" fill="#1a2138" stroke="#7dd3fc" stroke-width="2"/>
+  <text x="620" y="42" text-anchor="middle" fill="#7dd3fc" font-size="14" font-weight="700">遇到问题</text>
+  <text x="620" y="60" text-anchor="middle" fill="#94a3b8" font-size="11">先分类：内存？竞争？性能？</text>
+
+  <!-- Level 1: classify -->
+  <line x1="475" y1="55" x2="200" y2="100" stroke="#7dd3fc" marker-end="url(#dt9)"/>
+  <line x1="620" y1="70" x2="620" y2="100" stroke="#7dd3fc" marker-end="url(#dt9)"/>
+  <line x1="765" y1="55" x2="1040" y2="100" stroke="#7dd3fc" marker-end="url(#dt9)"/>
+
+  <rect x="80" y="100" width="240" height="40" rx="8" fill="#1a0e0e" stroke="#f87171"/>
+  <text x="200" y="125" text-anchor="middle" fill="#f87171" font-size="13" font-weight="700">内存错误 / 泄漏</text>
+
+  <rect x="500" y="100" width="240" height="40" rx="8" fill="#1a1408" stroke="#fb923c"/>
+  <text x="620" y="125" text-anchor="middle" fill="#fb923c" font-size="13" font-weight="700">data race / 死锁</text>
+
+  <rect x="920" y="100" width="240" height="40" rx="8" fill="#0a1414" stroke="#34d399"/>
+  <text x="1040" y="125" text-anchor="middle" fill="#34d399" font-size="13" font-weight="700">性能 / 瓶颈</text>
+
+  <!-- Level 2 (Memory): can recompile? -->
+  <line x1="200" y1="140" x2="200" y2="180" stroke="#a78bfa" marker-end="url(#dt9b)"/>
+  <polygon points="100,180 300,180 200,230" fill="#0f1424" stroke="#a78bfa"/>
+  <text x="200" y="208" text-anchor="middle" fill="#a78bfa" font-size="12" font-weight="600">能重编?</text>
+
+  <line x1="100" y1="220" x2="40" y2="280" stroke="#a78bfa" stroke-dasharray="3 3"/>
+  <text x="55" y="248" fill="#86efac" font-size="11">能</text>
+  <line x1="300" y1="220" x2="370" y2="280" stroke="#a78bfa" stroke-dasharray="3 3"/>
+  <text x="350" y="248" fill="#fbbf24" font-size="11">不能</text>
+
+  <!-- Memory: yes recompile -->
+  <rect x="20" y="280" width="180" height="120" rx="10" fill="#0a1414" stroke="#34d399"/>
+  <text x="110" y="305" text-anchor="middle" fill="#34d399" font-size="13" font-weight="700">能重编 · 线下</text>
+  <line x1="110" y1="313" x2="180" y2="313" stroke="#2a3556" stroke-width="0.5"/>
+  <text x="110" y="335" text-anchor="middle" fill="#cbd5e1" font-size="11">→ ASan + LSan</text>
+  <text x="110" y="353" text-anchor="middle" fill="#cbd5e1" font-size="11">→ MSan (uninit)</text>
+  <text x="110" y="371" text-anchor="middle" fill="#94a3b8" font-size="10">2-3× 损耗</text>
+  <text x="110" y="388" text-anchor="middle" fill="#94a3b8" font-size="10">CI 默认</text>
+
+  <!-- Memory: no recompile -->
+  <rect x="270" y="280" width="180" height="120" rx="10" fill="#1a0e0e" stroke="#f87171"/>
+  <text x="360" y="305" text-anchor="middle" fill="#f87171" font-size="13" font-weight="700">不能重编</text>
+  <line x1="280" y1="313" x2="440" y2="313" stroke="#2a3556" stroke-width="0.5"/>
+  <text x="360" y="335" text-anchor="middle" fill="#f87171" font-size="11" font-weight="700">→ Valgrind Memcheck</text>
+  <text x="360" y="353" text-anchor="middle" fill="#cbd5e1" font-size="11">3rd-party / 嵌入式</text>
+  <text x="360" y="371" text-anchor="middle" fill="#94a3b8" font-size="10">10-30× 损耗</text>
+  <text x="360" y="388" text-anchor="middle" fill="#fbbf24" font-size="10">独占场景</text>
+
+  <!-- Memory: production line -->
+  <rect x="20" y="430" width="430" height="60" rx="10" fill="#0f1424" stroke="#60a5fa"/>
+  <text x="235" y="450" text-anchor="middle" fill="#60a5fa" font-size="12" font-weight="700">生产环境? → eBPF / heaptrack attach / jeprof</text>
+  <text x="235" y="468" text-anchor="middle" fill="#94a3b8" font-size="10.5">(三者均不需要重启 + 低损耗)</text>
+  <text x="235" y="482" text-anchor="middle" fill="#fb923c" font-size="10.5">不要尝试 Valgrind</text>
+
+  <!-- Race -->
+  <line x1="620" y1="140" x2="620" y2="180" stroke="#a78bfa" marker-end="url(#dt9b)"/>
+  <polygon points="520,180 720,180 620,230" fill="#0f1424" stroke="#a78bfa"/>
+  <text x="620" y="208" text-anchor="middle" fill="#a78bfa" font-size="12" font-weight="600">能重编?</text>
+
+  <line x1="520" y1="220" x2="460" y2="280" stroke="#a78bfa" stroke-dasharray="3 3"/>
+  <text x="475" y="248" fill="#86efac" font-size="11">能</text>
+  <line x1="720" y1="220" x2="780" y2="280" stroke="#a78bfa" stroke-dasharray="3 3"/>
+  <text x="755" y="248" fill="#fbbf24" font-size="11">不能</text>
+
+  <rect x="440" y="280" width="180" height="120" rx="10" fill="#1a1408" stroke="#fb923c"/>
+  <text x="530" y="305" text-anchor="middle" fill="#fb923c" font-size="13" font-weight="700">能重编</text>
+  <line x1="450" y1="313" x2="610" y2="313" stroke="#2a3556" stroke-width="0.5"/>
+  <text x="530" y="335" text-anchor="middle" fill="#cbd5e1" font-size="11">→ TSan</text>
+  <text x="530" y="353" text-anchor="middle" fill="#94a3b8" font-size="10">5-15× 损耗</text>
+  <text x="530" y="371" text-anchor="middle" fill="#94a3b8" font-size="10">CI 默认</text>
+
+  <rect x="690" y="280" width="180" height="120" rx="10" fill="#1a0e0e" stroke="#f87171"/>
+  <text x="780" y="305" text-anchor="middle" fill="#f87171" font-size="13" font-weight="700">不能重编</text>
+  <line x1="700" y1="313" x2="860" y2="313" stroke="#2a3556" stroke-width="0.5"/>
+  <text x="780" y="335" text-anchor="middle" fill="#f87171" font-size="11" font-weight="700">→ Helgrind</text>
+  <text x="780" y="353" text-anchor="middle" fill="#cbd5e1" font-size="11">查锁序反转</text>
+  <text x="780" y="371" text-anchor="middle" fill="#f87171" font-size="11" font-weight="700">→ DRD</text>
+  <text x="780" y="388" text-anchor="middle" fill="#94a3b8" font-size="10">查 cv / atomic 同步</text>
+
+  <!-- Perf -->
+  <line x1="1040" y1="140" x2="1040" y2="180" stroke="#a78bfa" marker-end="url(#dt9b)"/>
+  <polygon points="940,180 1140,180 1040,230" fill="#0f1424" stroke="#a78bfa"/>
+  <text x="1040" y="208" text-anchor="middle" fill="#a78bfa" font-size="12" font-weight="600">需要可重现?</text>
+
+  <line x1="940" y1="220" x2="900" y2="280" stroke="#a78bfa" stroke-dasharray="3 3"/>
+  <text x="895" y="248" fill="#86efac" font-size="11">是</text>
+  <line x1="1140" y1="220" x2="1180" y2="280" stroke="#a78bfa" stroke-dasharray="3 3"/>
+  <text x="1180" y="248" fill="#fbbf24" font-size="11">否</text>
+
+  <rect x="890" y="280" width="180" height="120" rx="10" fill="#0f1424" stroke="#a78bfa"/>
+  <text x="980" y="305" text-anchor="middle" fill="#a78bfa" font-size="13" font-weight="700">需可重现</text>
+  <line x1="900" y1="313" x2="1060" y2="313" stroke="#2a3556" stroke-width="0.5"/>
+  <text x="980" y="335" text-anchor="middle" fill="#cbd5e1" font-size="11">→ Cachegrind</text>
+  <text x="980" y="353" text-anchor="middle" fill="#cbd5e1" font-size="11">→ Callgrind</text>
+  <text x="980" y="371" text-anchor="middle" fill="#94a3b8" font-size="10">CI 性能 baseline</text>
+
+  <rect x="1140" y="280" width="180" height="120" rx="10" fill="#0a1414" stroke="#34d399"/>
+  <text x="1230" y="305" text-anchor="middle" fill="#34d399" font-size="13" font-weight="700">真实测量</text>
+  <line x1="1150" y1="313" x2="1310" y2="313" stroke="#2a3556" stroke-width="0.5"/>
+  <text x="1230" y="335" text-anchor="middle" fill="#cbd5e1" font-size="11">→ perf record</text>
+  <text x="1230" y="353" text-anchor="middle" fill="#cbd5e1" font-size="11">→ vtune</text>
+  <text x="1230" y="371" text-anchor="middle" fill="#94a3b8" font-size="10">~ 1% 损耗</text>
+
+  <!-- Bottom: Valgrind 主场总结 -->
+  <rect x="200" y="540" width="840" height="160" rx="14" fill="#1a0e0e" stroke="#f87171" stroke-width="2"/>
+  <text x="620" y="568" text-anchor="middle" fill="#f87171" font-size="14" font-weight="700">Valgrind 的"独占主场" · 6 类</text>
+  <text x="220" y="595" fill="#cbd5e1" font-size="12">① 第三方闭源 .so 内有 bug，但拿不到源码（commercial SDK）</text>
+  <text x="220" y="616" fill="#cbd5e1" font-size="12">② 嵌入式 / 旧 toolchain，没有 ASan / TSan / MSan（GCC &lt; 4.8、定制 libc）</text>
+  <text x="220" y="637" fill="#cbd5e1" font-size="12">③ MSan 不可用（依赖未插桩，比如内核 syscall 直接 fill 数据）</text>
+  <text x="220" y="658" fill="#cbd5e1" font-size="12">④ 想要可重现的 cache 模拟（CI 性能 baseline）</text>
+  <text x="220" y="679" fill="#cbd5e1" font-size="12">⑤ 想"在 production-like 数据上跑一次最严格的 sanity check" 但不在生产</text>
+  <text x="220" y="700" fill="#cbd5e1" font-size="12">⑥ Valgrind 报了某个 bug 但 ASan 没报（双重保险，2 个工具结果取并集）</text>
+</svg>
+        <div class="svg-caption">图 9.1 · 工具选型大决策树。第一层按"问题分类"，第二层按"能否重编"或"是否需要可重现"，第三层指向具体工具。<strong>Valgrind 的 6 个独占主场</strong>都不是"日常"，但每个企业都会遇到——这就是它至今没死的原因。</div>
+      </div>
+
+      <h3 id="s9-2">9.2 真实事故 5 例 · Valgrind 是唯一答案的故事</h3>
+
+      <div class="case-tile">
+        <h4>Case 1 · 第三方闭源 SDK 导致段错误</h4>
+        <div class="case-meta">L7 · 4G/5G 设备 · 2022</div>
+        <div class="case-row"><div class="lbl">现象</div><div class="body">商用基站设备集成某 vendor 的 RAN 协议栈 SDK（动态库形式，<u>无源码</u>）。客户现场偶发 SIGSEGV，平均一周一次，core dump 显示 PC 在 <code>libran_pdcp.so</code> 内部，地址 0xFFFFFFFFDEADBEEF（典型 UAF 标志）。</div></div>
+        <div class="case-row"><div class="lbl">尝试</div><div class="body">① ASan 无效（不能重编 vendor 的库，混编后 <u>missed shadow</u> 报满屏 false positive 无法用）；② core dump 看不出来源；③ 静态分析工具看不到 .so 内部。</div></div>
+        <div class="case-row"><div class="lbl">突破</div><div class="body">复现环境跑 <code>valgrind --leak-check=full --keep-stacktraces=alloc-and-free ./bs_emu</code>。Memcheck 在 SIGSEGV 之前就报"<strong>Invalid read of size 8</strong> at <code>libran_pdcp.so</code> + 0x1234, allocated by 0x... freed by 0x..."。带着这份报告去找 vendor，对方一周后承认是 SDK 在某种重配场景下没正确处理 PDU 引用计数，发了 patch。</div></div>
+        <div class="case-row"><div class="lbl">教训</div><div class="body"><strong>对第三方闭源库，Valgrind 是唯一能给出可读报告的工具</strong>——它不需要 vendor 重编。这种事故里 Valgrind 不是"调试工具"，是"和 vendor 撕扯的<em>证据</em>"。</div></div>
+      </div>
+
+      <div class="case-tile">
+        <h4>Case 2 · 嵌入式 ARMv7 上 ASan 不可用</h4>
+        <div class="case-meta">L6 · 车载娱乐系统 · 2021</div>
+        <div class="case-row"><div class="lbl">现象</div><div class="body">车机 HMI 在长跑（48 小时回归测试）后偶发 freeze。日志显示 dbus 进程消失，怀疑 OOM。RAM 总共 1GB，dbus RSS 上涨到 200MB 不正常。</div></div>
+        <div class="case-row"><div class="lbl">尝试</div><div class="body">① ASan 在该 GCC 4.7 + 定制 musl 上构建失败（缺少 ASan runtime）；② 升级编译器风险太大（已 SIL2 认证）；③ heaptrack 不在 yocto BSP 里，拉进来需要 vendor 审批两个月。</div></div>
+        <div class="case-row"><div class="lbl">突破</div><div class="body">Valgrind 是 yocto 里默认就有的（<code>valgrind</code> recipe）。Cross-compile 后 push 到目标板，<code>valgrind --tool=memcheck --leak-check=full --soname-synonyms=somalloc=*musl* ./dbus-daemon</code>。20 分钟跑出报告：dbus 内部一个用户回调注册时分配了 256B，没在 unregister 路径释放。</div></div>
+        <div class="case-row"><div class="lbl">教训</div><div class="body">嵌入式上 <strong>"工具能不能用"比"工具好不好"更重要</strong>。Valgrind 在 yocto/buildroot 里覆盖率最高（甚至 ARMv5 都有），ASan 在很多嵌入式 toolchain 还跑不起来。</div></div>
+      </div>
+
+      <div class="case-tile">
+        <h4>Case 3 · MSan 报不出来的 syscall 信息泄漏</h4>
+        <div class="case-meta">L7 · 安全审计 · 2023</div>
+        <div class="case-row"><div class="lbl">现象</div><div class="body">安全审计工具抓到某 RPC 服务的 binary 协议在某些请求下回包<em>泄露 stack 内容</em>（包尾随机 8 字节看起来像 RIP / RBP 寄存器值）。</div></div>
+        <div class="case-row"><div class="lbl">尝试</div><div class="body">① MSan 跑了一遍 → 没报（因为 MSan 不监控 socket write 时的 buffer 是否全 defined）；② code review 没看出来（结构体 padding 看起来合理）。</div></div>
+        <div class="case-row"><div class="lbl">突破</div><div class="body">Valgrind Memcheck 跑同一份代码 → 立即报"<strong>Syscall param write(buf) points to uninitialised byte(s)</strong> at write(...) → encode_response(...) → handle_request(...)"。原因：协议结构体填字段时漏填了一个 4-byte padding，整个结构体直接 write 到 socket → 4 字节 stack 数据外泄。</div></div>
+        <div class="case-row"><div class="lbl">教训</div><div class="body">Memcheck 的 "syscall 参数检查" 是<strong>独有能力</strong>。MSan 监控的是用户代码 read uninit；Memcheck 还会监控 syscall <em>把 uninit data 写出去</em>——后者是信息泄漏漏洞的常见根因。</div></div>
+      </div>
+
+      <div class="case-tile">
+        <h4>Case 4 · cache 友好重构需要"可重现"的指标</h4>
+        <div class="case-meta">L6 · 高频交易 · 2024</div>
+        <div class="case-row"><div class="lbl">现象</div><div class="body">order book 数据结构从 <code>std::map</code> 改成 cache-friendly 的 SoA 布局，PR 评审需要客观证据"L1d miss 真的少了"。</div></div>
+        <div class="case-row"><div class="lbl">尝试</div><div class="body">① perf stat 在共享 CI 机器上反复跑，每次结果差 ±15%（有其他作业共用机器）；② 隔离机器排队 2 周；③ 用同事桌面机做 baseline → 不可比。</div></div>
+        <div class="case-row"><div class="lbl">突破</div><div class="body"><code>valgrind --tool=cachegrind --cache-sim=yes</code> 跑两个版本。结果显示：旧版 D1 miss = 12.3M，新版 = 4.1M（-66.7%）。<u>同一机器跑 5 次每次结果一模一样</u>。直接放进 PR description，秒批。</div></div>
+        <div class="case-row"><div class="lbl">教训</div><div class="body">"<em>可重现的相对指标</em>"在工程评审里比"绝对的真实数字"更值钱。Cachegrind 的<strong>纯软件模拟</strong>正好满足这个需求。</div></div>
+      </div>
+
+      <div class="case-tile">
+        <h4>Case 5 · ASan 漏报、Helgrind 抓到的 lock-free bug</h4>
+        <div class="case-meta">L7 · 分布式存储 · 2023</div>
+        <div class="case-row"><div class="lbl">现象</div><div class="body">自研 lock-free queue 在压测下偶发崩溃，core dump 显示 free list 链表破坏。怀疑 ABA 问题但 reproduce 困难。</div></div>
+        <div class="case-row"><div class="lbl">尝试</div><div class="body">① TSan 跑 → 0 race 报告（TSan 信任程序员标注的 atomic）；② code review 反复看没问题；③ stress test 一周不复现。</div></div>
+        <div class="case-row"><div class="lbl">突破</div><div class="body"><code>valgrind --tool=helgrind --history-level=full ./stress</code>。Helgrind 比 TSan 更"<u>偏执</u>"，对 lock-free 算法默认假设没同步。报了一段：<em>read of head 在 push() 中和 write of head 在 pop() 中竞争</em>。仔细看代码：作者用的 <code>memory_order_relaxed</code> 在某分支应该是 <code>acquire</code>。改了之后 stress 跑 24 小时无问题。</div></div>
+        <div class="case-row"><div class="lbl">教训</div><div class="body">TSan 信任程序员的 atomic memory order；Helgrind 不信任。<u>对 lock-free / 自定义同步原语，Helgrind 的"偏执"反而是优点</u>——它会逼你证明每一处同步都对。</div></div>
+      </div>
+
+      <div class="info">
+        <strong>5 例的共同特征</strong>：① 都是<em>主线工具失败后</em>才用 Valgrind；② Valgrind 提供的不是"快速"，是"<strong>独有能力</strong>"——闭源、嵌入式、syscall 检查、可重现 cache、偏执 race 检查。理解这一点，就理解了 Valgrind 在 2026 年仍然不可替代的真正原因。
+      </div>
+    </section>
+
+    <!-- ============= CH10 ============= -->
+    <section class="chapter" id="ch10">
+      <div class="ch-head">
+        <div class="num">10</div>
+        <div class="t">
+          <h2>面试专题 · L4 / L5 / L6 / L7 分层 13 题</h2>
+          <p class="sub">从"会用命令"到"懂 DBT 内核" · 4 个层级</p>
+        </div>
+      </div>
+
+      <p class="lead">大厂 C++ / 系统 / SRE 面试里 Valgrind 是高频考点（尤其问到"为什么慢"的细节）。这一章把题分成 4 个层级，每题给"答案 + 深挖"。如果 80% 能答出来，Tech Lead 面试的"调试与工具链"部分基本稳了。</p>
+
+      <h3 id="s10-1">10.1 L4 · 初级（4 题）"会用、知道是什么"</h3>
+
+      <details class="qa">
+        <summary><span class="lvl" style="background:rgba(125,211,252,.2);color:#7dd3fc">L4 INIT</span> <strong>Q1. 一句话讲 Valgrind 是什么、最常用是哪个工具？</strong></summary>
+        <div class="a">
+          <div class="point"><span class="label">答案</span><div>Valgrind 是<strong>动态二进制翻译框架</strong>（DBT），自带 6 个工具，不需要重编。最常用的是 <strong>Memcheck</strong>（默认工具），查内存错误和泄漏。其他 5 个：Helgrind/DRD（race）、Massif（heap profile）、Callgrind/Cachegrind（perf 分析）。</div></div>
+          <div class="point deep"><span class="label">深挖</span><div>"DBT 框架"具体什么意思？→ 把客户机指令翻译成 VEX IR，让 tool 插桩，再降回 host 指令在合成 CPU 上跑。这层抽象让"加新工具"成本极低（写组 callback 就行）。</div></div>
+        </div>
+      </details>
+
+      <details class="qa">
+        <summary><span class="lvl" style="background:rgba(125,211,252,.2);color:#7dd3fc">L4 INIT</span> <strong>Q2. 怎么用 Memcheck 查泄漏？典型命令是？</strong></summary>
+        <div class="a">
+          <div class="point"><span class="label">答案</span><div><code>valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes --num-callers=30 ./prog</code>。结果关注 "definitely lost"（必修）+ "indirectly lost"（连带）；"possibly lost" 通常误报；"still reachable" 通常忽略。</div></div>
+          <div class="point deep"><span class="label">深挖</span><div>4 类 leak 怎么区分？→ definitely=丢指针没 free；indirectly=父亲丢了连带儿子；possibly=指针偏到块中间（多继承 vtable）；reachable=还指着但程序退出没释放（leaky singleton）。</div></div>
+        </div>
+      </details>
+
+      <details class="qa">
+        <summary><span class="lvl" style="background:rgba(125,211,252,.2);color:#7dd3fc">L4 INIT</span> <strong>Q3. <code>--track-origins=yes</code> 干什么用、为什么不默认开？</strong></summary>
+        <div class="a">
+          <div class="point"><span class="label">答案</span><div>追溯"未初始化值"<em>来源</em>。报告里会多一行 "Uninitialised value was created by a stack/heap allocation at..."，告诉你这个 uninit 数据是从哪行代码冒出来的，不只告诉你"哪里读到了"。</div></div>
+          <div class="point deep"><span class="label">深挖</span><div>不默认开是因为<u>性能开销 ~ 50%</u>。Memcheck 内部要给每 4 字节再附一个 32-bit origin tag（指向分配栈），赋值/算术时跟着流动。</div></div>
+        </div>
+      </details>
+
+      <details class="qa">
+        <summary><span class="lvl" style="background:rgba(125,211,252,.2);color:#7dd3fc">L4 INIT</span> <strong>Q4. ASan / TSan 出来之后，Valgrind 还有用吗？</strong></summary>
+        <div class="a">
+          <div class="point"><span class="label">答案</span><div>有。ASan 杀掉了 Valgrind 在 CI / 日常开发的位置（快 10×），但<strong>"不能重编"的场景仍然只能 Valgrind</strong>：① 第三方闭源 .so；② 嵌入式 / 老 toolchain；③ 想跑可重现的 cache 模拟。</div></div>
+          <div class="point deep"><span class="label">深挖</span><div>2026 年 Valgrind 的"独占主场"6 类：闭源 .so / 老 toolchain / MSan 不可用 / Cachegrind 可重现指标 / production-like 数据 sanity check / ASan 漏抓的双重保险。</div></div>
+        </div>
+      </details>
+
+      <h3 id="s10-2">10.2 L5 · 中级（4 题）"懂原理"</h3>
+
+      <details class="qa">
+        <summary><span class="lvl" style="background:rgba(167,139,250,.2);color:#a78bfa">L5 MID</span> <strong>Q5. 为什么 Memcheck 慢 10-30×？</strong></summary>
+        <div class="a">
+          <div class="point"><span class="label">答案</span><div>开销叠乘：① 合成 CPU 解释 ~ 4×；② V-bit 检查（每个 load/store 查 shadow） ~ 7×；③ shadow memory 自己访存挤掉 cache ~ 2×；④ stacktrace 抓取 ~ 1.2×；⑤ IR 翻译（cache 命中后接近 0）。乘起来理论 100×，实测 10-30× 是因为 I/O / sleep 等被减速少。</div></div>
+          <div class="point deep"><span class="label">深挖</span><div>对比 ASan：ASan 编译期插桩，每次访存只多 1-2 条 host 指令检查 shadow（cache friendly），所以 2-3×。<u>Valgrind 慢主要不是因为"翻译"，而是因为"插桩太多 + shadow 抖 cache"</u>。</div></div>
+        </div>
+      </details>
+
+      <details class="qa">
+        <summary><span class="lvl" style="background:rgba(167,139,250,.2);color:#a78bfa">L5 MID</span> <strong>Q6. Memcheck 的 shadow memory 怎么工作？为什么能查 uninit？</strong></summary>
+        <div class="a">
+          <div class="point"><span class="label">答案</span><div>对每一字节用户内存，shadow 维护：1 个 <strong>A-bit</strong>（是否可寻址）+ 8 个 <strong>V-bits</strong>（每位是否已定义）。malloc → A=1, V=undef；写入 → V=defined；free → A=0；读 → 检查 A=1 ∧ V=defined。位级精度。</div></div>
+          <div class="point deep"><span class="label">深挖</span><div>① 内存开销：每用户字节多 9 位 → 总 ~ 2-3× 内存。<br>② 对比 ASan：ASan shadow 是 1B/8B 粒度，<u>不能查 uninit</u>（只查 addressable + redzone）。MSan 才补回了 V-bit 模型。<br>③ 为什么 V-bits 是 1 字节用 8 位？因为 C/C++ 允许位操作（如 bitfield、union），需要位级追踪。</div></div>
+        </div>
+      </details>
+
+      <details class="qa">
+        <summary><span class="lvl" style="background:rgba(167,139,250,.2);color:#a78bfa">L5 MID</span> <strong>Q7. Helgrind 跟 TSan 的区别？什么时候用 Helgrind 而不是 TSan？</strong></summary>
+        <div class="a">
+          <div class="point"><span class="label">答案</span><div>① Helgrind 是 DBT，不需要重编；TSan 编译期插桩，必须重编。② Helgrind 慢 20-100×；TSan 5-15×。③ Helgrind 用 lockset + happens-before 混合算法，能<u>独家查锁序反转</u>；TSan 用 vector clock (FastTrack) 只查 race。④ TSan 信任程序员的 atomic mem-order，Helgrind 不信任，对 lock-free 更"偏执"。</div></div>
+          <div class="point deep"><span class="label">深挖</span><div>什么时候选 Helgrind：① 不能重编（第三方 .so）；② 想抓 lock-free 算法的 mem-order bug（Helgrind 偏执反成优点）；③ 想查锁序反转（TSan 不查）。<br>什么时候选 DRD：cv / atomic 同步多 → DRD 误报少。</div></div>
+        </div>
+      </details>
+
+      <details class="qa">
+        <summary><span class="lvl" style="background:rgba(167,139,250,.2);color:#a78bfa">L5 MID</span> <strong>Q8. Memcheck 能查栈越界吗？为什么？</strong></summary>
+        <div class="a">
+          <div class="point"><span class="label">答案</span><div><strong>不能</strong>（绝大多数情况）。栈是 OS 一次性分给进程的合法内存，Memcheck 只能从 A-bit 看到"整页 mapped"。栈帧之间没有"redzone"，越界 1 个 int 写到了相邻局部变量上 → A=1, V=defined → Memcheck 看不出问题。</div></div>
+          <div class="point deep"><span class="label">深挖</span><div>ASan 能查栈越界，因为它在编译期给每个栈对象前后插入 redzone（典型 32B），用 shadow 标 poison。这是"DBT 抓不到、需要编译期信息"的典型场景。<br>Memcheck 能查的栈相关错误：use-after-return（栈帧析构后某些场景能抓）、栈整体越界（栈溢出 SIGSEGV）。</div></div>
+        </div>
+      </details>
+
+      <h3 id="s10-3">10.3 L6 · 高级（3 题）"懂设计 + 工程化"</h3>
+
+      <details class="qa">
+        <summary><span class="lvl" style="background:rgba(52,211,153,.2);color:#34d399">L6 SR</span> <strong>Q9. VEX IR 是什么？为什么 Valgrind 要专门做一个 IR？</strong></summary>
+        <div class="a">
+          <div class="point"><span class="label">答案</span><div>VEX 是 Valgrind 自己定义的<strong>体系结构无关中间表示</strong>。每条 host 指令翻成多条 VEX IR statement（Get/Put/WrTmp/Store/Dirty 等），每个 statement 只读/写一次。这层抽象让 tool 写在 IR 上，<u>不用懂 x86/ARM/RISC-V 细节</u>，加新 ISA 只要写前后端。</div></div>
+          <div class="point deep"><span class="label">深挖</span><div>VEX vs LLVM IR：① VEX 设计目标是"<em>方便插桩</em>"，不是"优化"；② VEX 比 LLVM IR 更接近物理指令（保留 EFLAGS 等），翻译保真；③ VEX 更小，能在线翻译快速生成。<br>VEX vs Pin / DynamoRIO：Pin 直接在 host 指令上加 hook（无 IR），写 tool 难；Valgrind 选了"易扩展"取舍。</div></div>
+        </div>
+      </details>
+
+      <details class="qa">
+        <summary><span class="lvl" style="background:rgba(52,211,153,.2);color:#34d399">L6 SR</span> <strong>Q10. 怎么把 Valgrind 集成到 CI 里？suppression 怎么治理？</strong></summary>
+        <div class="a">
+          <div class="point"><span class="label">答案</span><div>① CI 命令：<code>valgrind --error-exitcode=1 --suppressions=project.supp --xml=yes ...</code>；② 把 suppression 拆成业务自己的 + 第三方库的两份文件，每条加注释（来源 / 为什么是误报）；③ 季度 review，因为库升级会失效；④ <u>同时跑 <code>--gen-suppressions=all</code></u>，PR diff 检查是否新增可疑 suppression。</div></div>
+          <div class="point deep"><span class="label">深挖</span><div>反模式 5 条：① 用 <code>...</code> 通配符吃掉一大段栈（容易误吃真 bug）；② 名字都叫 fix-later；③ 把项目自己代码的 leak 也压（应该修）；④ 不写注释；⑤ 把 suppression 写在源码 #pragma 里（不能版本管理）。</div></div>
+        </div>
+      </details>
+
+      <details class="qa">
+        <summary><span class="lvl" style="background:rgba(52,211,153,.2);color:#34d399">L6 SR</span> <strong>Q11. 自己写了个 pool allocator，Memcheck 看不到 UAF。怎么办？</strong></summary>
+        <div class="a">
+          <div class="point"><span class="label">答案</span><div>用 <strong>Client Requests 宏</strong>。在 alloc 路径调 <code>VALGRIND_MEMPOOL_ALLOC(pool, p, size)</code>，dealloc 路径调 <code>VALGRIND_MEMPOOL_FREE(pool, p)</code>。这样 Memcheck 把 pool 的整块底层 mmap 看成 NoAccess，只在程序"实际拿到"slot 时才标 Defined → 用户在 dealloc 后还访问就能被抓到。</div></div>
+          <div class="point deep"><span class="label">深挖</span><div>① 性能成本：Client Request 宏在 native 跑就是几条 NOP-like 指令，&lt; 1ns 开销，可以放生产代码不需要 #ifdef。<br>② 同类宏 helgrind 也有：<code>ANNOTATE_RWLOCK_ACQUIRED/RELEASED</code> 让 Helgrind 认识自己实现的同步原语。<br>③ 实现原理：宏展开成"魔法 x86 序列"（一组特殊的 ROL 指令组合），native CPU 执行就是 NOP，但 Valgrind 翻译时识别为 client request 转走。</div></div>
+        </div>
+      </details>
+
+      <h3 id="s10-4">10.4 L7 · 专家（2 题）"系统设计 + 边界条件"</h3>
+
+      <details class="qa">
+        <summary><span class="lvl" style="background:rgba(251,191,36,.2);color:#fbbf24">L7 EXPERT</span> <strong>Q12. 在嵌入式 ARMv7 + 1GB RAM 上跑 Valgrind，会遇到什么问题？怎么解决？</strong></summary>
+        <div class="a">
+          <div class="point"><span class="label">答案（开放设计题）</span><div>4 个问题 + 解法：<br>① <strong>Memory 2-3×</strong>：原本 200MB 服务变 600MB → 接近 1GB 限制，OOM。<em>解</em>：缩小 testcase；或者跑 None tool（只测核心 DBT 开销）；或者只对部分进程开。<br>② <strong>性能 10-30×</strong>：原本 10s 测试变 5min。<em>解</em>：缩小输入；或并行多个小 testcase。<br>③ <strong>ARMv7 syscall 支持</strong>：定制内核新 syscall Valgrind 可能不识别。<em>解</em>：升级到 valgrind 3.21+；或者 fallback 到不用该 syscall 的代码路径测。<br>④ <strong>编译 cross-toolchain</strong>：要 yocto / buildroot recipe，或自己编。<em>解</em>：用 yocto 自带 recipe，或预编好的 bin。</div></div>
+          <div class="point deep"><span class="label">考察</span><div>是否真的在嵌入式上跑过，是否懂多约束工程权衡。<br>额外加分：知道 valgrind 在 ARMv5 / MIPS / PowerPC 这类老架构上仍然<u>是少数能用的工具</u>，是 vendor 集成测试的"最后一道防线"。</div></div>
+        </div>
+      </details>
+
+      <details class="qa">
+        <summary><span class="lvl" style="background:rgba(251,191,36,.2);color:#fbbf24">L7 EXPERT</span> <strong>Q13. 设计：怎么给团队建一套"渐进式" Valgrind 误报治理流程？让团队从不愿用到日常用？</strong></summary>
+        <div class="a">
+          <div class="point"><span class="label">答案（开放设计题）</span><div>4 阶段渐进：<br>① <strong>Phase 1 · Baseline</strong> · 跑一次完整 valgrind，<u>把<em>所有当前</em>的报告全部转成 suppression</u>（Big Bang）。CI 从 0 开始，<em>新增任何错误才 fail</em>。<br>② <strong>Phase 2 · Differential</strong> · 每月 review 一次 suppression list，挑 top 10 重复出现的真 bug 修掉，suppression 数量净减少。<br>③ <strong>Phase 3 · Per-team</strong> · 拆 suppression 文件按子模块归属，谁的代码谁负责。<br>④ <strong>Phase 4 · Mature</strong> · 把 Valgrind 替换成 ASan + LSan 跑 CI（快 10×），保留 Valgrind 作为夜间深度扫描 + 第三方 .so 专项检查。<br><br><strong>关键</strong>：不要一上来就要求 0 suppression，那必死；先稳住边界，再慢慢往里收。</div></div>
+          <div class="point deep"><span class="label">考察</span><div>① 工程领导力 —— 怎么推动一个"高摩擦工具"在团队里落地。<br>② 是否懂 suppression 的<em>双面性</em>：既是治理利器，也是"债务沉淀池"。<br>③ 是否能把 Valgrind 放在大工具栈里看 —— 它<u>不是终态</u>，是过渡阶段，最终被 ASan + eBPF 替代到边缘场景。</div></div>
+        </div>
+      </details>
+
+      <div class="kmap" style="margin-top:32px">
+        <div class="kmap-title">学习闭环 · 你现在应该能做的事</div>
+        <div class="grid cols-2">
+          <ul style="font-size:14px">
+            <li>✓ 看到 Valgrind 报告，1 分钟内说出"哪个工具 + 哪类问题 + 修复方向"</li>
+            <li>✓ 解释为什么 Memcheck 慢 10-30× —— 不是只说"动态翻译"，而是 V-bit 检查 + shadow 抖 cache 主导</li>
+            <li>✓ 画出 A-bit / V-bit 状态机和 4 种转换</li>
+            <li>✓ 区分 Helgrind / DRD / TSan 三者，知道何时用谁</li>
+          </ul>
+          <ul style="font-size:14px">
+            <li>✓ 给团队制定 suppression 治理 4 阶段流程</li>
+            <li>✓ 用 Client Requests 宏让 Memcheck 认识自定义 allocator</li>
+            <li>✓ 用 vgdb 在 Valgrind 内联调 GDB</li>
+            <li>✓ 答出 13 道分层面试题的 80%</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="info" style="margin-top:24px">
+        <strong>下一步推荐阅读</strong>·已有文档中：<br>
+        • <a href="./memory_leak_guide.html">memory_leak_guide.html</a> — 内存泄漏的<em>方法论层</em>，本文是<em>工具层</em><br>
+        • <a href="./sanitizers_guide.html">sanitizers_guide.html</a> — Sanitizer 全家桶（Valgrind 的"快 10×"对手）<br>
+        • <a href="../cpp/sanitizer_internals.html">sanitizer_internals.html</a> — Sanitizer 编译期插桩内部，与本文 DBT 内部互补<br>
+        • <a href="./crash_debugging_guide.html">crash_debugging_guide.html</a> — 崩溃 / core dump / GDB 基础<br>
+        • <a href="./deadlock_debugging_guide.html">deadlock_debugging_guide.html</a> — 死锁专题（Helgrind / DRD 的实战延伸）<br>
+        • <a href="../system/observability_ebpf.html">observability_ebpf.html</a> — eBPF 视角（Valgrind 的"生产级"对手）
+      </div>
+    </section>
+
+    <footer>
+      <div class="made">— Engineered with First Principles · No CDN · Single File · DBT-Aware Notes —</div>
+      <div style="margin-top:8px;color:var(--text-mute)">基于已有文档体系增强 · 与 <code>memory_leak_guide · sanitizers_guide · sanitizer_internals · crash_debugging_guide · deadlock_debugging_guide</code> 形成 6 件套</div>
+    </footer>
+
+  </main>
+</div>
+
+<script>
+// =========================================
+// Self-contained JS · 无 CDN
+// =========================================
+
+const progress = document.getElementById('progress');
+const updateProgress = () => {
+  const h = document.documentElement;
+  const max = h.scrollHeight - h.clientHeight;
+  progress.style.width = (h.scrollTop / max * 100) + '%';
+};
+window.addEventListener('scroll', updateProgress, {passive:true});
+updateProgress();
+
+const tocLinks = document.querySelectorAll('aside.toc nav a[href^="#"]');
+const sections = [...tocLinks].map(a => {
+  const id = a.getAttribute('href').slice(1);
+  return {a, el: document.getElementById(id)};
+}).filter(x => x.el);
+
+const onScroll = () => {
+  const y = window.scrollY + 100;
+  let cur = null;
+  for (const s of sections) {
+    if (s.el.offsetTop <= y) cur = s;
+  }
+  tocLinks.forEach(a => a.classList.remove('active'));
+  if (cur) cur.a.classList.add('active');
+};
+window.addEventListener('scroll', onScroll, {passive:true});
+
+tocLinks.forEach(a => {
+  a.addEventListener('click', e => {
+    const href = a.getAttribute('href');
+    const target = document.querySelector(href);
+    if (target) {
+      e.preventDefault();
+      target.scrollIntoView({behavior:'smooth', block:'start'});
+      history.pushState(null, '', href);
+    }
+  });
+});
+
+const fadeEls = document.querySelectorAll('.card, .svg-wrap, table, details, .tool-card, .case-tile');
+const io = new IntersectionObserver(entries => {
+  entries.forEach(e => {
+    if (e.isIntersecting) {
+      e.target.style.opacity = '1';
+      e.target.style.transform = 'translateY(0)';
+    }
+  });
+}, {threshold:0.05});
+
+fadeEls.forEach(el => {
+  el.style.opacity = '0';
+  el.style.transform = 'translateY(12px)';
+  el.style.transition = 'opacity .5s ease, transform .5s ease';
+  io.observe(el);
+});
+
+const chapters = document.querySelectorAll('section.chapter');
+let curChapter = 0;
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+  if (e.key === 'j') {
+    curChapter = Math.min(curChapter + 1, chapters.length - 1);
+    chapters[curChapter].scrollIntoView({behavior:'smooth'});
+  } else if (e.key === 'k') {
+    curChapter = Math.max(curChapter - 1, 0);
+    chapters[curChapter].scrollIntoView({behavior:'smooth'});
+  }
+});
+
+console.log('%c Valgrind Complete Guide ', 'background:linear-gradient(90deg,#7dd3fc,#a78bfa);color:#0a0e1a;font-weight:700;padding:4px 12px;border-radius:4px;font-size:13px');
+console.log('Press J/K to navigate between chapters.');
+</script>
+
+<button class="back-top" id="backTop" onclick="window.scrollTo({top:0,behavior:'smooth'})">&uarr;</button>
+<script>
+  (function(){
+    var btn = document.getElementById('backTop');
+    if (!btn) return;
+    function tg(){ btn.classList.toggle('show', window.scrollY > 400); }
+    window.addEventListener('scroll', tg, { passive: true });
+    tg();
+  })();
+</script>
+<script src="../assets/site-theme.js" defer></script>
+</body>
+</html>
