@@ -46,7 +46,9 @@
     // we still want a progress bar and a way back to the index.
     if (body.classList.contains('tn-shell-overlay')) {
       injectProgress(body);
-      injectHomeFab(body, indexHref);
+      if (!document.getElementById('tn-nav')) {
+        injectHomeFab(body, indexHref);
+      }
       return;
     }
 
