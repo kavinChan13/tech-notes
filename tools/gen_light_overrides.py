@@ -269,8 +269,6 @@ def main():
     var_acc = {}
     for dp,dns,fns in os.walk(ROOT):
         dns[:] = [d for d in dns if d not in EXCLUDE]
-        if os.path.relpath(dp,ROOT).replace('\\','/').split('/')[0] == 'bigdata':
-            continue
         for fn in fns:
             if fn.endswith('.html'):
                 process_html(os.path.join(dp,fn), acc, svg_acc, inline_acc, var_acc)
