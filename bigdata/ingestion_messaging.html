@@ -1,0 +1,724 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>数据摄取与消息中枢 · Kafka / ISR / Exactly-once / Connect / CDC / Airflow 编排</title>
+<link rel="stylesheet" href="../assets/site-theme.css">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<style>
+  .analogy{background:linear-gradient(135deg,rgba(167,139,250,.08),rgba(125,211,252,.05));border:1px solid var(--border-2);border-left:4px solid var(--accent-2);border-radius:10px;padding:14px 18px;margin:16px 0;font-size:14px;line-height:1.75}
+  .analogy::before{content:"🔌 生活类比";display:inline-block;color:var(--accent-2);font-weight:700;font-size:12px;letter-spacing:.5px;margin-right:10px}
+  .analogy strong{color:var(--text)}
+  .def{background:rgba(125,211,252,.05);border:1px solid var(--border);border-left:4px solid var(--accent);border-radius:8px;padding:14px 18px;margin:16px 0;font-size:14px;line-height:1.75}
+  .def::before{content:"📖 名词解释";display:inline-block;color:var(--accent);font-weight:700;font-size:12px;letter-spacing:.5px;margin-right:10px}
+  .def strong{color:var(--text)}
+  .glossary{margin:14px 0}
+  .gl-group{margin:20px 0}
+  .gl-group > h4{color:var(--accent);border-left:3px solid var(--accent);padding-left:10px;margin:0 0 10px;font-size:15px}
+  .gl{display:grid;grid-template-columns:210px 1fr;gap:14px;padding:11px 15px;border:1px solid var(--border);border-radius:8px;background:var(--bg-card);margin:7px 0;transition:border-color .15s}
+  .gl:hover{border-color:var(--border-2)}
+  .gl .gl-t{font-weight:600;color:var(--text);font-size:14px}
+  .gl .gl-t em{display:block;font-style:normal;font-family:"JetBrains Mono",monospace;font-size:11px;color:var(--text-mute);margin-top:3px;font-weight:400;letter-spacing:.2px}
+  .gl .gl-d{font-size:13.5px;color:var(--text-dim);line-height:1.7}
+  .gl .gl-d strong{color:var(--accent-4)}
+  .gl .gl-d code{font-size:.85em}
+  @media(max-width:760px){.gl{grid-template-columns:1fr;gap:4px}}
+  .demo{background:var(--bg-card);border:1px solid var(--border-2);border-radius:14px;padding:20px;margin:22px 0;box-shadow:var(--shadow)}
+  .demo .demo-title{font-size:13px;text-transform:uppercase;letter-spacing:1.5px;color:var(--accent);font-family:"JetBrains Mono",monospace;margin-bottom:14px;display:flex;align-items:center;gap:8px}
+  .demo .demo-title::before{content:"▶";font-size:10px;color:var(--accent-3)}
+  .demo-controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:16px}
+  .demo button{font-family:inherit;cursor:pointer;border-radius:8px;font-size:13px;padding:8px 14px;border:1px solid var(--border-2);background:var(--bg-card-2);color:var(--text-dim);transition:.15s}
+  .demo button:hover{color:var(--text);border-color:var(--accent)}
+  .demo button.seg.active{background:rgba(125,211,252,.14);color:var(--accent);border-color:var(--accent)}
+  .demo button.run{background:rgba(52,211,153,.14);color:var(--accent-3);border-color:rgba(52,211,153,.4);font-weight:600}
+  .demo button.run:hover{background:rgba(52,211,153,.24)}
+  .demo button.ghost{background:transparent}
+
+  /* Kafka 消费者组演示 */
+  .cg-wrap{display:flex;flex-wrap:wrap;gap:12px}
+  .consumer{flex:1;min-width:120px;background:var(--bg-card-2);border:1px solid var(--border-2);border-radius:10px;padding:12px;text-align:center;transition:.2s}
+  .consumer.idle{opacity:.45;border-style:dashed}
+  .consumer .cname{font-family:"JetBrains Mono",monospace;font-size:12.5px;color:var(--accent);margin-bottom:8px;font-weight:600}
+  .consumer .pchip{display:inline-block;font-family:"JetBrains Mono",monospace;font-size:11.5px;padding:4px 9px;margin:3px;border-radius:6px;background:rgba(52,211,153,.12);color:var(--accent-3);border:1px solid rgba(52,211,153,.3)}
+  .consumer .idle-tag{font-size:11px;color:var(--text-mute);font-style:italic}
+  .cg-readout{margin-top:14px;font-size:13.5px;color:var(--text-dim);line-height:1.8}
+  .cg-readout b{color:var(--accent)}
+
+  /* DAG 调度演示 */
+  .dag-grid{display:flex;gap:0;align-items:center;overflow-x:auto;padding:6px 0}
+  .dag-col{display:flex;flex-direction:column;gap:10px;justify-content:center;flex-shrink:0}
+  .dag-arrow{color:var(--text-mute);font-size:20px;padding:0 8px;flex-shrink:0}
+  .dnode{min-width:130px;border:1px solid var(--border-2);border-radius:9px;padding:9px 12px;font-family:"JetBrains Mono",monospace;font-size:12px;text-align:center;background:var(--bg-card-2);color:var(--text-mute);transition:.3s}
+  .dnode.pending{opacity:.5}
+  .dnode.running{border-color:var(--accent-4);color:var(--accent-4);background:rgba(251,191,36,.12);animation:dpulse 1s ease-in-out infinite}
+  .dnode.success{border-color:var(--accent-3);color:var(--accent-3);background:rgba(52,211,153,.12)}
+  @keyframes dpulse{0%,100%{box-shadow:0 0 0 0 rgba(251,191,36,.3)}50%{box-shadow:0 0 0 5px rgba(251,191,36,0)}}
+  .dnode .dstate{font-size:10px;display:block;margin-top:3px;opacity:.85}
+  .dag-readout{margin-top:14px;font-size:13.5px;color:var(--text-dim);line-height:1.8;min-height:24px}
+  .dag-readout b{color:var(--accent-3);font-family:"JetBrains Mono",monospace}
+</style>
+</head>
+<body class="tn-shell-overlay">
+<!-- tn-nav:v1 -->
+<style>
+#tn-nav{position:fixed;top:14px;right:14px;z-index:99999;display:flex;gap:6px;align-items:center;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;font-size:12px;line-height:1;font-weight:500;}
+#tn-nav a,#tn-nav .tn-meta{display:inline-flex;align-items:center;gap:4px;background:rgba(20,20,30,.85);color:#fff !important;text-decoration:none !important;padding:7px 11px;border-radius:999px;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);border:1px solid rgba(255,255,255,.10);box-shadow:0 2px 8px rgba(0,0,0,.18);transition:background .15s,transform .15s;}
+#tn-nav a:hover{background:rgba(56,189,248,.92);transform:translateY(-1px);}
+#tn-nav .tn-meta{background:rgba(20,20,30,.55);cursor:default;}
+@media (max-width:640px){#tn-nav{top:8px;right:8px;font-size:11px;gap:4px;}#tn-nav a,#tn-nav .tn-meta{padding:5px 9px;}}
+@media print{#tn-nav{display:none;}}
+</style>
+<div id="tn-nav">
+  <a href="../index.html" title="&#x8FD4;&#x56DE;&#x4E3B;&#x9875;">&larr; &#x4E3B;&#x9875;</a>
+  <a href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub &#x4ED3;&#x5E93;">&#x1F4C1; Repo</a>
+  <a href="https://github.com/kavinChan13/tech-notes/blob/main/bigdata/ingestion_messaging.html" target="_blank" rel="noopener" title="&#x672C;&#x6587;&#x6E90;&#x7801;">&#x1F4DD; Source</a>
+  <span class="tn-meta" title="&#x9884;&#x8BA1;&#x9605;&#x8BFB;&#x65F6;&#x957F;">&#x23F1; 50 min</span>
+</div>
+<!-- /tn-nav:v1 -->
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>大数据 D06 · Roadmap</h2>
+    <nav>
+      <ol>
+        <li><a href="#ch0" class="active">摄取全景 · ETL/ELT</a>
+          <ol>
+            <li><a href="#s0-1">采集端：第一公里</a></li>
+            <li><a href="#s0-2">埋点与日志采集</a></li>
+          </ol>
+        </li>
+        <li><a href="#ch1">Kafka 核心架构</a>
+          <ol>
+            <li><a href="#s1-1">Topic / Partition / Offset</a></li>
+            <li><a href="#s1-2">消费者组演示</a></li>
+          </ol>
+        </li>
+        <li><a href="#ch2">Kafka 可靠性</a>
+          <ol>
+            <li><a href="#s2-1">副本 / ISR / acks</a></li>
+            <li><a href="#s2-2">顺序与 Exactly-once</a></li>
+            <li><a href="#s2-3">可观测性与告警</a></li>
+            <li><a href="#s2-4">失败处理与 DLQ</a></li>
+          </ol>
+        </li>
+        <li><a href="#ch3">Connect · Schema Registry · Pulsar</a>
+          <ol>
+            <li><a href="#s3-1">安全治理</a></li>
+          </ol>
+        </li>
+        <li><a href="#ch4">CDC 变更数据捕获</a>
+          <ol>
+            <li><a href="#s4-1">DDL 变更实战</a></li>
+          </ol>
+        </li>
+        <li><a href="#ch5">工作流编排 Airflow</a>
+          <ol>
+            <li><a href="#s5-1">DAG 调度演示</a></li>
+            <li><a href="#s5-2">回填 · SLA</a></li>
+          </ol>
+        </li>
+        <li><a href="#ch6">摄取模式选型</a>
+          <ol>
+            <li><a href="#s6-1">容量规划与成本</a></li>
+            <li><a href="#s6-2">上线检查清单</a></li>
+          </ol>
+        </li>
+        <li><a href="#ch7">小结 · 面试 · 术语表</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+
+    <header class="hero">
+      <div class="badge">Big Data · 06 · Ingestion</div>
+      <h1>数据摄取与消息中枢</h1>
+      <p class="sub">前面几篇有了<strong>存储</strong>（D01）、<strong>建模</strong>（D02）、<strong>计算引擎</strong>（D03/D04）、<strong>SQL</strong>（D05）。但数据怎么<strong>进来</strong>？本篇打通数据管道的「血管」：从<strong>采集端</strong>（埋点 SDK / 日志 Agent，数据进 Kafka 前的第一公里）讲起；到<strong>Kafka</strong>——数据世界的中枢神经（架构、分区、ISR、Exactly-once、Connect、Schema Registry）；<strong>CDC</strong>——从数据库 binlog 实时捕获变更；以及<strong>工作流编排</strong>（Airflow / DolphinScheduler）——让成百上千个任务按依赖、按时间、可回填地有序运转。老兵会发现：Kafka 就是一个分布式 commit log，处处是你熟悉的顺序写、副本、offset。</p>
+      <div class="meta">
+        <span>8 章 + 术语表</span>
+        <span>9 张 SVG / 图表</span>
+        <span>2 个交互演示</span>
+        <span>30+ 名词解释</span>
+        <span>老兵视角 · 类比驱动</span>
+        <span>无 CDN · 单文件</span>
+      </div>
+    </header>
+
+    <!-- ===== 第 0 章 ===== -->
+    <section class="chapter" id="ch0">
+      <div class="ch-head"><div class="num">00</div><div class="t"><h2>数据摄取全景 · ETL vs ELT</h2><p class="sub">数据从源头流进数据栈的第一公里 · 批 / 流 / CDC 三种姿势</p></div></div>
+
+      <p class="lead">数据不会自己跑进数仓。<strong>摄取（Ingestion）</strong>是把数据从各种源头（业务库、日志、埋点、第三方 API）搬进数据平台的第一步。它决定了下游能拿到多新、多全、多干净的数据。</p>
+
+      <div class="def"><strong>ETL vs ELT</strong>：两种摄取范式。<strong>ETL（Extract-Transform-Load）</strong>——先抽取、在中途转换好、再装载进仓，转换发生在入仓<em>前</em>（传统数仓时代）。<strong>ELT（Extract-Load-Transform）</strong>——先把原始数据原样装进仓/湖，再用仓内强大算力做转换（现代云数仓主流，dbt 即此范式，呼应 D02）。ELT 的好处：原始数据留底可重跑、转换逻辑用 SQL 在仓内统一管理。</div>
+
+      <div class="svg-wrap">
+        <svg width="780" height="200" viewBox="0 0 780 200" role="img" aria-label="数据摄取全景">
+          <text x="390" y="22" text-anchor="middle" fill="#7dd3fc" font-size="15" font-weight="bold">数据摄取全景：从源头到数据栈的第一公里</text>
+          <!-- sources -->
+          <rect x="30" y="50" width="130" height="110" rx="8" fill="#0c1120" stroke="#2a3556"/>
+          <text x="95" y="72" text-anchor="middle" fill="#94a3b8" font-size="12" font-weight="bold">数据源</text>
+          <text x="95" y="94" text-anchor="middle" fill="#64748b" font-size="10">业务库 (MySQL)</text>
+          <text x="95" y="112" text-anchor="middle" fill="#64748b" font-size="10">日志 / 埋点</text>
+          <text x="95" y="130" text-anchor="middle" fill="#64748b" font-size="10">第三方 API</text>
+          <text x="95" y="148" text-anchor="middle" fill="#64748b" font-size="10">IoT / 设备</text>
+          <!-- ingestion paths -->
+          <rect x="250" y="40" width="160" height="36" rx="6" fill="#10241c" stroke="#34d399"/><text x="330" y="63" text-anchor="middle" fill="#6ee7b7" font-size="11">① 批量同步（T+1）</text>
+          <rect x="250" y="86" width="160" height="36" rx="6" fill="#231a33" stroke="#a78bfa"/><text x="330" y="109" text-anchor="middle" fill="#c4b5fd" font-size="11">② 流式（Kafka）</text>
+          <rect x="250" y="132" width="160" height="36" rx="6" fill="#2a2410" stroke="#fbbf24"/><text x="330" y="155" text-anchor="middle" fill="#fcd34d" font-size="11">③ CDC（实时变更）</text>
+          <!-- hub -->
+          <rect x="470" y="78" width="120" height="50" rx="8" fill="#10172b" stroke="#7dd3fc"/><text x="530" y="100" text-anchor="middle" fill="#7dd3fc" font-size="12" font-weight="bold">Kafka</text><text x="530" y="116" text-anchor="middle" fill="#94a3b8" font-size="9.5">消息中枢</text>
+          <!-- sinks -->
+          <rect x="650" y="50" width="110" height="110" rx="8" fill="#0c1120" stroke="#2a3556"/>
+          <text x="705" y="72" text-anchor="middle" fill="#94a3b8" font-size="12" font-weight="bold">数据栈</text>
+          <text x="705" y="94" text-anchor="middle" fill="#64748b" font-size="10">数据湖 / 仓</text>
+          <text x="705" y="112" text-anchor="middle" fill="#64748b" font-size="10">Flink 实时</text>
+          <text x="705" y="130" text-anchor="middle" fill="#64748b" font-size="10">OLAP 引擎</text>
+          <defs><marker id="ar" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#64748b"/></marker></defs>
+          <line x1="160" y1="105" x2="248" y2="58" stroke="#475569" stroke-width="1.2" marker-end="url(#ar)"/>
+          <line x1="160" y1="105" x2="248" y2="104" stroke="#475569" stroke-width="1.2" marker-end="url(#ar)"/>
+          <line x1="160" y1="105" x2="248" y2="150" stroke="#475569" stroke-width="1.2" marker-end="url(#ar)"/>
+          <line x1="410" y1="104" x2="468" y2="103" stroke="#64748b" stroke-width="1.4" marker-end="url(#ar)"/>
+          <line x1="590" y1="103" x2="648" y2="104" stroke="#64748b" stroke-width="1.4" marker-end="url(#ar)"/>
+        </svg>
+        <div class="svg-caption">三种摄取姿势：批量（定时全/增量同步）、流式（实时事件经 Kafka）、CDC（捕获数据库变更）。Kafka 常作为汇聚一切的中枢。</div>
+      </div>
+      <div class="info">本篇先讲<strong>采集端</strong>（本章，数据进 Kafka 前的最后一公里），再讲<strong>中枢 Kafka</strong>（第 1-3 章）、<strong>CDC</strong>（第 4 章）、<strong>编排</strong>（第 5 章）。流式计算引擎本身在 D04（Flink）已讲。</div>
+
+      <h3 id="s0-1">0.1 采集端：数据进 Kafka 之前的「最后一公里」</h3>
+      <p>上面的全景图里，业务库走 CDC、流式事件走 Kafka——但<strong>日志和埋点数据是怎么变成 Kafka 里的一条条消息的？</strong>答案是<strong>采集端（Collection Agent）</strong>。它常被初学者忽略，却是真实数据平台里<strong>最容易丢数据、最难排查</strong>的一环。</p>
+      <div class="analogy">如果 Kafka 是中央邮局，采集端就是<strong>街角的取件员</strong>：他要挨家挨户（每台服务器、每个 App）把信件（日志行 / 埋点事件）收上来，本地先装进背包（缓冲），路上不能弄丢，到邮局后准确投递。取件员干得好不好，直接决定邮局收到的信全不全、及不及时。</div>
+
+      <div class="svg-wrap">
+        <svg width="780" height="220" viewBox="0 0 780 220" role="img" aria-label="采集端链路">
+          <text x="390" y="22" text-anchor="middle" fill="#7dd3fc" font-size="15" font-weight="bold">采集链路：从端/服务器到 Kafka</text>
+          <rect x="20" y="56" width="140" height="110" rx="8" fill="#0c1120" stroke="#2a3556"/>
+          <text x="90" y="78" text-anchor="middle" fill="#94a3b8" font-size="12" font-weight="bold">产生数据的地方</text>
+          <text x="90" y="100" text-anchor="middle" fill="#64748b" font-size="10">App / Web（埋点 SDK）</text>
+          <text x="90" y="118" text-anchor="middle" fill="#64748b" font-size="10">服务器（日志文件）</text>
+          <text x="90" y="136" text-anchor="middle" fill="#64748b" font-size="10">网关 / Nginx</text>
+          <text x="90" y="154" text-anchor="middle" fill="#64748b" font-size="10">IoT / 设备</text>
+
+          <rect x="230" y="42" width="160" height="50" rx="8" fill="#231a33" stroke="#a78bfa"/><text x="310" y="63" text-anchor="middle" fill="#c4b5fd" font-size="11" font-weight="bold">埋点上报服务</text><text x="310" y="80" text-anchor="middle" fill="#94a3b8" font-size="9.5">收集 SDK 事件（HTTP/gRPC）</text>
+          <rect x="230" y="118" width="160" height="50" rx="8" fill="#10241c" stroke="#34d399"/><text x="310" y="139" text-anchor="middle" fill="#6ee7b7" font-size="11" font-weight="bold">采集 Agent</text><text x="310" y="156" text-anchor="middle" fill="#94a3b8" font-size="9.5">Filebeat / Vector / Flume</text>
+
+          <rect x="460" y="80" width="130" height="50" rx="8" fill="#10172b" stroke="#7dd3fc"/><text x="525" y="101" text-anchor="middle" fill="#7dd3fc" font-size="12" font-weight="bold">Kafka</text><text x="525" y="118" text-anchor="middle" fill="#94a3b8" font-size="9.5">本地缓冲 → 批量发送</text>
+
+          <rect x="650" y="80" width="110" height="50" rx="8" fill="#0c1120" stroke="#2a3556"/><text x="705" y="101" text-anchor="middle" fill="#94a3b8" font-size="11">下游</text><text x="705" y="118" text-anchor="middle" fill="#64748b" font-size="9.5">Flink / 湖仓</text>
+
+          <defs><marker id="arc" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#64748b"/></marker></defs>
+          <line x1="160" y1="95" x2="228" y2="67" stroke="#475569" stroke-width="1.2" marker-end="url(#arc)"/>
+          <line x1="160" y1="125" x2="228" y2="143" stroke="#475569" stroke-width="1.2" marker-end="url(#arc)"/>
+          <line x1="390" y1="67" x2="458" y2="95" stroke="#475569" stroke-width="1.2" marker-end="url(#arc)"/>
+          <line x1="390" y1="143" x2="458" y2="112" stroke="#475569" stroke-width="1.2" marker-end="url(#arc)"/>
+          <line x1="590" y1="105" x2="648" y2="105" stroke="#64748b" stroke-width="1.4" marker-end="url(#arc)"/>
+        </svg>
+        <div class="svg-caption">两条典型采集路：① 客户端埋点 → 上报服务 → Kafka；② 服务器日志文件 → 采集 Agent → Kafka。Agent 在本地缓冲、批量、断点续传。</div>
+      </div>
+
+      <h3 id="s0-2">0.2 埋点 SDK 与日志采集 Agent</h3>
+      <div class="def"><strong>埋点（Tracking / Instrumentation）</strong>：在 App / 网页 / 服务代码里<strong>主动记录用户行为或业务事件</strong>（如「点击了商品」「下单成功」），按统一的事件 schema 上报。分两类：<strong>客户端埋点</strong>（App/Web 端 SDK 采集，能拿到 UI 行为，但受网络/防丢影响）与<strong>服务端埋点</strong>（在后端服务里打点，可靠、不易被篡改，但拿不到纯前端行为）。埋点数据是<strong>用户行为分析、推荐、AB 实验</strong>的原料（呼应 <code>pm/data_ab_testing</code>）。</div>
+      <div class="warn"><strong>埋点规范是数据质量的源头</strong>：事件命名、字段类型、必填项若不统一，下游再多治理也救不回来。成熟团队会用<strong>埋点元数据管理 + schema 校验</strong>（如上报时校验事件结构，呼应 D06 的 Schema Registry 与 D09 的数据契约），从源头卡住脏数据。这就是「<strong>数据质量左移</strong>」。</div>
+
+      <p>服务器上的日志文件，则由<strong>采集 Agent</strong> 监听、读取、发往 Kafka。主流 Agent 各有取向：</p>
+      <table>
+        <thead><tr><th>Agent</th><th>出身 / 生态</th><th>特点</th><th>适用</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Filebeat</strong></td><td>Elastic 系</td><td class="cell-ok">轻量、低资源、稳定</td><td>日志采集进 ES / Kafka，最常见</td></tr>
+          <tr><td><strong>Logstash</strong></td><td>Elastic 系</td><td class="cell-mid">功能强但重、吃内存</td><td>需要复杂解析/富化的场景</td></tr>
+          <tr><td><strong>Fluentd / Fluent Bit</strong></td><td>CNCF</td><td class="cell-ok">云原生、K8s 日志标配（Bit 极轻）</td><td>容器 / K8s 日志采集</td></tr>
+          <tr><td><strong>Vector</strong></td><td>Datadog（Rust）</td><td class="cell-ok">高性能、可观测性统一管道</td><td>现代新选，logs/metrics 统一</td></tr>
+          <tr><td><strong>Flume</strong></td><td>Hadoop 系</td><td class="cell-mid">老牌、与 HDFS/Kafka 集成好</td><td>传统 Hadoop 体系内</td></tr>
+        </tbody>
+      </table>
+      <div class="note">采集端的工程难题，本质都是老兵熟悉的可靠性问题：<strong>① 不丢</strong>——本地磁盘缓冲 + 断点续传（记录读到文件哪个 offset，重启续读）；<strong>② 不重</strong>——配合下游幂等，做到至少一次 + 去重（呼应 Kafka 的 Exactly-once）；<strong>③ 背压</strong>——下游/Kafka 写不动时本地缓冲并降速，别撑爆内存；<strong>④ 多行/格式</strong>——堆栈日志多行合并、结构化解析。这些在 D04 反压、D06 可靠性里都会再次相遇。</div>
+    </section>
+
+    <!-- ===== 第 1 章 ===== -->
+    <section class="chapter" id="ch1">
+      <div class="ch-head"><div class="num">01</div><div class="t"><h2>Kafka 核心架构</h2><p class="sub">本质是一个分布式、可持久化、可重放的 commit log · 老兵秒懂</p></div></div>
+
+      <p class="lead"><strong>Kafka</strong> 是大数据世界的「中枢神经」——几乎所有实时数据都先流进 Kafka，再被各路下游消费。别被「消息队列」这个标签局限，它的本质是一个<strong>分布式的、持久化的、可重放的提交日志（commit log）</strong>。</p>
+
+      <div class="analogy">Kafka 像一份<strong>不断追加、永不修改的"流水账本"</strong>：生产者只管在账本末尾<strong>一行行追加</strong>记录（顺序写，极快）；每个读者（消费者）拿一个<strong>书签（offset）</strong>记自己读到第几行，各读各的、互不干扰；账本按主题分成很多本、每本再撕成几叠（分区）让多人同时记。这就是为什么它又快、又能多方消费、还能"倒回去重读"。</div>
+
+      <h3 id="s1-1">1.1 Topic / Partition / Offset / Consumer Group</h3>
+      <div class="svg-wrap">
+        <svg width="780" height="250" viewBox="0 0 780 250" role="img" aria-label="Kafka topic 分区与消费者组">
+          <text x="390" y="20" text-anchor="middle" fill="#7dd3fc" font-size="14" font-weight="bold">Topic「orders」分成 3 个分区，生产者写入、消费者组并行读</text>
+          <!-- producer -->
+          <rect x="20" y="95" width="90" height="44" rx="7" fill="#231a33" stroke="#a78bfa"/><text x="65" y="121" text-anchor="middle" fill="#c4b5fd" font-size="11">Producer</text>
+          <!-- partitions -->
+          <g font-family="monospace" font-size="10">
+            <text x="300" y="48" text-anchor="middle" fill="#94a3b8" font-size="10">offset → 0  1  2  3  4 ...</text>
+            <rect x="170" y="56" width="260" height="30" rx="4" fill="#10172b" stroke="#34d399"/><text x="155" y="76" text-anchor="end" fill="#6ee7b7">P0</text>
+            <rect x="170" y="100" width="260" height="30" rx="4" fill="#10172b" stroke="#34d399"/><text x="155" y="120" text-anchor="end" fill="#6ee7b7">P1</text>
+            <rect x="170" y="144" width="260" height="30" rx="4" fill="#10172b" stroke="#34d399"/><text x="155" y="164" text-anchor="end" fill="#6ee7b7">P2</text>
+            <g fill="#1a2138" stroke="#475569">
+              <rect x="176" y="60" width="22" height="22"/><rect x="200" y="60" width="22" height="22"/><rect x="224" y="60" width="22" height="22"/><rect x="248" y="60" width="22" height="22"/>
+              <rect x="176" y="104" width="22" height="22"/><rect x="200" y="104" width="22" height="22"/><rect x="224" y="104" width="22" height="22"/>
+              <rect x="176" y="148" width="22" height="22"/><rect x="200" y="148" width="22" height="22"/><rect x="224" y="148" width="22" height="22"/><rect x="248" y="148" width="22" height="22"/><rect x="272" y="148" width="22" height="22"/>
+            </g>
+            <text x="420" y="76" fill="#64748b">追加→</text><text x="420" y="120" fill="#64748b">追加→</text><text x="420" y="164" fill="#64748b">追加→</text>
+          </g>
+          <line x1="110" y1="117" x2="168" y2="71" stroke="#475569" marker-end="url(#ar1)"/>
+          <line x1="110" y1="117" x2="168" y2="115" stroke="#475569" marker-end="url(#ar1)"/>
+          <line x1="110" y1="117" x2="168" y2="159" stroke="#475569" marker-end="url(#ar1)"/>
+          <!-- consumers -->
+          <rect x="500" y="56" width="120" height="30" rx="6" fill="#2a2410" stroke="#fbbf24"/><text x="560" y="76" text-anchor="middle" fill="#fcd34d" font-size="10">Consumer A → P0</text>
+          <rect x="500" y="100" width="120" height="30" rx="6" fill="#2a2410" stroke="#fbbf24"/><text x="560" y="120" text-anchor="middle" fill="#fcd34d" font-size="10">Consumer B → P1</text>
+          <rect x="500" y="144" width="120" height="30" rx="6" fill="#2a2410" stroke="#fbbf24"/><text x="560" y="164" text-anchor="middle" fill="#fcd34d" font-size="10">Consumer C → P2</text>
+          <text x="560" y="200" text-anchor="middle" fill="#94a3b8" font-size="10">同一消费者组：每个分区只被组内一个消费者读 → 并行</text>
+          <line x1="430" y1="71" x2="498" y2="71" stroke="#fb923c" marker-end="url(#ar1)"/>
+          <line x1="430" y1="115" x2="498" y2="115" stroke="#fb923c" marker-end="url(#ar1)"/>
+          <line x1="430" y1="159" x2="498" y2="159" stroke="#fb923c" marker-end="url(#ar1)"/>
+          <defs><marker id="ar1" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#64748b"/></marker></defs>
+        </svg>
+        <div class="svg-caption">Topic 是逻辑主题；它被切成多个 Partition（并行 + 扩展单位）；每条消息在分区内有唯一递增的 Offset；消费者用 offset 记录读到哪。</div>
+      </div>
+      <div class="def"><strong>核心概念一次过</strong>：
+        <ul style="margin-top:8px">
+          <li><strong>Topic（主题）</strong>：一类消息的逻辑分类，如 <code>orders</code>、<code>clicks</code>。</li>
+          <li><strong>Partition（分区）</strong>：Topic 的物理切分，是<strong>并行与扩展的单位</strong>（呼应 D01 分片）。<strong>分区内有序，跨分区无序。</strong></li>
+          <li><strong>Offset（偏移量）</strong>：消息在分区内的唯一递增编号。消费者提交 offset 记录"读到哪了"，故可<strong>重放</strong>（把 offset 调回去重读）。</li>
+          <li><strong>Broker</strong>：Kafka 服务节点；多个 broker 组成集群，分区副本分散其上。</li>
+          <li><strong>Producer / Consumer</strong>：生产者按 key 哈希决定写哪个分区；消费者从分区拉取。</li>
+          <li><strong>Consumer Group（消费者组）</strong>：一组协作消费者，<strong>组内每个分区只分配给一个消费者</strong>（实现并行）；不同组互相独立（各自全量消费）。</li>
+        </ul>
+      </div>
+
+      <h3 id="s1-2">1.2 交互演示：消费者组与分区再均衡</h3>
+      <p>Topic 有 <strong>4 个分区</strong>。调整消费者数量，看 Kafka 如何把分区<strong>再均衡（rebalance）</strong>分配给消费者——尤其注意：<strong>消费者数超过分区数时，多出来的只能闲着</strong>（分区数 = 并行度上限）：</p>
+
+      <div class="demo" id="cgDemo">
+        <div class="demo-title">交互演示 · 4 分区的 Topic + 不同数量的消费者</div>
+        <div class="demo-controls">
+          <span style="color:var(--text-mute);font-size:12.5px;margin-right:4px">消费者数：</span>
+          <button class="seg" data-n="1">1</button>
+          <button class="seg active" data-n="2">2</button>
+          <button class="seg" data-n="3">3</button>
+          <button class="seg" data-n="4">4</button>
+          <button class="seg" data-n="6">6</button>
+        </div>
+        <div class="cg-wrap" id="cgWrap"></div>
+        <div class="cg-readout" id="cgReadout"></div>
+      </div>
+      <div class="tip">这解释了 Kafka 的一条铁律：<strong>消费者组的有效并行度 = min(消费者数, 分区数)</strong>。想提高消费吞吐，先得有足够的分区。所以<strong>分区数是 Kafka 容量规划的核心参数</strong>——设少了并行不够，设多了元数据/再均衡开销大、且小文件多。</div>
+    </section>
+
+    <!-- ===== 第 2 章 ===== -->
+    <section class="chapter" id="ch2">
+      <div class="ch-head"><div class="num">02</div><div class="t"><h2>Kafka 可靠性：副本 / ISR / Exactly-once</h2><p class="sub">数据不能丢 · 这套机制和 D01 的副本、D04 的 exactly-once 一脉相承</p></div></div>
+
+      <h3 id="s2-1">2.1 副本、ISR 与 acks</h3>
+      <div class="def"><strong>副本（Replica）与 Leader/Follower</strong>：每个分区有多个副本分散在不同 broker。其中一个是 <strong>Leader</strong>（负责所有读写），其余是 <strong>Follower</strong>（从 Leader 同步数据）。Leader 挂了，从同步副本里选新 Leader——这就是容错。（呼应 D01 副本、共识选主。）</div>
+      <div class="def"><strong>ISR（In-Sync Replicas，同步副本集）</strong>：与 Leader<strong>保持同步</strong>的副本集合。只有 ISR 里的副本才有资格在 Leader 故障时被选为新 Leader——保证选出来的副本数据是全的。落后太多的 follower 会被踢出 ISR。</div>
+      <div class="def"><strong>acks（生产者确认级别）</strong>：决定"写入算成功"的标准，是<strong>可靠性 vs 吞吐/延迟</strong>的权衡：
+        <ul style="margin-top:8px">
+          <li><code>acks=0</code>：发了就算成功，不等确认。最快，可能丢。</li>
+          <li><code>acks=1</code>：Leader 写入即确认。Leader 挂且未同步则可能丢。</li>
+          <li><code>acks=all</code>（=-1）：ISR 全部确认才算成功。最可靠，延迟最高。<strong>金融/关键数据用它。</strong></li>
+        </ul>
+      </div>
+      <pre><span class="c"># 生产者高可靠配置（不丢数据的典型组合）</span>
+    acks=all                      <span class="c"># ISR 全确认</span>
+    min.insync.replicas=2         <span class="c"># ISR 至少 2 个才接受写（否则拒绝，宁可不写也不丢）</span>
+    enable.idempotence=true       <span class="c"># 幂等生产者：重试不产生重复</span>
+    retries=Integer.MAX_VALUE     <span class="c"># 失败无限重试</span>
+    delivery.timeout.ms=120000    <span class="c"># 总投递超时，需与重试策略联动设计</span>
+    <span class="c"># broker 侧建议：unclean.leader.election.enable=false（避免脏选主导致数据回退）</span></pre>
+
+      <h3 id="s2-2">2.2 顺序保证与 Exactly-once</h3>
+      <div class="warn"><strong>Kafka 只保证「分区内有序」，不保证「Topic 全局有序」。</strong> 所以需要保序的消息（如同一订单的状态变更）必须用<strong>同一个 key</strong>（如 order_id）——相同 key 哈希到同一分区，自然有序。这是用 Kafka 最容易踩的坑之一。</div>
+      <div class="def"><strong>Kafka 的 Exactly-once（EOS）</strong>：通过<strong>幂等生产者</strong>（去重重复发送）+ <strong>事务</strong>（跨分区/Topic 原子写）实现。配合 Flink（D04）的 checkpoint + 两阶段提交，可达<strong>端到端精确一次</strong>：源（Kafka offset 可重放）→ 计算（Flink 状态快照）→ sink（事务写）。三者缺一不可。这正是 D04 讲的"端到端 exactly-once 需要可重放源 + 事务 sink"的源头。<strong>注意：</strong>端到端 EOS 不是默认自动获得，只有当 sink 侧支持事务或幂等写，且"处理结果提交"与"消费位点推进"能绑定一致性语义时才成立。</div>
+      <div class="def"><strong>消费语义</strong>：取决于<strong>何时提交 offset</strong>。先处理后提交 = <strong>至少一次（at-least-once）</strong>（可能重复，崩在提交前会重处理）；先提交后处理 = <strong>至多一次（at-most-once）</strong>（可能丢）；要精确一次需把"处理结果"和"offset 提交"放进同一个事务。</div>
+
+      <h3 id="s2-3">2.3 生产可观测性与告警基线</h3>
+      <p>Kafka 出问题通常不是"挂了"，而是<strong>慢慢退化</strong>：消费追不上、ISR 抖动、再均衡频繁。上线前应先定义一套可观测性基线：</p>
+      <table>
+        <thead><tr><th>指标</th><th>含义</th><th>告警建议</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Consumer Lag</strong></td><td>消费位点落后最新位点的差值</td><td class="cell-bad">持续增长且超过业务 SLA（例如 15 分钟）即告警</td></tr>
+          <tr><td><strong>End-to-End Latency</strong></td><td>从生产到下游可见的总延迟</td><td class="cell-mid">P95/P99 超阈值持续 N 分钟告警</td></tr>
+          <tr><td><strong>ISR Shrink/Expand</strong></td><td>同步副本集频繁收缩/恢复</td><td class="cell-mid">短时频繁抖动说明磁盘/网络或负载异常</td></tr>
+          <tr><td><strong>Rebalance 次数与时长</strong></td><td>消费者组重分配的频率与停顿时间</td><td class="cell-mid">频繁 rebalance 会带来吞吐抖动与重复消费</td></tr>
+          <tr><td><strong>Produce/Consume TPS</strong></td><td>写入与消费速率</td><td>观察供需差，提前扩容分区/消费实例</td></tr>
+          <tr><td><strong>DLQ 速率</strong></td><td>进入死信队列的消息比例</td><td class="cell-bad">突增往往是 schema 变更或下游解析故障</td></tr>
+        </tbody>
+      </table>
+      <div class="tip">最低限度的监控组合：<strong>lag + 端到端延迟 + ISR 抖动 + rebalance + DLQ</strong>。少一个维度，排障就容易"盲人摸象"。</div>
+
+      <h3 id="s2-4">2.4 失败处理：重试队列与死信队列（DLQ）</h3>
+      <div class="def"><strong>重试策略不是一把梭</strong>：先区分错误类型。可重试错误（下游短暂超时、网络抖动）走<strong>退避重试</strong>；不可重试错误（字段缺失、schema 不兼容、业务校验失败）应直接入 <strong>DLQ</strong>，避免把主消费线程拖死。</div>
+      <table>
+        <thead><tr><th>错误类型</th><th>处理建议</th><th>备注</th></tr></thead>
+        <tbody>
+          <tr><td>临时性故障（5xx/超时）</td><td class="cell-ok">指数退避重试（如 1s/5s/30s）</td><td>限制最大重试次数，避免雪崩</td></tr>
+          <tr><td>脏数据/校验失败</td><td class="cell-mid">直接入 DLQ + 告警</td><td>由离线修复任务二次处理</td></tr>
+          <tr><td>Schema 不兼容</td><td class="cell-bad">阻断上线并回滚 schema</td><td>优先在 Registry 做兼容性守门</td></tr>
+        </tbody>
+      </table>
+      <div class="warn">保序场景（同 key 同分区）中，遇到坏消息不要简单 "skip"。更稳妥做法是：把该 key 暂停、旁路到隔离队列处理，再恢复主链路，避免后续消息乱序或语义破坏。</div>
+    </section>
+
+    <!-- ===== 第 3 章 ===== -->
+    <section class="chapter" id="ch3">
+      <div class="ch-head"><div class="num">03</div><div class="t"><h2>Kafka 生态：Connect · Schema Registry · Pulsar</h2><p class="sub">不只是个队列 · 围绕它长出的一整套数据集成能力</p></div></div>
+
+      <div class="def"><strong>Kafka Connect</strong>：Kafka 官方的<strong>数据集成框架</strong>，用<strong>配置（而非写代码）</strong>把数据在 Kafka 与外部系统间搬运。<strong>Source Connector</strong> 把外部数据导入 Kafka（如 Debezium 抓 MySQL binlog）；<strong>Sink Connector</strong> 把 Kafka 数据导出到外部（如写入 S3 / ES / JDBC）。它解决"又要写一遍数据搬运代码"的重复劳动。</div>
+      <div class="def"><strong>Schema Registry（模式注册中心）</strong>：集中管理 Kafka 消息的 schema（常配 Avro/Protobuf）。生产者按注册的 schema 序列化、消费者按 schema 反序列化，并强制<strong>schema 兼容性校验</strong>（如只允许向后兼容地加字段）。它解决流数据的<strong>"schema 演进"难题</strong>——上游改了字段不会让下游突然解析失败。呼应 D01 的 Avro（行式、自描述、利于流式写入）。</div>
+      <div class="analogy">没有 Schema Registry 的流数据像<strong>大家用各自的方言传话</strong>，上游改个说法下游就听不懂、整条链路崩。有了它就像<strong>全公司统一的术语词典 + 变更审批</strong>：改字段要先过兼容性检查，保证老消费者不被突然搞挂。</div>
+      <table>
+        <thead><tr><th>维度</th><th>Kafka</th><th>Pulsar</th></tr></thead>
+        <tbody>
+          <tr><td>架构</td><td>存算一体（broker 存数据）</td><td class="cell-ok">存算分离（broker + BookKeeper）</td></tr>
+          <tr><td>多租户 / 地理复制</td><td class="cell-mid">需额外组件</td><td class="cell-ok">原生支持</td></tr>
+          <tr><td>生态成熟度</td><td class="cell-ok">最成熟、事实标准</td><td class="cell-mid">较新、生态追赶中</td></tr>
+          <tr><td>选择</td><td>绝大多数场景的默认</td><td>强多租户/分层存储需求时考虑</td></tr>
+        </tbody>
+      </table>
+      <div class="info">Kafka 仍是事实标准；Pulsar 的<strong>存算分离</strong>思想（呼应 D01）在超大规模/多租户场景有优势。了解即可，选型上 Kafka 通常是稳妥默认。</div>
+
+      <h3 id="s3-1">3.1 生产环境安全治理（常被低估）</h3>
+      <div class="grid cols-3">
+        <div class="card"><h4>传输与鉴权</h4><p style="font-size:13px;color:var(--text-dim)">启用 TLS 加密链路，配合 SASL（SCRAM/OAuth 等）做客户端鉴权，避免明文传输与匿名接入。</p></div>
+        <div class="card amber"><h4>最小权限 ACL</h4><p style="font-size:13px;color:var(--text-dim)">按 Topic 和 Consumer Group 下发最小权限（读/写/管理分离），禁止一把通配符账号跑全链路。</p></div>
+        <div class="card green"><h4>敏感数据治理</h4><p style="font-size:13px;color:var(--text-dim)">对 PII 字段（手机号/证件号）做脱敏或令牌化；日志与 DLQ 也要遵守同样的数据合规策略。</p></div>
+      </div>
+      <div class="tip">很多团队只做了吞吐压测，没做安全压测。建议补一次"证书轮换 + ACL 变更 + 凭据过期"演练，确认不会导致大面积消费中断。</div>
+    </section>
+
+    <!-- ===== 第 4 章 ===== -->
+    <section class="chapter" id="ch4">
+      <div class="ch-head"><div class="num">04</div><div class="t"><h2>CDC：变更数据捕获</h2><p class="sub">让数据库的每一次增删改，实时流进数据栈 · 实时数仓的源头活水</p></div></div>
+
+      <p class="lead">业务数据躺在 MySQL / PostgreSQL 里，每天都在增删改。怎么让数仓<strong>实时</strong>跟上这些变化，而不是 T+1 全表拉一遍？答案是 <strong>CDC（Change Data Capture，变更数据捕获）</strong>。</p>
+
+      <div class="def"><strong>CDC（变更数据捕获）</strong>：实时捕获数据库的<strong>数据变更（INSERT/UPDATE/DELETE）</strong>并以事件流输出。主流做法是<strong>读数据库的事务日志</strong>（MySQL 的 <strong>binlog</strong>、PostgreSQL 的 WAL）——这是数据库本就为复制/恢复而写的日志（呼应 architect 的 WAL）。读 binlog 几乎<strong>不增加业务库负担</strong>、且能捕获到每一次变更（包括删除），远优于"定时查全表/查 updated_at"的老办法。</div>
+      <div class="analogy">老式同步像<strong>每天给整个仓库盘点一次</strong>——慢、费力、还抓不到"中途进又出"的货。CDC 像<strong>在仓库门口装了监控，每件货的进出立刻记一笔</strong>——实时、轻量、一笔不漏（连"删除"都记得到）。这笔"流水"恰恰就是数据库自己写的 binlog。</div>
+
+      <div class="svg-wrap">
+        <svg width="760" height="160" viewBox="0 0 760 160" role="img" aria-label="CDC 链路">
+          <text x="380" y="20" text-anchor="middle" fill="#7dd3fc" font-size="14" font-weight="bold">CDC 链路：binlog → Debezium → Kafka → 实时下游</text>
+          <rect x="30" y="55" width="120" height="50" rx="8" fill="#231a33" stroke="#a78bfa"/><text x="90" y="78" text-anchor="middle" fill="#c4b5fd" font-size="12">MySQL</text><text x="90" y="95" text-anchor="middle" fill="#94a3b8" font-size="9">binlog（变更日志）</text>
+          <rect x="210" y="55" width="120" height="50" rx="8" fill="#2a2410" stroke="#fbbf24"/><text x="270" y="78" text-anchor="middle" fill="#fcd34d" font-size="12">Debezium</text><text x="270" y="95" text-anchor="middle" fill="#94a3b8" font-size="9">读 binlog → 事件</text>
+          <rect x="390" y="55" width="110" height="50" rx="8" fill="#10172b" stroke="#7dd3fc"/><text x="445" y="78" text-anchor="middle" fill="#7dd3fc" font-size="12">Kafka</text><text x="445" y="95" text-anchor="middle" fill="#94a3b8" font-size="9">变更事件流</text>
+          <rect x="560" y="38" width="180" height="34" rx="7" fill="#10241c" stroke="#34d399"/><text x="650" y="60" text-anchor="middle" fill="#6ee7b7" font-size="10">Flink 实时数仓（D08）</text>
+          <rect x="560" y="86" width="180" height="34" rx="7" fill="#10241c" stroke="#34d399"/><text x="650" y="108" text-anchor="middle" fill="#6ee7b7" font-size="10">湖仓 / OLAP / 缓存同步</text>
+          <defs><marker id="arc" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#64748b"/></marker></defs>
+          <line x1="150" y1="80" x2="208" y2="80" stroke="#64748b" marker-end="url(#arc)"/>
+          <line x1="330" y1="80" x2="388" y2="80" stroke="#64748b" marker-end="url(#arc)"/>
+          <line x1="500" y1="75" x2="558" y2="56" stroke="#64748b" marker-end="url(#arc)"/>
+          <line x1="500" y1="85" x2="558" y2="103" stroke="#64748b" marker-end="url(#arc)"/>
+        </svg>
+        <div class="svg-caption">Debezium 读 MySQL binlog、把每条变更转成结构化事件灌进 Kafka，下游（Flink/湖仓/OLAP）实时消费——OLTP 的每一次写，秒级出现在分析侧。</div>
+      </div>
+
+      <div class="grid cols-2">
+        <div class="card"><h4>Debezium</h4><p style="font-size:13px;color:var(--text-dim)">最流行的开源 CDC 工具，以 Kafka Connect Source Connector 形式运行，支持 MySQL/PG/Mongo/Oracle 等。输出标准化的变更事件（before/after 镜像）。</p></div>
+        <div class="card green"><h4>Flink CDC</h4><p style="font-size:13px;color:var(--text-dim)">把 CDC 能力直接集成进 Flink，<strong>无需 Kafka 中转</strong>即可"数据库 → Flink → 下游"。还能做<strong>全量 + 增量无缝衔接</strong>（先快照存量、再接 binlog 增量）。</p></div>
+      </div>
+      <div class="tip">CDC 是<strong>实时数仓（D08）的源头活水</strong>，也是"把核心业务库的数据安全地拷贝一份去做分析、避免分析查询拖垮线上库"的标准手段。它产出的变更流天然适合 D02 的<strong>SCD2 / 拉链表</strong>——每条 UPDATE 都是一个新版本。</div>
+      <div class="warn">CDC 落地的坑：① <strong>DDL 变更</strong>（源表加列/改类型）要能传导到下游，否则解析失败；② <strong>初始全量快照</strong>对大表可能很重，要选低峰期或用增量快照；③ 删除事件（tombstone）下游要正确处理，否则数据删不掉。</div>
+
+      <h3 id="s4-1">4.1 DDL 变更与发布顺序（实战版）</h3>
+      <table>
+        <thead><tr><th>变更类型</th><th>推荐做法</th><th>风险点</th></tr></thead>
+        <tbody>
+          <tr><td>新增可空字段</td><td class="cell-ok">优先新增，保持向后兼容</td><td>下游默认值逻辑需补齐</td></tr>
+          <tr><td>字段重命名</td><td class="cell-mid">先双写新旧字段，灰度后再移除旧字段</td><td>直接改名会导致历史消费者解析失败</td></tr>
+          <tr><td>类型变更</td><td class="cell-bad">新字段承载新类型，旧字段保留过渡期</td><td>强改类型最容易引发序列化异常</td></tr>
+        </tbody>
+      </table>
+      <div class="def"><strong>灰度顺序</strong>：先升级下游消费者（兼容新旧 schema）→ 再改上游 DDL → 观察 lag 与 DLQ → 最后清理旧字段。把"向前兼容"放在上线前，而不是事故后补救。</div>
+    </section>
+
+    <!-- ===== 第 5 章 ===== -->
+    <section class="chapter" id="ch5">
+      <div class="ch-head"><div class="num">05</div><div class="t"><h2>工作流编排：Airflow & 同类</h2><p class="sub">几百个任务、复杂依赖、定时与回填——靠编排器统一调度</p></div></div>
+
+      <p class="lead">数据平台每天要跑成百上千个任务：抽取、清洗、各层加工、报表生成……它们之间有<strong>依赖</strong>（B 要等 A 完成）、有<strong>时间</strong>（每天凌晨跑）、还可能<strong>失败重试、补跑历史</strong>。<strong>工作流编排器</strong>就是统一管理这些任务的"总调度室"。</p>
+
+      <div class="def"><strong>工作流编排（Workflow Orchestration）</strong>：用 <strong>DAG（有向无环图，又见 D03！）</strong>描述任务及其依赖，由调度器按依赖顺序、按时间触发、并处理失败重试/告警/回填。代表：<strong>Airflow</strong>（Python 定义 DAG，最流行）、<strong>DolphinScheduler</strong>（国产，可视化拖拽）、<strong>Dagster / Prefect</strong>（更现代、数据感知）。</div>
+      <div class="analogy">编排器像<strong>厨房的总厨</strong>：他手里有一张"出菜流程图"（DAG）——切配、炖煮、摆盘谁先谁后；该并行的同时开火（洗菜和烧水一起），该等的等着（没炖好不能摆盘）；某道菜搞砸了就重做（重试）；客人要补昨天的菜也能补（回填）。厨师（具体任务）只管做自己那道，总厨负责"什么时候、按什么顺序、谁做"。</div>
+
+      <h3 id="s5-1">5.1 交互演示：DAG 依赖调度</h3>
+      <p>一个典型的数据管道 DAG：两个抽取任务<strong>并行</strong>起步，转换要等它们都完成，再依次质检、入库。点「开始调度」，看编排器如何<strong>按依赖一波波推进、能并行的并行</strong>：</p>
+
+      <div class="demo" id="dagDemo">
+        <div class="demo-title">交互演示 · Airflow 风格 DAG 调度</div>
+        <div class="demo-controls">
+          <button class="run" id="dagRun">▶ 开始调度</button>
+          <button class="ghost" id="dagReset">重置</button>
+        </div>
+        <div class="dag-grid" id="dagGrid"></div>
+        <div class="dag-readout" id="dagReadout">点「开始调度」，编排器会按拓扑顺序逐波执行。</div>
+      </div>
+      <pre><span class="c"># Airflow DAG 定义（Python）：声明任务 + 依赖，调度器负责其余</span>
+<span class="k">with</span> DAG(<span class="s">"sales_etl"</span>, schedule=<span class="s">"0 2 * * *"</span>, start_date=...) <span class="k">as</span> dag:
+    ext_orders = PythonOperator(task_id=<span class="s">"extract_orders"</span>, ...)
+    ext_users  = PythonOperator(task_id=<span class="s">"extract_users"</span>, ...)
+    transform  = SparkOperator(task_id=<span class="s">"transform"</span>, ...)
+    qc         = PythonOperator(task_id=<span class="s">"quality_check"</span>, ...)
+    load       = PythonOperator(task_id=<span class="s">"load_dwd"</span>, ...)
+
+    [ext_orders, ext_users] <span class="o">&gt;&gt;</span> transform <span class="o">&gt;&gt;</span> qc <span class="o">&gt;&gt;</span> load   <span class="c"># &gt;&gt; 定义依赖</span></pre>
+
+      <h3 id="s5-2">5.2 回填、调度与 SLA</h3>
+      <div class="def"><strong>回填（Backfill）</strong>：重新跑某段历史时间区间的任务。常见于：修了 bug 要重算过去 30 天、新加的指标要补历史。编排器把每个调度周期看作一次独立的 <strong>run（按 execution_date 参数化）</strong>，所以能精确地"重跑 2026-06-01 那天的管道"——这要求任务<strong>幂等</strong>（重跑结果一致，不会重复累加）。</div>
+      <div class="def"><strong>幂等性（Idempotency）</strong>：同一任务重跑多次，结果与跑一次相同。是回填/重试安全的前提。实现常用「先按分区删除再写入（overwrite）」而非「追加（append）」，确保重跑不产生重复数据。</div>
+      <div class="grid cols-3">
+        <div class="card"><h4>调度触发</h4><p style="font-size:13px;color:var(--text-dim)">Cron 定时（每天 2 点）、或数据/事件驱动（上游数据就绪才触发，data-aware）。</p></div>
+        <div class="card amber"><h4>失败处理</h4><p style="font-size:13px;color:var(--text-dim)">自动重试（带退避）、告警、依赖任务阻塞，避免错误数据往下游扩散。</p></div>
+        <div class="card green"><h4>SLA 与监控</h4><p style="font-size:13px;color:var(--text-dim)">设定任务应在何时完成；超时告警。配合血缘定位"谁卡住了整条链"。</p></div>
+      </div>
+      <div class="info">编排器是数据平台的"心跳"。它和 D02 的分层、dbt 是绝配：dbt 管"模型之间的依赖与转换"，Airflow 管"何时触发、跨系统编排、回填与告警"。两者常配合使用（Airflow 触发 dbt run）。</div>
+    </section>
+
+    <!-- ===== 第 6 章 ===== -->
+    <section class="chapter" id="ch6">
+      <div class="ch-head"><div class="num">06</div><div class="t"><h2>摄取模式选型</h2><p class="sub">批 / 流 / CDC 怎么选 · 一张决策清单</p></div></div>
+      <table>
+        <thead><tr><th>模式</th><th>怎么做</th><th>延迟</th><th>适用</th></tr></thead>
+        <tbody>
+          <tr><td><strong>批量全量</strong></td><td>定时拉整张表</td><td class="cell-bad">T+1</td><td>小表、维表、对实时无要求</td></tr>
+          <tr><td><strong>批量增量</strong></td><td>按 updated_at / 自增 ID 拉新增</td><td class="cell-mid">小时级</td><td>大表、有可靠增量标记、抓不到删除</td></tr>
+          <tr><td><strong>流式（Kafka）</strong></td><td>事件实时进 Kafka</td><td class="cell-ok">秒级</td><td>埋点、日志、IoT 等天然事件流</td></tr>
+          <tr><td><strong>CDC</strong></td><td>读 binlog 捕获变更</td><td class="cell-ok">秒级</td><td>业务库实时同步（含删除）、实时数仓</td></tr>
+        </tbody>
+      </table>
+      <div class="flow-row"><span class="step">Q1</span><span class="arrow">→</span><span class="desc">数据源是<strong>数据库</strong>还是<strong>事件</strong>？ 数据库→CDC/批增量；事件流→Kafka</span></div>
+      <div class="flow-row"><span class="step">Q2</span><span class="arrow">→</span><span class="desc">要<strong>实时</strong>吗？ 要→CDC / 流式；T+1 够用→批量（更简单省钱）</span></div>
+      <div class="flow-row"><span class="step">Q3</span><span class="arrow">→</span><span class="desc">需要捕获<strong>删除</strong>、还原完整历史？ 需要→CDC（批增量抓不到删除）</span></div>
+      <div class="flow-row"><span class="step">Q4</span><span class="arrow">→</span><span class="desc">表很大、全量太重？ → CDC 增量快照 或 增量拉取</span></div>
+      <div class="tip">实战常<strong>混用</strong>：埋点/日志走 Kafka 流式，业务库走 CDC 实时同步，少量小维表 T+1 批量。没有银弹，按"延迟要求 + 数据源类型 + 成本"组合。</div>
+
+      <h3 id="s6-1">6.1 容量规划与成本速查</h3>
+      <table>
+        <thead><tr><th>参数</th><th>调大后的收益</th><th>副作用/成本</th></tr></thead>
+        <tbody>
+          <tr><td>Partition 数</td><td class="cell-ok">并行度上升、单组消费吞吐提升</td><td>元数据与 rebalance 开销增大，小文件更多</td></tr>
+          <tr><td>副本因子（RF）</td><td class="cell-ok">容灾能力增强</td><td>磁盘与网络成本近似按 RF 线性增加</td></tr>
+          <tr><td>Retention 保留时长</td><td>回放窗口更长、故障恢复更从容</td><td class="cell-mid">占用磁盘增大，恢复扫描更慢</td></tr>
+          <tr><td>压缩（lz4/zstd）</td><td class="cell-ok">降低网络与存储成本</td><td>CPU 消耗上升，需平衡延迟</td></tr>
+        </tbody>
+      </table>
+      <div class="info">一个简单估算：<strong>日存储量 ≈ 日写入量 × 副本因子 × 保留天数 ÷ 压缩比</strong>。先算账再扩容，避免"吞吐够了、磁盘先爆"。</div>
+
+      <h3 id="s6-2">6.2 上线前 10 条检查清单</h3>
+      <div class="def">
+        <ol style="margin-top:8px">
+          <li>是否定义了分区 key，并明确保序边界（按用户、订单或设备）？</li>
+          <li>生产端是否启用 <code>acks=all</code>、幂等与合理重试上限？</li>
+          <li><code>min.insync.replicas</code> 与副本因子是否匹配（避免单点写入）？</li>
+          <li>是否启用 DLQ，并对 DLQ 速率做告警？</li>
+          <li>是否监控 lag、端到端延迟、ISR 抖动、rebalance？</li>
+          <li>是否做过 broker 故障与消费者重启演练？</li>
+          <li>Schema Registry 是否开启兼容性校验并通过回归？</li>
+          <li>CDC 是否验证了 DELETE 与 DDL 变更链路？</li>
+          <li>任务是否幂等，支持回填与重跑不重复？</li>
+          <li>ACL/TLS/凭据轮换是否在预发演练过？</li>
+        </ol>
+      </div>
+    </section>
+
+    <!-- ===== 第 7 章 ===== -->
+    <section class="chapter" id="ch7">
+      <div class="ch-head"><div class="num">07</div><div class="t"><h2>小结 · 面试 · 术语表</h2><p class="sub">收束成判断力 · 并接上 D07</p></div></div>
+
+      <h3>一页纸总结</h3>
+      <div class="grid cols-2">
+        <div class="card"><h4>① Kafka = 分布式 commit log</h4><p style="font-size:13px;color:var(--text-dim)">Topic→Partition→Offset；分区是并行单位、分区内有序、可重放。</p></div>
+        <div class="card amber"><h4>② 消费者组</h4><p style="font-size:13px;color:var(--text-dim)">组内每分区只给一个消费者；有效并行 = min(消费者数, 分区数)。</p></div>
+        <div class="card green"><h4>③ 可靠性</h4><p style="font-size:13px;color:var(--text-dim)">副本+ISR+acks=all+min.insync；幂等+事务=EOS。保序靠同 key 同分区。</p></div>
+        <div class="card violet"><h4>④ 生态</h4><p style="font-size:13px;color:var(--text-dim)">Connect（配置式集成）+ Schema Registry（schema 演进治理）。</p></div>
+        <div class="card"><h4>⑤ CDC</h4><p style="font-size:13px;color:var(--text-dim)">读 binlog 实时捕获增删改（含删除），Debezium/Flink CDC，实时数仓源头。</p></div>
+        <div class="card green"><h4>⑥ 编排</h4><p style="font-size:13px;color:var(--text-dim)">DAG 调度依赖+定时+回填+SLA；幂等是回填/重试安全的前提。</p></div>
+      </div>
+
+      <h3>面试自测（点击展开）</h3>
+      <details class="qa">
+        <summary><span class="lvl pill cyan">基础</span>Kafka 为什么快？Topic/Partition/Offset 是什么关系？</summary>
+        <div class="a">
+          <div class="point"><span class="label">快</span>本质是 commit log：生产者<strong>顺序追加写</strong>（顺序 IO 极快）、零拷贝、批量发送、页缓存。</div>
+          <div class="point"><span class="label">关系</span>Topic（逻辑主题）→ 切成多个 Partition（并行/扩展单位，分区内有序）→ 每条消息有唯一递增 Offset（消费者记录读到哪、可重放）。</div>
+        </div>
+      </details>
+      <details class="qa">
+        <summary><span class="lvl pill green">核心</span>消费者数和分区数什么关系？消费者多了会怎样？</summary>
+        <div class="a">
+          <div class="point"><span class="label">规则</span>同一消费者组内，每个分区只分配给一个消费者。有效并行 = min(消费者数, 分区数)。</div>
+          <div class="point bad"><span class="label">多了</span>消费者数 &gt; 分区数时，多出来的消费者<strong>分不到分区、空闲</strong>。要提并行必须先加分区。</div>
+        </div>
+      </details>
+      <details class="qa">
+        <summary><span class="lvl pill amber">高频</span>Kafka 怎么保证不丢数据？怎么保证顺序？</summary>
+        <div class="a">
+          <div class="point"><span class="label">不丢</span><code>acks=all</code> + <code>min.insync.replicas≥2</code> + 多副本 + 幂等生产者；ISR 保证选主时数据全。</div>
+          <div class="point"><span class="label">顺序</span>只保证<strong>分区内有序</strong>。要保序的消息用同一 key（哈希到同一分区）。全局有序需单分区（牺牲并行）。</div>
+        </div>
+      </details>
+      <details class="qa">
+        <summary><span class="lvl pill violet">实战</span>什么是 CDC？相比定时拉全表/查 updated_at 有什么优势？</summary>
+        <div class="a">
+          <div class="point"><span class="label">CDC</span>读数据库事务日志（binlog/WAL）实时捕获增删改事件。</div>
+          <div class="point"><span class="label">优势</span>① 实时（秒级）；② 轻量（不查业务表、不加锁）；③ <strong>能抓到删除</strong>（查 updated_at 抓不到）；④ 完整变更历史（天然适配 SCD2）。</div>
+        </div>
+      </details>
+      <details class="qa">
+        <summary><span class="lvl pill red">工程</span>为什么回填要求任务幂等？怎么实现幂等？</summary>
+        <div class="a">
+          <div class="point"><span class="label">原因</span>回填/重试会让同一任务对同一时间分区多次运行，非幂等会重复累加/插入，数据错。</div>
+          <div class="point"><span class="label">实现</span>「按分区先删后写（overwrite）」而非「追加」；用 execution_date 参数化每次 run；写入带主键去重/MERGE。</div>
+        </div>
+      </details>
+
+      <h3 id="s7-gloss" style="margin-top:34px">术语表速查 · Glossary</h3>
+      <p>本篇核心名词一次收齐：</p>
+      <div class="glossary">
+        <div class="gl-group">
+          <h4>① Kafka 核心</h4>
+          <div class="gl"><span class="gl-t">Topic / Partition / Offset</span><span class="gl-d">逻辑主题 / 物理切分（并行单位，分区内有序）/ 分区内唯一递增编号（可重放）。</span></div>
+          <div class="gl"><span class="gl-t">Broker</span><span class="gl-d">Kafka 服务节点，多个组成集群，分区副本分散其上。</span></div>
+          <div class="gl"><span class="gl-t">Consumer Group</span><span class="gl-d">协作消费者组；组内每分区只给一个消费者；有效并行 = min(消费者数, 分区数)。</span></div>
+          <div class="gl"><span class="gl-t">commit log</span><span class="gl-d">只追加、不修改的有序日志——Kafka 的本质数据结构，顺序写极快、可重放。</span></div>
+          <div class="gl"><span class="gl-t">Consumer Lag <em>消费滞后</em></span><span class="gl-d">最新 offset 与消费者已提交 offset 的差，衡量消费跟不跟得上，核心监控指标。</span></div>
+        </div>
+        <div class="gl-group">
+          <h4>② 可靠性</h4>
+          <div class="gl"><span class="gl-t">副本 / Leader / Follower</span><span class="gl-d">分区多副本；Leader 读写、Follower 同步；Leader 挂从 ISR 选新主。</span></div>
+          <div class="gl"><span class="gl-t">ISR <em>In-Sync Replicas</em></span><span class="gl-d">与 Leader 保持同步的副本集，只有它们有资格被选为新 Leader。</span></div>
+          <div class="gl"><span class="gl-t">acks</span><span class="gl-d">生产者确认级别：0（不等）/1（Leader）/all（ISR 全确认，最可靠）。</span></div>
+          <div class="gl"><span class="gl-t">幂等生产者 / 事务</span><span class="gl-d">去重重试 + 跨分区原子写，是 Kafka Exactly-once（EOS）的基础。</span></div>
+          <div class="gl"><span class="gl-t">at-least / at-most / exactly-once</span><span class="gl-d">消费语义，取决于"处理与提交 offset 的先后"；精确一次需把结果与 offset 放进同一事务。</span></div>
+        </div>
+        <div class="gl-group">
+          <h4>③ 生态与 CDC</h4>
+          <div class="gl"><span class="gl-t">Kafka Connect</span><span class="gl-d">配置式数据集成框架：Source 导入、Sink 导出，免写搬运代码。</span></div>
+          <div class="gl"><span class="gl-t">Schema Registry</span><span class="gl-d">集中管理消息 schema 并强制兼容性校验，治理流数据的 schema 演进。</span></div>
+          <div class="gl"><span class="gl-t">CDC <em>Change Data Capture</em></span><span class="gl-d">读数据库事务日志实时捕获增删改事件，轻量、实时、能抓删除。</span></div>
+          <div class="gl"><span class="gl-t">binlog / WAL</span><span class="gl-d">数据库为复制/恢复写的变更日志，CDC 的数据来源。</span></div>
+          <div class="gl"><span class="gl-t">Debezium / Flink CDC</span><span class="gl-d">主流 CDC 工具：前者经 Kafka Connect，后者集成进 Flink（全量+增量无缝）。</span></div>
+        </div>
+        <div class="gl-group">
+          <h4>④ 编排</h4>
+          <div class="gl"><span class="gl-t">工作流编排 <em>Orchestration</em></span><span class="gl-d">用 DAG 描述任务与依赖，按依赖/时间调度、重试、回填、告警。Airflow/DolphinScheduler。</span></div>
+          <div class="gl"><span class="gl-t">DAG</span><span class="gl-d">有向无环图，描述任务依赖；能并行的并行，有依赖的排队（又见 D03）。</span></div>
+          <div class="gl"><span class="gl-t">回填 <em>Backfill</em></span><span class="gl-d">重跑某段历史时间区间的任务（补历史/修 bug）。依赖任务幂等。</span></div>
+          <div class="gl"><span class="gl-t">幂等性 <em>Idempotency</em></span><span class="gl-d">重跑多次结果与一次相同。回填/重试安全的前提，常用先删后写实现。</span></div>
+          <div class="gl"><span class="gl-t">SLA</span><span class="gl-d">任务应完成的时限约定，超时告警，保障数据及时性。</span></div>
+        </div>
+      </div>
+
+      <div class="tip" style="margin-top:24px"><strong>下一篇预告 · D07：OLAP 引擎内核</strong>。数据存好了、建好模、算好、进来了——终于到了「<strong>查得飞快</strong>」的环节。ClickHouse / StarRocks / Doris / Trino 是怎么做到亚秒级扫几十亿行的？列存引擎内部、<strong>向量化执行、SIMD、CBO</strong>——这是和 C++ 老兵性能直觉最契合的一篇。</div>
+    </section>
+
+  </main>
+</div>
+
+<footer>
+  <div class="made">TECH NOTES · BIG DATA SERIES</div>
+  #D06 数据摄取与消息中枢 · <a href="../index.html">返回首页</a> · © 2026 Kavin Chan · MIT
+</footer>
+
+<button class="back-top" id="backTop" onclick="window.scrollTo({top:0,behavior:'smooth'})">↑</button>
+<style>.back-top{position:fixed;bottom:1.5rem;right:1.5rem;width:44px;height:44px;border-radius:50%;background:#141a2c;color:#e4e9f5;border:1px solid #2a3556;cursor:pointer;font-size:18px;display:none;z-index:100;align-items:center;justify-content:center}.back-top:hover{color:#7dd3fc}.back-top.show{display:flex}</style>
+
+<script>
+const progress=document.getElementById('progress');
+const up=()=>{const h=document.documentElement;const m=h.scrollHeight-h.clientHeight;progress.style.width=(m>0?(h.scrollTop/m*100):0)+'%';};
+window.addEventListener('scroll',up,{passive:true});up();
+const tocLinks=document.querySelectorAll('.toc a');
+const secs=document.querySelectorAll('section.chapter');
+const no=new IntersectionObserver(es=>{es.forEach(e=>{if(e.isIntersecting){const id=e.target.id;tocLinks.forEach(a=>a.classList.toggle('active',a.getAttribute('href')==='#'+id));}});},{rootMargin:'-25% 0px -65% 0px'});
+secs.forEach(s=>no.observe(s));
+tocLinks.forEach(a=>{a.addEventListener('click',e=>{const h=a.getAttribute('href');const t=document.querySelector(h);if(t){e.preventDefault();t.scrollIntoView({behavior:'smooth',block:'start'});history.pushState(null,'',h);}});});
+const fe=document.querySelectorAll('.card,.svg-wrap,table,details,.demo,pre,.flow-row');
+const fo=new IntersectionObserver(es=>{es.forEach(e=>{if(e.isIntersecting){e.target.style.opacity='1';e.target.style.transform='translateY(0)';}});},{threshold:0.04});
+fe.forEach(el=>{el.style.opacity='0';el.style.transform='translateY(12px)';el.style.transition='opacity .5s ease, transform .5s ease';fo.observe(el);});
+(function(){var b=document.getElementById('backTop');if(!b)return;function t(){b.classList.toggle('show',window.scrollY>400);}window.addEventListener('scroll',t,{passive:true});t();})();
+
+// ===== 交互演示 A：Kafka 消费者组再均衡 =====
+(function(){
+  const PARTS=4;
+  const wrap=document.getElementById('cgWrap');
+  const readout=document.getElementById('cgReadout');
+  const segs=document.querySelectorAll('#cgDemo .seg');
+  function render(n){
+    const cons=Array.from({length:n},()=>[]);
+    for(let p=0;p<PARTS;p++) cons[p%n].push('P'+p);   // 仅用于演示的简化分配，实际由消费者组 assignor 决定
+    wrap.innerHTML=cons.map((ps,i)=>{
+      const idle=ps.length===0;
+      return '<div class="consumer'+(idle?' idle':'')+'"><div class="cname">Consumer '+i+'</div>'+
+        (idle?'<span class="idle-tag">（空闲 · 分不到分区）</span>':ps.map(p=>'<span class="pchip">'+p+'</span>').join(''))+'</div>';
+    }).join('');
+    const active=Math.min(n,PARTS), idleN=Math.max(0,n-PARTS);
+    if(n<PARTS) readout.innerHTML='消费者数 <b>'+n+'</b> &lt; 分区数 4 → 每个消费者扛多个分区，全部满载。有效并行 = <b>'+n+'</b>。还能再加消费者提升并行。';
+    else if(n===PARTS) readout.innerHTML='消费者数 <b>4</b> = 分区数 4 → 一人一分区，<b>并行度拉满</b>且无浪费。这是最理想配置。';
+    else readout.innerHTML='消费者数 <b>'+n+'</b> &gt; 分区数 4 → 有 <b>'+idleN+'</b> 个消费者<span style="color:#f87171">空闲（分不到分区）</span>。有效并行仍只有 4 —— <b>分区数才是并行度天花板</b>。';
+  }
+  segs.forEach(b=>b.addEventListener('click',()=>{segs.forEach(x=>x.classList.remove('active'));b.classList.add('active');render(+b.dataset.n);}));
+  render(2);
+})();
+
+// ===== 交互演示 B：DAG 调度 =====
+(function(){
+  const TASKS=[
+    {id:'A',name:'extract_orders',lvl:0},
+    {id:'B',name:'extract_users',lvl:0},
+    {id:'C',name:'transform',lvl:1},
+    {id:'D',name:'quality_check',lvl:2},
+    {id:'E',name:'load_dwd',lvl:3},
+  ];
+  const LABELS=['extract','transform','quality_check','load'];
+  const grid=document.getElementById('dagGrid');
+  const readout=document.getElementById('dagReadout');
+  const runBtn=document.getElementById('dagRun');
+  const resetBtn=document.getElementById('dagReset');
+  const maxLvl=Math.max(...TASKS.map(t=>t.lvl));
+  let timer=null,state={};
+  function reset(){
+    if(timer){clearInterval(timer);timer=null;}
+    state={};TASKS.forEach(t=>state[t.id]='pending');
+    render();readout.innerHTML='点「开始调度」，编排器会按拓扑顺序逐波执行。';runBtn.disabled=false;
+  }
+  function render(){
+    let html='';
+    for(let l=0;l<=maxLvl;l++){
+      const col=TASKS.filter(t=>t.lvl===l);
+      html+='<div class="dag-col">'+col.map(t=>{
+        const st=state[t.id];
+        const label={pending:'待运行',running:'运行中',success:'✓ 成功'}[st];
+        return '<div class="dnode '+st+'">'+t.name+'<span class="dstate">'+label+'</span></div>';
+      }).join('')+'</div>';
+      if(l<maxLvl) html+='<div class="dag-arrow">→</div>';
+    }
+    grid.innerHTML=html;
+  }
+  function run(){
+    reset();runBtn.disabled=true;
+    let l=0;
+    function wave(){
+      if(l>maxLvl){clearInterval(timer);timer=null;runBtn.disabled=false;readout.innerHTML='🎉 全部任务成功。整条管道按依赖一波波跑完——能并行的并行，有依赖的等待。';return;}
+      const col=TASKS.filter(t=>t.lvl===l);
+      col.forEach(t=>state[t.id]='running');render();
+      const names=col.map(t=>t.name).join(' / ');
+      readout.innerHTML='第 <b>'+(l+1)+'</b> 波：'+names+(col.length>1?' <b>并行执行</b>（无相互依赖）':'')+(l>0?'（等上一波成功后才开始）':'（根任务，无依赖，立即开跑）');
+      setTimeout(()=>{ col.forEach(t=>state[t.id]='success'); render(); }, 700);
+      l++;
+    }
+    wave();
+    timer=setInterval(wave,1400);
+  }
+  runBtn.addEventListener('click',run);
+  resetBtn.addEventListener('click',reset);
+  reset();
+})();
+
+console.log('%c Big Data D06 · 数据摄取与消息中枢 ','background:linear-gradient(90deg,#7dd3fc,#a78bfa);color:#0a0e1a;font-weight:700;padding:4px 12px;border-radius:4px;font-size:13px');
+</script>
+<script src="../assets/site-theme.js" defer></script>
+</body>
+</html>

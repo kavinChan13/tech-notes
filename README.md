@@ -80,11 +80,12 @@ npx serve .
 | **性能与调试** | [`perf-debug/`](./perf-debug) | 性能优化、低延迟、内存泄漏、崩溃与死锁调试、Sanitizers、CMake/CI、ABI 兼容、安全硬化、可观测性 |
 | **系统与网络** | [`system/`](./system) | Linux 内核 IO、文件描述符、OS 基础、网络编程、异步网络框架 |
 | **架构师方法论** | [`architect/`](./architect) | C4 / DDD / ADR、大型 C++ 工程化、分布式系统、存储、可观测性、Capstone、分布式进阶 |
+| **大数据 / 数据工程** | [`bigdata/`](./bigdata) | 大数据全景与存储基础（HDFS/对象存储、行列存、Parquet、编码压缩）、数据建模与数仓分层（维度建模、星型/雪花、SCD、Inmon/Kimball、ODS→ADS、dbt）、Spark 内核深潜（RDD/DAG/Shuffle、Catalyst/Tungsten、调优与数据倾斜）、Flink 流处理深潜（事件时间/Watermark、窗口、State、Checkpoint/Exactly-once、反压/CEP）、高级 SQL（窗口函数、ROLLUP/CUBE、递归 CTE、Join 进阶、执行顺序与调优）、数据摄取与消息中枢（Kafka/ISR/Exactly-once、Connect、CDC、Airflow 编排）、OLAP 引擎内核（列存引擎、向量化执行、SIMD、MPP、CBO、ClickHouse/StarRocks/Trino）、实时数仓与流批一体（Lambda/Kappa、CDC→Flink→OLAP 链路、撤回流、Paimon）、数据治理与平台工程（元数据血缘、数据质量、安全隐私、FinOps、云原生、云托管服务横评、DataOps/数据网格）、端到端 Capstone（电商数据平台从需求到落地、ADR 决策、全系列知识地图）、湖仓表格式深潜（Iceberg/Delta/Hudi、三层元数据树、原子提交、时间旅行、Schema/分区演进、COW vs MOR、Compaction、Catalog 之争）、NoSQL 与在线服务层（HBase/Cassandra/LSM、RowKey 热点、Redis 缓存三问题、Elasticsearch 倒排索引、CAP 选型）、数据 × AI 桥梁（特征平台/训练-服务一致性、向量库/ANN、RAG 数据管道、Lakehouse for ML）、大数据开发实战（docker-compose 本地全栈、Kafka+Flink/Spark+Iceberg+Trino 端到端跑通） |
 | **AI-Native 工程** | [`ai-native/`](./ai-native) · [`ai-infra/`](./ai-infra) | AI-Native 实践、Prompt 工程、Agent 架构、LLMOps、AI Safety + AI 基础设施 |
 | **嵌入式 / 实时 / 车端** | [`embedded-realtime/`](./embedded-realtime) | PREEMPT_RT、AUTOSAR AP、ISO 26262、车端网络 |
 | **工程管理 & EM** | [`management/`](./management) | 研发管理、管理知识体系、Senior EM、AI-Native EM、组织设计、EM 模板库 |
 | **PM 双线** | [`pm/`](./pm) | PgM × PdM 能力地图、EVM、A/B 测试、干系人、JTBD、PRD、PMBOK + PM 模板库 |
-| **面试** | [`interview/`](./interview) | Tech Lead 长文 + C++ / 架构师 / EM / PM 四套交互式卡片应用 |
+| **面试** | [`interview/`](./interview) | Tech Lead 长文 + C++ / 架构师 / EM / PM 四套交互式卡片应用 + AI 系统设计 + 大数据系统设计 12 经典题 |
 
 > 完整目录、跨文档链接、搜索、阅读时长等导航信息都在 [GitHub Pages 站点](https://kavinchan13.github.io/tech-notes/) 上。
 

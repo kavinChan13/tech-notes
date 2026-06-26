@@ -1,0 +1,1146 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>大数据全景与存储基础 · 从单机到机房 / 行列存 / Parquet / 编码压缩</title>
+<link rel="stylesheet" href="../assets/site-theme.css">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<style>
+  /* D01 专属增强：生活类比卡 + 交互演示，沿用 guide-theme 配色变量 */
+  .analogy{background:linear-gradient(135deg,rgba(167,139,250,.08),rgba(125,211,252,.05));
+    border:1px solid var(--border-2);border-left:4px solid var(--accent-2);border-radius:10px;
+    padding:14px 18px;margin:16px 0;font-size:14px;line-height:1.75}
+  .analogy::before{content:"🔌 生活类比";display:inline-block;color:var(--accent-2);font-weight:700;
+    font-size:12px;letter-spacing:.5px;margin-right:10px}
+  .analogy strong{color:var(--text)}
+
+  /* 名词解释 callout */
+  .def{background:rgba(125,211,252,.05);border:1px solid var(--border);border-left:4px solid var(--accent);
+    border-radius:8px;padding:14px 18px;margin:16px 0;font-size:14px;line-height:1.75}
+  .def::before{content:"📖 名词解释";display:inline-block;color:var(--accent);font-weight:700;
+    font-size:12px;letter-spacing:.5px;margin-right:10px}
+  .def strong{color:var(--text)}
+
+  /* 术语表 */
+  .glossary{margin:14px 0}
+  .gl-group{margin:20px 0}
+  .gl-group > h4{color:var(--accent);border-left:3px solid var(--accent);padding-left:10px;
+    margin:0 0 10px;font-size:15px}
+  .gl{display:grid;grid-template-columns:210px 1fr;gap:14px;padding:11px 15px;border:1px solid var(--border);
+    border-radius:8px;background:var(--bg-card);margin:7px 0;transition:border-color .15s}
+  .gl:hover{border-color:var(--border-2)}
+  .gl .gl-t{font-weight:600;color:var(--text);font-size:14px}
+  .gl .gl-t em{display:block;font-style:normal;font-family:"JetBrains Mono",monospace;
+    font-size:11px;color:var(--text-mute);margin-top:3px;font-weight:400;letter-spacing:.2px}
+  .gl .gl-d{font-size:13.5px;color:var(--text-dim);line-height:1.7}
+  .gl .gl-d strong{color:var(--accent-4)}
+  .gl .gl-d code{font-size:.85em}
+  @media(max-width:760px){.gl{grid-template-columns:1fr;gap:4px}}
+
+  /* 交互演示外壳 */
+  .demo{background:var(--bg-card);border:1px solid var(--border-2);border-radius:14px;
+    padding:20px;margin:22px 0;box-shadow:var(--shadow)}
+  .demo .demo-title{font-size:13px;text-transform:uppercase;letter-spacing:1.5px;color:var(--accent);
+    font-family:"JetBrains Mono",monospace;margin-bottom:14px;display:flex;align-items:center;gap:8px}
+  .demo .demo-title::before{content:"▶";font-size:10px;color:var(--accent-3)}
+  .demo-controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:16px}
+  .demo button{font-family:inherit;cursor:pointer;border-radius:8px;font-size:13px;padding:8px 14px;
+    border:1px solid var(--border-2);background:var(--bg-card-2);color:var(--text-dim);transition:.15s}
+  .demo button:hover{color:var(--text);border-color:var(--accent)}
+  .demo button.seg.active{background:rgba(125,211,252,.14);color:var(--accent);border-color:var(--accent)}
+  .demo button.run{background:rgba(52,211,153,.14);color:var(--accent-3);border-color:rgba(52,211,153,.4);font-weight:600}
+  .demo button.run:hover{background:rgba(52,211,153,.24)}
+  .demo button.ghost{background:transparent}
+  .demo button:disabled{opacity:.4;cursor:not-allowed}
+
+  /* 扫描表 */
+  .scan-table{width:auto;margin:6px 0;border-collapse:separate;border-spacing:5px;background:none;border:0}
+  .scan-table td,.scan-table th{border:1px solid var(--border-2);border-radius:6px;padding:8px 12px;
+    text-align:center;font-family:"JetBrains Mono",monospace;font-size:13px;transition:background .18s,
+    transform .18s,box-shadow .18s;background:var(--bg-card-2);color:var(--text-dim);text-transform:none;letter-spacing:0}
+  .scan-table th{color:var(--accent);background:#10172b}
+  .scan-table td.scan-read{background:rgba(125,211,252,.22);color:var(--text);box-shadow:0 0 0 2px var(--accent);transform:translateY(-2px)}
+  .scan-table td.scan-skip{opacity:.28}
+  .scan-table td.scan-done{background:rgba(52,211,153,.16);color:var(--accent-3)}
+  .scan-table .col-head-salary{color:var(--accent-4)}
+  .demo-readout{margin-top:14px;font-size:13.5px;color:var(--text-dim);line-height:1.8}
+  .demo-readout b{font-family:"JetBrains Mono",monospace;color:var(--accent);font-size:16px}
+  .demo-verdict{margin-top:10px;padding:10px 14px;border-radius:8px;font-size:13.5px;display:none}
+  .demo-verdict.show{display:block}
+  .demo-verdict.good{background:rgba(52,211,153,.08);border-left:3px solid var(--accent-3);color:var(--text)}
+  .demo-verdict.bad{background:rgba(251,146,60,.08);border-left:3px solid var(--warn);color:var(--text)}
+
+  /* 编码演示 */
+  .enc-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:6px}
+  @media(max-width:760px){.enc-grid{grid-template-columns:1fr}}
+  .enc-col{background:var(--bg-card-2);border:1px solid var(--border);border-radius:10px;padding:14px}
+  .enc-col h5{font-size:12px;text-transform:uppercase;letter-spacing:1px;color:var(--text-mute);margin-bottom:10px}
+  .enc-cells{display:flex;flex-wrap:wrap;gap:5px}
+  .enc-cell{font-family:"JetBrains Mono",monospace;font-size:12px;padding:5px 9px;border-radius:5px;
+    background:#11182c;border:1px solid var(--border-2);color:var(--text-dim)}
+  .enc-cell.hl{background:rgba(251,191,36,.16);color:var(--accent-4);border-color:rgba(251,191,36,.4)}
+  .enc-stat{margin-top:12px;font-size:13px;color:var(--text-dim)}
+  .enc-stat b{font-family:"JetBrains Mono",monospace;color:var(--accent-3)}
+</style>
+</head>
+<body class="tn-shell-overlay">
+<!-- tn-nav:v1 -->
+<style>
+#tn-nav{position:fixed;top:14px;right:14px;z-index:99999;display:flex;gap:6px;align-items:center;
+  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;
+  font-size:12px;line-height:1;font-weight:500;}
+#tn-nav a,#tn-nav .tn-meta{display:inline-flex;align-items:center;gap:4px;
+  background:rgba(20,20,30,.85);color:#fff !important;text-decoration:none !important;
+  padding:7px 11px;border-radius:999px;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+  border:1px solid rgba(255,255,255,.10);box-shadow:0 2px 8px rgba(0,0,0,.18);
+  transition:background .15s,transform .15s;}
+#tn-nav a:hover{background:rgba(56,189,248,.92);transform:translateY(-1px);}
+#tn-nav .tn-meta{background:rgba(20,20,30,.55);cursor:default;}
+@media (max-width:640px){#tn-nav{top:8px;right:8px;font-size:11px;gap:4px;}
+  #tn-nav a,#tn-nav .tn-meta{padding:5px 9px;}}
+@media print{#tn-nav{display:none;}}
+</style>
+<div id="tn-nav">
+  <a href="../index.html" title="&#x8FD4;&#x56DE;&#x4E3B;&#x9875;">&larr; &#x4E3B;&#x9875;</a>
+  <a href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub &#x4ED3;&#x5E93;">&#x1F4C1; Repo</a>
+  <a href="https://github.com/kavinChan13/tech-notes/blob/main/bigdata/bigdata_landscape.html" target="_blank" rel="noopener" title="&#x672C;&#x6587;&#x6E90;&#x7801;">&#x1F4DD; Source</a>
+  <span class="tn-meta" title="&#x9884;&#x8BA1;&#x9605;&#x8BFB;&#x65F6;&#x957F;">&#x23F1; 55 min</span>
+</div>
+<!-- /tn-nav:v1 -->
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>大数据 D01 · Roadmap</h2>
+    <nav>
+      <ol>
+        <li><a href="#ch0" class="active">给老兵的地图</a></li>
+        <li><a href="#ch1">大数据是什么 · 演进史</a>
+          <ol>
+            <li><a href="#s1-1">5V 模型</a></li>
+            <li><a href="#s1-2">单机为何搞不定</a></li>
+            <li><a href="#s1-3">技术演进时间线</a></li>
+          </ol>
+        </li>
+        <li><a href="#ch2">五个分水岭概念</a>
+          <ol>
+            <li><a href="#s2-1">批 vs 流</a></li>
+            <li><a href="#s2-2">OLTP vs OLAP</a></li>
+            <li><a href="#s2-3">Scale-up vs out</a></li>
+            <li><a href="#s2-4">Schema on write/read</a></li>
+          </ol>
+        </li>
+        <li><a href="#ch3">分布式存储底座</a>
+          <ol>
+            <li><a href="#s3-1">HDFS 架构</a></li>
+            <li><a href="#s3-2">写流程与副本</a></li>
+            <li><a href="#s3-3">对象存储 · 存算分离</a></li>
+            <li><a href="#s3-4">分布式基础速览</a></li>
+          </ol>
+        </li>
+        <li><a href="#ch4">行存 vs 列存</a>
+          <ol>
+            <li><a href="#s4-1">物理布局</a></li>
+            <li><a href="#s4-2">交互演示</a></li>
+            <li><a href="#s4-3">为什么 OLAP 选列存</a></li>
+          </ol>
+        </li>
+        <li><a href="#ch5">列式格式 Parquet/ORC</a>
+          <ol>
+            <li><a href="#s5-1">Parquet 物理布局</a></li>
+            <li><a href="#s5-2">三大下推优化</a></li>
+            <li><a href="#s5-3">格式对比</a></li>
+          </ol>
+        </li>
+        <li><a href="#ch6">编码与压缩</a>
+          <ol>
+            <li><a href="#s6-1">编码 ≠ 压缩</a></li>
+            <li><a href="#s6-2">编码演示</a></li>
+            <li><a href="#s6-3">压缩算法选型</a></li>
+          </ol>
+        </li>
+        <li><a href="#ch7">小结 · 选型 · 面试</a></li>
+        <li><a href="#ch8">术语表速查</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+
+    <!-- ============= HERO ============= -->
+    <header class="hero">
+      <div class="badge">Big Data · 01 · Foundations</div>
+      <h1>大数据全景与存储基础</h1>
+      <p class="sub">这是大数据系列的第一篇。它<strong>不</strong>从「装个 Hadoop」开始，而是从一个 <strong>C++ / 系统老兵</strong>已经熟悉的世界出发——单机的内存、磁盘、CPU cache、并发——然后回答一个问题：<em>当数据大到一台机器装不下、算不完时，世界会发生什么质变？</em> 本篇打地基：全景与演进、五个分水岭概念、分布式存储底座（HDFS / 对象存储），以及大数据性能的真正命门——<strong>行存 vs 列存、列式文件格式、编码与压缩</strong>。</p>
+      <div class="meta">
+        <span>8 章 + 术语表</span>
+        <span>10+ SVG / 图表</span>
+        <span>2 个交互演示</span>
+        <span>40+ 名词解释</span>
+        <span>老兵视角 · 类比驱动</span>
+        <span>无 CDN · 单文件</span>
+      </div>
+    </header>
+
+    <!-- ============= 第 0 章 ============= -->
+    <section class="chapter" id="ch0">
+      <div class="ch-head">
+        <div class="num">00</div>
+        <div class="t">
+          <h2>给 C++ / 系统老兵的大数据地图</h2>
+          <p class="sub">你已经掌握的，比你以为的多 · 大数据只是把熟悉的约束放大到「一个机房」</p>
+        </div>
+      </div>
+
+      <p class="lead">如果你写过 C++、调过内存泄漏、读过 Linux IO 路径，那么你其实已经懂了大数据 <strong>70%</strong> 的底层直觉。大数据不是一门全新的学问，而是把单机里那些你已经熟悉的权衡——<em>顺序 IO vs 随机 IO、cache 命中、批处理、并发与一致性</em>——<strong>放大到几十上百台机器协作的尺度</strong>。本系列就站在这个起点上展开。</p>
+
+      <div class="analogy">单机就像你<strong>一个人在厨房做一桌菜</strong>：内存是案台，磁盘是冰箱，CPU 是你的双手。大数据则是<strong>一整个中央厨房</strong>：几十个厨师（节点）协作，食材（数据）放在共享冷库（分布式存储）里，难点从「怎么切菜」变成「怎么分工、怎么对账、有人请假怎么办」。烹饪技巧没变，<strong>协调</strong>成了新的主题。
+      </div>
+
+      <div class="kmap">
+        <div class="kmap-title">本系列站在这些「已有知识」之上</div>
+        <div class="grid cols-3">
+          <div class="card">
+            <h4>system / IO 与内核</h4>
+            <p style="font-size:12.5px;color:var(--text-dim)">顺序 vs 随机 IO、page cache、零拷贝、文件描述符——大数据存储引擎的每个设计都在和这些较劲。</p>
+          </div>
+          <div class="card violet">
+            <h4>architect / 分布式 & 存储</h4>
+            <p style="font-size:12.5px;color:var(--text-dim)">CAP、副本、共识、B+Tree vs LSM、WAL——分布式文件系统和数仓直接复用这些原语。</p>
+          </div>
+          <div class="card green">
+            <h4>cpp / 并发 & 性能</h4>
+            <p style="font-size:12.5px;color:var(--text-dim)">cache 局部性、SIMD、向量化、内存布局——正是列存与向量化执行引擎快的根因。</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="info">本篇遇到的分布式原理（CAP、副本、共识）只做「数据视角」的最小化引用，不重复展开。需要深入时，请看 <code>architect/distributed_systems_fundamentals.html</code> 与 <code>architect/storage_and_data_architecture.html</code>。</div>
+
+      <h3 id="ch0-1">一句话定义</h3>
+      <div class="tip">所谓「大数据」，并不是「数据很大」这么简单，而是：<strong>当数据的体量、速度或多样性，超过了单台机器在可接受时间 / 成本内处理的能力，必须用一组机器协作来存储与计算时</strong>，你就进入了大数据的领域。判据是「单机搞不定」，而不是某个绝对的 GB 数字。</div>
+    </section>
+
+    <!-- ============= 第 1 章 ============= -->
+    <section class="chapter" id="ch1">
+      <div class="ch-head">
+        <div class="num">01</div>
+        <div class="t">
+          <h2>大数据是什么 · 演进史</h2>
+          <p class="sub">5V 模型 · 单机的物理天花板 · 从 Google 三驾马车到湖仓与云原生</p>
+        </div>
+      </div>
+
+      <h3 id="s1-1">1.1 5V：大数据的五个维度</h3>
+      <p>业界常用 5 个以 V 开头的词来刻画大数据的特征。别把它当口号，每个 V 都对应一类<strong>真实的工程难题</strong>：</p>
+
+      <div class="grid cols-2">
+        <div class="card">
+          <h4>Volume · 体量</h4>
+          <p style="font-size:13px;color:var(--text-dim)">TB / PB / EB 级。一台机器的内存（几百 GB）和磁盘（几十 TB）都装不下 → 必须<strong>分片（sharding）+ 分布式存储</strong>。</p>
+        </div>
+        <div class="card violet">
+          <h4>Velocity · 速度</h4>
+          <p style="font-size:13px;color:var(--text-dim)">数据持续高速涌入（每秒百万条）→ 催生<strong>流处理</strong>与消息系统（Kafka / Flink）。</p>
+        </div>
+        <div class="card green">
+          <h4>Variety · 多样性</h4>
+          <p style="font-size:13px;color:var(--text-dim)">结构化（表）、半结构化（JSON / 日志）、非结构化（图片 / 视频）混杂 → 催生<strong>数据湖</strong>与 schema-on-read。</p>
+        </div>
+        <div class="card amber">
+          <h4>Veracity · 真实性</h4>
+          <p style="font-size:13px;color:var(--text-dim)">数据有脏、有缺、有重复、有迟到 → 催生<strong>数据质量与治理</strong>（后续 D09 专题）。</p>
+        </div>
+        <div class="card" style="grid-column:1/-1">
+          <h4>Value · 价值</h4>
+          <p style="font-size:13px;color:var(--text-dim)">价值密度低——PB 的日志里也许只有几条有用。整个数据工程的终极目的，是<strong>用尽量低的成本把低密度的价值提炼出来</strong>。这也是为什么「成本 / 性价比」是大数据架构永恒的主线。</p>
+        </div>
+      </div>
+
+      <div class="def"><strong>结构化 / 半结构化 / 非结构化数据</strong>——这是「多样性」里最常被问到的三个词：
+        <ul style="margin-top:8px">
+          <li><strong>结构化（Structured）</strong>：有固定 schema、能放进二维表的数据。如数据库里的订单表。规整、好查询。</li>
+          <li><strong>半结构化（Semi-structured）</strong>：有一定结构但不固定，字段可增减、可嵌套。如 JSON 日志、XML。靠「自描述」携带结构信息。</li>
+          <li><strong>非结构化（Unstructured）</strong>：没有预定义结构。如图片、音频、视频、自由文本。占数据总量的大头，但最难直接分析。</li>
+        </ul>
+      </div>
+
+      <div class="def"><strong>分片 / 分区（Sharding / Partitioning）</strong>：把一份大数据按某个规则（如按用户 id 取模、按日期）<strong>切成多个小片，分散到不同机器</strong>，让它们能并行读写。这是 scale-out 的最基本动作——和单机里「把大任务拆成多线程」是同一种思想，只是从「多核」放大到了「多机」。后面几乎所有引擎的并行度，本质都来自分片。</div>
+
+      <h3 id="s1-2">1.2 单机为什么搞不定？——算一笔账</h3>
+      <p>老兵最该建立的直觉是<strong>定量</strong>的。我们用一个最朴素的任务来感受单机的天花板：<em>「扫描 1 TB 数据做一次聚合」</em>。</p>
+
+      <div class="svg-wrap">
+        <svg width="780" height="230" viewBox="0 0 780 230" role="img" aria-label="单机 vs 集群扫描 1TB 的时间对比">
+          <text x="390" y="26" text-anchor="middle" fill="#7dd3fc" font-size="15" font-weight="bold">扫描 1 TB：单机 vs 100 台并行</text>
+          <!-- 单机 -->
+          <text x="30" y="70" fill="#94a3b8" font-size="13">单盘顺序读 ≈ 200 MB/s</text>
+          <rect x="30" y="80" width="600" height="26" rx="5" fill="#1a2138" stroke="#2a3556"/>
+          <rect x="30" y="80" width="600" height="26" rx="5" fill="#f87171" opacity="0.55"/>
+          <text x="640" y="98" fill="#f87171" font-size="13" font-weight="bold">≈ 87 分钟</text>
+          <!-- 集群 -->
+          <text x="30" y="150" fill="#94a3b8" font-size="13">100 块盘并行读（各 1/100 数据）</text>
+          <rect x="30" y="160" width="600" height="26" rx="5" fill="#1a2138" stroke="#2a3556"/>
+          <rect x="30" y="160" width="6" height="26" rx="3" fill="#34d399"/>
+          <text x="640" y="178" fill="#34d399" font-size="13" font-weight="bold">≈ 52 秒</text>
+          <text x="30" y="214" fill="#64748b" font-size="11.5">注：理想化估算，忽略网络 / 调度 / shuffle 开销；真实世界并行效率达不到线性，但量级直觉成立。</text>
+        </svg>
+        <div class="svg-caption">单盘吞吐是物理常数；要更快，只能让更多盘<strong>同时</strong>读 —— 这就是 scale-out 的全部动机。</div>
+      </div>
+
+      <div class="note">关键认知：单盘吞吐（HDD ~200MB/s、NVMe SSD ~3-7GB/s）是<strong>物理上限</strong>，靠换更贵的单机（scale-up）很快撞墙且价格指数上涨。把数据切片、让 N 台机器各读一份再汇总（scale-out），用<strong>数量</strong>换吞吐，是大数据的第一性原理。代价是：你引入了网络、协调、容错这三个新麻烦。</div>
+
+      <h3 id="s1-3">1.3 技术演进时间线</h3>
+      <p>理解「为什么有这么多组件」，最好的方式是顺着历史走一遍。每一代技术，都是为了解决上一代的痛点而生：</p>
+
+      <div class="timeline">
+        <div class="tl-item"><div class="tl-time">2003–2004 · Google 三驾马车</div><div class="tl-title">GFS + MapReduce + BigTable（论文）</div><div class="tl-body">奠基之作：GFS = 分布式文件系统，MapReduce = 分布式批计算范式，BigTable = 分布式宽表。整个大数据世界都是这三篇论文的回声。</div></div>
+        <div class="tl-item"><div class="tl-time">2006 · Hadoop</div><div class="tl-title">HDFS + MapReduce 开源</div><div class="tl-body">Doug Cutting 把 Google 论文落地为开源。从此普通公司也能搭分布式集群。HDFS 至今仍是很多体系的存储底座。</div></div>
+        <div class="tl-item"><div class="tl-time">2010 · Spark</div><div class="tl-title">内存计算挑战 MapReduce</div><div class="tl-body">MapReduce 每步都落盘、慢。Spark 用内存 + DAG 把迭代计算提速 10–100x，逐渐成为批处理事实标准。</div></div>
+        <div class="tl-item"><div class="tl-time">2011 · Kafka</div><div class="tl-title">高吞吐分布式消息</div><div class="tl-body">LinkedIn 开源。成为「数据管道的中枢神经」，把批处理世界推向<strong>流</strong>处理时代。</div></div>
+        <div class="tl-item"><div class="tl-time">2014–2015 · Flink</div><div class="tl-title">真正的流优先引擎</div><div class="tl-body">事件时间、Watermark、状态、Exactly-once——把「流」做成一等公民，而非把批切小。实时数仓的引擎担当。</div></div>
+        <div class="tl-item"><div class="tl-time">2014+ · 云数仓</div><div class="tl-title">Snowflake / BigQuery：存算分离</div><div class="tl-body">计算与存储解耦、按需弹性、按量计费。把「运维集群」变成「写 SQL」，重塑了行业。</div></div>
+        <div class="tl-item"><div class="tl-time">2017–2020 · Lakehouse</div><div class="tl-title">Delta Lake / Iceberg / Hudi</div><div class="tl-body">给廉价的对象存储 + Parquet 加上 ACID、schema 演进、time travel。湖（灵活廉价）与仓（事务可靠）走向融合。</div></div>
+        <div class="tl-item"><div class="tl-time">2023+ · 云原生 & AI</div><div class="tl-title">K8s 化 · 向量 / 特征 · 数据 ×AI</div><div class="tl-body">引擎跑在 Kubernetes 上；数据栈开始为 ML / LLM（特征平台、向量检索、RAG 管道）服务。</div></div>
+      </div>
+
+      <details class="qa">
+        <summary><span class="lvl pill cyan">展开</span>「Google 三驾马车」到底各自解决了什么问题？</summary>
+        <div class="a">
+          <div class="point"><span class="label">GFS</span><strong>Google File System（2003）</strong>：一个跑在大量廉价机器上的<strong>分布式文件系统</strong>。核心思想——大文件切块、多副本、主从架构。解决「数据放哪、坏盘了怎么办」。开源对应物就是 HDFS（第 3 章详讲）。</div>
+          <div class="point"><span class="label">MapReduce</span><strong>分布式批计算范式（2004）</strong>：把计算拆成 Map（各节点本地处理自己那片数据）+ Reduce（汇总）两阶段，框架自动负责分发、容错、汇总。解决「怎么让一群机器协作算一件大事」。</div>
+          <div class="point"><span class="label">BigTable</span><strong>分布式宽表 / NoSQL（2006）</strong>：在 GFS 之上建一个能存千亿行、按 key 快速读写的「超大表」。解决「海量结构化数据的在线存取」。开源对应物是 HBase。</div>
+          <div class="point deep"><span class="label">一句话</span>GFS 管「存」、MapReduce 管「算」、BigTable 管「在线查」——后来整个大数据生态，几乎都是在这三条主线上不断演进、优化、替换零件。</div>
+        </div>
+      </details>
+
+      <div class="info">这条时间线就是本系列的「地图」：D01 打地基，D03/D04 讲计算引擎（Spark/Flink），D05 讲 Kafka/摄取，D06 讲湖仓（Iceberg/Delta），D07 讲 OLAP 引擎内核，D08 讲实时数仓，D09 讲治理与平台，D10 是端到端 Capstone。</div>
+    </section>
+
+    <!-- ============= 第 2 章 ============= -->
+    <section class="chapter" id="ch2">
+      <div class="ch-head">
+        <div class="num">02</div>
+        <div class="t">
+          <h2>五个分水岭概念</h2>
+          <p class="sub">这五对概念决定了「你该选哪种系统」 · 选错了，再努力调优也救不回来</p>
+        </div>
+      </div>
+
+      <h3 id="s2-1">2.1 批处理 vs 流处理</h3>
+      <div class="analogy"><strong>批处理</strong>像「每天晚上盘点一次仓库」——数据攒成一批，定时跑，吞吐高、延迟以小时计。<strong>流处理</strong>像「每进出一件货就立刻记一笔」——数据一来就处理，延迟以秒 / 毫秒计，但要时刻在线、处理乱序与迟到。</div>
+      <table>
+        <thead><tr><th>维度</th><th>批处理 Batch</th><th>流处理 Stream</th></tr></thead>
+        <tbody>
+          <tr><td>数据边界</td><td>有界（一批固定数据）</td><td>无界（永不结束）</td></tr>
+          <tr><td>延迟</td><td class="cell-mid">分钟 ~ 小时</td><td class="cell-ok">毫秒 ~ 秒</td></tr>
+          <tr><td>吞吐</td><td class="cell-ok">极高</td><td class="cell-mid">高</td></tr>
+          <tr><td>典型场景</td><td>T+1 报表、离线训练、对账</td><td>实时大屏、风控、监控告警</td></tr>
+          <tr><td>代表引擎</td><td>Spark、MapReduce</td><td>Flink、Spark Structured Streaming</td></tr>
+        </tbody>
+      </table>
+      <div class="note">现代趋势是<strong>流批一体</strong>：用同一套引擎和 API 同时表达批与流（Flink、Spark 都在做）。但「批」和「流」的心智差异依然存在，D04 / D08 会深入。</div>
+
+      <h3 id="s2-2">2.2 OLTP vs OLAP——大数据主要服务后者</h3>
+      <div class="analogy"><strong>OLTP</strong>像银行柜台：一次只办一个人的一笔业务（转账），要快、要准、要事务。<strong>OLAP</strong>像统计局：一次扫描上亿条记录算「全国人均存款」，不在乎单条延迟，只在乎整体吞吐。</div>
+      <table>
+        <thead><tr><th>维度</th><th>OLTP（事务）</th><th>OLAP（分析）</th></tr></thead>
+        <tbody>
+          <tr><td>典型操作</td><td>点查 / 单行增删改</td><td>大范围扫描 + 聚合</td></tr>
+          <tr><td>并发</td><td class="cell-ok">高并发、小事务</td><td class="cell-mid">低并发、大查询</td></tr>
+          <tr><td>数据量 / 查询</td><td>几行</td><td>百万 ~ 十亿行</td></tr>
+          <tr><td>存储取向</td><td class="cell-ok">行存（整行一起读写）</td><td class="cell-ok">列存（只读需要的列）</td></tr>
+          <tr><td>代表系统</td><td>MySQL、PostgreSQL</td><td>ClickHouse、StarRocks、数仓</td></tr>
+        </tbody>
+      </table>
+      <div class="tip">大数据体系绝大多数组件服务于 <strong>OLAP</strong>。记住这一点，第 4 章「为什么是列存」就顺理成章了——OLAP 查询的本质是「扫很多行，但只关心少数几列」。</div>
+
+      <h3 id="s2-3">2.3 Scale-up vs Scale-out</h3>
+      <div class="grid cols-2">
+        <div class="card amber">
+          <h4>Scale-up（垂直扩展）</h4>
+          <p style="font-size:13px;color:var(--text-dim)">换更强的单机：更多 CPU / 内存 / 更快磁盘。<strong>简单</strong>，无需改架构，但有物理上限，且高端硬件价格指数上涨。</p>
+        </div>
+        <div class="card green">
+          <h4>Scale-out（水平扩展）</h4>
+          <p style="font-size:13px;color:var(--text-dim)">加更多<strong>普通机器</strong>，让它们并行。理论上线性扩展、用廉价硬件，但引入网络、协调、容错的复杂度。大数据的主旋律。</p>
+        </div>
+      </div>
+      <div class="warn">Scale-out 不是免费午餐。一旦多机协作，你立刻要面对：<strong>数据怎么分片、节点挂了怎么办、机器间怎么对账（一致性）、网络成为瓶颈</strong>。这正是分布式系统的全部难点（详见 <code>architect/</code> 板块）。</div>
+
+      <h3 id="s2-4">2.4 Schema-on-write vs Schema-on-read</h3>
+      <div class="analogy"><strong>Schema-on-write</strong>（写时模式 / 数仓）像「进图书馆前先按杜威分类编号上架」——入库严格、查得快，但前期规整成本高、不灵活。<strong>Schema-on-read</strong>（读时模式 / 数据湖）像「先把书全堆进仓库，要看时再翻」——入库零成本、什么都能存，但查询时要自己解析、容易乱。</div>
+      <table>
+        <thead><tr><th></th><th>Schema-on-write（数据仓库）</th><th>Schema-on-read（数据湖）</th></tr></thead>
+        <tbody>
+          <tr><td>何时定义结构</td><td>写入前</td><td>读取时</td></tr>
+          <tr><td>灵活性</td><td class="cell-mid">低（改结构代价大）</td><td class="cell-ok">高（先存了再说）</td></tr>
+          <tr><td>查询性能 / 可靠</td><td class="cell-ok">高、强一致</td><td class="cell-mid">取决于读时处理</td></tr>
+          <tr><td>典型载体</td><td>数仓表</td><td>对象存储上的文件</td></tr>
+        </tbody>
+      </table>
+      <div class="info">「湖仓一体（Lakehouse）」正是想<strong>兼得两者</strong>：在数据湖的廉价灵活之上，叠加数仓的事务与 schema 治理。这是 D06 的主题。</div>
+    </section>
+
+    <!-- ============= 第 3 章 ============= -->
+    <section class="chapter" id="ch3">
+      <div class="ch-head">
+        <div class="num">03</div>
+        <div class="t">
+          <h2>分布式存储底座</h2>
+          <p class="sub">数据先得有地方放 · HDFS 的设计哲学 · 对象存储与存算分离的崛起</p>
+        </div>
+      </div>
+
+      <p class="lead">所有计算都建立在存储之上。大数据的存储底座要回答一个老兵熟悉、但被放大了的问题：<strong>当单块磁盘装不下、且随时可能坏掉时，怎么可靠地存 PB 级数据？</strong></p>
+
+      <h3 id="s3-1">3.1 HDFS：分布式文件系统的范本</h3>
+      <p>HDFS（Hadoop Distributed File System）是 GFS 的开源实现，核心思路朴素得惊人：<strong>把大文件切成固定大小的块（默认 128MB），分散存到很多台廉价机器上，每块存 3 份副本防丢。</strong></p>
+
+      <div class="svg-wrap">
+        <svg width="800" height="380" viewBox="0 0 800 380" role="img" aria-label="HDFS 架构图">
+          <text x="400" y="24" text-anchor="middle" fill="#7dd3fc" font-size="15" font-weight="bold">HDFS 架构：一个 Master 管元数据，多个 Worker 存数据</text>
+
+          <!-- Client -->
+          <rect x="30" y="60" width="120" height="50" rx="8" fill="#1a2138" stroke="#7dd3fc"/>
+          <text x="90" y="82" text-anchor="middle" fill="#e4e9f5" font-size="13">Client</text>
+          <text x="90" y="99" text-anchor="middle" fill="#94a3b8" font-size="11">读 / 写请求</text>
+
+          <!-- NameNode -->
+          <rect x="320" y="55" width="200" height="62" rx="8" fill="#231a33" stroke="#a78bfa"/>
+          <text x="420" y="78" text-anchor="middle" fill="#c4b5fd" font-size="13" font-weight="bold">NameNode（Master）</text>
+          <text x="420" y="97" text-anchor="middle" fill="#94a3b8" font-size="11">只存元数据：目录树 / 块→节点映射</text>
+          <text x="420" y="110" text-anchor="middle" fill="#94a3b8" font-size="11">（内存中，不存真实数据）</text>
+
+          <!-- arrow client->NN -->
+          <line x1="150" y1="85" x2="318" y2="86" stroke="#64748b" stroke-width="1.5" marker-end="url(#arr)"/>
+          <text x="235" y="78" text-anchor="middle" fill="#64748b" font-size="10.5">①问元数据</text>
+
+          <!-- DataNodes -->
+          <g>
+            <rect x="60" y="220" width="180" height="130" rx="8" fill="#10241c" stroke="#34d399"/>
+            <text x="150" y="242" text-anchor="middle" fill="#6ee7b7" font-size="12.5" font-weight="bold">DataNode 1</text>
+            <rect x="80" y="256" width="60" height="30" rx="4" fill="#0c1120" stroke="#34d399"/><text x="110" y="276" text-anchor="middle" fill="#86efac" font-size="11">A</text>
+            <rect x="150" y="256" width="60" height="30" rx="4" fill="#0c1120" stroke="#fbbf24"/><text x="180" y="276" text-anchor="middle" fill="#fcd34d" font-size="11">B</text>
+            <rect x="80" y="296" width="60" height="30" rx="4" fill="#0c1120" stroke="#f472b6"/><text x="110" y="316" text-anchor="middle" fill="#f9a8d4" font-size="11">C</text>
+          </g>
+          <g>
+            <rect x="310" y="220" width="180" height="130" rx="8" fill="#10241c" stroke="#34d399"/>
+            <text x="400" y="242" text-anchor="middle" fill="#6ee7b7" font-size="12.5" font-weight="bold">DataNode 2</text>
+            <rect x="330" y="256" width="60" height="30" rx="4" fill="#0c1120" stroke="#34d399"/><text x="360" y="276" text-anchor="middle" fill="#86efac" font-size="11">A</text>
+            <rect x="400" y="256" width="60" height="30" rx="4" fill="#0c1120" stroke="#f472b6"/><text x="430" y="276" text-anchor="middle" fill="#f9a8d4" font-size="11">C</text>
+            <rect x="330" y="296" width="60" height="30" rx="4" fill="#0c1120" stroke="#fbbf24"/><text x="360" y="316" text-anchor="middle" fill="#fcd34d" font-size="11">B</text>
+          </g>
+          <g>
+            <rect x="560" y="220" width="180" height="130" rx="8" fill="#10241c" stroke="#34d399"/>
+            <text x="650" y="242" text-anchor="middle" fill="#6ee7b7" font-size="12.5" font-weight="bold">DataNode 3</text>
+            <rect x="580" y="256" width="60" height="30" rx="4" fill="#0c1120" stroke="#fbbf24"/><text x="610" y="276" text-anchor="middle" fill="#fcd34d" font-size="11">B</text>
+            <rect x="650" y="256" width="60" height="30" rx="4" fill="#0c1120" stroke="#34d399"/><text x="680" y="276" text-anchor="middle" fill="#86efac" font-size="11">A</text>
+            <rect x="580" y="296" width="60" height="30" rx="4" fill="#0c1120" stroke="#f472b6"/><text x="610" y="316" text-anchor="middle" fill="#f9a8d4" font-size="11">C</text>
+          </g>
+
+          <!-- NN to DN arrows -->
+          <line x1="380" y1="117" x2="160" y2="218" stroke="#475569" stroke-width="1.2" stroke-dasharray="4 3"/>
+          <line x1="420" y1="117" x2="400" y2="218" stroke="#475569" stroke-width="1.2" stroke-dasharray="4 3"/>
+          <line x1="460" y1="117" x2="640" y2="218" stroke="#475569" stroke-width="1.2" stroke-dasharray="4 3"/>
+          <text x="120" y="200" fill="#64748b" font-size="10.5">②直连 DataNode 读写真实数据块</text>
+
+          <text x="400" y="372" text-anchor="middle" fill="#64748b" font-size="11">每个块（A / B / C）都有 3 副本，分散在不同节点 —— 坏一台不丢数据</text>
+
+          <defs><marker id="arr" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#64748b"/></marker></defs>
+        </svg>
+        <div class="svg-caption">主从架构：NameNode 是「目录管理员」（只记谁在哪），DataNode 是「货架」（真正存货）。数据流不经过 NameNode，避免它成为带宽瓶颈。</div>
+      </div>
+
+      <h4>三个关键设计，背后都是老兵熟悉的权衡</h4>
+      <ul>
+        <li><strong>为什么块这么大（128MB）？</strong> 减小元数据规模（块越大、块越少、NameNode 内存压力越小），并让磁盘读以<em>顺序 IO</em> 为主——这正是你在单机优化里追求的「大块顺序读 ≫ 小块随机读」，只是搬到了集群尺度。</li>
+        <li><strong>为什么 3 副本？</strong> 廉价机器会坏。副本是最简单的容错：坏一份，从另两份恢复。代价是 3 倍存储成本（后来用 <em>纠删码 Erasure Coding</em> 把冷数据降到 ~1.5 倍）。</li>
+        <li><strong>为什么元数据和数据分离？</strong> NameNode 只管「映射」放内存里、查得飞快；真实数据直连 DataNode，吞吐随节点数线性扩展。这与数据库里「索引 vs 数据页」的分工异曲同工。</li>
+      </ul>
+
+      <div class="def"><strong>元数据（Metadata）</strong>：描述「数据的数据」——不是文件内容本身，而是「有哪些文件、每个文件由哪些块组成、每个块存在哪几台机器上、文件多大、谁创建的」这类<strong>账本信息</strong>。HDFS 把元数据全放在 NameNode 内存里，所以元数据的规模直接决定了集群能管多少文件（这也是「小文件问题」的根源）。</div>
+
+      <div class="def"><strong>纠删码（Erasure Coding, EC）</strong>：一种比「多副本」更省空间的容错方式。原理类似 RAID——把数据切成 k 个数据块，再算出 m 个校验块；任意丢失 ≤ m 个块都能从其余块<strong>反推恢复</strong>。例如 EC(6,3) 用 1.5 倍空间就能容忍坏 3 块，而 3 副本要 3 倍空间。代价是恢复时要做计算、读多个块，所以一般只对<strong>冷数据</strong>用 EC，热数据仍用副本。</div>
+
+      <div class="danger">NameNode 是单点：它一挂、元数据全失，整个集群瘫痪（早期 HDFS 的痛点）。生产用 <strong>HA 双 NameNode + ZooKeeper 自动切换</strong> 解决——这本质就是分布式共识问题（见 <code>architect/distributed_systems_advanced.html</code> 的 Raft / Paxos）。</div>
+
+      <h3 id="s3-2">3.2 写入流程：副本是怎么落地的</h3>
+      <p>理解写流程，能解释很多「为什么 HDFS 适合一次写多次读、不适合频繁改」的问题：</p>
+      <div class="flow-row"><span class="step">1</span><span class="arrow">→</span><span class="desc">Client 问 NameNode：「我要写文件 X，给我分配块和目标 DataNode」</span></div>
+      <div class="flow-row"><span class="step">2</span><span class="arrow">→</span><span class="desc">NameNode 返回一组 DataNode（按机架感知策略挑选）组成<strong>写入管线（pipeline）</strong></span></div>
+      <div class="flow-row"><span class="step">3</span><span class="arrow">→</span><span class="desc">Client 把数据切成 packet，流式推给第 1 个 DataNode；它边收边转发给第 2 个，第 2 个转发给第 3 个（链式复制，省 Client 带宽）</span></div>
+      <div class="flow-row"><span class="step">4</span><span class="arrow">→</span><span class="desc">三份都落盘后逐级 ACK 回到 Client，该块写入完成</span></div>
+      <div class="note"><strong>机架感知（rack awareness）</strong>：默认把 3 副本放成「本机架 2 份 + 异机架 1 份」——既防单机坏（同机架另一份兜底），又防整机架断电（异机架那份兜底），同时尽量减少跨机架带宽。这是「容错」与「网络成本」之间的经典折中。</div>
+
+      <h3 id="s3-3">3.3 对象存储与存算分离</h3>
+      <p>云时代，HDFS 的「存算耦合」（数据和计算在同一批机器）显出短板：扩容算力必须连带扩存储，反之亦然，弹性差。于是<strong>对象存储 + 存算分离</strong>成为新范式。</p>
+      <div class="analogy"><strong>存算耦合</strong>像「自带食材的私厨」——厨师和冰箱绑在一起，要加厨师就得连冰箱一起买。<strong>存算分离</strong>像「中央冷库 + 按需叫的厨师」——食材统一放云冷库（对象存储），需要算力时临时拉一批计算节点，算完释放。冷库和厨师各自独立伸缩。</div>
+      <table>
+        <thead><tr><th>维度</th><th>HDFS（存算耦合）</th><th>对象存储 S3 / OSS / MinIO</th></tr></thead>
+        <tbody>
+          <tr><td>数据模型</td><td>文件 / 目录（可追加）</td><td>对象 + 扁平 key（不可改，整体覆盖）</td></tr>
+          <tr><td>弹性</td><td class="cell-bad">存算绑定，弹性差</td><td class="cell-ok">存算分离，按需弹性</td></tr>
+          <tr><td>成本</td><td class="cell-mid">自建运维成本高</td><td class="cell-ok">极低（尤其冷数据）</td></tr>
+          <tr><td>一致性 / 延迟</td><td>低延迟、强一致</td><td class="cell-mid">延迟较高、历史上最终一致</td></tr>
+          <tr><td>典型搭配</td><td>本地 Hadoop 集群</td><td>云上 Lakehouse（Iceberg/Delta + Spark/Trino）</td></tr>
+        </tbody>
+      </table>
+      <div class="tip">趋势很明确：<strong>对象存储正在成为大数据新的统一底座</strong>。但对象存储「不能原地改、只能整体覆盖、list 慢」的特性，催生了表格式（Iceberg/Delta/Hudi）来管理「哪些文件属于当前表、怎么做 ACID 更新」——这是 D06 的核心。</div>
+
+      <h3 id="s3-4">3.4 数据视角的分布式基础速览</h3>
+      <p>大数据的存储与计算，全建立在几条分布式原语之上。这里用<strong>数据语境</strong>把它们串成一页速查——不展开推导（那是架构板块的事），只讲"它在大数据里长什么样"。</p>
+      <div class="def"><strong>分片 / 分区（Sharding / Partitioning）</strong>：把大数据切成多片散到不同机器，是<strong>并行度与扩展性的根</strong>。在不同层有不同名字：HDFS 叫<strong>块（Block）</strong>、Kafka 叫<strong>分区（Partition）</strong>、Spark/Flink 叫<strong>分区（Partition，= 一个 Task 的处理单元）</strong>、数仓表叫<strong>分区（按天/地区）</strong>。它们本质同源：用切分换并行。</div>
+      <div class="def"><strong>副本（Replication）</strong>：同一份分片存多份在不同机器上，用于<strong>容错</strong>（坏一份从别处恢复）与<strong>分摊读压力</strong>。HDFS 默认 3 副本、Kafka 用 ISR（同步副本集）、对象存储内部也做多副本/纠删码。代价是存储成本与写放大。</div>
+      <div class="def"><strong>CAP 定理</strong>：分布式系统在<strong>一致性（C）、可用性（A）、分区容错（P）</strong>三者中，网络分区发生时只能保 CP 或 AP（P 在分布式里必选）。数据视角：强一致存储（如 HBase）偏 CP，高可用缓存/对象存储常偏 AP（最终一致）。<strong>选型即在"读到的一定是最新"和"任何时候都能读写"之间取舍。</strong>（进阶 PACELC：即使没分区，也要在延迟 L 与一致性 C 间权衡。）</div>
+      <div class="def"><strong>共识（Consensus）与 Raft</strong>：让多个节点对"谁是主、数据是什么"达成一致的算法。大数据里到处是它的身影：HDFS NameNode HA、Kafka Controller、各类元数据服务都靠共识选主、保证元数据一致。<strong>Raft</strong> 是目前最易懂、最常用的共识算法（Leader 选举 + 日志复制）。</div>
+      <div class="info">这些只是"数据视角的速览"。完整推导（CAP/PACELC 证明、Raft 四子问题与陷阱、Paxos/BFT、向量时钟/TrueTime、CRDT、TLA+）请看架构板块：<code>architect/distributed_systems_fundamentals.html</code> 与 <code>architect/distributed_systems_advanced.html</code>。本系列只在用到时点到，不重复造轮子。</div>
+    </section>
+
+    <!-- ============= 第 4 章 ============= -->
+    <section class="chapter" id="ch4">
+      <div class="ch-head">
+        <div class="num">04</div>
+        <div class="t">
+          <h2>行存 vs 列存：大数据性能的命门</h2>
+          <p class="sub">同样的数据，换个摆放方式，分析查询能快一个数量级 · 老兵的 cache 直觉在这里发光</p>
+        </div>
+      </div>
+
+      <p class="lead">如果说前三章是「数据放哪」，那从这一章开始是「数据怎么摆」。<strong>行存还是列存</strong>，是分析型系统最关键的一个决定。理解它，你就理解了 Parquet、ClickHouse、向量化执行为什么快。</p>
+
+      <h3 id="s4-1">4.1 同一张表的两种摆法</h3>
+      <div class="analogy">想象一张员工表。<strong>行存</strong>像一摞「个人档案袋」——每个人的所有信息装在一个袋子里，按人挨个排。要看某个人全部资料很方便；但要「统计全公司平均工资」，得把每个袋子都翻出来抽出工资那页。<strong>列存</strong>像「按字段归档的文件柜」——所有人的工资单放一个抽屉、所有人的姓名放另一个抽屉。算平均工资只需拉开「工资」抽屉，其余看都不看。</div>
+
+      <div class="svg-wrap">
+        <svg width="800" height="300" viewBox="0 0 800 300" role="img" aria-label="行存与列存的磁盘布局对比">
+          <!-- 逻辑表 -->
+          <text x="120" y="24" text-anchor="middle" fill="#7dd3fc" font-size="13" font-weight="bold">逻辑表</text>
+          <rect x="20" y="36" width="200" height="120" rx="6" fill="#141a2c" stroke="#2a3556"/>
+          <line x1="20" y1="66" x2="220" y2="66" stroke="#2a3556"/>
+          <text x="55" y="56" text-anchor="middle" fill="#7dd3fc" font-size="11">id</text>
+          <text x="105" y="56" text-anchor="middle" fill="#7dd3fc" font-size="11">name</text>
+          <text x="155" y="56" text-anchor="middle" fill="#7dd3fc" font-size="11">dept</text>
+          <text x="200" y="56" text-anchor="middle" fill="#fbbf24" font-size="11">salary</text>
+          <text x="55" y="86" text-anchor="middle" fill="#cbd5e1" font-size="10.5">1</text><text x="105" y="86" text-anchor="middle" fill="#cbd5e1" font-size="10.5">Amy</text><text x="155" y="86" text-anchor="middle" fill="#cbd5e1" font-size="10.5">Eng</text><text x="200" y="86" text-anchor="middle" fill="#fcd34d" font-size="10.5">30</text>
+          <text x="55" y="108" text-anchor="middle" fill="#cbd5e1" font-size="10.5">2</text><text x="105" y="108" text-anchor="middle" fill="#cbd5e1" font-size="10.5">Bob</text><text x="155" y="108" text-anchor="middle" fill="#cbd5e1" font-size="10.5">Sale</text><text x="200" y="108" text-anchor="middle" fill="#fcd34d" font-size="10.5">25</text>
+          <text x="55" y="130" text-anchor="middle" fill="#cbd5e1" font-size="10.5">3</text><text x="105" y="130" text-anchor="middle" fill="#cbd5e1" font-size="10.5">Cid</text><text x="155" y="130" text-anchor="middle" fill="#cbd5e1" font-size="10.5">Eng</text><text x="200" y="130" text-anchor="middle" fill="#fcd34d" font-size="10.5">40</text>
+
+          <!-- 行存 -->
+          <text x="500" y="24" text-anchor="middle" fill="#f472b6" font-size="13" font-weight="bold">行存：整行连续存放</text>
+          <g font-size="10.5" font-family="monospace">
+            <rect x="300" y="40" width="44" height="26" fill="#1a2138" stroke="#475569"/><text x="322" y="57" text-anchor="middle" fill="#cbd5e1">1</text>
+            <rect x="344" y="40" width="56" height="26" fill="#1a2138" stroke="#475569"/><text x="372" y="57" text-anchor="middle" fill="#cbd5e1">Amy</text>
+            <rect x="400" y="40" width="56" height="26" fill="#1a2138" stroke="#475569"/><text x="428" y="57" text-anchor="middle" fill="#cbd5e1">Eng</text>
+            <rect x="456" y="40" width="44" height="26" fill="#3a2a10" stroke="#fbbf24"/><text x="478" y="57" text-anchor="middle" fill="#fcd34d">30</text>
+            <rect x="500" y="40" width="44" height="26" fill="#1a2138" stroke="#475569"/><text x="522" y="57" text-anchor="middle" fill="#cbd5e1">2</text>
+            <rect x="544" y="40" width="56" height="26" fill="#1a2138" stroke="#475569"/><text x="572" y="57" text-anchor="middle" fill="#cbd5e1">Bob</text>
+            <rect x="600" y="40" width="56" height="26" fill="#1a2138" stroke="#475569"/><text x="628" y="57" text-anchor="middle" fill="#cbd5e1">Sale</text>
+            <rect x="656" y="40" width="44" height="26" fill="#3a2a10" stroke="#fbbf24"/><text x="678" y="57" text-anchor="middle" fill="#fcd34d">25</text>
+            <rect x="300" y="66" width="44" height="26" fill="#1a2138" stroke="#475569"/><text x="322" y="83" text-anchor="middle" fill="#cbd5e1">3</text>
+            <rect x="344" y="66" width="56" height="26" fill="#1a2138" stroke="#475569"/><text x="372" y="83" text-anchor="middle" fill="#cbd5e1">Cid</text>
+            <rect x="400" y="66" width="56" height="26" fill="#1a2138" stroke="#475569"/><text x="428" y="83" text-anchor="middle" fill="#cbd5e1">Eng</text>
+            <rect x="456" y="66" width="44" height="26" fill="#3a2a10" stroke="#fbbf24"/><text x="478" y="83" text-anchor="middle" fill="#fcd34d">40</text>
+          </g>
+          <text x="500" y="112" text-anchor="middle" fill="#94a3b8" font-size="10.5">算 SUM(salary) 要读过所有灰格子才能拿到黄格子</text>
+
+          <!-- 列存 -->
+          <text x="500" y="170" text-anchor="middle" fill="#34d399" font-size="13" font-weight="bold">列存：同列连续存放</text>
+          <g font-size="10.5" font-family="monospace">
+            <rect x="300" y="186" width="44" height="26" fill="#1a2138" stroke="#475569"/><text x="322" y="203" text-anchor="middle" fill="#cbd5e1">1</text>
+            <rect x="344" y="186" width="44" height="26" fill="#1a2138" stroke="#475569"/><text x="366" y="203" text-anchor="middle" fill="#cbd5e1">2</text>
+            <rect x="388" y="186" width="44" height="26" fill="#1a2138" stroke="#475569"/><text x="410" y="203" text-anchor="middle" fill="#cbd5e1">3</text>
+            <rect x="300" y="212" width="56" height="26" fill="#1a2138" stroke="#475569"/><text x="328" y="229" text-anchor="middle" fill="#cbd5e1">Amy</text>
+            <rect x="356" y="212" width="56" height="26" fill="#1a2138" stroke="#475569"/><text x="384" y="229" text-anchor="middle" fill="#cbd5e1">Bob</text>
+            <rect x="412" y="212" width="56" height="26" fill="#1a2138" stroke="#475569"/><text x="440" y="229" text-anchor="middle" fill="#cbd5e1">Cid</text>
+            <rect x="300" y="238" width="56" height="26" fill="#1a2138" stroke="#475569"/><text x="328" y="255" text-anchor="middle" fill="#cbd5e1">Eng</text>
+            <rect x="356" y="238" width="56" height="26" fill="#1a2138" stroke="#475569"/><text x="384" y="255" text-anchor="middle" fill="#cbd5e1">Sale</text>
+            <rect x="412" y="238" width="56" height="26" fill="#1a2138" stroke="#475569"/><text x="440" y="255" text-anchor="middle" fill="#cbd5e1">Eng</text>
+            <rect x="300" y="264" width="44" height="26" fill="#3a2a10" stroke="#fbbf24"/><text x="322" y="281" text-anchor="middle" fill="#fcd34d">30</text>
+            <rect x="344" y="264" width="44" height="26" fill="#3a2a10" stroke="#fbbf24"/><text x="366" y="281" text-anchor="middle" fill="#fcd34d">25</text>
+            <rect x="388" y="264" width="44" height="26" fill="#3a2a10" stroke="#fbbf24"/><text x="410" y="281" text-anchor="middle" fill="#fcd34d">40</text>
+          </g>
+          <text x="600" y="281" text-anchor="middle" fill="#34d399" font-size="10.5">↑ salary 列连续，只读这一段即可</text>
+        </svg>
+        <div class="svg-caption">磁盘是一维的。「行存」沿行展开，「列存」沿列展开。摆法决定了「只关心几列」的查询要不要读无关数据。</div>
+      </div>
+
+      <h3 id="s4-2">4.2 交互演示：跑一次 SELECT SUM(salary)</h3>
+      <p>下面这个小演示直观展示差异。切换<strong>存储模式</strong>，点「运行查询」，看两种布局各自需要读多少个单元格（≈ IO 量）：</p>
+
+      <div class="demo" id="scanDemo">
+        <div class="demo-title">交互演示 · 行存 vs 列存 扫描代价</div>
+        <div class="demo-controls">
+          <button class="seg active" data-mode="row">🗂️ 行存 Row-store</button>
+          <button class="seg" data-mode="col">🗄️ 列存 Column-store</button>
+          <button class="run" id="scanRun">▶ 运行 SELECT SUM(salary)</button>
+          <button class="ghost" id="scanReset">重置</button>
+        </div>
+        <table class="scan-table" id="scanTable">
+          <thead>
+            <tr><th>id</th><th>name</th><th>dept</th><th class="col-head-salary">salary</th></tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+        <div class="demo-readout">
+          读取单元格（≈ 磁盘 IO）：<b id="scanCount">0</b> <span id="scanTotal"></span>
+        </div>
+        <div class="demo-verdict" id="scanVerdict"></div>
+      </div>
+      <div class="note">演示里只有 5 行，差距不明显。把行数换成<strong>十亿</strong>、列数换成<strong>几百</strong>，而查询只碰 1–2 列时，列存少读 99% 的数据——这就是为什么所有分析型引擎（ClickHouse / StarRocks / 数仓）默认列存。</div>
+
+      <h3 id="s4-3">4.3 为什么 OLAP 一定选列存？三个老兵能秒懂的理由</h3>
+      <div class="grid cols-3">
+        <div class="card">
+          <h4>① 只读需要的列</h4>
+          <p style="font-size:13px;color:var(--text-dim)">分析查询常是「几百列里取 2 列做聚合」。列存只读这 2 列对应的磁盘段，<strong>投影下推</strong>直接砍掉绝大部分 IO。</p>
+        </div>
+        <div class="card green">
+          <h4>② 压缩率碾压</h4>
+          <p style="font-size:13px;color:var(--text-dim)">同一列的数据<strong>类型相同、取值相近</strong>（比如「国家」列大量重复），压缩比远高于行存的混合数据。第 6 章详解。</p>
+        </div>
+        <div class="card violet">
+          <h4>③ 向量化 + SIMD 友好</h4>
+          <p style="font-size:13px;color:var(--text-dim)">同列连续 = 内存里一段同类型数组，正好喂给 <strong>SIMD</strong> 批量计算、cache 命中高。这正是你在 C++ 性能优化里追求的「数据导向设计」。</p>
+        </div>
+      </div>
+      <div class="info">第 ③ 点直接呼应 <code>cpp/concurrency_deep.html</code> 与 <code>perf-debug/</code> 里的 cache 局部性、SIMD 主题。列存 + 向量化执行引擎（D07 的 ClickHouse / Velox）本质就是把单机性能工程的「array of structs vs struct of arrays」之争，搬到了数据引擎尺度。</div>
+      <div class="warn">列存的代价：写入和「按行点查 / 改单行」变慢（要拆散到各列、或重写整个文件）。所以列存服务 OLAP（读多写少、批量追加），OLTP 仍然行存。<strong>没有银弹，只有匹配工作负载的选择。</strong></div>
+    </section>
+
+    <!-- ============= 第 5 章 ============= -->
+    <section class="chapter" id="ch5">
+      <div class="ch-head">
+        <div class="num">05</div>
+        <div class="t">
+          <h2>列式文件格式：Parquet / ORC</h2>
+          <p class="sub">列存的思想，落地成磁盘上的具体文件格式 · 自带「智能」让引擎少读数据</p>
+        </div>
+      </div>
+
+      <p class="lead">「列存」是思想，<strong>Parquet</strong> / <strong>ORC</strong> 是把它落到磁盘上的标准文件格式。它们是当今数据湖 / 湖仓的事实标准——你存进对象存储的，几乎都是 Parquet。理解它的内部布局，是理解「谓词下推为什么能跳过整段数据」的钥匙。</p>
+
+      <h3 id="s5-1">5.1 Parquet 的物理布局</h3>
+      <p>Parquet 不是「整列从头存到尾」那么简单，而是<strong>先横切成若干行组（Row Group），每个行组内部再按列切块</strong>——这样既享受列存的好处，又能让一个行组成为并行处理的单位。</p>
+
+      <div class="svg-wrap">
+        <svg width="780" height="370" viewBox="0 0 780 370" role="img" aria-label="Parquet 文件物理布局">
+          <text x="390" y="22" text-anchor="middle" fill="#7dd3fc" font-size="15" font-weight="bold">一个 Parquet 文件的内部结构</text>
+
+          <!-- File 外框 -->
+          <rect x="40" y="40" width="700" height="300" rx="10" fill="none" stroke="#2a3556" stroke-width="1.5"/>
+          <text x="58" y="60" fill="#64748b" font-size="11">PAR1 (magic)</text>
+
+          <!-- Row Group 1 -->
+          <rect x="60" y="72" width="320" height="180" rx="8" fill="#10172b" stroke="#7dd3fc"/>
+          <text x="220" y="92" text-anchor="middle" fill="#7dd3fc" font-size="12.5" font-weight="bold">Row Group 1（如 128MB）</text>
+          <!-- column chunks -->
+          <rect x="74" y="104" width="90" height="134" rx="5" fill="#141a2c" stroke="#34d399"/>
+          <text x="119" y="120" text-anchor="middle" fill="#6ee7b7" font-size="11">Col Chunk: id</text>
+          <rect x="170" y="104" width="90" height="134" rx="5" fill="#141a2c" stroke="#a78bfa"/>
+          <text x="215" y="120" text-anchor="middle" fill="#c4b5fd" font-size="11">Col Chunk: dept</text>
+          <rect x="266" y="104" width="100" height="134" rx="5" fill="#141a2c" stroke="#fbbf24"/>
+          <text x="316" y="120" text-anchor="middle" fill="#fcd34d" font-size="11">Col Chunk: salary</text>
+          <!-- pages inside one chunk -->
+          <rect x="274" y="132" width="84" height="22" rx="3" fill="#0c1120" stroke="#fbbf24" opacity=".8"/><text x="316" y="147" text-anchor="middle" fill="#fcd34d" font-size="9.5">Page (+ 统计)</text>
+          <rect x="274" y="158" width="84" height="22" rx="3" fill="#0c1120" stroke="#fbbf24" opacity=".8"/><text x="316" y="173" text-anchor="middle" fill="#fcd34d" font-size="9.5">Page</text>
+          <rect x="274" y="184" width="84" height="22" rx="3" fill="#0c1120" stroke="#fbbf24" opacity=".8"/><text x="316" y="199" text-anchor="middle" fill="#fcd34d" font-size="9.5">Page</text>
+
+          <!-- Row Group 2 -->
+          <rect x="396" y="72" width="320" height="180" rx="8" fill="#10172b" stroke="#7dd3fc" opacity=".55"/>
+          <text x="556" y="92" text-anchor="middle" fill="#7dd3fc" font-size="12.5" font-weight="bold">Row Group 2</text>
+          <text x="556" y="170" text-anchor="middle" fill="#64748b" font-size="11">… 同样的列块结构 …</text>
+
+          <!-- Footer -->
+          <rect x="60" y="264" width="656" height="56" rx="8" fill="#231a33" stroke="#f472b6"/>
+          <text x="388" y="286" text-anchor="middle" fill="#f9a8d4" font-size="12.5" font-weight="bold">File Footer（写在文件末尾）</text>
+          <text x="388" y="305" text-anchor="middle" fill="#94a3b8" font-size="11">Schema · 每个 Row Group / Column 的 min-max / count / null 统计 · 各块偏移量</text>
+        </svg>
+        <div class="svg-caption">层级：File → Row Group（并行单位） → Column Chunk（列存单位） → Page（编码 / 压缩单位）。Footer 是「目录 + 统计摘要」，读取时先读它。</div>
+      </div>
+
+      <div class="tip"><strong>为什么 Footer 在末尾？</strong> 写的时候数据是流式追加的，统计信息（每列 min/max、行数）要等全部写完才知道，所以放最后。读的时候引擎<strong>先 seek 到文件尾读 Footer</strong>，拿到「地图」后再精准跳读需要的列块——这就是下面三大优化的物理基础。</div>
+
+      <h3 id="s5-2">5.2 三大下推优化：让引擎「少读」</h3>
+      <p>Parquet 之所以快，不只是列存，更因为它自带统计信息，让查询引擎在真正读数据前就能<strong>跳过</strong>大量无关内容：</p>
+      <div class="grid cols-3">
+        <div class="card green">
+          <h4>投影下推 Projection</h4>
+          <p style="font-size:13px;color:var(--text-dim)"><code>SELECT salary</code> 只读 salary 那些 Column Chunk，其余列的磁盘段碰都不碰。</p>
+        </div>
+        <div class="card amber">
+          <h4>谓词下推 Predicate</h4>
+          <p style="font-size:13px;color:var(--text-dim)"><code>WHERE salary &gt; 100</code> 时，先看每个 Row Group 的 salary <strong>max</strong>。max≤100 的整组直接跳过，不解压不扫描。</p>
+        </div>
+        <div class="card violet">
+          <h4>统计裁剪 Pruning</h4>
+          <p style="font-size:13px;color:var(--text-dim)">利用 min/max/null 计数、字典、Bloom Filter，把「肯定不含目标值」的块整段排除。</p>
+        </div>
+      </div>
+
+      <pre><span class="c"># PyArrow 读 Parquet：只取 2 列 + 谓词，引擎自动下推</span>
+<span class="k">import</span> pyarrow.parquet <span class="k">as</span> pq
+
+table = pq.read_table(
+    <span class="s">"employees.parquet"</span>,
+    columns=[<span class="s">"dept"</span>, <span class="s">"salary"</span>],          <span class="c"># 投影下推：只读这 2 列的 Column Chunk</span>
+    filters=[(<span class="s">"salary"</span>, <span class="s">"&gt;"</span>, <span class="n">100</span>)],     <span class="c"># 谓词下推：salary max≤100 的 Row Group 整段跳过</span>
+)
+<span class="c"># 100 列、10 亿行的文件里，这条查询可能只真正读了 &lt;2% 的字节</span></pre>
+
+      <div class="analogy">这就像查一本<strong>带详细目录和索引的工具书</strong>：你不会从第一页读到最后一页，而是先翻目录（Footer），看「第 3 章工资在哪、范围多少」，确认相关章节后只翻那几页。Parquet 把这套「目录 + 索引」直接焊进了文件格式里。</div>
+
+      <h3 id="s5-3">5.3 格式对比：Parquet / ORC / Avro</h3>
+      <table>
+        <thead><tr><th>格式</th><th>取向</th><th>存储方向</th><th>最适合</th><th>生态</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Parquet</strong></td><td>分析</td><td class="cell-ok">列存</td><td>OLAP 扫描 / 湖仓事实标准</td><td>Spark / Trino / 几乎所有</td></tr>
+          <tr><td><strong>ORC</strong></td><td>分析</td><td class="cell-ok">列存</td><td>OLAP；Hive 生态略优</td><td>Hive / Spark</td></tr>
+          <tr><td><strong>Avro</strong></td><td>传输 / 写入</td><td class="cell-bad">行存</td><td>逐行写、流式管道、schema 演进</td><td>Kafka / 摄取</td></tr>
+          <tr><td>CSV / JSON</td><td>交换</td><td>行（文本）</td><td>人读 / 小数据交换</td><td>通用（但低效）</td></tr>
+        </tbody>
+      </table>
+      <div class="note">实战经验：<strong>写入 / 流式管道用 Avro（行存、逐条追加友好），分析存储用 Parquet（列存、扫描友好）</strong>。一条数据从 Kafka（Avro）落到数据湖时常会转成 Parquet——这个「行转列」的转换，是数据管道里非常常见的一步。</div>
+    </section>
+
+    <!-- ============= 第 6 章 ============= -->
+    <section class="chapter" id="ch6">
+      <div class="ch-head">
+        <div class="num">06</div>
+        <div class="t">
+          <h2>编码与压缩：列存为何如此省空间</h2>
+          <p class="sub">先「聪明地表示」（编码），再「无脑地压小」（压缩）· 两步叠加才是列存的省空间魔法</p>
+        </div>
+      </div>
+
+      <h3 id="s6-1">6.1 编码 ≠ 压缩：先分清两件事</h3>
+      <p>很多人把「编码」和「压缩」混为一谈。在 Parquet 这类格式里，它们是<strong>先后两步</strong>，各司其职：</p>
+      <div class="grid cols-2">
+        <div class="card violet">
+          <h4>编码 Encoding（先做）</h4>
+          <p style="font-size:13px;color:var(--text-dim)">利用<strong>数据本身的规律</strong>换一种更紧凑的表示。无损、可直接在编码态上做计算。例：字典编码、RLE、Delta、Bit-packing。</p>
+        </div>
+        <div class="card green">
+          <h4>压缩 Compression（后做）</h4>
+          <p style="font-size:13px;color:var(--text-dim)">对编码后的字节流再跑<strong>通用压缩算法</strong>，挤掉剩余冗余。与数据语义无关。例：Snappy、LZ4、ZSTD、GZIP。</p>
+        </div>
+      </div>
+      <p>列存之所以省空间，关键在于<strong>编码这一步在列存里特别有效</strong>——因为同一列的值类型相同、分布集中，规律性强。常见列编码：</p>
+      <ul>
+        <li><strong>字典编码（Dictionary）</strong>：把重复的值（如「部门」只有十几种）建一张字典表，原列只存「字典下标」的小整数。基数低的列效果惊人。</li>
+        <li><strong>游程编码（RLE, Run-Length）</strong>：连续重复值压成「值 × 次数」。如 <code>Eng,Eng,Eng,Eng</code> → <code>Eng×4</code>。排序后的列效果最佳。</li>
+        <li><strong>Delta 编码</strong>：存相邻值的差。对递增的 id / 时间戳列，差值都很小，能用更少 bit。</li>
+        <li><strong>Bit-packing</strong>：若一列值域只需 3 bit，就别用 32 bit 存——按实际位宽紧凑打包。</li>
+      </ul>
+
+      <h3 id="s6-2">6.2 交互演示：字典编码 & RLE 怎么省</h3>
+      <p>下面用一个真实场景——「100 万行的 <code>dept</code> 列，但只有 4 种部门」——直观看编码怎么把它压小。点按钮切换查看：</p>
+
+      <div class="demo" id="encDemo">
+        <div class="demo-title">交互演示 · 列编码效果（dept 列，基数=4）</div>
+        <div class="demo-controls">
+          <button class="seg active" data-enc="raw">原始 Raw</button>
+          <button class="seg" data-enc="dict">字典编码 Dictionary</button>
+          <button class="seg" data-enc="rle">排序 + RLE</button>
+        </div>
+        <div class="enc-grid">
+          <div class="enc-col">
+            <h5 id="encLeftTitle">列内容（示意前 12 行）</h5>
+            <div class="enc-cells" id="encCells"></div>
+          </div>
+          <div class="enc-col">
+            <h5>编码说明 + 体积</h5>
+            <div id="encDesc" style="font-size:13px;color:var(--text-dim);line-height:1.7"></div>
+            <div class="enc-stat" id="encStat"></div>
+          </div>
+        </div>
+      </div>
+      <div class="tip">字典编码还有个额外好处：<code>WHERE dept = 'Eng'</code> 可以直接在<strong>字典下标</strong>上比较小整数，比逐个比字符串快得多——这又一次和「向量化执行」联动。</div>
+
+      <h3 id="s6-3">6.3 压缩算法选型：速度 vs 比率的权衡</h3>
+      <p>编码之后再叠加通用压缩。选哪个算法，本质是<strong>「CPU 时间」换「磁盘 / 网络字节」</strong>的权衡——又是一个老兵熟悉的折中：</p>
+      <table>
+        <thead><tr><th>算法</th><th>压缩比</th><th>压 / 解速度</th><th>适用</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Snappy</strong></td><td class="cell-mid">中</td><td class="cell-ok">极快</td><td>默认之选，热数据、追求吞吐</td></tr>
+          <tr><td><strong>LZ4</strong></td><td class="cell-mid">中</td><td class="cell-ok">极快（解压尤快）</td><td>对延迟敏感的读</td></tr>
+          <tr><td><strong>ZSTD</strong></td><td class="cell-ok">高（可调级别）</td><td class="cell-mid">快（综合最佳）</td><td>现代首选，比率 / 速度平衡好</td></tr>
+          <tr><td><strong>GZIP</strong></td><td class="cell-ok">高</td><td class="cell-bad">慢</td><td>冷数据、归档、CPU 不紧张</td></tr>
+        </tbody>
+      </table>
+      <div class="info">经验法则：<strong>热数据（频繁查）用 Snappy/LZ4 保速度，冷数据（少查、长期存）用 ZSTD 高级别或 GZIP 省空间</strong>。如今 ZSTD 因为「比率接近 GZIP、速度接近 Snappy」，正在成为很多场景的新默认。这与你在网络 / 序列化里做的取舍完全同源。</div>
+      <div class="warn">别忽视「解压」开销：分析查询是<strong>读多</strong>的，解压速度往往比压缩速度更重要。一个压缩比高但解压慢的算法，可能让 CPU 成为查询瓶颈，反而比少压一点更慢。</div>
+    </section>
+
+    <!-- ============= 第 7 章 ============= -->
+    <section class="chapter" id="ch7">
+      <div class="ch-head">
+        <div class="num">07</div>
+        <div class="t">
+          <h2>小结 · 选型决策 · 面试自测</h2>
+          <p class="sub">把这一篇收束成可带走的判断力 · 并接上后续篇章</p>
+        </div>
+      </div>
+
+      <h3>一页纸总结</h3>
+      <div class="grid cols-2">
+        <div class="card"><h4>① 大数据的判据</h4><p style="font-size:13px;color:var(--text-dim)">「单机搞不定」而非某个 GB 数字。靠 scale-out 用数量换吞吐，代价是网络 / 协调 / 容错。</p></div>
+        <div class="card violet"><h4>② 五个分水岭</h4><p style="font-size:13px;color:var(--text-dim)">批/流、OLTP/OLAP、up/out、写时/读时 schema。大数据主要服务 OLAP。</p></div>
+        <div class="card green"><h4>③ 存储底座</h4><p style="font-size:13px;color:var(--text-dim)">HDFS（切块 + 多副本 + 元数据分离）→ 对象存储 + 存算分离成为云时代新底座。</p></div>
+        <div class="card amber"><h4>④ 列存是命门</h4><p style="font-size:13px;color:var(--text-dim)">OLAP 选列存：少读列、压得狠、向量化友好。Parquet 是事实标准。</p></div>
+        <div class="card"><h4>⑤ 文件级智能</h4><p style="font-size:13px;color:var(--text-dim)">Parquet Footer + 统计 → 投影 / 谓词下推 / 裁剪，让引擎「少读」。</p></div>
+        <div class="card green"><h4>⑥ 编码 + 压缩</h4><p style="font-size:13px;color:var(--text-dim)">先编码（字典 / RLE / Delta）利用规律，再压缩（ZSTD/Snappy）挤冗余。</p></div>
+      </div>
+
+      <h3>一个最小选型决策清单</h3>
+      <div class="flow-row"><span class="step">Q1</span><span class="arrow">→</span><span class="desc">是事务（点查改单行）还是分析（扫描聚合）？ → 事务走 OLTP 行存；分析走 OLAP 列存</span></div>
+      <div class="flow-row"><span class="step">Q2</span><span class="arrow">→</span><span class="desc">延迟要求是秒级实时还是分钟 / 小时？ → 实时走流（Flink）；离线走批（Spark）</span></div>
+      <div class="flow-row"><span class="step">Q3</span><span class="arrow">→</span><span class="desc">数据结构固定还是杂乱多变？ → 固定可入数仓；多变先入数据湖（Parquet on 对象存储）</span></div>
+      <div class="flow-row"><span class="step">Q4</span><span class="arrow">→</span><span class="desc">数据冷热？ → 热数据 Snappy/LZ4 保速度，冷数据 ZSTD/GZIP 省空间</span></div>
+
+      <h3>面试自测（点击展开）</h3>
+      <details class="qa">
+        <summary><span class="lvl pill cyan">基础</span>为什么大数据系统普遍用列式存储？至少说出两个理由。</summary>
+        <div class="a">
+          <div class="point"><span class="label">投影</span>分析查询常只取少数列，列存只读相关列的磁盘段，IO 大幅下降（投影下推）。</div>
+          <div class="point"><span class="label">压缩</span>同列数据类型相同、取值集中，编码 + 压缩比远高于行存的混合数据。</div>
+          <div class="point deep"><span class="label">向量化</span>同列连续 = 内存里同类型数组，天然适合 SIMD 批量计算、cache 友好。</div>
+        </div>
+      </details>
+      <details class="qa">
+        <summary><span class="lvl pill green">理解</span>Parquet 的「谓词下推」是怎么做到「不读就跳过」一整段数据的？</summary>
+        <div class="a">
+          <div class="point"><span class="label">机制</span>Parquet 在 Footer 里为每个 Row Group / Page 存了该列的 min/max/null 统计。</div>
+          <div class="point"><span class="label">裁剪</span>遇到 <code>WHERE salary&gt;100</code>，引擎先看某 Row Group 的 salary max；若 max≤100，该组不可能有命中行，整段跳过——不解压、不扫描。</div>
+          <div class="point deep"><span class="label">延伸</span>数据若按谓词列<strong>排序 / 分区</strong>存放，跳过效率更高。这也是「数据布局优化」的核心套路（D06 会讲 Z-order / 聚簇）。</div>
+        </div>
+      </details>
+      <details class="qa">
+        <summary><span class="lvl pill amber">辨析</span>HDFS 的块为什么默认设得很大（128MB）？小块不行吗？</summary>
+        <div class="a">
+          <div class="point"><span class="label">元数据</span>块越大、块数越少，NameNode 内存里要维护的「块→节点」映射就越少（NameNode 元数据全在内存，是稀缺资源）。</div>
+          <div class="point"><span class="label">IO 模式</span>大块促成<strong>顺序读</strong>，摊薄寻址 / 建连开销——和单机「大块顺序 IO ≫ 小块随机 IO」同理。</div>
+          <div class="point bad"><span class="label">代价</span>小文件多时（海量 KB 级文件）会撑爆 NameNode 内存、且每个都占一个块槽——这就是著名的「HDFS 小文件问题」。</div>
+        </div>
+      </details>
+      <details class="qa">
+        <summary><span class="lvl pill violet">进阶</span>编码（encoding）和压缩（compression）有什么区别？为什么要分两步？</summary>
+        <div class="a">
+          <div class="point"><span class="label">编码</span>利用数据语义规律换紧凑表示（字典 / RLE / Delta），无损、常可在编码态直接计算（如字典下标比较）。</div>
+          <div class="point"><span class="label">压缩</span>对编码后的字节流跑通用算法（ZSTD/Snappy），与语义无关，挤掉剩余冗余。</div>
+          <div class="point deep"><span class="label">为何分两步</span>编码把「结构化冗余」先榨干（这是通用压缩看不懂的），再交给压缩处理「字节级冗余」，两步叠加效果远好于单独压缩原始数据。</div>
+        </div>
+      </details>
+      <details class="qa">
+        <summary><span class="lvl pill red">架构</span>都说「存算分离」好，那它相比 HDFS 的存算耦合，牺牲了什么？</summary>
+        <div class="a">
+          <div class="point"><span class="label">收益</span>计算 / 存储独立弹性伸缩、对象存储成本极低、运维简化。</div>
+          <div class="point bad"><span class="label">代价</span>数据不在本地，计算要<strong>跨网络拉取</strong>，延迟更高；对象存储「不可原地改、list 慢、历史上最终一致」带来新问题。</div>
+          <div class="point deep"><span class="label">应对</span>用缓存层（如本地 SSD 缓存热数据）补延迟，用表格式（Iceberg/Delta）在对象存储上补 ACID 与高效元数据——正是 D06 的主题。</div>
+        </div>
+      </details>
+
+      <div class="tip" style="margin-top:28px"><strong>下一篇预告 · D02：数据建模与数仓分层</strong>。地基打好后，下一步是「数据该怎么组织成可用的表」——维度建模（Kimball）、星型 / 雪花、缓慢变化维、以及 ODS→DWD→DWS→ADS 的分层方法论。之后 D03（Spark 内核）、D04（Flink 流处理）进入计算引擎深水区。</div>
+    </section>
+
+    <!-- ============= 第 8 章 · 术语表 ============= -->
+    <section class="chapter" id="ch8">
+      <div class="ch-head">
+        <div class="num">08</div>
+        <div class="t">
+          <h2>术语表速查 · Glossary</h2>
+          <p class="sub">本篇出现的名词一次性收齐 · 看到不认识的词，回这里查 · 也为后续 D02–D10 做铺垫</p>
+        </div>
+      </div>
+
+      <p class="lead">大数据领域名词密度高、缩写多，初学最容易被术语劝退。这里把全篇（及后续会反复出现）的核心概念按主题归类，给出<strong>「人话版」定义</strong>。不必一次记完，当字典用即可。</p>
+
+      <div class="glossary">
+
+        <div class="gl-group">
+          <h4>① 总览与基础</h4>
+          <div class="gl"><span class="gl-t">大数据 <em>Big Data</em></span><span class="gl-d">当数据的<strong>量 / 速度 / 多样性</strong>超过单机可承受的处理能力，必须用一组机器协作的场景。判据是「单机搞不定」，而非某个绝对数字。</span></div>
+          <div class="gl"><span class="gl-t">5V</span><span class="gl-d">刻画大数据的五个维度：Volume 体量、Velocity 速度、Variety 多样性、Veracity 真实性、Value 价值。</span></div>
+          <div class="gl"><span class="gl-t">吞吐 vs 延迟 <em>Throughput / Latency</em></span><span class="gl-d"><strong>吞吐</strong>=单位时间能处理多少（每秒多少条）；<strong>延迟</strong>=单次处理多久出结果。大数据常以「牺牲单条延迟换整体吞吐」。</span></div>
+          <div class="gl"><span class="gl-t">分片 / 分区 <em>Sharding / Partitioning</em></span><span class="gl-d">把大数据按规则切成多片分散到不同机器，以便并行读写。是 scale-out 并行度的来源。</span></div>
+          <div class="gl"><span class="gl-t">副本 <em>Replica</em></span><span class="gl-d">同一份数据存多份在不同机器上，用于容错（坏一份从别的恢复）和分摊读压力。</span></div>
+          <div class="gl"><span class="gl-t">一致性 <em>Consistency</em></span><span class="gl-d">多副本 / 多节点之间，数据是否「对得上账」。强一致=任何时刻读到的都是最新；最终一致=允许短暂不一致，但最终会收敛。</span></div>
+          <div class="gl"><span class="gl-t">顺序 IO vs 随机 IO</span><span class="gl-d">顺序读写（连续地址）比随机读写（跳来跳去）快得多。大数据存储格式的设计大量围绕「尽量顺序」展开。</span></div>
+        </div>
+
+        <div class="gl-group">
+          <h4>② 计算引擎与范式</h4>
+          <div class="gl"><span class="gl-t">MapReduce</span><span class="gl-d">最早的分布式批计算范式：Map（各节点本地处理）+ Reduce（汇总）。框架自动管分发与容错。慢在每步落盘，已被 Spark 取代。</span></div>
+          <div class="gl"><span class="gl-t">DAG <em>有向无环图</em></span><span class="gl-d">把一个计算任务表示成「算子→算子」的依赖图。Spark/Flink 用它来调度、优化、做容错恢复。</span></div>
+          <div class="gl"><span class="gl-t">Shuffle</span><span class="gl-d">分布式计算中，为了把「相同 key 的数据」聚到一起（如 group by），在节点之间<strong>大规模搬运、重分发数据</strong>的过程。往往是性能瓶颈，D03 详讲。</span></div>
+          <div class="gl"><span class="gl-t">批处理 / 流处理 <em>Batch / Stream</em></span><span class="gl-d">批=攒一批有界数据定时跑，吞吐高延迟大；流=数据一来就处理无界数据，延迟低但要常驻、处理乱序。</span></div>
+          <div class="gl"><span class="gl-t">流批一体</span><span class="gl-d">用同一套引擎和 API 同时表达批与流，降低维护两套代码的成本。Flink / Spark 都在推。</span></div>
+          <div class="gl"><span class="gl-t">事件时间 vs 处理时间 <em>Event / Processing Time</em></span><span class="gl-d">事件时间=数据「实际发生」的时间；处理时间=引擎「收到处理」的时间。网络延迟会让二者错位，流处理要按事件时间才准确。</span></div>
+          <div class="gl"><span class="gl-t">Watermark <em>水位线</em></span><span class="gl-d">流处理里的一个「时间进度标记」，用来判断「事件时间到此为止的数据应该都到齐了」，从而触发窗口计算、容忍一定迟到。D04 详讲。</span></div>
+          <div class="gl"><span class="gl-t">状态 <em>State</em></span><span class="gl-d">流处理为了做累计 / 关联，需要在内存 / 磁盘里记住「到目前为止的中间结果」（如至今的总和），这就是状态。</span></div>
+          <div class="gl"><span class="gl-t">Exactly-once <em>精确一次</em></span><span class="gl-d">即使中途故障重试，每条数据对结果的影响也<strong>有且仅有一次</strong>（不丢不重）。是流处理可靠性的最高级别，对应还有 at-least-once（不丢但可能重）。</span></div>
+          <div class="gl"><span class="gl-t">反压 <em>Backpressure</em></span><span class="gl-d">下游处理不过来时，把「慢」的信号逐级传回上游让它降速，避免数据堆爆内存。类似水管堵了往回顶。</span></div>
+        </div>
+
+        <div class="gl-group">
+          <h4>③ 存储底座</h4>
+          <div class="gl"><span class="gl-t">HDFS</span><span class="gl-d">Hadoop 分布式文件系统，GFS 的开源实现。大文件切块、多副本、主从架构。很多大数据体系的存储底座。</span></div>
+          <div class="gl"><span class="gl-t">NameNode / DataNode</span><span class="gl-d">HDFS 的主从两角色：NameNode（主）只管元数据（谁在哪）；DataNode（从）真正存数据块。</span></div>
+          <div class="gl"><span class="gl-t">块 <em>Block</em></span><span class="gl-d">HDFS 把文件切成的固定大小单位（默认 128MB）。块大→元数据少、利于顺序读。</span></div>
+          <div class="gl"><span class="gl-t">机架感知 <em>Rack Awareness</em></span><span class="gl-d">放副本时，刻意把副本分散到「同机架 + 异机架」，同时兼顾「容错」与「跨机架带宽成本」。</span></div>
+          <div class="gl"><span class="gl-t">元数据 <em>Metadata</em></span><span class="gl-d">「描述数据的数据」：有哪些文件、由哪些块组成、块在哪、多大、谁建的。不是内容本身，而是账本。</span></div>
+          <div class="gl"><span class="gl-t">纠删码 <em>Erasure Coding</em></span><span class="gl-d">比多副本更省空间的容错法（类 RAID）：数据块 + 校验块，丢少量块可反推恢复。适合冷数据。</span></div>
+          <div class="gl"><span class="gl-t">对象存储 <em>Object Storage</em></span><span class="gl-d">以「对象 + 扁平 key」组织数据的存储（S3 / OSS / MinIO）。便宜、近乎无限扩展，但不能原地改、list 慢。云时代新底座。</span></div>
+          <div class="gl"><span class="gl-t">存算分离</span><span class="gl-d">把存储（对象存储）和计算（临时拉起的节点）解耦，各自独立弹性伸缩。代价是计算要跨网络读数据。</span></div>
+        </div>
+
+        <div class="gl-group">
+          <h4>④ 仓库 / 湖 / 表</h4>
+          <div class="gl"><span class="gl-t">OLTP / OLAP</span><span class="gl-d">OLTP=在线事务处理（高并发小事务，如下单）；OLAP=在线分析处理（大范围扫描聚合，如报表）。大数据主要服务 OLAP。</span></div>
+          <div class="gl"><span class="gl-t">数据仓库 <em>Data Warehouse</em></span><span class="gl-d">为分析而生、结构严谨（schema-on-write）的集中式数据存储。查得快、强治理，但灵活性低。</span></div>
+          <div class="gl"><span class="gl-t">数据湖 <em>Data Lake</em></span><span class="gl-d">先把各种原始数据（结构化 / 非结构化）廉价地堆进对象存储，读时再定义结构（schema-on-read）。灵活但易乱。</span></div>
+          <div class="gl"><span class="gl-t">湖仓一体 <em>Lakehouse</em></span><span class="gl-d">在数据湖的廉价灵活之上，叠加数仓的事务 / schema 治理，兼得两者。靠表格式（Iceberg/Delta/Hudi）实现。D06 主题。</span></div>
+          <div class="gl"><span class="gl-t">Schema <em>模式</em></span><span class="gl-d">数据的「结构定义」：有哪些列、各是什么类型。Schema 演进=随业务变化安全地增删改列。</span></div>
+          <div class="gl"><span class="gl-t">ACID</span><span class="gl-d">事务的四个保证：原子性 / 一致性 / 隔离性 / 持久性。让「要么全成功要么全失败」成为可能。湖仓表格式给对象存储补上了 ACID。</span></div>
+          <div class="gl"><span class="gl-t">Time Travel <em>时间旅行</em></span><span class="gl-d">表格式能保留历史版本，让你「查询某个过去时间点的数据」或回滚到旧版本。便于纠错与审计。</span></div>
+          <div class="gl"><span class="gl-t">数仓分层 <em>ODS/DWD/DWS/ADS</em></span><span class="gl-d">把数据按加工程度分层：原始层→明细层→汇总层→应用层（或 Medallion 的 bronze/silver/gold）。D02 详讲。</span></div>
+        </div>
+
+        <div class="gl-group">
+          <h4>⑤ 列存与文件格式</h4>
+          <div class="gl"><span class="gl-t">行存 / 列存 <em>Row / Columnar</em></span><span class="gl-d">行存=整行连续存（利于点查改单行，OLTP）；列存=同列连续存（利于扫描聚合、压缩、向量化，OLAP）。</span></div>
+          <div class="gl"><span class="gl-t">Parquet / ORC / Avro</span><span class="gl-d">Parquet、ORC=列式分析格式（湖仓事实标准）；Avro=行式格式，适合逐行写入 / 流式传输。</span></div>
+          <div class="gl"><span class="gl-t">Row Group / Column Chunk / Page</span><span class="gl-d">Parquet 的层级单位：行组（并行单位）→列块（列存单位）→页（编码/压缩单位）。Footer 记录各自的偏移与统计。</span></div>
+          <div class="gl"><span class="gl-t">谓词下推 <em>Predicate Pushdown</em></span><span class="gl-d">把 <code>WHERE</code> 过滤条件「下推」到读数据这一层，利用块的 min/max 统计<strong>整段跳过</strong>不可能命中的数据。</span></div>
+          <div class="gl"><span class="gl-t">投影下推 <em>Projection Pushdown</em></span><span class="gl-d">只读 <code>SELECT</code> 用到的列对应的磁盘段，其余列完全不读。列存的核心红利。</span></div>
+          <div class="gl"><span class="gl-t">基数 <em>Cardinality</em></span><span class="gl-d">一列中<strong>不同取值的数量</strong>。如「性别」基数=2，「用户 id」基数极高。低基数列特别适合字典编码。</span></div>
+          <div class="gl"><span class="gl-t">编码 <em>Encoding</em></span><span class="gl-d">利用数据规律换紧凑表示：字典编码（重复值→小整数下标）、RLE（连续重复→值×次数）、Delta（存差值）、Bit-packing（按实际位宽打包）。无损。</span></div>
+          <div class="gl"><span class="gl-t">压缩 <em>Compression</em></span><span class="gl-d">对编码后的字节流再跑通用算法挤冗余：Snappy/LZ4（极快、比率中）、ZSTD（综合最佳）、GZIP（比率高但慢）。</span></div>
+          <div class="gl"><span class="gl-t">向量化执行 <em>Vectorized Execution</em></span><span class="gl-d">一次处理一<strong>批</strong>同类型数据（而非一行一行），配合 CPU 的 SIMD 指令并行计算。列存天然适配，是 OLAP 引擎快的关键。</span></div>
+          <div class="gl"><span class="gl-t">Bloom Filter <em>布隆过滤器</em></span><span class="gl-d">一种极省空间的概率结构，能快速判断「某值<strong>一定不在</strong>集合里」（可能误判存在，绝不漏判不存在）。用于跳过不含目标值的数据块。</span></div>
+        </div>
+
+      </div>
+
+      <div class="info">这些词在 D02–D10 会反复出现并各自展开。这里建立「混个脸熟」的程度即可——真正的理解会在后续看到它们如何协同工作时自然长出来。</div>
+    </section>
+
+  </main>
+</div>
+
+<footer>
+  <div class="made">TECH NOTES · BIG DATA SERIES</div>
+  #D01 大数据全景与存储基础 · <a href="../index.html">返回首页</a> · © 2026 Kavin Chan · MIT
+</footer>
+
+<button class="back-top" id="backTop" onclick="window.scrollTo({top:0,behavior:'smooth'})">↑</button>
+<style>.back-top{position:fixed;bottom:1.5rem;right:1.5rem;width:44px;height:44px;border-radius:50%;background:#141a2c;color:#e4e9f5;border:1px solid #2a3556;cursor:pointer;font-size:18px;display:none;z-index:100;align-items:center;justify-content:center}.back-top:hover{color:#7dd3fc}.back-top.show{display:flex}</style>
+
+<script>
+// ===== 1. 阅读进度条 =====
+const progress = document.getElementById('progress');
+const updateProgress = () => {
+  const h = document.documentElement;
+  const max = h.scrollHeight - h.clientHeight;
+  progress.style.width = (max > 0 ? (h.scrollTop / max * 100) : 0) + '%';
+};
+window.addEventListener('scroll', updateProgress, {passive:true});
+updateProgress();
+
+// ===== 2. TOC active 高亮 =====
+const tocLinks = document.querySelectorAll('.toc a');
+const sections = document.querySelectorAll('section.chapter');
+const navObserver = new IntersectionObserver(entries => {
+  entries.forEach(e => {
+    if (e.isIntersecting) {
+      const id = e.target.id;
+      tocLinks.forEach(a => a.classList.toggle('active', a.getAttribute('href') === '#' + id));
+    }
+  });
+}, { rootMargin: '-25% 0px -65% 0px' });
+sections.forEach(s => navObserver.observe(s));
+
+// ===== 3. 平滑滚动 =====
+tocLinks.forEach(a => {
+  a.addEventListener('click', e => {
+    const href = a.getAttribute('href');
+    const target = document.querySelector(href);
+    if (target) {
+      e.preventDefault();
+      target.scrollIntoView({behavior:'smooth', block:'start'});
+      history.pushState(null, '', href);
+    }
+  });
+});
+
+// ===== 4. fade-in =====
+const fadeEls = document.querySelectorAll('.card, .svg-wrap, table, details, .demo, .timeline');
+const fadeObserver = new IntersectionObserver(entries => {
+  entries.forEach(e => {
+    if (e.isIntersecting) { e.target.style.opacity='1'; e.target.style.transform='translateY(0)'; }
+  });
+}, {threshold:0.05});
+fadeEls.forEach(el => {
+  el.style.opacity='0'; el.style.transform='translateY(12px)';
+  el.style.transition='opacity .5s ease, transform .5s ease';
+  fadeObserver.observe(el);
+});
+
+// ===== 5. back-to-top =====
+(function(){
+  var btn = document.getElementById('backTop');
+  if (!btn) return;
+  function tg(){ btn.classList.toggle('show', window.scrollY > 400); }
+  window.addEventListener('scroll', tg, { passive: true });
+  tg();
+})();
+
+// ===== 6. 交互演示 A：行存 vs 列存 扫描 =====
+(function(){
+  const ROWS = [
+    {id:1, name:'Amy', dept:'Eng',  salary:30},
+    {id:2, name:'Bob', dept:'Sale', salary:25},
+    {id:3, name:'Cid', dept:'Eng',  salary:40},
+    {id:4, name:'Dan', dept:'HR',   salary:22},
+    {id:5, name:'Eve', dept:'Eng',  salary:35},
+  ];
+  const COLS = ['id','name','dept','salary'];
+  const tbody = document.querySelector('#scanTable tbody');
+  const countEl = document.getElementById('scanCount');
+  const totalEl = document.getElementById('scanTotal');
+  const verdict = document.getElementById('scanVerdict');
+  const runBtn = document.getElementById('scanRun');
+  const resetBtn = document.getElementById('scanReset');
+  const segs = document.querySelectorAll('#scanDemo .seg');
+  let mode = 'row';
+  let timer = null;
+  const TOTAL = ROWS.length * COLS.length;
+
+  function build(){
+    tbody.innerHTML = '';
+    ROWS.forEach((r, ri) => {
+      const tr = document.createElement('tr');
+      COLS.forEach((c, ci) => {
+        const td = document.createElement('td');
+        td.textContent = r[c];
+        td.dataset.r = ri; td.dataset.c = ci; td.dataset.col = c;
+        if (c === 'salary') td.classList.add('col-salary');
+        tr.appendChild(td);
+      });
+      tbody.appendChild(tr);
+    });
+  }
+  function reset(){
+    if (timer){ clearInterval(timer); timer = null; }
+    build();
+    countEl.textContent = '0';
+    totalEl.textContent = '';
+    verdict.className = 'demo-verdict';
+    runBtn.disabled = false;
+  }
+  function cellsInOrder(){
+    // 磁盘读取顺序：行存按行优先，列存按列优先（且只需 salary 列）
+    const order = [];
+    if (mode === 'row'){
+      for (let ri=0; ri<ROWS.length; ri++)
+        for (let ci=0; ci<COLS.length; ci++)
+          order.push({ri, ci, need: COLS[ci]==='salary'});
+    } else {
+      const si = COLS.indexOf('salary');
+      for (let ri=0; ri<ROWS.length; ri++) order.push({ri, ci:si, need:true});
+    }
+    return order;
+  }
+  function run(){
+    reset();
+    runBtn.disabled = true;
+    const order = cellsInOrder();
+    let i = 0, reads = 0;
+    timer = setInterval(() => {
+      if (i >= order.length){
+        clearInterval(timer); timer = null;
+        runBtn.disabled = false;
+        verdict.className = 'demo-verdict show ' + (mode==='col' ? 'good':'bad');
+        if (mode === 'col')
+          verdict.innerHTML = '✅ 列存：只读了 <b>'+reads+'</b> 个单元格（salary 列），其余 '+(TOTAL-reads)+' 个看都没看。行数越多、列数越多，省得越夸张。';
+        else
+          verdict.innerHTML = '⚠️ 行存：为了拿 salary，把全部 <b>'+reads+'</b> 个单元格都读过了一遍——无关的 id/name/dept 也被迫读入。';
+        return;
+      }
+      const {ri, ci, need} = order[i];
+      const td = tbody.rows[ri].cells[ci];
+      td.classList.add('scan-read');
+      reads++;
+      countEl.textContent = reads;
+      totalEl.textContent = '（全表共 '+TOTAL+' 个单元格）';
+      // 上一格变为已读
+      if (i>0){
+        const p = order[i-1];
+        const ptd = tbody.rows[p.ri].cells[p.ci];
+        ptd.classList.remove('scan-read');
+        ptd.classList.add(p.need ? 'scan-done' : 'scan-read');
+      }
+      i++;
+    }, 160);
+  }
+  segs.forEach(b => b.addEventListener('click', () => {
+    segs.forEach(x => x.classList.remove('active'));
+    b.classList.add('active');
+    mode = b.dataset.mode;
+    reset();
+  }));
+  runBtn.addEventListener('click', run);
+  resetBtn.addEventListener('click', reset);
+  build();
+})();
+
+// ===== 7. 交互演示 B：列编码 =====
+(function(){
+  const cellsEl = document.getElementById('encCells');
+  const descEl = document.getElementById('encDesc');
+  const statEl = document.getElementById('encStat');
+  const leftTitle = document.getElementById('encLeftTitle');
+  const segs = document.querySelectorAll('#encDemo .seg');
+  const N = 1000000; // 一百万行
+  const raw = ['Eng','Sale','Eng','HR','Eng','Sale','HR','Eng','Eng','Sale','HR','Eng'];
+  const sorted = ['Eng','Eng','Eng','Eng','Eng','Eng','HR','HR','HR','Sale','Sale','Sale'];
+
+  function render(enc){
+    let cells = [], desc = '', stat = '';
+    if (enc === 'raw'){
+      leftTitle.textContent = '列内容（原始字符串，示意前 12 行）';
+      cells = raw.map(v => ({t:v}));
+      desc = '直接存 100 万个字符串。每个部门名平均按 4 字节算，<b>约 4 MB</b>，且大量重复字节被白白存了一遍。';
+      stat = '体积基线：<b>≈ 4.0 MB</b>';
+    } else if (enc === 'dict'){
+      leftTitle.textContent = '字典编码：字典表 + 下标列（前 12 行下标）';
+      const dict = ['Eng','Sale','HR'];
+      const idx = {Eng:0, Sale:1, HR:2};
+      cells = raw.map(v => ({t:idx[v], hl:true}));
+      desc = '建字典 <code>{0:Eng, 1:Sale, 2:HR}</code>，原列只存下标。4 种部门只需 2 bit/行，100 万行 ≈ <b>0.25 MB</b> + 一张极小字典。';
+      stat = '体积：<b>≈ 0.25 MB</b> （约为原始的 1/16）';
+    } else {
+      leftTitle.textContent = '排序后 + RLE：把连续重复压成「值 × 次数」';
+      cells = [{t:'Eng×6', hl:true},{t:'HR×3', hl:true},{t:'Sale×3', hl:true},{t:'…', }];
+      desc = '若该列已按值排序，相同值连续成片，RLE 把每段压成「值 + 长度」。100 万行若只有 4 段，<b>几乎可忽略不计</b>。这正是「排序数据布局」威力巨大的原因。';
+      stat = '体积：<b>≈ 几十字节</b> （仅取决于段数，与行数几乎无关）';
+    }
+    cellsEl.innerHTML = cells.map(c =>
+      '<span class="enc-cell'+(c.hl?' hl':'')+'">'+c.t+'</span>').join('');
+    descEl.innerHTML = desc;
+    statEl.innerHTML = stat;
+  }
+  segs.forEach(b => b.addEventListener('click', () => {
+    segs.forEach(x => x.classList.remove('active'));
+    b.classList.add('active');
+    render(b.dataset.enc);
+  }));
+  render('raw');
+})();
+
+console.log('%c Big Data D01 · 大数据全景与存储基础 ', 'background:linear-gradient(90deg,#7dd3fc,#a78bfa);color:#0a0e1a;font-weight:700;padding:4px 12px;border-radius:4px;font-size:13px');
+</script>
+<script src="../assets/site-theme.js" defer></script>
+</body>
+</html>

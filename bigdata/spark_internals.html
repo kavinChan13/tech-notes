@@ -1,0 +1,953 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Spark 内核深潜 · RDD / DAG / Shuffle / Catalyst / Tungsten / 调优与数据倾斜</title>
+<link rel="stylesheet" href="../assets/site-theme.css">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<style>
+  /* D03 专属增强：沿用系列视觉系统 */
+  .analogy{background:linear-gradient(135deg,rgba(167,139,250,.08),rgba(125,211,252,.05));
+    border:1px solid var(--border-2);border-left:4px solid var(--accent-2);border-radius:10px;
+    padding:14px 18px;margin:16px 0;font-size:14px;line-height:1.75}
+  .analogy::before{content:"🔌 生活类比";display:inline-block;color:var(--accent-2);font-weight:700;
+    font-size:12px;letter-spacing:.5px;margin-right:10px}
+  .analogy strong{color:var(--text)}
+
+  .def{background:rgba(125,211,252,.05);border:1px solid var(--border);border-left:4px solid var(--accent);
+    border-radius:8px;padding:14px 18px;margin:16px 0;font-size:14px;line-height:1.75}
+  .def::before{content:"📖 名词解释";display:inline-block;color:var(--accent);font-weight:700;
+    font-size:12px;letter-spacing:.5px;margin-right:10px}
+  .def strong{color:var(--text)}
+
+  .glossary{margin:14px 0}
+  .gl-group{margin:20px 0}
+  .gl-group > h4{color:var(--accent);border-left:3px solid var(--accent);padding-left:10px;margin:0 0 10px;font-size:15px}
+  .gl{display:grid;grid-template-columns:210px 1fr;gap:14px;padding:11px 15px;border:1px solid var(--border);
+    border-radius:8px;background:var(--bg-card);margin:7px 0;transition:border-color .15s}
+  .gl:hover{border-color:var(--border-2)}
+  .gl .gl-t{font-weight:600;color:var(--text);font-size:14px}
+  .gl .gl-t em{display:block;font-style:normal;font-family:"JetBrains Mono",monospace;font-size:11px;
+    color:var(--text-mute);margin-top:3px;font-weight:400;letter-spacing:.2px}
+  .gl .gl-d{font-size:13.5px;color:var(--text-dim);line-height:1.7}
+  .gl .gl-d strong{color:var(--accent-4)}
+  .gl .gl-d code{font-size:.85em}
+  @media(max-width:760px){.gl{grid-template-columns:1fr;gap:4px}}
+
+  /* 交互演示外壳 */
+  .demo{background:var(--bg-card);border:1px solid var(--border-2);border-radius:14px;padding:20px;margin:22px 0;box-shadow:var(--shadow)}
+  .demo .demo-title{font-size:13px;text-transform:uppercase;letter-spacing:1.5px;color:var(--accent);
+    font-family:"JetBrains Mono",monospace;margin-bottom:14px;display:flex;align-items:center;gap:8px}
+  .demo .demo-title::before{content:"▶";font-size:10px;color:var(--accent-3)}
+  .demo-controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:16px}
+  .demo button{font-family:inherit;cursor:pointer;border-radius:8px;font-size:13px;padding:8px 14px;
+    border:1px solid var(--border-2);background:var(--bg-card-2);color:var(--text-dim);transition:.15s}
+  .demo button:hover{color:var(--text);border-color:var(--accent)}
+  .demo button.seg.active{background:rgba(125,211,252,.14);color:var(--accent);border-color:var(--accent)}
+  .demo button.run{background:rgba(52,211,153,.14);color:var(--accent-3);border-color:rgba(52,211,153,.4);font-weight:600}
+  .demo button.run:hover{background:rgba(52,211,153,.24)}
+  .demo button.ghost{background:transparent}
+
+  /* Stage 划分演示 */
+  .pipe{display:flex;flex-wrap:wrap;align-items:stretch;gap:0;margin:8px 0 4px;position:relative}
+  .stage-band{border:1px dashed var(--border-2);border-radius:10px;padding:14px 10px 10px;margin:6px;position:relative;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+  .stage-band .stage-tag{position:absolute;top:-10px;left:12px;font-size:10.5px;font-family:"JetBrains Mono",monospace;
+    padding:1px 8px;border-radius:99px;background:#10172b;border:1px solid var(--border-2)}
+  .stage-band.s0{border-color:rgba(52,211,153,.5)}.stage-band.s0 .stage-tag{color:var(--accent-3);border-color:rgba(52,211,153,.4)}
+  .stage-band.s1{border-color:rgba(125,211,252,.5)}.stage-band.s1 .stage-tag{color:var(--accent);border-color:rgba(125,211,252,.4)}
+  .stage-band.s2{border-color:rgba(167,139,250,.5)}.stage-band.s2 .stage-tag{color:var(--accent-2);border-color:rgba(167,139,250,.4)}
+  .op{font-family:"JetBrains Mono",monospace;font-size:12px;padding:6px 11px;border-radius:7px;border:1px solid var(--border-2);background:var(--bg-card-2);color:var(--text-dim);white-space:nowrap}
+  .op.narrow{border-color:rgba(52,211,153,.4);color:#86efac}
+  .op.wide{border-color:rgba(248,113,113,.5);color:#fca5a5;background:rgba(248,113,113,.08)}
+  .op.source,.op.action{border-color:rgba(148,163,184,.35);color:var(--text-dim)}
+  .shuffle-bar{align-self:center;color:var(--danger);font-size:11px;font-family:"JetBrains Mono",monospace;margin:0 2px}
+  .stage-readout{margin-top:12px;font-size:13.5px;color:var(--text-dim);line-height:1.8}
+  .stage-readout b{color:var(--accent);font-family:"JetBrains Mono",monospace;font-size:15px}
+
+  /* 数据倾斜演示 */
+  .skew-rows{display:flex;flex-direction:column;gap:8px;margin:6px 0}
+  .skew-row{display:flex;align-items:center;gap:10px}
+  .skew-row .pname{width:46px;font-family:"JetBrains Mono",monospace;font-size:12px;color:var(--text-mute);flex-shrink:0}
+  .skew-bar{height:24px;border-radius:5px;background:linear-gradient(90deg,#38bdf8,#60a5fa);transition:width .6s ease,background .3s;
+    display:flex;align-items:center;justify-content:flex-end;padding-right:8px;font-size:11px;color:#0a0e1a;font-weight:700;min-width:34px}
+  .skew-bar.hot{background:linear-gradient(90deg,#fb923c,#f87171)}
+  .skew-meta{margin-top:14px;font-size:13.5px;color:var(--text-dim);line-height:1.8}
+  .skew-meta b{font-family:"JetBrains Mono",monospace}
+  .skew-meta .slow{color:var(--danger)}.skew-meta .fast{color:var(--accent-3)}
+</style>
+</head>
+<body class="tn-shell-overlay">
+<!-- tn-nav:v1 -->
+<style>
+#tn-nav{position:fixed;top:14px;right:14px;z-index:99999;display:flex;gap:6px;align-items:center;
+  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;
+  font-size:12px;line-height:1;font-weight:500;}
+#tn-nav a,#tn-nav .tn-meta{display:inline-flex;align-items:center;gap:4px;
+  background:rgba(20,20,30,.85);color:#fff !important;text-decoration:none !important;
+  padding:7px 11px;border-radius:999px;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+  border:1px solid rgba(255,255,255,.10);box-shadow:0 2px 8px rgba(0,0,0,.18);
+  transition:background .15s,transform .15s;}
+#tn-nav a:hover{background:rgba(56,189,248,.92);transform:translateY(-1px);}
+#tn-nav .tn-meta{background:rgba(20,20,30,.55);cursor:default;}
+@media (max-width:640px){#tn-nav{top:8px;right:8px;font-size:11px;gap:4px;}
+  #tn-nav a,#tn-nav .tn-meta{padding:5px 9px;}}
+@media print{#tn-nav{display:none;}}
+</style>
+<div id="tn-nav">
+  <a href="../index.html" title="&#x8FD4;&#x56DE;&#x4E3B;&#x9875;">&larr; &#x4E3B;&#x9875;</a>
+  <a href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub &#x4ED3;&#x5E93;">&#x1F4C1; Repo</a>
+  <a href="https://github.com/kavinChan13/tech-notes/blob/main/bigdata/spark_internals.html" target="_blank" rel="noopener" title="&#x672C;&#x6587;&#x6E90;&#x7801;">&#x1F4DD; Source</a>
+  <span class="tn-meta" title="&#x9884;&#x8BA1;&#x9605;&#x8BFB;&#x65F6;&#x957F;">&#x23F1; 55 min</span>
+</div>
+<!-- /tn-nav:v1 -->
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>大数据 D03 · Roadmap</h2>
+    <nav>
+      <ol>
+        <li><a href="#ch0" class="active">Spark 是什么</a></li>
+        <li><a href="#ch1">RDD 与惰性求值</a>
+          <ol>
+            <li><a href="#s1-1">RDD 五大特性</a></li>
+            <li><a href="#s1-2">转换 vs 动作</a></li>
+            <li><a href="#s1-3">血缘与容错</a></li>
+          </ol>
+        </li>
+        <li><a href="#ch2">DAG 与宽窄依赖</a>
+          <ol>
+            <li><a href="#s2-1">窄依赖 vs 宽依赖</a></li>
+            <li><a href="#s2-2">Stage 划分演示</a></li>
+          </ol>
+        </li>
+        <li><a href="#ch3">Shuffle 内部</a></li>
+        <li><a href="#ch4">Catalyst & Tungsten</a>
+          <ol>
+            <li><a href="#s4-1">Catalyst 优化器</a></li>
+            <li><a href="#s4-2">Tungsten 引擎</a></li>
+          </ol>
+        </li>
+        <li><a href="#ch5">内存与执行模型</a></li>
+        <li><a href="#ch6">调优与数据倾斜</a>
+          <ol>
+            <li><a href="#s6-1">数据倾斜演示</a></li>
+            <li><a href="#s6-2">调优清单</a></li>
+            <li><a href="#s6-3">Join 策略 · AQE</a></li>
+          </ol>
+        </li>
+        <li><a href="#ch7">Structured Streaming 与部署</a>
+          <ol>
+            <li><a href="#s7-1">微批 · 无界表模型</a></li>
+            <li><a href="#s7-2">Watermark 与输出模式</a></li>
+            <li><a href="#s7-3">部署：YARN / K8s</a></li>
+            <li><a href="#s7-4">DataFrame / PySpark 速查</a></li>
+          </ol>
+        </li>
+        <li><a href="#ch8">小结 · 面试 · 术语表</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+
+    <!-- ============= HERO ============= -->
+    <header class="hero">
+      <div class="badge">Big Data · 03 · Compute Engine</div>
+      <h1>Spark 内核深潜</h1>
+      <p class="sub">D02 定义了「数据长什么样」，本篇登场的是把原始数据加工成各层表的<strong>施工队</strong>——Spark。我们不停留在「会写 <code>df.groupBy()</code>」，而是从<strong>系统老兵</strong>视角扒开盖子：RDD 与惰性求值、DAG 与<strong>宽/窄依赖</strong>、决定性能命脉的 <strong>Shuffle 内部</strong>、Catalyst 优化器与 Tungsten 向量化、统一内存模型与执行模型、躲不开的<strong>调优与数据倾斜</strong>，最后补齐 <strong>Structured Streaming 与作业部署（YARN / K8s）</strong>。你会发现它处处是单机性能工程的影子：cache、内存布局、codegen、stragglers。</p>
+      <div class="meta">
+        <span>9 章 + 术语表</span>
+        <span>11 张 SVG / 图表</span>
+        <span>2 个交互演示</span>
+        <span>30+ 名词解释</span>
+        <span>老兵视角 · 类比驱动</span>
+        <span>无 CDN · 单文件</span>
+      </div>
+    </header>
+
+    <!-- ============= 第 0 章 ============= -->
+    <section class="chapter" id="ch0">
+      <div class="ch-head">
+        <div class="num">00</div>
+        <div class="t">
+          <h2>Spark 是什么 · 为什么取代了 MapReduce</h2>
+          <p class="sub">一个分布式计算引擎 · 用内存 + DAG 把批处理提速一个数量级</p>
+        </div>
+      </div>
+
+      <p class="lead">Apache Spark 是当今最主流的<strong>分布式计算引擎</strong>：你写一段看似单机的代码（map、filter、join、聚合），它自动把任务切片、分发到一群机器上并行执行、容错、再汇总结果。D01 提过它的由来——MapReduce 太慢，Spark 用<strong>内存计算 + DAG 调度</strong>把迭代式作业提速 10–100 倍，逐渐成为批处理事实标准。</p>
+
+      <div class="analogy">MapReduce 像<strong>每做一道工序就把半成品打包入库、下道工序再拆箱取出</strong>——每一步都落磁盘，反复搬运极慢。Spark 像<strong>一条流水线，半成品在工位间直接传递（留在内存），只在必要时才入库</strong>。同样的活，省掉了大量来回搬运（磁盘 IO），自然快得多。</div>
+
+      <div class="def"><strong>为什么 Spark 比 MapReduce 快？</strong>三个核心原因：① <strong>内存计算</strong>——中间结果尽量留内存，不像 MR 每步都落盘；② <strong>DAG 执行</strong>——把整个作业看成一张有向无环图统一优化、流水线执行，而非一连串割裂的 map/reduce；③ <strong>惰性求值 + 优化器</strong>——先攒齐所有操作再整体优化，避免冗余计算。</div>
+
+      <div class="svg-wrap">
+        <svg width="780" height="250" viewBox="0 0 780 250" role="img" aria-label="Spark 运行架构">
+          <text x="390" y="22" text-anchor="middle" fill="#7dd3fc" font-size="15" font-weight="bold">Spark 运行架构：一个 Driver 指挥，多个 Executor 干活</text>
+          <!-- Driver -->
+          <rect x="40" y="90" width="170" height="90" rx="8" fill="#231a33" stroke="#a78bfa"/>
+          <text x="125" y="118" text-anchor="middle" fill="#c4b5fd" font-size="13" font-weight="bold">Driver（大脑）</text>
+          <text x="125" y="138" text-anchor="middle" fill="#94a3b8" font-size="10.5">构建 DAG / 划分 Stage</text>
+          <text x="125" y="154" text-anchor="middle" fill="#94a3b8" font-size="10.5">调度 Task / 汇总结果</text>
+          <text x="125" y="170" text-anchor="middle" fill="#94a3b8" font-size="10.5">你的 main() 跑在这</text>
+          <!-- Cluster Manager -->
+          <rect x="300" y="100" width="160" height="70" rx="8" fill="#10172b" stroke="#7dd3fc"/>
+          <text x="380" y="128" text-anchor="middle" fill="#7dd3fc" font-size="12" font-weight="bold">Cluster Manager</text>
+          <text x="380" y="148" text-anchor="middle" fill="#94a3b8" font-size="10">YARN / K8s / Standalone</text>
+          <text x="380" y="162" text-anchor="middle" fill="#64748b" font-size="9.5">分配资源</text>
+          <!-- Executors -->
+          <g>
+            <rect x="540" y="40" width="200" height="58" rx="8" fill="#10241c" stroke="#34d399"/>
+            <text x="640" y="63" text-anchor="middle" fill="#6ee7b7" font-size="12" font-weight="bold">Executor 1（工人）</text>
+            <text x="640" y="82" text-anchor="middle" fill="#94a3b8" font-size="10">跑 Task · 缓存数据 · 多核并行</text>
+          </g>
+          <g>
+            <rect x="540" y="106" width="200" height="58" rx="8" fill="#10241c" stroke="#34d399"/>
+            <text x="640" y="129" text-anchor="middle" fill="#6ee7b7" font-size="12" font-weight="bold">Executor 2</text>
+            <text x="640" y="148" text-anchor="middle" fill="#94a3b8" font-size="10">每个 Task 处理一个 partition</text>
+          </g>
+          <g>
+            <rect x="540" y="172" width="200" height="58" rx="8" fill="#10241c" stroke="#34d399"/>
+            <text x="640" y="195" text-anchor="middle" fill="#6ee7b7" font-size="12" font-weight="bold">Executor 3</text>
+            <text x="640" y="214" text-anchor="middle" fill="#94a3b8" font-size="10">… 横向扩展更多</text>
+          </g>
+          <defs><marker id="ar" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#64748b"/></marker></defs>
+          <line x1="210" y1="135" x2="298" y2="135" stroke="#64748b" stroke-width="1.4" marker-end="url(#ar)"/>
+          <line x1="460" y1="120" x2="538" y2="69" stroke="#64748b" stroke-width="1.2" marker-end="url(#ar)"/>
+          <line x1="460" y1="135" x2="538" y2="135" stroke="#64748b" stroke-width="1.2" marker-end="url(#ar)"/>
+          <line x1="460" y1="150" x2="538" y2="201" stroke="#64748b" stroke-width="1.2" marker-end="url(#ar)"/>
+        </svg>
+        <div class="svg-caption">Driver 是大脑（你的代码 + 调度），Executor 是工人（真正执行 Task、缓存数据）。Cluster Manager 负责申请机器资源。</div>
+      </div>
+      <div class="info">本篇默认你接触过 Spark 的基本 API。我们聚焦「<strong>它内部到底怎么跑</strong>」——这正是从「会用」到「能调优、能面试」的分水岭。涉及的分布式基础（容错、调度）可回看 <code>architect/</code> 板块。</div>
+    </section>
+
+    <!-- ============= 第 1 章 ============= -->
+    <section class="chapter" id="ch1">
+      <div class="ch-head">
+        <div class="num">01</div>
+        <div class="t">
+          <h2>RDD 与惰性求值</h2>
+          <p class="sub">Spark 的「内存指针」抽象 · 理解它，才懂上层 DataFrame / SQL 为何那样跑</p>
+        </div>
+      </div>
+
+      <p class="lead"><strong>RDD（Resilient Distributed Dataset，弹性分布式数据集）</strong>是 Spark 最底层的核心抽象。如今你多半写 DataFrame / SQL，但它们最终都编译成 RDD 执行——理解 RDD，是理解一切的基础。</p>
+
+      <div class="def"><strong>RDD</strong>：一个<strong>分布在多台机器上、被切成多个分区（partition）的只读数据集</strong>。它有三个关键词：<strong>弹性（Resilient）</strong>——靠血缘可重算恢复，不怕节点挂；<strong>分布式（Distributed）</strong>——数据分区散在集群各处并行处理；<strong>数据集（Dataset）</strong>——一份逻辑上的数据集合。它更像「<em>一份计算的配方 + 数据指针</em>」，而非真正持有数据。</div>
+
+      <h3 id="s1-1">1.1 RDD 的五大特性</h3>
+      <div class="grid cols-2">
+        <div class="card"><h4>① 分区列表（Partitions）</h4><p style="font-size:13px;color:var(--text-dim)">数据被切成多个分区，<strong>分区数 = 并行度</strong>。一个分区由一个 Task 处理。</p></div>
+        <div class="card green"><h4>② 计算函数（compute）</h4><p style="font-size:13px;color:var(--text-dim)">对每个分区怎么算的函数。Spark 在每个分区上独立应用它。</p></div>
+        <div class="card violet"><h4>③ 依赖（Dependencies）</h4><p style="font-size:13px;color:var(--text-dim)">这个 RDD 由哪些父 RDD 算来——即<strong>血缘（lineage）</strong>，是容错和 DAG 的基础。</p></div>
+        <div class="card amber"><h4>④ 分区器（Partitioner）</h4><p style="font-size:13px;color:var(--text-dim)">（针对 KV 型 RDD）数据按 key 怎么分到各分区，如 Hash / Range。决定 shuffle 行为。</p></div>
+        <div class="card" style="grid-column:1/-1"><h4>⑤ 首选位置（Preferred Locations）</h4><p style="font-size:13px;color:var(--text-dim)">每个分区「最好在哪台机器上算」——<strong>数据本地性（data locality）</strong>。Spark 尽量把计算调度到数据所在节点，避免网络搬运。这与 HDFS「移动计算比移动数据便宜」一脉相承。</p></div>
+      </div>
+
+      <h3 id="s1-2">1.2 转换（Transformation） vs 动作（Action）——惰性求值</h3>
+      <div class="analogy">写 RDD 操作像<strong>列购物清单</strong>：你写「买菜、洗菜、切菜」（transformation），并不会真的开始动手——清单只是<strong>记下来</strong>。直到你说「开饭！」（action），厨房才一次性按清单把活干完。这就是<strong>惰性求值（lazy evaluation）</strong>：攒齐所有步骤，到 action 才真正触发计算。</div>
+      <table>
+        <thead><tr><th></th><th>转换 Transformation</th><th>动作 Action</th></tr></thead>
+        <tbody>
+          <tr><td>作用</td><td>定义「怎么变」，返回新 RDD</td><td>触发真正计算，返回结果/落地</td></tr>
+          <tr><td>是否立即执行</td><td class="cell-mid">否（惰性，只记血缘）</td><td class="cell-ok">是（触发整个 DAG）</td></tr>
+          <tr><td>例子</td><td><code>map</code> / <code>filter</code> / <code>groupByKey</code> / <code>join</code></td><td><code>collect</code> / <code>count</code> / <code>save</code> / <code>take</code></td></tr>
+        </tbody>
+      </table>
+      <pre><span class="c">// 这几行不会触发任何计算——只是在攒"配方"（血缘）</span>
+<span class="k">val</span> rdd = sc.textFile(<span class="s">"logs/*.txt"</span>)   <span class="c">// transformation</span>
+  .map(line =&gt; line.split(<span class="s">","</span>))            <span class="c">// transformation</span>
+  .filter(arr =&gt; arr(<span class="n">2</span>) == <span class="s">"ERROR"</span>)       <span class="c">// transformation</span>
+
+<span class="k">val</span> n = rdd.count()   <span class="c">// ← action！到这里 Spark 才真正读文件、跑整条链</span></pre>
+      <div class="tip"><strong>惰性求值不是偷懒，是为了优化</strong>：攒齐所有操作后，Spark（尤其上层的 Catalyst）能做谓词下推、合并算子、裁剪列等全局优化——这和编译器「看到整段代码再优化」是同一种智慧。代价：调试时 action 才报错，错误栈常指向 action 那一行而非真正出错的 transformation。</div>
+
+      <h3 id="s1-3">1.3 血缘与容错——「弹性」从哪来</h3>
+      <div class="def"><strong>血缘（Lineage）</strong>：RDD 记录的「我是从哪些父 RDD、经过哪些转换得来的」这条family tree。<strong>容错的核心</strong>：某个分区的数据因节点宕机丢了，Spark 不需要回滚整个作业，只需<strong>沿血缘把那个分区重算一遍</strong>即可。这比 MapReduce「靠落盘 + 重跑」轻量得多，也是「弹性」二字的来源。</div>
+      <div class="note">血缘太长（如迭代上百次的机器学习）会让重算代价高、DAG 臃肿。此时用 <code>checkpoint()</code> 把 RDD 物化到可靠存储「截断血缘」，或用 <code>cache()/persist()</code> 把热点 RDD 缓存到内存复用——后者正是 Spark 对迭代算法极快的关键。</div>
+    </section>
+
+    <!-- ============= 第 2 章 ============= -->
+    <section class="chapter" id="ch2">
+      <div class="ch-head">
+        <div class="num">02</div>
+        <div class="t">
+          <h2>DAG 与宽窄依赖</h2>
+          <p class="sub">action 一触发，Spark 把血缘编译成 DAG，再按「依赖类型」切成 Stage · 这是性能的关键分水岭</p>
+        </div>
+      </div>
+
+      <p class="lead">当 action 触发，Spark 把整条血缘组织成一张 <strong>DAG（有向无环图）</strong>，然后做一件最关键的事：<strong>按依赖类型把 DAG 切成若干 Stage（阶段）</strong>。切分的依据，就是「窄依赖」还是「宽依赖」。</p>
+
+      <h3 id="s2-1">2.1 窄依赖 vs 宽依赖</h3>
+      <div class="def"><strong>窄依赖（Narrow Dependency）</strong>：父 RDD 的每个分区，最多被<strong>一个</strong>子分区使用（1→1 或 N→1 的局部）。如 <code>map</code> / <code>filter</code>。数据不跨分区流动，可在<strong>同一台机器上流水线连续执行</strong>，无需网络传输。</div>
+      <div class="def"><strong>宽依赖（Wide Dependency / Shuffle Dependency）</strong>：父 RDD 的一个分区，会被<strong>多个</strong>子分区使用（需按 key 重新分发）。如 <code>groupByKey</code> / <code>reduceByKey</code> / <code>join</code>。数据必须<strong>跨节点重新洗牌（Shuffle）</strong>——这是昂贵操作，且是 Stage 的分界线。</div>
+
+      <div class="svg-wrap">
+        <svg width="760" height="250" viewBox="0 0 760 250" role="img" aria-label="窄依赖与宽依赖对比">
+          <text x="190" y="22" text-anchor="middle" fill="#34d399" font-size="13" font-weight="bold">窄依赖（如 map）：1 → 1，不跨分区</text>
+          <g font-size="10" font-family="monospace" fill="#cbd5e1">
+            <rect x="60" y="50" width="80" height="30" rx="5" fill="#10241c" stroke="#34d399"/><text x="100" y="69" text-anchor="middle">父 P0</text>
+            <rect x="60" y="100" width="80" height="30" rx="5" fill="#10241c" stroke="#34d399"/><text x="100" y="119" text-anchor="middle">父 P1</text>
+            <rect x="60" y="150" width="80" height="30" rx="5" fill="#10241c" stroke="#34d399"/><text x="100" y="169" text-anchor="middle">父 P2</text>
+            <rect x="260" y="50" width="80" height="30" rx="5" fill="#0c1120" stroke="#34d399"/><text x="300" y="69" text-anchor="middle">子 P0</text>
+            <rect x="260" y="100" width="80" height="30" rx="5" fill="#0c1120" stroke="#34d399"/><text x="300" y="119" text-anchor="middle">子 P1</text>
+            <rect x="260" y="150" width="80" height="30" rx="5" fill="#0c1120" stroke="#34d399"/><text x="300" y="169" text-anchor="middle">子 P2</text>
+          </g>
+          <line x1="140" y1="65" x2="260" y2="65" stroke="#34d399" stroke-width="1.5"/>
+          <line x1="140" y1="115" x2="260" y2="115" stroke="#34d399" stroke-width="1.5"/>
+          <line x1="140" y1="165" x2="260" y2="165" stroke="#34d399" stroke-width="1.5"/>
+          <text x="190" y="210" text-anchor="middle" fill="#6ee7b7" font-size="10.5">可流水线、无网络 → 同一 Stage</text>
+
+          <line x1="390" y1="35" x2="390" y2="210" stroke="#2a3556" stroke-dasharray="4 4"/>
+
+          <text x="575" y="22" text-anchor="middle" fill="#f87171" font-size="13" font-weight="bold">宽依赖（如 groupByKey）：跨分区洗牌</text>
+          <g font-size="10" font-family="monospace" fill="#cbd5e1">
+            <rect x="440" y="50" width="80" height="30" rx="5" fill="#10241c" stroke="#34d399"/><text x="480" y="69" text-anchor="middle">父 P0</text>
+            <rect x="440" y="100" width="80" height="30" rx="5" fill="#10241c" stroke="#34d399"/><text x="480" y="119" text-anchor="middle">父 P1</text>
+            <rect x="440" y="150" width="80" height="30" rx="5" fill="#10241c" stroke="#34d399"/><text x="480" y="169" text-anchor="middle">父 P2</text>
+            <rect x="650" y="70" width="80" height="30" rx="5" fill="#0c1120" stroke="#f87171"/><text x="690" y="89" text-anchor="middle">子 P0</text>
+            <rect x="650" y="130" width="80" height="30" rx="5" fill="#0c1120" stroke="#f87171"/><text x="690" y="149" text-anchor="middle">子 P1</text>
+          </g>
+          <g stroke="#f87171" stroke-width="1.1" opacity="0.8">
+            <line x1="520" y1="65" x2="650" y2="85"/><line x1="520" y1="65" x2="650" y2="145"/>
+            <line x1="520" y1="115" x2="650" y2="85"/><line x1="520" y1="115" x2="650" y2="145"/>
+            <line x1="520" y1="165" x2="650" y2="85"/><line x1="520" y1="165" x2="650" y2="145"/>
+          </g>
+          <text x="575" y="210" text-anchor="middle" fill="#fca5a5" font-size="10.5">每个父分区喂给多个子分区 → 必须 Shuffle → 切 Stage</text>
+        </svg>
+        <div class="svg-caption">窄依赖的连线是「平行直线」（1→1）；宽依赖是「交叉网状」（N→M，要按 key 重新分发）。这张图是理解 Stage 划分的关键。</div>
+      </div>
+
+      <div class="def"><strong>Stage（阶段）</strong>：Spark 把 DAG 按宽依赖切成的执行单元。<strong>一连串窄依赖被合并进同一个 Stage 流水线执行；每遇到一个宽依赖（Shuffle）就切出一个新 Stage。</strong> 所以记住这条黄金公式：<strong>Stage 数 = Shuffle 次数 + 1</strong>。每个 Stage 内部又按分区拆成多个并行的 <strong>Task</strong>。</div>
+
+      <h3 id="s2-2">2.2 交互演示：Shuffle 如何切分 Stage</h3>
+      <p>选择不同的算子流水线，看 Spark 如何按宽依赖（红色算子）切分 Stage。注意 <strong>Stage 边界永远落在 Shuffle 处</strong>：</p>
+
+      <div class="demo" id="stageDemo">
+        <div class="demo-title">交互演示 · DAG → Stage 划分</div>
+        <div class="demo-controls">
+          <button class="seg active" data-p="0">流水线 A：无 shuffle</button>
+          <button class="seg" data-p="1">流水线 B：1 次 shuffle</button>
+          <button class="seg" data-p="2">流水线 C：2 次 shuffle</button>
+        </div>
+        <div class="pipe" id="stagePipe"></div>
+        <div class="stage-readout" id="stageReadout"></div>
+      </div>
+      <div class="note">绿色算子（map/filter）是窄依赖，能和前后算子<strong>挤进同一个 Stage 流水线跑</strong>，几乎零额外成本；红色算子（groupByKey/join）是宽依赖，强制 Shuffle、切出新 Stage。<strong>优化 Spark 作业，本质就是「想方设法减少 Shuffle」</strong>——这正是下一章的主题。</div>
+    </section>
+
+    <!-- ============= 第 3 章 ============= -->
+    <section class="chapter" id="ch3">
+      <div class="ch-head">
+        <div class="num">03</div>
+        <div class="t">
+          <h2>Shuffle 内部：性能的头号命门</h2>
+          <p class="sub">几乎所有 Spark 慢、OOM、倾斜问题都和 Shuffle 有关 · 老兵尤其要懂它的磁盘 / 网络代价</p>
+        </div>
+      </div>
+
+      <p class="lead">如果只能记住 Spark 调优的一件事，那就是：<strong>Shuffle 很贵，能少则少</strong>。它同时吃<strong>磁盘 IO、网络、序列化、内存</strong>四样资源，是绝大多数性能问题的根源。</p>
+
+      <div class="analogy">Shuffle 像<strong>一个班级重新分组</strong>：原来按「入学顺序」坐（父分区），现在要求「同省份的坐一起」（按 key 重分区）。于是每个人都得收拾东西（<strong>map 端写磁盘</strong>），走到新组（<strong>网络传输</strong>），新组再把来自各方的同省同学聚齐（<strong>reduce 端拉取 + 合并</strong>）。全班一起搬，乱哄哄又费时——这就是 Shuffle 昂贵的直觉。</div>
+
+      <div class="svg-wrap">
+        <svg width="760" height="280" viewBox="0 0 760 280" role="img" aria-label="Shuffle 内部：map 端写、reduce 端拉">
+          <text x="380" y="22" text-anchor="middle" fill="#7dd3fc" font-size="15" font-weight="bold">Shuffle 内部：Map 端写盘 → Reduce 端跨网络拉取</text>
+          <!-- map side -->
+          <text x="150" y="56" text-anchor="middle" fill="#34d399" font-size="12" font-weight="bold">Map 端（Stage N）</text>
+          <g font-size="10" font-family="monospace">
+            <rect x="60" y="70" width="80" height="40" rx="5" fill="#10241c" stroke="#34d399"/><text x="100" y="94" text-anchor="middle" fill="#6ee7b7">MapTask0</text>
+            <rect x="60" y="130" width="80" height="40" rx="5" fill="#10241c" stroke="#34d399"/><text x="100" y="154" text-anchor="middle" fill="#6ee7b7">MapTask1</text>
+            <rect x="60" y="190" width="80" height="40" rx="5" fill="#10241c" stroke="#34d399"/><text x="100" y="214" text-anchor="middle" fill="#6ee7b7">MapTask2</text>
+          </g>
+          <!-- shuffle files -->
+          <text x="320" y="56" text-anchor="middle" fill="#fbbf24" font-size="11.5">①按 key 分区 + 排序，写本地 shuffle 文件</text>
+          <g font-size="9" font-family="monospace" fill="#fcd34d">
+            <rect x="220" y="72" width="190" height="36" rx="4" fill="#2a2410" stroke="#fbbf24"/><text x="315" y="94" text-anchor="middle">分区0 | 分区1 （MapTask0 的输出）</text>
+            <rect x="220" y="132" width="190" height="36" rx="4" fill="#2a2410" stroke="#fbbf24"/><text x="315" y="154" text-anchor="middle">分区0 | 分区1</text>
+            <rect x="220" y="192" width="190" height="36" rx="4" fill="#2a2410" stroke="#fbbf24"/><text x="315" y="214" text-anchor="middle">分区0 | 分区1</text>
+          </g>
+          <!-- reduce side -->
+          <text x="630" y="56" text-anchor="middle" fill="#f472b6" font-size="12" font-weight="bold">Reduce 端（Stage N+1）</text>
+          <text x="540" y="250" text-anchor="middle" fill="#94a3b8" font-size="10">②每个 ReduceTask 跨网络拉取属于自己的那个分区</text>
+          <g font-size="10" font-family="monospace">
+            <rect x="610" y="90" width="110" height="40" rx="5" fill="#231a33" stroke="#f472b6"/><text x="665" y="114" text-anchor="middle" fill="#f9a8d4">ReduceTask0</text>
+            <rect x="610" y="160" width="110" height="40" rx="5" fill="#231a33" stroke="#f472b6"/><text x="665" y="184" text-anchor="middle" fill="#f9a8d4">ReduceTask1</text>
+          </g>
+          <g stroke="#f472b6" stroke-width="1" opacity="0.6">
+            <line x1="410" y1="86" x2="610" y2="105"/><line x1="410" y1="146" x2="610" y2="105"/><line x1="410" y1="206" x2="610" y2="110"/>
+            <line x1="410" y1="92" x2="610" y2="180"/><line x1="410" y1="152" x2="610" y2="180"/><line x1="410" y1="212" x2="610" y2="180"/>
+          </g>
+        </svg>
+        <div class="svg-caption">Map 端把输出按目标分区切好、写本地磁盘（shuffle write）；Reduce 端跨网络把属于自己的分区都拉过来（shuffle read / fetch）再聚合。中间这一写一读，就是 Shuffle 的全部开销来源。</div>
+      </div>
+
+      <h4>为什么 Shuffle 这么贵？四笔账</h4>
+      <ul>
+        <li><strong>磁盘 IO</strong>：map 端输出要落本地盘（shuffle write），reduce 端读取——大量随机/顺序 IO。</li>
+        <li><strong>网络</strong>：reduce 端要跨节点把数据拉过来，数据量大时网络成瓶颈。</li>
+        <li><strong>序列化</strong>：跨网络传输前要序列化、收到后反序列化，吃 CPU。</li>
+        <li><strong>内存与排序</strong>：聚合 / 排序需要内存缓冲，放不下就 <strong>spill 到磁盘</strong>，进一步拖慢。</li>
+      </ul>
+
+      <div class="tip"><strong>少 Shuffle 的实战手段</strong>：① 用 <code>reduceByKey</code> 替代 <code>groupByKey</code>（前者 map 端先局部聚合，shuffle 的数据量小得多）；② 小表 join 大表用 <strong>Broadcast Join</strong>（把小表广播到各节点，<em>完全消除</em> shuffle）；③ 提前 <code>filter</code> 减少进入 shuffle 的数据；④ 复用已分区的 RDD（相同 partitioner 的 join 可免 shuffle）。</div>
+      <div class="danger"><code>groupByKey</code> vs <code>reduceByKey</code> 是经典面试题：两者都触发 shuffle，但 <code>reduceByKey</code> 在 <strong>map 端先做局部聚合（combine）</strong>，跨网络传的是「已经合并过的小结果」；<code>groupByKey</code> 把<strong>所有原始值</strong>都搬过网络再聚合，数据量大时极易 OOM。<strong>能用 reduceByKey / aggregateByKey 就别用 groupByKey。</strong></div>
+    </section>
+
+    <!-- ============= 第 4 章 ============= -->
+    <section class="chapter" id="ch4">
+      <div class="ch-head">
+        <div class="num">04</div>
+        <div class="t">
+          <h2>Catalyst 优化器 & Tungsten 引擎</h2>
+          <p class="sub">为什么写 DataFrame / SQL 往往比手写 RDD 还快 · 因为有一个编译器在帮你优化</p>
+        </div>
+      </div>
+
+      <p class="lead">很多人惊讶：用高层的 DataFrame / SQL，居然常比手写 RDD 更快。原因是 Spark SQL 背后有两套「黑科技」——<strong>Catalyst</strong>（查询优化器）和 <strong>Tungsten</strong>（执行引擎）。它们把你的声明式查询，编译成高度优化的物理执行。</p>
+
+      <h3 id="s4-1">4.1 Catalyst：把 SQL 当代码来编译优化</h3>
+      <div class="def"><strong>Catalyst</strong>：Spark SQL 的查询优化器。它把一条 SQL / DataFrame 操作，经过<strong>解析 → 分析 → 逻辑优化 → 物理计划 → 代码生成</strong>多个阶段层层优化，最终生成高效的 RDD 执行。这和你熟悉的<strong>编译器前端/中端/后端</strong>结构几乎一一对应。</div>
+      <div class="svg-wrap">
+        <svg width="780" height="150" viewBox="0 0 780 150" role="img" aria-label="Catalyst 优化流水线">
+          <text x="390" y="22" text-anchor="middle" fill="#7dd3fc" font-size="14" font-weight="bold">Catalyst 查询优化流水线</text>
+          <defs><marker id="ar2" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#64748b"/></marker></defs>
+          <g font-size="10.5" font-family="monospace">
+            <rect x="20" y="55" width="110" height="50" rx="6" fill="#10172b" stroke="#7dd3fc"/><text x="75" y="78" text-anchor="middle" fill="#7dd3fc">SQL /</text><text x="75" y="94" text-anchor="middle" fill="#7dd3fc">DataFrame</text>
+            <rect x="160" y="55" width="120" height="50" rx="6" fill="#1a2138" stroke="#475569"/><text x="220" y="78" text-anchor="middle" fill="#cbd5e1">未解析</text><text x="220" y="94" text-anchor="middle" fill="#94a3b8" font-size="9">逻辑计划</text>
+            <rect x="310" y="55" width="120" height="50" rx="6" fill="#1a2138" stroke="#475569"/><text x="370" y="78" text-anchor="middle" fill="#cbd5e1">分析后</text><text x="370" y="94" text-anchor="middle" fill="#94a3b8" font-size="9">（绑定元数据）</text>
+            <rect x="460" y="55" width="120" height="50" rx="6" fill="#2a2410" stroke="#fbbf24"/><text x="520" y="78" text-anchor="middle" fill="#fcd34d">优化后</text><text x="520" y="94" text-anchor="middle" fill="#94a3b8" font-size="9">谓词下推/裁剪</text>
+            <rect x="610" y="55" width="120" height="50" rx="6" fill="#10241c" stroke="#34d399"/><text x="670" y="78" text-anchor="middle" fill="#6ee7b7">物理计划</text><text x="670" y="94" text-anchor="middle" fill="#94a3b8" font-size="9">+代码生成→RDD</text>
+          </g>
+          <line x1="130" y1="80" x2="158" y2="80" stroke="#64748b" marker-end="url(#ar2)"/>
+          <line x1="280" y1="80" x2="308" y2="80" stroke="#64748b" marker-end="url(#ar2)"/>
+          <line x1="430" y1="80" x2="458" y2="80" stroke="#64748b" marker-end="url(#ar2)"/>
+          <line x1="580" y1="80" x2="608" y2="80" stroke="#64748b" marker-end="url(#ar2)"/>
+          <text x="390" y="132" text-anchor="middle" fill="#64748b" font-size="10.5">每一步都基于规则（rule-based）+ 成本（cost-based, CBO）做变换</text>
+        </svg>
+        <div class="svg-caption">和编译器同构：解析→语义分析→中端优化→后端代码生成。正因有这层优化，声明式的 SQL 反而比手写 RDD 更容易跑得快。</div>
+      </div>
+      <ul>
+        <li><strong>谓词下推（Predicate Pushdown）</strong>：把 <code>WHERE</code> 尽量推到数据源（如只读 Parquet 中符合条件的 row group）——呼应 D01！</li>
+        <li><strong>列裁剪（Column Pruning）</strong>：只读查询用到的列——又是 D01 列存的红利。</li>
+        <li><strong>常量折叠、谓词合并、Join 重排</strong>：CBO 利用统计信息选更优的 join 顺序与算法。</li>
+      </ul>
+
+      <h3 id="s4-2">4.2 Tungsten：榨干 CPU 与内存</h3>
+      <div class="def"><strong>Tungsten</strong>：Spark 的底层执行引擎，目标是「把硬件性能榨干」。三板斧：① <strong>堆外内存 + 自管理</strong>——绕开 JVM 对象开销和 GC，用紧凑的二进制格式存数据；② <strong>缓存感知计算</strong>——数据布局对 CPU cache 友好，减少 cache miss；③ <strong>全阶段代码生成（Whole-Stage Codegen）</strong>——把一个 Stage 里的多个算子<strong>编译成一段紧凑的 Java 代码</strong>，消除虚函数调用和中间对象，像手写的 for 循环一样高效。</div>
+      <div class="info"><strong>老兵会心一笑</strong>：Tungsten 做的事，正是你在 C++ 里追求的——避免对象开销（紧凑内存布局）、cache 友好、减少分支与虚调用（codegen 把火山模型的 <code>next()</code> 虚调用消成直筒循环）、必要时上 SIMD 向量化。<strong>分布式引擎的单节点性能，最终还是单机性能工程那一套。</strong> 这也是 D07（OLAP 引擎内核）的核心母题。</div>
+      <div class="note">DataFrame / Dataset / SQL 共享 Catalyst + Tungsten，所以性能相近且通常优于 RDD；RDD 是更底层的逃生舱（需要细粒度控制、非结构化数据时才直接用）。<strong>日常优先 DataFrame / SQL，把优化交给 Catalyst。</strong></div>
+    </section>
+
+    <!-- ============= 第 5 章 ============= -->
+    <section class="chapter" id="ch5">
+      <div class="ch-head">
+        <div class="num">05</div>
+        <div class="t">
+          <h2>内存管理与执行模型</h2>
+          <p class="sub">Executor 里的内存怎么分 · 一个作业从提交到执行经历了什么</p>
+        </div>
+      </div>
+
+      <h3>5.1 执行模型：Job → Stage → Task</h3>
+      <p>一个 action 触发一个 <strong>Job</strong>；Job 按宽依赖切成多个 <strong>Stage</strong>；每个 Stage 按分区拆成多个 <strong>Task</strong>（最小执行单元，一个 Task 处理一个分区）。Task 被分发到 Executor 的 CPU core 上并行跑。</p>
+      <div class="flow-row"><span class="step">Job</span><span class="arrow">→</span><span class="desc">一个 action（如 <code>count()</code>）= 一个 Job</span></div>
+      <div class="flow-row"><span class="step">Stage</span><span class="arrow">→</span><span class="desc">Job 按 Shuffle 边界切成多个 Stage（Stage 数 = shuffle 数 + 1）</span></div>
+      <div class="flow-row"><span class="step">Task</span><span class="arrow">→</span><span class="desc">Stage 按分区切成 N 个 Task，并行跑在 Executor 的 core 上（并行度 = 分区数）</span></div>
+      <div class="def"><strong>并行度（Parallelism）</strong>：同时能跑多少 Task ≈ <strong>分区数</strong>，上限是「Executor 数 × 每个 Executor 的 core 数」。分区太少 → 并行不足、机器闲置；分区太多 → 调度开销大、小文件多。经验值：分区数设为总 core 数的 2–4 倍较均衡。</div>
+
+      <h3>5.2 统一内存模型</h3>
+      <div class="analogy">Executor 的内存像<strong>一个合租的开间</strong>：<strong>执行内存</strong>（Execution，跑 shuffle/排序/聚合用）和<strong>存储内存</strong>（Storage，缓存 RDD 用）是两个室友，共用一套空间。Spark 的「统一内存管理」让它们<strong>能互相借用</strong>：谁暂时不用，另一个可以多占；但执行内存「优先级更高」，需要时能把存储内存挤出去（缓存被驱逐）。</div>
+      <div class="svg-wrap">
+        <svg width="720" height="150" viewBox="0 0 720 150" role="img" aria-label="Executor 统一内存模型">
+          <text x="360" y="22" text-anchor="middle" fill="#7dd3fc" font-size="14" font-weight="bold">Executor 内存划分（统一内存管理）</text>
+          <rect x="40" y="45" width="640" height="60" rx="8" fill="#0c1120" stroke="#2a3556"/>
+          <rect x="48" y="52" width="180" height="46" rx="5" fill="#1a2138" stroke="#64748b"/><text x="138" y="80" text-anchor="middle" fill="#94a3b8" font-size="11">Reserved / 系统预留</text>
+          <rect x="232" y="52" width="250" height="46" rx="5" fill="#10241c" stroke="#34d399"/><text x="357" y="74" text-anchor="middle" fill="#6ee7b7" font-size="11">Execution（执行）</text><text x="357" y="90" text-anchor="middle" fill="#94a3b8" font-size="9">shuffle/排序/聚合</text>
+          <rect x="486" y="52" width="186" height="46" rx="5" fill="#231a33" stroke="#a78bfa"/><text x="579" y="74" text-anchor="middle" fill="#c4b5fd" font-size="11">Storage（存储）</text><text x="579" y="90" text-anchor="middle" fill="#94a3b8" font-size="9">cache/persist</text>
+          <text x="484" y="130" text-anchor="middle" fill="#64748b" font-size="10.5">↑ Execution 与 Storage 共享一池、可互相借用；Execution 优先级更高，可驱逐 Storage 缓存</text>
+        </svg>
+        <div class="svg-caption">内存不够时数据会 <strong>spill 到磁盘</strong>（溢写），作业还能跑完但会变慢。频繁 spill / OOM 是内存配置或数据倾斜的信号。</div>
+      </div>
+      <div class="note">常见 OOM 不一定是「内存小」，更多是<strong>单个 Task 的数据太多</strong>（分区不均 / 数据倾斜）或 <strong>groupByKey 把海量值堆到一处</strong>。先排查倾斜（下一章），再谈加内存。</div>
+    </section>
+
+    <!-- ============= 第 6 章 ============= -->
+    <section class="chapter" id="ch6">
+      <div class="ch-head">
+        <div class="num">06</div>
+        <div class="t">
+          <h2>调优与数据倾斜</h2>
+          <p class="sub">Spark 工程师的日常 · 90% 的「Spark 跑得慢」最后都查到 Shuffle 或倾斜</p>
+        </div>
+      </div>
+
+      <p class="lead"><strong>数据倾斜（Data Skew）</strong>是 Spark 最常见、最折磨人的性能问题：大部分 Task 秒级完成，个别 Task 跑几十分钟——整个 Stage 被这几个「拖油瓶」卡住。根因是数据按 key 分区时<strong>分布极不均匀</strong>（如某个热点 key 占了一半数据）。</p>
+
+      <div class="def"><strong>掉队者 / 长尾 Task（Straggler）</strong>：一个 Stage 必须等它<strong>所有</strong> Task 都完成才算结束，所以 Stage 耗时 ≈ <strong>最慢的那个 Task</strong>。哪怕 99 个 Task 各 1 秒，只要 1 个 Task 要 100 秒，这个 Stage 就得 100 秒。这就是为什么「平均很快但总体很慢」。</div>
+
+      <h3 id="s6-1">6.1 交互演示：数据倾斜与「加盐」</h3>
+      <p>下面每个条代表一个 Task 处理的数据量（≈ 耗时）。倾斜时 P2 是热点、拖垮整个 Stage。点「加盐打散」看如何把热点 key 拆开、让负载均衡：</p>
+
+      <div class="demo" id="skewDemo">
+        <div class="demo-title">交互演示 · 数据倾斜 → 加盐打散</div>
+        <div class="demo-controls">
+          <button class="seg active" data-state="skew">😣 倾斜状态</button>
+          <button class="seg" data-state="salt">🧂 加盐打散后</button>
+        </div>
+        <div class="skew-rows" id="skewRows"></div>
+        <div class="skew-meta" id="skewMeta"></div>
+      </div>
+      <div class="tip"><strong>加盐（Salting）</strong>：给热点 key 拼一个随机后缀（如 <code>hotkey_0</code>…<code>hotkey_9</code>），把它「拆成 10 个 key」分散到不同分区先做<strong>局部聚合</strong>，再去掉后缀做一次<strong>全局聚合</strong>。热点被打散，长尾 Task 消失。这是处理倾斜最通用的招。</div>
+
+      <h3 id="s6-2">6.2 调优清单（按收益排序）</h3>
+      <table>
+        <thead><tr><th>手段</th><th>解决什么</th><th>说明</th></tr></thead>
+        <tbody>
+          <tr><td><strong>开启 AQE</strong></td><td>倾斜 / 分区不合理</td><td class="cell-ok">Spark 3 默认开。运行时动态合并小分区、拆分倾斜分区、自动选 join 策略。先开它！</td></tr>
+          <tr><td><strong>Broadcast Join</strong></td><td>大表 join 小表的 shuffle</td><td class="cell-ok">小表广播到各节点，彻底消除 shuffle。注意小表别太大（默认阈值 10MB，可调）</td></tr>
+          <tr><td><strong>reduceByKey 替代 groupByKey</strong></td><td>shuffle 数据量 / OOM</td><td>map 端预聚合，少传数据</td></tr>
+          <tr><td><strong>加盐 / 拆分热点</strong></td><td>数据倾斜</td><td>打散热点 key，消除长尾 Task</td></tr>
+          <tr><td><strong>调分区数</strong></td><td>并行度不足 / 过度</td><td><code>spark.sql.shuffle.partitions</code>，配合 AQE 自适应</td></tr>
+          <tr><td><strong>cache / persist</strong></td><td>重复计算</td><td>多次用到的 RDD/DataFrame 缓存复用，避免重算血缘</td></tr>
+          <tr><td><strong>列存 + 谓词下推</strong></td><td>读取 IO</td><td>存 Parquet，让 Catalyst 下推过滤与列裁剪（D01 红利）</td></tr>
+        </tbody>
+      </table>
+      <div class="def"><strong>AQE（Adaptive Query Execution，自适应查询执行）</strong>：Spark 3 的杀手锏。传统优化在「跑之前」基于静态统计做决策，常因估计不准而次优。AQE 让 Spark 在<strong>运行中、拿到每个 Stage 真实的中间结果统计后，动态调整后续计划</strong>——合并过小的分区、把倾斜的大分区再切分、把原计划的 shuffle join 改成 broadcast join。它把很多手工调优自动化了，<strong>是现代 Spark 调优的第一道开关</strong>。</div>
+      <h3 id="s6-3">6.3 Join 策略与 AQE 动态优化</h3>
+      <p>Join 是最容易出性能问题的算子。Spark 有几种物理 Join 策略，<strong>选对策略往往比加资源更管用</strong>。理解它们，也是面试高频考点。</p>
+      <table>
+        <thead><tr><th>Join 策略</th><th>原理</th><th>是否 Shuffle</th><th>适用</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Broadcast Hash Join</strong><br>(BHJ)</td><td>把<strong>小表广播</strong>到每个 Executor，在本地用大表流式探测哈希表</td><td class="cell-ok">无（仅广播小表）</td><td>大表 join 小表（小表 &lt; 阈值，默认 10MB）。最快</td></tr>
+          <tr><td><strong>Shuffle Hash Join</strong><br>(SHJ)</td><td>两表按 key shuffle 到同分区，小侧建哈希表、大侧探测</td><td class="cell-mid">是</td><td>一侧较小但放不下广播、且无需排序时</td></tr>
+          <tr><td><strong>Sort-Merge Join</strong><br>(SMJ)</td><td>两表按 key shuffle 后<strong>各自排序</strong>，再归并匹配</td><td class="cell-mid">是（+排序）</td><td>两个大表 join 的默认选择，稳健但有排序开销</td></tr>
+          <tr><td><strong>Broadcast Nested Loop</strong><br>(BNLJ)</td><td>嵌套循环 + 广播，O(n×m)</td><td class="cell-bad">视情况</td><td>兜底（如非等值 join），<strong>慢，尽量避免</strong></td></tr>
+        </tbody>
+      </table>
+      <div class="def"><strong>Spark 怎么选 Join 策略？</strong> 大致优先级：能广播（有一侧足够小）→ <strong>BHJ</strong>；否则等值 join → <strong>SMJ</strong>（默认）或 SHJ；非等值/无法 hash → <strong>BNLJ</strong> 兜底。你可以用 <code>EXPLAIN</code> 看物理计划里到底走了哪种，也能用 <code>broadcast()</code> hint 强制广播。<strong>「大表 join 小表慢」十有八九是没走 BHJ</strong>——要么小表超了广播阈值，要么统计信息不准让 Spark 误判。</div>
+
+      <div class="svg-wrap">
+        <svg width="720" height="170" viewBox="0 0 720 170" role="img" aria-label="Broadcast Hash Join vs Sort-Merge Join">
+          <text x="180" y="20" text-anchor="middle" fill="#34d399" font-size="13" font-weight="bold">Broadcast Hash Join（无 shuffle）</text>
+          <rect x="40" y="40" width="90" height="34" rx="6" fill="#10241c" stroke="#34d399"/><text x="85" y="62" text-anchor="middle" fill="#6ee7b7" font-size="11">小表</text>
+          <g stroke="#34d399" stroke-width="1.2" opacity=".7"><line x1="130" y1="57" x2="250" y2="50"/><line x1="130" y1="57" x2="250" y2="100"/><line x1="130" y1="57" x2="250" y2="150"/></g>
+          <text x="190" y="40" text-anchor="middle" fill="#94a3b8" font-size="9">广播到各节点</text>
+          <rect x="250" y="36" width="80" height="28" rx="5" fill="#0c1120" stroke="#34d399"/><text x="290" y="55" text-anchor="middle" fill="#86efac" font-size="10">Exec1+大表片</text>
+          <rect x="250" y="86" width="80" height="28" rx="5" fill="#0c1120" stroke="#34d399"/><text x="290" y="105" text-anchor="middle" fill="#86efac" font-size="10">Exec2+大表片</text>
+          <rect x="250" y="136" width="80" height="28" rx="5" fill="#0c1120" stroke="#34d399"/><text x="290" y="155" text-anchor="middle" fill="#86efac" font-size="10">Exec3+大表片</text>
+          <text x="180" y="135" text-anchor="middle" fill="#6ee7b7" font-size="9.5">大表不动，本地 join</text>
+
+          <line x1="380" y1="30" x2="380" y2="160" stroke="#2a3556" stroke-dasharray="4 4"/>
+
+          <text x="560" y="20" text-anchor="middle" fill="#fbbf24" font-size="13" font-weight="bold">Sort-Merge Join（两表都 shuffle+排序）</text>
+          <rect x="410" y="40" width="70" height="30" rx="5" fill="#2a2410" stroke="#fbbf24"/><text x="445" y="60" text-anchor="middle" fill="#fcd34d" font-size="10">大表A</text>
+          <rect x="410" y="120" width="70" height="30" rx="5" fill="#2a2410" stroke="#fbbf24"/><text x="445" y="140" text-anchor="middle" fill="#fcd34d" font-size="10">大表B</text>
+          <g stroke="#fb923c" stroke-width="1" opacity=".6"><line x1="480" y1="55" x2="560" y2="85"/><line x1="480" y1="135" x2="560" y2="95"/></g>
+          <rect x="560" y="74" width="120" height="32" rx="5" fill="#0c1120" stroke="#fbbf24"/><text x="620" y="88" text-anchor="middle" fill="#fcd34d" font-size="9.5">按 key shuffle</text><text x="620" y="101" text-anchor="middle" fill="#94a3b8" font-size="9">+ 排序 + 归并</text>
+          <text x="545" y="160" text-anchor="middle" fill="#fb923c" font-size="9.5">两表都要搬 → 贵，但能处理超大表</text>
+        </svg>
+        <div class="svg-caption">能广播就别 shuffle：BHJ 把小表搬给数据、SMJ 把两个大表都搬到一起。这正是「移动小数据 ≪ 移动大数据」的体现。</div>
+      </div>
+
+      <h4>AQE 的三大动态优化（运行时才出手）</h4>
+      <div class="grid cols-3">
+        <div class="card green"><h4>① 动态合并分区</h4><p style="font-size:13px;color:var(--text-dim)">Coalesce Shuffle Partitions：shuffle 后发现很多分区很小，自动合并成更少的大分区，减少 Task 调度开销与小文件。</p></div>
+        <div class="card amber"><h4>② 动态处理倾斜</h4><p style="font-size:13px;color:var(--text-dim)">Skew Join：运行时检测到某分区远大于中位数，自动把它<strong>再切成多个子分区</strong>并行处理，免去手工加盐。</p></div>
+        <div class="card violet"><h4>③ 动态切换 Join</h4><p style="font-size:13px;color:var(--text-dim)">运行时拿到真实大小，发现一侧其实够小 → 把原计划的 SMJ <strong>临时改成 BHJ</strong>，省掉一次大 shuffle。</p></div>
+      </div>
+      <div class="info"><strong>为什么 AQE 有用？</strong> 传统优化在「跑之前」靠静态统计估算，常因数据分布估不准而选错策略。AQE 等到每个 Stage <strong>真实跑完、拿到准确统计</strong>再决定下一步——用"运行时真相"纠正"编译期猜测"。这就是为什么它是现代 Spark 调优的第一道开关：<code>spark.sql.adaptive.enabled=true</code>（Spark 3 默认开）。</div>
+
+      <div class="warn">调优顺序建议：① 先确认开了 <strong>AQE</strong>；② 看 Spark UI 找<strong>最慢的 Stage / Task</strong>（是不是倾斜？）；③ 减少 / 避免 Shuffle（broadcast、reduceByKey、提前 filter）；④ 检查 Join 策略是否走了预期的 BHJ；⑤ 最后才是加资源。<strong>先定位再动手，别上来就堆内存堆 core。</strong> Spark UI 的 DAG 图和 Task 时间分布是你最好的朋友。</div>
+    </section>
+
+    <!-- ============= 第 7 章 · Structured Streaming 与部署 ============= -->
+    <section class="chapter" id="ch7">
+      <div class="ch-head">
+        <div class="num">07</div>
+        <div class="t">
+          <h2>Structured Streaming 与作业部署</h2>
+          <p class="sub">同一套 DataFrame API 也能写流 · 以及作业到底怎么跑在 YARN / K8s 上</p>
+        </div>
+      </div>
+
+      <p class="lead">前 6 章讲的都是<strong>批</strong>。但 Spark 也能做流——而且用的是<strong>同一套 DataFrame/SQL API</strong>。这一章补齐两块面试与实战的高频盲区：<strong>Structured Streaming（结构化流）</strong>的心智模型，以及一个作业从 <code>spark-submit</code> 到真正在集群上跑起来，中间经历了什么（YARN / K8s / 动态资源）。</p>
+
+      <h3 id="s7-1">7.1 从 DStream 到 Structured Streaming：把流看成「一张不断长高的表」</h3>
+      <p>Spark 的流处理有两代：老的 <strong>Spark Streaming（DStream）</strong>是「把流切成一个个小批 RDD」；新的 <strong>Structured Streaming</strong>（2.0+，现在的事实标准）则换了个更优雅的心智模型——</p>
+      <div class="analogy">Structured Streaming 把一条无界数据流，想象成<strong>一张永远在底部追加新行的表</strong>。你对这张「无界表」写的查询（<code>groupBy</code>、<code>join</code>、<code>agg</code>），和写一张静态表的批查询<strong>一模一样</strong>；引擎负责在每个微批到来时，<strong>增量地</strong>把新行并进结果。你写的是「批」的逻辑，跑出来的是「流」的效果。</div>
+
+      <div class="svg-wrap">
+        <svg width="780" height="240" viewBox="0 0 780 240" role="img" aria-label="Structured Streaming 无界表模型">
+          <text x="390" y="24" text-anchor="middle" fill="#7dd3fc" font-size="15" font-weight="bold">无界表（Unbounded Table）模型</text>
+          <text x="150" y="58" text-anchor="middle" fill="#94a3b8" font-size="12">输入流 = 不断追加行的表</text>
+          <rect x="60" y="70" width="180" height="30" rx="4" fill="#10172b" stroke="#34d399"/><text x="150" y="90" text-anchor="middle" fill="#86efac" font-size="11">t1: {user:A, amt:10}</text>
+          <rect x="60" y="104" width="180" height="30" rx="4" fill="#10172b" stroke="#34d399"/><text x="150" y="124" text-anchor="middle" fill="#86efac" font-size="11">t2: {user:B, amt:20}</text>
+          <rect x="60" y="138" width="180" height="30" rx="4" fill="#10172b" stroke="#34d399"/><text x="150" y="158" text-anchor="middle" fill="#86efac" font-size="11">t3: {user:A, amt:30}</text>
+          <rect x="60" y="172" width="180" height="30" rx="4" fill="#0c1120" stroke="#475569" stroke-dasharray="4 3"/><text x="150" y="192" text-anchor="middle" fill="#64748b" font-size="11">t4: … 持续追加 …</text>
+
+          <text x="390" y="130" text-anchor="middle" fill="#a78bfa" font-size="22">⇒</text>
+          <text x="390" y="150" text-anchor="middle" fill="#64748b" font-size="10">同一个 query</text>
+          <text x="390" y="164" text-anchor="middle" fill="#64748b" font-size="10">groupBy(user).sum(amt)</text>
+
+          <text x="630" y="58" text-anchor="middle" fill="#94a3b8" font-size="12">结果表 = 每个微批增量更新</text>
+          <rect x="540" y="86" width="180" height="30" rx="4" fill="#231a33" stroke="#a78bfa"/><text x="630" y="106" text-anchor="middle" fill="#c4b5fd" font-size="11">A → 40 (10+30)</text>
+          <rect x="540" y="120" width="180" height="30" rx="4" fill="#231a33" stroke="#a78bfa"/><text x="630" y="140" text-anchor="middle" fill="#c4b5fd" font-size="11">B → 20</text>
+          <text x="630" y="178" text-anchor="middle" fill="#64748b" font-size="10.5">新行到达 → 结果自动重算/增量更新</text>
+        </svg>
+        <div class="svg-caption">批与流共用一套 API 的本质：流只是「无界的批」，引擎把你的批查询持续增量地跑在新到的行上。</div>
+      </div>
+
+      <div class="def"><strong>微批 vs 连续处理（Micro-batch vs Continuous）</strong>：Structured Streaming 默认是<strong>微批</strong>——每隔很短的触发间隔（如 1s）把累积的新数据当一个小批处理，延迟通常<strong>百毫秒~秒级</strong>。它还有实验性的 <strong>Continuous Processing</strong> 模式可做到毫秒级，但功能受限。这正是它与 Flink 的根本差异：<strong>Spark 是「批优先、流是把批切小」，Flink 是「流优先、批是有界的流」</strong>（详见 D04）。</div>
+
+      <pre><span class="c"># Structured Streaming：读 Kafka → 开窗聚合 → 写下游，全是 DataFrame API</span>
+df = (spark.readStream
+        .format(<span class="s">"kafka"</span>)
+        .option(<span class="s">"subscribe"</span>, <span class="s">"orders"</span>)
+        .load())
+
+agg = (df.selectExpr(<span class="s">"CAST(value AS STRING)"</span>)
+         .select(from_json(<span class="s">"value"</span>, schema).alias(<span class="s">"o"</span>)).select(<span class="s">"o.*"</span>)
+         .withWatermark(<span class="s">"event_time"</span>, <span class="s">"10 minutes"</span>)        <span class="c"># 容忍迟到 10min</span>
+         .groupBy(window(<span class="s">"event_time"</span>, <span class="s">"5 minutes"</span>), <span class="s">"city"</span>)
+         .sum(<span class="s">"amount"</span>))
+
+query = (agg.writeStream
+           .outputMode(<span class="s">"update"</span>)          <span class="c"># 输出模式见 7.2</span>
+           .format(<span class="s">"console"</span>)
+           .option(<span class="s">"checkpointLocation"</span>, <span class="s">"/ckpt/orders"</span>)  <span class="c"># 容错的根</span>
+           .trigger(processingTime=<span class="s">"5 seconds"</span>)
+           .start())</pre>
+
+      <h3 id="s7-2">7.2 Watermark、输出模式与「精确一次」</h3>
+      <p>流处理的三个共性难题，Structured Streaming 都有自己的答法（概念与 D04 Flink 相通，这里只讲 Spark 的形态）：</p>
+      <div class="grid cols-3">
+        <div class="card">
+          <h4>Watermark 水位线</h4>
+          <p style="font-size:13px;color:var(--text-dim)"><code>withWatermark</code> 告诉引擎「事件时间晚于水位这么久的迟到数据就丢弃」，从而能<strong>关闭旧窗口、清理状态</strong>，否则状态无限膨胀。</p>
+        </div>
+        <div class="card violet">
+          <h4>三种输出模式</h4>
+          <p style="font-size:13px;color:var(--text-dim)"><strong>Append</strong>（只追加最终行）、<strong>Update</strong>（只输出有变化的行）、<strong>Complete</strong>（每次输出整张结果表）。开窗聚合常用 Update/Append。</p>
+        </div>
+        <div class="card green">
+          <h4>Exactly-once</h4>
+          <p style="font-size:13px;color:var(--text-dim)">靠 <strong>Checkpoint + WAL + 可重放 source（Kafka offset）+ 幂等 sink</strong>。故障重启从 checkpoint 恢复进度与状态，端到端不丢不重。</p>
+        </div>
+      </div>
+      <div class="warn">Structured Streaming 的状态默认存在 Executor 内存 + HDFS checkpoint，<strong>大状态场景</strong>（海量 key 的去重/聚合）不如 Flink 的 RocksDB 状态后端从容。<strong>选型直觉</strong>：已有重 Spark 批生态、延迟要求秒级、想「一套代码批流复用」→ Structured Streaming；超低延迟、复杂事件时间/大状态/CEP → Flink（D04）。</div>
+
+      <h3 id="s7-3">7.3 作业部署：spark-submit 之后发生了什么</h3>
+      <p>写完代码只是第一步。一个 Spark 作业要真正跑起来，得先向<strong>集群管理器</strong>申请资源、拉起 Driver 与 Executor。这是「能写代码」和「能上生产」之间的分水岭，也是高频面试点。</p>
+      <table>
+        <thead><tr><th>集群管理器</th><th>定位</th><th>适用</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Standalone</strong></td><td>Spark 自带的简单调度</td><td>测试 / 小集群，不与其他框架共享资源</td></tr>
+          <tr><td><strong>YARN</strong></td><td class="cell-ok">Hadoop 生态主流</td><td>传统大数据集群，和 Hive/MR 共用资源池</td></tr>
+          <tr><td><strong>Kubernetes</strong></td><td class="cell-ok">云原生主流（趋势）</td><td>容器化、弹性、存算分离、多租户隔离</td></tr>
+          <tr><td>Mesos</td><td>早期方案</td><td class="cell-mid">已基本退出历史舞台</td></tr>
+        </tbody>
+      </table>
+      <div class="def"><strong>client 模式 vs cluster 模式</strong>：决定 <strong>Driver 跑在哪</strong>。① <strong>client</strong>：Driver 跑在你提交命令的那台机器（如跳板机），适合调试、能直接看到输出，但提交机一关作业就挂。② <strong>cluster</strong>：Driver 也被调度到集群里某个容器跑，提交机可以下线，<strong>生产标准</strong>。</div>
+
+      <div class="svg-wrap">
+        <svg width="780" height="270" viewBox="0 0 780 270" role="img" aria-label="Spark on YARN/K8s 运行架构">
+          <text x="390" y="22" text-anchor="middle" fill="#7dd3fc" font-size="15" font-weight="bold">spark-submit → 集群管理器 → Driver + Executors</text>
+          <rect x="30" y="50" width="130" height="44" rx="8" fill="#1a2138" stroke="#7dd3fc"/><text x="95" y="70" text-anchor="middle" fill="#e4e9f5" font-size="12">spark-submit</text><text x="95" y="86" text-anchor="middle" fill="#94a3b8" font-size="10">提交应用</text>
+          <line x1="160" y1="72" x2="248" y2="72" stroke="#64748b" stroke-width="1.5" marker-end="url(#a2)"/>
+          <rect x="250" y="46" width="170" height="52" rx="8" fill="#231a33" stroke="#a78bfa"/><text x="335" y="68" text-anchor="middle" fill="#c4b5fd" font-size="12" font-weight="bold">Cluster Manager</text><text x="335" y="86" text-anchor="middle" fill="#94a3b8" font-size="10">YARN RM / K8s API Server</text>
+          <line x1="335" y1="98" x2="335" y2="128" stroke="#64748b" stroke-width="1.5" marker-end="url(#a2)"/><text x="430" y="118" fill="#64748b" font-size="10">①申请容器，拉起 Driver</text>
+          <rect x="250" y="130" width="170" height="46" rx="8" fill="#10241c" stroke="#34d399"/><text x="335" y="150" text-anchor="middle" fill="#6ee7b7" font-size="12" font-weight="bold">Driver</text><text x="335" y="167" text-anchor="middle" fill="#94a3b8" font-size="10">建 DAG / 调度 Task</text>
+          <line x1="335" y1="176" x2="200" y2="212" stroke="#475569" stroke-width="1.2" stroke-dasharray="4 3"/>
+          <line x1="335" y1="176" x2="400" y2="212" stroke="#475569" stroke-width="1.2" stroke-dasharray="4 3"/>
+          <line x1="335" y1="176" x2="600" y2="212" stroke="#475569" stroke-width="1.2" stroke-dasharray="4 3"/>
+          <text x="470" y="200" fill="#64748b" font-size="10">②按需申请 Executor 容器</text>
+          <rect x="120" y="214" width="150" height="42" rx="6" fill="#141a2c" stroke="#fbbf24"/><text x="195" y="240" text-anchor="middle" fill="#fcd34d" font-size="11">Executor (cores+mem)</text>
+          <rect x="330" y="214" width="150" height="42" rx="6" fill="#141a2c" stroke="#fbbf24"/><text x="405" y="240" text-anchor="middle" fill="#fcd34d" font-size="11">Executor</text>
+          <rect x="540" y="214" width="150" height="42" rx="6" fill="#141a2c" stroke="#fbbf24"/><text x="615" y="240" text-anchor="middle" fill="#fcd34d" font-size="11">Executor</text>
+          <defs><marker id="a2" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#64748b"/></marker></defs>
+        </svg>
+        <div class="svg-caption">无论 YARN 还是 K8s，套路一致：管理器先拉起 Driver，Driver 再申请一批 Executor 容器执行 Task。区别只在「容器是 YARN Container 还是 K8s Pod」。</div>
+      </div>
+
+      <pre><span class="c"># 提交到 YARN（cluster 模式，生产常见）</span>
+spark-submit --master yarn --deploy-mode cluster \
+  --num-executors 20 --executor-cores 4 --executor-memory 8g \
+  --conf spark.sql.adaptive.enabled=true \
+  app.py
+
+<span class="c"># 提交到 Kubernetes（存算分离 / 云原生）</span>
+spark-submit --master k8s://https://&lt;api-server&gt; --deploy-mode cluster \
+  --conf spark.kubernetes.container.image=my-spark:3.5 \
+  --conf spark.executor.instances=20 \
+  --conf spark.dynamicAllocation.enabled=true \   <span class="c"># 动态资源：按需增减 Executor</span>
+  local:///opt/app.py</pre>
+      <div class="tip"><strong>动态资源分配（Dynamic Allocation）</strong>：让 Spark 根据待处理 Task 量<strong>自动增减 Executor</strong>——空闲就释放、积压就申请。配合 K8s 弹性，是云上省成本的关键开关（呼应 D09 FinOps）。on K8s 时还需开 <code>shuffleTracking</code> 或外部 shuffle 服务来安全回收带 shuffle 数据的 Executor。</div>
+
+      <h3 id="s7-4">7.4 DataFrame / PySpark 实用 API 速查</h3>
+      <p>面试写代码、实战上手，这套结构化 API 是肌肉记忆。一页带走最常用的几类操作：</p>
+      <pre><span class="c"># 读 → 转换 → 聚合 → 写，典型批处理骨架</span>
+df = spark.read.parquet(<span class="s">"s3://lake/orders/"</span>)              <span class="c"># 也可 .format("iceberg").table("db.orders")</span>
+
+res = (df
+  .filter(col(<span class="s">"status"</span>) == <span class="s">"PAID"</span>)                     <span class="c"># 谓词（会下推到 Parquet）</span>
+  .withColumn(<span class="s">"day"</span>, to_date(<span class="s">"event_time"</span>))            <span class="c"># 派生列</span>
+  .groupBy(<span class="s">"day"</span>, <span class="s">"city"</span>)
+  .agg(sum(<span class="s">"amount"</span>).alias(<span class="s">"gmv"</span>),
+       countDistinct(<span class="s">"user_id"</span>).alias(<span class="s">"uv"</span>))
+  .join(broadcast(dim_city), <span class="s">"city"</span>)                   <span class="c"># 小表广播 join，免 shuffle</span>
+  .orderBy(desc(<span class="s">"gmv"</span>)))
+
+res.write.mode(<span class="s">"overwrite"</span>).partitionBy(<span class="s">"day"</span>).parquet(<span class="s">"s3://lake/dws/gmv/"</span>)
+
+<span class="c"># 等价 SQL 写法（同样走 Catalyst，二选一看团队习惯）</span>
+df.createOrReplaceTempView(<span class="s">"orders"</span>)
+spark.sql(<span class="s">"SELECT day, city, sum(amount) gmv FROM orders WHERE status='PAID' GROUP BY day, city"</span>)</pre>
+      <div class="note">记住一条工程原则：<strong>优先 DataFrame/SQL，而非裸 RDD</strong>（呼应第 4 章 Catalyst）。前者能享受谓词下推、列裁剪、AQE、Tungsten codegen；RDD 只在需要细粒度控制（自定义分区器、非结构化数据）时才下沉使用。PySpark 的 DataFrame 算子本质是调用 JVM 端的 Catalyst，<strong>没有 Python 序列化开销</strong>——但一旦用 Python UDF 就会有，能用内置函数就别写 UDF。</div>
+    </section>
+
+    <!-- ============= 第 8 章 ============= -->
+    <section class="chapter" id="ch8">
+      <div class="ch-head">
+        <div class="num">08</div>
+        <div class="t">
+          <h2>小结 · 面试 · 术语表</h2>
+          <p class="sub">收束成判断力 · 并接上 D04 Flink</p>
+        </div>
+      </div>
+
+      <h3>一页纸总结</h3>
+      <div class="grid cols-2">
+        <div class="card"><h4>① RDD + 惰性</h4><p style="font-size:13px;color:var(--text-dim)">RDD 是分区化的「计算配方」；transformation 惰性、action 触发；血缘支撑容错。</p></div>
+        <div class="card violet"><h4>② DAG → Stage</h4><p style="font-size:13px;color:var(--text-dim)">窄依赖流水线进同一 Stage；宽依赖（shuffle）切 Stage。Stage 数 = shuffle 数 + 1。</p></div>
+        <div class="card danger"><h4>③ Shuffle 最贵</h4><p style="font-size:13px;color:var(--text-dim)">磁盘+网络+序列化+内存。少 shuffle 是调优主线：broadcast、reduceByKey、提前 filter。</p></div>
+        <div class="card green"><h4>④ Catalyst + Tungsten</h4><p style="font-size:13px;color:var(--text-dim)">SQL 被编译优化（下推/裁剪/CBO）+ codegen/堆外内存/cache 友好。DataFrame 优先。</p></div>
+        <div class="card amber"><h4>⑤ 执行 / 内存模型</h4><p style="font-size:13px;color:var(--text-dim)">Job→Stage→Task；并行度≈分区数；执行/存储内存统一可借用，不够则 spill。</p></div>
+        <div class="card"><h4>⑥ 倾斜与 AQE</h4><p style="font-size:13px;color:var(--text-dim)">长尾 Task 拖垮 Stage；加盐打散热点；先开 AQE 自适应，再看 UI 定位。</p></div>
+      </div>
+
+      <h3>面试自测（点击展开）</h3>
+      <details class="qa">
+        <summary><span class="lvl pill cyan">基础</span>什么是 RDD？transformation 和 action 有什么区别？</summary>
+        <div class="a">
+          <div class="point"><span class="label">RDD</span>弹性分布式数据集——分区化、只读、靠血缘容错的「计算配方 + 数据指针」。</div>
+          <div class="point"><span class="label">transformation</span>惰性，只记血缘返回新 RDD（map/filter/join），不触发计算。</div>
+          <div class="point"><span class="label">action</span>触发整条 DAG 真正执行并返回结果（count/collect/save）。</div>
+          <div class="point deep"><span class="label">为何惰性</span>攒齐操作后能整体优化（下推、合并算子），和编译器优化同理。</div>
+        </div>
+      </details>
+      <details class="qa">
+        <summary><span class="lvl pill green">核心</span>窄依赖和宽依赖的区别？Stage 是怎么划分的？</summary>
+        <div class="a">
+          <div class="point"><span class="label">窄依赖</span>父分区→最多一个子分区（map/filter），不跨网络，可流水线。</div>
+          <div class="point"><span class="label">宽依赖</span>父分区→多个子分区，需按 key 跨节点 shuffle（groupByKey/join）。</div>
+          <div class="point"><span class="label">划分</span>从 action 回溯 DAG，遇宽依赖就切 Stage——<strong>Stage 数 = shuffle 数 + 1</strong>。</div>
+        </div>
+      </details>
+      <details class="qa">
+        <summary><span class="lvl pill amber">高频</span>groupByKey 和 reduceByKey 有什么区别？该用哪个？</summary>
+        <div class="a">
+          <div class="point"><span class="label">共同点</span>都是宽依赖、都触发 shuffle。</div>
+          <div class="point"><span class="label">reduceByKey</span>map 端<strong>先局部聚合（combine）</strong>，跨网络只传合并后的小结果。</div>
+          <div class="point bad"><span class="label">groupByKey</span>把<strong>所有原始值</strong>都搬过网络再聚合，数据量大时极易 OOM。</div>
+          <div class="point deep"><span class="label">结论</span>能用 reduceByKey/aggregateByKey 就别用 groupByKey。</div>
+        </div>
+      </details>
+      <details class="qa">
+        <summary><span class="lvl pill violet">实战</span>线上一个 Spark 作业卡在某个 Stage 很久，怎么排查？</summary>
+        <div class="a">
+          <div class="point"><span class="label">看 UI</span>Spark UI 找最慢 Stage，看 Task 时间分布——少数 Task 远慢于其他 → <strong>数据倾斜</strong>。</div>
+          <div class="point"><span class="label">确认</span>看倾斜 Task 的输入数据量是否远大于其他（热点 key）。</div>
+          <div class="point"><span class="label">解决</span>① 开 AQE 倾斜处理；② 加盐打散热点 key；③ 大表 join 小表改 broadcast；④ 用 reduceByKey 减少 shuffle 量。</div>
+          <div class="point deep"><span class="label">原则</span>先定位（UI）再动手，别盲目加资源。</div>
+        </div>
+      </details>
+      <details class="qa">
+        <summary><span class="lvl pill red">深度</span>为什么 DataFrame/SQL 常比手写 RDD 快？</summary>
+        <div class="a">
+          <div class="point"><span class="label">Catalyst</span>优化器对声明式查询做谓词下推、列裁剪、Join 重排、CBO——手写 RDD 享受不到。</div>
+          <div class="point"><span class="label">Tungsten</span>全阶段代码生成 + 堆外内存 + cache 友好布局，消除虚调用与对象开销。</div>
+          <div class="point deep"><span class="label">本质</span>你把"怎么做"交给引擎，引擎比大多数人手写的 RDD 优化得更好。RDD 留给需要细粒度控制的场景。</div>
+        </div>
+      </details>
+      <details class="qa">
+        <summary><span class="lvl pill amber">高频</span>Spark Structured Streaming 和 Flink 该怎么选？</summary>
+        <div class="a">
+          <div class="point"><span class="label">Spark SS</span>微批模型、延迟秒级；最大优势是<strong>和批共用一套 DataFrame/SQL</strong>、复用现有 Spark 生态与运维。</div>
+          <div class="point"><span class="label">Flink</span>真流优先、延迟毫秒级、事件时间/大状态(RocksDB)/CEP 更强。</div>
+          <div class="point deep"><span class="label">选型</span>已有重 Spark 批栈、要"一套代码批流复用"、延迟容忍秒级 → Spark SS；超低延迟、复杂事件时间、大状态去重 → Flink。</div>
+        </div>
+      </details>
+      <details class="qa">
+        <summary><span class="lvl pill violet">实战</span>client 模式和 cluster 模式有什么区别？生产用哪个？</summary>
+        <div class="a">
+          <div class="point"><span class="label">client</span>Driver 跑在提交机（跳板机），能直接看输出、便于调试；但提交机一断，作业就挂。</div>
+          <div class="point"><span class="label">cluster</span>Driver 被调度进集群容器，提交机可下线，稳定——<strong>生产标准</strong>。</div>
+          <div class="point deep"><span class="label">本质</span>区别只在「Driver 进程跑在哪」。on YARN/K8s 生产作业一律 cluster 模式。</div>
+        </div>
+      </details>
+
+      <!-- ===== 术语表 ===== -->
+      <h3 id="s7-gloss" style="margin-top:34px">术语表速查 · Glossary</h3>
+      <p>本篇核心名词一次收齐：</p>
+      <div class="glossary">
+        <div class="gl-group">
+          <h4>① 核心抽象</h4>
+          <div class="gl"><span class="gl-t">RDD <em>Resilient Distributed Dataset</em></span><span class="gl-d">Spark 最底层抽象：分区化、只读、靠血缘容错的分布式数据集。DataFrame/SQL 最终都编译成 RDD。</span></div>
+          <div class="gl"><span class="gl-t">分区 <em>Partition</em></span><span class="gl-d">RDD 被切成的数据块，一个分区由一个 Task 处理。分区数 = 并行度。</span></div>
+          <div class="gl"><span class="gl-t">血缘 <em>Lineage</em></span><span class="gl-d">RDD 记录的「从哪些父 RDD 经哪些转换得来」。丢分区时沿血缘重算即可，是「弹性」之源。</span></div>
+          <div class="gl"><span class="gl-t">惰性求值 <em>Lazy Evaluation</em></span><span class="gl-d">transformation 只记血缘不执行，直到 action 才触发整条 DAG。为全局优化创造空间。</span></div>
+          <div class="gl"><span class="gl-t">转换 / 动作 <em>Transformation / Action</em></span><span class="gl-d">转换返回新 RDD（map/filter/join，惰性）；动作触发计算返回结果（count/collect/save）。</span></div>
+          <div class="gl"><span class="gl-t">DataFrame / Dataset</span><span class="gl-d">带 schema 的高层结构化 API，享受 Catalyst+Tungsten 优化，性能通常优于裸 RDD。</span></div>
+        </div>
+        <div class="gl-group">
+          <h4>② 执行与调度</h4>
+          <div class="gl"><span class="gl-t">DAG <em>有向无环图</em></span><span class="gl-d">action 触发后，Spark 把血缘组织成 DAG 来调度与优化。</span></div>
+          <div class="gl"><span class="gl-t">窄依赖 / 宽依赖 <em>Narrow / Wide</em></span><span class="gl-d">窄=父分区→最多一子分区（可流水线）；宽=需跨节点按 key shuffle（切 Stage）。</span></div>
+          <div class="gl"><span class="gl-t">Stage / Task / Job</span><span class="gl-d">Job（一个 action）→ Stage（按 shuffle 切）→ Task（按分区切，最小执行单元）。</span></div>
+          <div class="gl"><span class="gl-t">Driver / Executor</span><span class="gl-d">Driver=大脑（建 DAG、调度）；Executor=工人（跑 Task、缓存数据）。</span></div>
+          <div class="gl"><span class="gl-t">数据本地性 <em>Data Locality</em></span><span class="gl-d">尽量把计算调度到数据所在节点，减少网络搬运。「移动计算比移动数据便宜」。</span></div>
+          <div class="gl"><span class="gl-t">并行度 <em>Parallelism</em></span><span class="gl-d">同时可跑的 Task 数 ≈ 分区数，上限 = Executor 数 × 每 Executor core 数。</span></div>
+        </div>
+        <div class="gl-group">
+          <h4>③ Shuffle 与性能</h4>
+          <div class="gl"><span class="gl-t">Shuffle</span><span class="gl-d">按 key 跨节点重新分发数据（map 端写盘 + reduce 端拉取）。吃磁盘/网络/序列化/内存，最贵操作。</span></div>
+          <div class="gl"><span class="gl-t">数据倾斜 <em>Data Skew</em></span><span class="gl-d">数据按 key 分布极不均，热点分区拖慢整个 Stage。Spark 头号性能杀手。</span></div>
+          <div class="gl"><span class="gl-t">掉队者 <em>Straggler</em></span><span class="gl-d">远慢于其他的长尾 Task。Stage 耗时 ≈ 最慢 Task，所以一个 straggler 能拖垮全局。</span></div>
+          <div class="gl"><span class="gl-t">加盐 <em>Salting</em></span><span class="gl-d">给热点 key 拼随机后缀拆成多 key，先局部聚合再全局聚合，打散倾斜。</span></div>
+          <div class="gl"><span class="gl-t">Broadcast Join</span><span class="gl-d">把小表广播到各 Executor，本地完成 join，彻底消除 shuffle。大表 join 小表首选。</span></div>
+          <div class="gl"><span class="gl-t">spill <em>溢写</em></span><span class="gl-d">内存放不下时把中间数据写到磁盘。能跑完但变慢，频繁 spill 是内存/倾斜信号。</span></div>
+        </div>
+        <div class="gl-group">
+          <h4>④ 优化引擎</h4>
+          <div class="gl"><span class="gl-t">Catalyst</span><span class="gl-d">Spark SQL 查询优化器：解析→分析→逻辑优化→物理计划→codegen，含谓词下推/列裁剪/CBO。</span></div>
+          <div class="gl"><span class="gl-t">Tungsten</span><span class="gl-d">底层执行引擎：堆外内存、cache 友好布局、全阶段代码生成，榨干单节点 CPU/内存。</span></div>
+          <div class="gl"><span class="gl-t">Whole-Stage Codegen</span><span class="gl-d">把一个 Stage 的多算子编译成一段紧凑代码，消除虚调用与中间对象，像手写循环般高效。</span></div>
+          <div class="gl"><span class="gl-t">AQE <em>Adaptive Query Execution</em></span><span class="gl-d">运行时根据真实统计动态调整计划：合并小分区、拆倾斜分区、改 join 策略。现代调优第一开关。</span></div>
+          <div class="gl"><span class="gl-t">cache / persist</span><span class="gl-d">把 RDD/DataFrame 缓存到内存（或磁盘）复用，避免重算血缘。迭代算法提速关键。</span></div>
+        </div>
+        <div class="gl-group">
+          <h4>⑤ 流处理与部署</h4>
+          <div class="gl"><span class="gl-t">Structured Streaming</span><span class="gl-d">Spark 现代流引擎：把流看成「无界表」，用与批相同的 DataFrame/SQL 表达，默认微批增量执行。</span></div>
+          <div class="gl"><span class="gl-t">微批 <em>Micro-batch</em></span><span class="gl-d">把流按短触发间隔切成小批处理，延迟百毫秒~秒级。与 Flink 的真流（毫秒级）相对。</span></div>
+          <div class="gl"><span class="gl-t">输出模式 <em>Output Mode</em></span><span class="gl-d">Append（只追加最终行）/ Update（只输出有变化行）/ Complete（输出整张结果表）。</span></div>
+          <div class="gl"><span class="gl-t">Checkpoint <em>检查点</em></span><span class="gl-d">流作业把进度（offset）与状态持久化到 HDFS/对象存储，故障重启从此恢复，是 Exactly-once 的根。</span></div>
+          <div class="gl"><span class="gl-t">集群管理器 <em>Cluster Manager</em></span><span class="gl-d">为作业分配资源、拉起 Driver/Executor：Standalone / YARN / Kubernetes。</span></div>
+          <div class="gl"><span class="gl-t">client / cluster 模式</span><span class="gl-d">决定 Driver 跑在提交机还是集群容器里。生产用 cluster（提交机可下线）。</span></div>
+          <div class="gl"><span class="gl-t">动态资源分配 <em>Dynamic Allocation</em></span><span class="gl-d">按待处理 Task 量自动增减 Executor，空闲释放、积压申请，云上省成本关键开关。</span></div>
+        </div>
+      </div>
+
+      <div class="tip" style="margin-top:24px"><strong>下一篇预告 · D04：Flink 流处理深潜</strong>。Spark 是「批优先（流是把批切小）」，而 Flink 是「<strong>流优先</strong>」——事件时间、Watermark、State、Checkpoint、Exactly-once、反压、CEP。我们将看清「真正的流」和「微批」的本质差异，以及实时数仓的引擎担当。</div>
+    </section>
+
+  </main>
+</div>
+
+<footer>
+  <div class="made">TECH NOTES · BIG DATA SERIES</div>
+  #D03 Spark 内核深潜 · <a href="../index.html">返回首页</a> · © 2026 Kavin Chan · MIT
+</footer>
+
+<button class="back-top" id="backTop" onclick="window.scrollTo({top:0,behavior:'smooth'})">↑</button>
+<style>.back-top{position:fixed;bottom:1.5rem;right:1.5rem;width:44px;height:44px;border-radius:50%;background:#141a2c;color:#e4e9f5;border:1px solid #2a3556;cursor:pointer;font-size:18px;display:none;z-index:100;align-items:center;justify-content:center}.back-top:hover{color:#7dd3fc}.back-top.show{display:flex}</style>
+
+<script>
+// ===== 1. 进度条 =====
+const progress = document.getElementById('progress');
+const updateProgress = () => { const h = document.documentElement; const max = h.scrollHeight - h.clientHeight; progress.style.width = (max>0?(h.scrollTop/max*100):0) + '%'; };
+window.addEventListener('scroll', updateProgress, {passive:true}); updateProgress();
+
+// ===== 2. TOC active =====
+const tocLinks = document.querySelectorAll('.toc a');
+const sections = document.querySelectorAll('section.chapter');
+const navObserver = new IntersectionObserver(entries => {
+  entries.forEach(e => { if (e.isIntersecting) { const id = e.target.id; tocLinks.forEach(a => a.classList.toggle('active', a.getAttribute('href') === '#' + id)); } });
+}, { rootMargin: '-25% 0px -65% 0px' });
+sections.forEach(s => navObserver.observe(s));
+
+// ===== 3. 平滑滚动 =====
+tocLinks.forEach(a => { a.addEventListener('click', e => { const href=a.getAttribute('href'); const t=document.querySelector(href); if(t){e.preventDefault(); t.scrollIntoView({behavior:'smooth',block:'start'}); history.pushState(null,'',href);} }); });
+
+// ===== 4. fade-in =====
+const fadeEls = document.querySelectorAll('.card, .svg-wrap, table, details, .demo, .flow-row');
+const fadeObserver = new IntersectionObserver(entries => { entries.forEach(e => { if (e.isIntersecting) { e.target.style.opacity='1'; e.target.style.transform='translateY(0)'; } }); }, {threshold:0.05});
+fadeEls.forEach(el => { el.style.opacity='0'; el.style.transform='translateY(12px)'; el.style.transition='opacity .5s ease, transform .5s ease'; fadeObserver.observe(el); });
+
+// ===== 5. back-to-top =====
+(function(){ var btn=document.getElementById('backTop'); if(!btn) return; function tg(){ btn.classList.toggle('show', window.scrollY>400); } window.addEventListener('scroll', tg, {passive:true}); tg(); })();
+
+// ===== 6. 交互演示 A：Stage 划分 =====
+(function(){
+  const PIPES = [
+    [ {n:'textFile', t:'source'}, {n:'map', t:'narrow'}, {n:'filter', t:'narrow'}, {n:'collect', t:'action'} ],
+    [ {n:'textFile', t:'source'}, {n:'map', t:'narrow'}, {n:'reduceByKey', t:'wide'}, {n:'collect', t:'action'} ],
+    [ {n:'textFile', t:'source'}, {n:'map', t:'narrow'}, {n:'groupByKey', t:'wide'}, {n:'mapValues', t:'narrow'}, {n:'join', t:'wide'}, {n:'count', t:'action'} ],
+  ];
+  const pipeEl = document.getElementById('stagePipe');
+  const readEl = document.getElementById('stageReadout');
+  const segs = document.querySelectorAll('#stageDemo .seg');
+  const STYLE = ['s0','s1','s2','s0'];
+
+  function render(idx){
+    const ops = PIPES[idx];
+    // 切 stage：遇 wide 在它之前断开（wide 属于新 stage 的起点 = reduce 端）
+    const stages = []; let cur = [];
+    ops.forEach(op => {
+      if (op.t === 'wide'){ if (cur.length) stages.push(cur); cur = [op]; }
+      else cur.push(op);
+    });
+    if (cur.length) stages.push(cur);
+    const shuffles = ops.filter(o => o.t==='wide').length;
+
+    pipeEl.innerHTML = stages.map((st, i) => {
+      const inner = st.map(op => '<span class="op '+op.t+'">'+op.n+'()</span>').join('<span style="color:#475569;align-self:center">→</span>');
+      const bar = i>0 ? '<span class="shuffle-bar">🔀 Shuffle</span>' : '';
+      return bar + '<div class="stage-band '+STYLE[i % STYLE.length]+'"><span class="stage-tag">Stage '+i+'</span>'+inner+'</div>';
+    }).join('');
+
+    readEl.innerHTML = '本流水线有 <b>'+shuffles+'</b> 次 Shuffle（红色算子）→ 被切成 <b>'+stages.length+'</b> 个 Stage。'+
+      '<br>印证黄金公式：<b>Stage 数 = Shuffle 数 + 1 = '+shuffles+' + 1 = '+stages.length+'</b>。'+
+      (shuffles===0 ? ' 全是窄依赖，整条链在一个 Stage 里流水线跑完，最高效。' : ' 每个 🔀 处数据都要跨节点重分发。');
+  }
+  segs.forEach(b => b.addEventListener('click', () => { segs.forEach(x=>x.classList.remove('active')); b.classList.add('active'); render(+b.dataset.p); }));
+  render(0);
+})();
+
+// ===== 7. 交互演示 B：数据倾斜 =====
+(function(){
+  const SKEW = [20, 18, 140, 22, 19];
+  const SALT = [44, 43, 45, 43, 44];
+  const rowsEl = document.getElementById('skewRows');
+  const metaEl = document.getElementById('skewMeta');
+  const segs = document.querySelectorAll('#skewDemo .seg');
+  const maxVal = 150;
+
+  function render(state){
+    const data = state==='skew' ? SKEW : SALT;
+    const hotIdx = state==='skew' ? 2 : -1;
+    rowsEl.innerHTML = data.map((v,i) =>
+      '<div class="skew-row"><span class="pname">P'+i+'</span>'+
+      '<div class="skew-bar'+(i===hotIdx?' hot':'')+'" style="width:'+(v/maxVal*100)+'%">'+v+'</div></div>').join('');
+    const slow = Math.max(...data), total = data.reduce((s,x)=>s+x,0);
+    if (state==='skew'){
+      metaEl.innerHTML = '🐢 Stage 耗时 ≈ 最慢 Task = <b class="slow">'+slow+'</b>（P2 热点）。其余 Task 早就闲下来空等——'+
+        '总数据 '+total+'，却被一个掉队者卡住。<b class="slow">CPU 利用率极低</b>。';
+    } else {
+      metaEl.innerHTML = '🚀 热点被打散后最慢 Task = <b class="fast">'+slow+'</b>，相比倾斜时的 140 提速约 <b class="fast">3×</b>。'+
+        '同样的 '+total+' 条数据，各 Task 负载均衡、几乎同时完成，<b class="fast">机器吃满</b>。';
+    }
+  }
+  segs.forEach(b => b.addEventListener('click', () => { segs.forEach(x=>x.classList.remove('active')); b.classList.add('active'); render(b.dataset.state); }));
+  render('skew');
+})();
+
+console.log('%c Big Data D03 · Spark 内核深潜 ', 'background:linear-gradient(90deg,#7dd3fc,#a78bfa);color:#0a0e1a;font-weight:700;padding:4px 12px;border-radius:4px;font-size:13px');
+</script>
+<script src="../assets/site-theme.js" defer></script>
+</body>
+</html>

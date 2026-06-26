@@ -1,0 +1,551 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OLAP 引擎内核 · 列存引擎 / 向量化执行 / SIMD / MPP / CBO（ClickHouse·StarRocks·Trino）</title>
+<link rel="stylesheet" href="../assets/site-theme.css">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<style>
+  .analogy{background:linear-gradient(135deg,rgba(167,139,250,.08),rgba(125,211,252,.05));border:1px solid var(--border-2);border-left:4px solid var(--accent-2);border-radius:10px;padding:14px 18px;margin:16px 0;font-size:14px;line-height:1.75}
+  .analogy::before{content:"🔌 生活类比";display:inline-block;color:var(--accent-2);font-weight:700;font-size:12px;letter-spacing:.5px;margin-right:10px}
+  .analogy strong{color:var(--text)}
+  .def{background:rgba(125,211,252,.05);border:1px solid var(--border);border-left:4px solid var(--accent);border-radius:8px;padding:14px 18px;margin:16px 0;font-size:14px;line-height:1.75}
+  .def::before{content:"📖 名词解释";display:inline-block;color:var(--accent);font-weight:700;font-size:12px;letter-spacing:.5px;margin-right:10px}
+  .def strong{color:var(--text)}
+  .glossary{margin:14px 0}
+  .gl-group{margin:20px 0}
+  .gl-group > h4{color:var(--accent);border-left:3px solid var(--accent);padding-left:10px;margin:0 0 10px;font-size:15px}
+  .gl{display:grid;grid-template-columns:210px 1fr;gap:14px;padding:11px 15px;border:1px solid var(--border);border-radius:8px;background:var(--bg-card);margin:7px 0;transition:border-color .15s}
+  .gl:hover{border-color:var(--border-2)}
+  .gl .gl-t{font-weight:600;color:var(--text);font-size:14px}
+  .gl .gl-t em{display:block;font-style:normal;font-family:"JetBrains Mono",monospace;font-size:11px;color:var(--text-mute);margin-top:3px;font-weight:400;letter-spacing:.2px}
+  .gl .gl-d{font-size:13.5px;color:var(--text-dim);line-height:1.7}
+  .gl .gl-d strong{color:var(--accent-4)}
+  .gl .gl-d code{font-size:.85em}
+  @media(max-width:760px){.gl{grid-template-columns:1fr;gap:4px}}
+  .demo{background:var(--bg-card);border:1px solid var(--border-2);border-radius:14px;padding:20px;margin:22px 0;box-shadow:var(--shadow)}
+  .demo .demo-title{font-size:13px;text-transform:uppercase;letter-spacing:1.5px;color:var(--accent);font-family:"JetBrains Mono",monospace;margin-bottom:14px;display:flex;align-items:center;gap:8px}
+  .demo .demo-title::before{content:"▶";font-size:10px;color:var(--accent-3)}
+  .demo-controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:16px}
+  .demo button{font-family:inherit;cursor:pointer;border-radius:8px;font-size:13px;padding:8px 14px;border:1px solid var(--border-2);background:var(--bg-card-2);color:var(--text-dim);transition:.15s}
+  .demo button:hover{color:var(--text);border-color:var(--accent)}
+  .demo button.seg.active{background:rgba(125,211,252,.14);color:var(--accent);border-color:var(--accent)}
+  .demo button.run{background:rgba(52,211,153,.14);color:var(--accent-3);border-color:rgba(52,211,153,.4);font-weight:600}
+  .demo button.run:hover{background:rgba(52,211,153,.24)}
+  .demo button.ghost{background:transparent}
+  .demo button:disabled{opacity:.4;cursor:not-allowed}
+
+  /* 火山 vs 向量化 */
+  .tuples{display:flex;flex-wrap:wrap;gap:5px;margin:10px 0}
+  .tcell{width:30px;height:30px;border-radius:5px;background:var(--bg-card-2);border:1px solid var(--border-2);transition:.12s}
+  .tcell.hot{background:rgba(251,191,36,.25);border-color:var(--accent-4);transform:scale(1.12)}
+  .tcell.done{background:rgba(52,211,153,.18);border-color:rgba(52,211,153,.4)}
+  .vbar-wrap{margin-top:14px;display:flex;flex-direction:column;gap:8px}
+  .vbar-row{display:flex;align-items:center;gap:10px;font-size:12.5px}
+  .vbar-row .vlab{width:90px;flex-shrink:0;font-family:"JetBrains Mono",monospace;color:var(--text-dim)}
+  .vbar{height:22px;border-radius:5px;display:flex;align-items:center;justify-content:flex-end;padding-right:8px;font-size:11px;font-family:"JetBrains Mono",monospace;color:#0a0e1a;font-weight:700;min-width:40px;transition:width .6s ease}
+  .vbar.slow{background:linear-gradient(90deg,#fb923c,#f87171)}
+  .vbar.fast{background:linear-gradient(90deg,#38bdf8,#34d399)}
+  .v-readout{margin-top:14px;font-size:13.5px;color:var(--text-dim);line-height:1.8;min-height:24px}
+  .v-readout b{font-family:"JetBrains Mono",monospace;color:var(--accent)}
+
+  /* 稀疏索引数据跳过 */
+  .granules{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}
+  .granule{flex:1;min-width:78px;border:1px solid var(--border-2);border-radius:8px;padding:10px 8px;text-align:center;font-family:"JetBrains Mono",monospace;transition:.25s;background:var(--bg-card-2)}
+  .granule .gidx{font-size:10.5px;color:var(--text-mute)}
+  .granule .grange{font-size:12px;color:var(--text-dim);margin-top:3px}
+  .granule.scan{background:rgba(52,211,153,.16);border-color:var(--accent-3);box-shadow:0 0 0 1px var(--accent-3)}
+  .granule.scan .grange{color:var(--accent-3)}
+  .granule.skip{opacity:.3}
+  .g-readout{margin-top:14px;font-size:13.5px;color:var(--text-dim);line-height:1.8}
+  .g-readout b{font-family:"JetBrains Mono",monospace;color:var(--accent-3)}
+</style>
+</head>
+<body class="tn-shell-overlay">
+<!-- tn-nav:v1 -->
+<style>
+#tn-nav{position:fixed;top:14px;right:14px;z-index:99999;display:flex;gap:6px;align-items:center;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;font-size:12px;line-height:1;font-weight:500;}
+#tn-nav a,#tn-nav .tn-meta{display:inline-flex;align-items:center;gap:4px;background:rgba(20,20,30,.85);color:#fff !important;text-decoration:none !important;padding:7px 11px;border-radius:999px;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);border:1px solid rgba(255,255,255,.10);box-shadow:0 2px 8px rgba(0,0,0,.18);transition:background .15s,transform .15s;}
+#tn-nav a:hover{background:rgba(56,189,248,.92);transform:translateY(-1px);}
+#tn-nav .tn-meta{background:rgba(20,20,30,.55);cursor:default;}
+@media (max-width:640px){#tn-nav{top:8px;right:8px;font-size:11px;gap:4px;}#tn-nav a,#tn-nav .tn-meta{padding:5px 9px;}}
+@media print{#tn-nav{display:none;}}
+</style>
+<div id="tn-nav">
+  <a href="../index.html" title="&#x8FD4;&#x56DE;&#x4E3B;&#x9875;">&larr; &#x4E3B;&#x9875;</a>
+  <a href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub &#x4ED3;&#x5E93;">&#x1F4C1; Repo</a>
+  <a href="https://github.com/kavinChan13/tech-notes/blob/main/bigdata/olap_engines_internals.html" target="_blank" rel="noopener" title="&#x672C;&#x6587;&#x6E90;&#x7801;">&#x1F4DD; Source</a>
+  <span class="tn-meta" title="&#x9884;&#x8BA1;&#x9605;&#x8BFB;&#x65F6;&#x957F;">&#x23F1; 52 min</span>
+</div>
+<!-- /tn-nav:v1 -->
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>大数据 D07 · Roadmap</h2>
+    <nav>
+      <ol>
+        <li><a href="#ch0" class="active">OLAP 引擎是什么</a></li>
+        <li><a href="#ch1">列存引擎内部</a>
+          <ol>
+            <li><a href="#s1-1">MergeTree 结构</a></li>
+            <li><a href="#s1-2">稀疏索引演示</a></li>
+          </ol>
+        </li>
+        <li><a href="#ch2">向量化 vs 火山模型</a>
+          <ol>
+            <li><a href="#s2-1">火山模型的问题</a></li>
+            <li><a href="#s2-2">向量化演示</a></li>
+          </ol>
+        </li>
+        <li><a href="#ch3">SIMD 与 CPU 友好</a></li>
+        <li><a href="#ch4">MPP 分布式执行</a>
+          <ol>
+            <li><a href="#s4-1">扩展边界与抖动</a></li>
+          </ol>
+        </li>
+        <li><a href="#ch5">CBO · 物化视图 · 预聚合</a></li>
+        <li><a href="#ch6">引擎横评与选型</a>
+          <ol>
+            <li><a href="#s6-1">压测口径与稳定性</a></li>
+          </ol>
+        </li>
+        <li><a href="#ch7">小结 · 面试 · 术语表</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+
+    <header class="hero">
+      <div class="badge">Big Data · 07 · OLAP Engine</div>
+      <h1>OLAP 引擎内核</h1>
+      <p class="sub">数据存好了（D01）、建好模（D02）、算好了（D03/D04）、进来了（D06）——终于到了「<strong>查得飞快</strong>」：ClickHouse / StarRocks / Doris / Trino 凭什么能<strong>亚秒级扫几十亿行</strong>做聚合？这一篇是整个系列里<strong>和 C++ / 系统老兵性能直觉最契合</strong>的——因为 OLAP 引擎快的秘密，正是你熟悉的那一套：<strong>列存 + 数据跳过、向量化执行（取代火山模型）、SIMD、cache 友好的内存布局、CBO</strong>，再加上 <strong>MPP</strong> 把单机性能横向放大。把它扒开，你会发现"分布式分析引擎"的内核，就是单机性能工程的集大成。</p>
+      <div class="meta">
+        <span>8 章 + 术语表</span>
+        <span>8 张 SVG / 图表</span>
+        <span>2 个交互演示</span>
+        <span>30+ 名词解释</span>
+        <span>老兵主场 · SIMD/cache</span>
+        <span>无 CDN · 单文件</span>
+      </div>
+    </header>
+
+    <!-- ===== 第 0 章 ===== -->
+    <section class="chapter" id="ch0">
+      <div class="ch-head"><div class="num">00</div><div class="t"><h2>OLAP 引擎是什么 · 为什么这么快</h2><p class="sub">不是 Spark 那种批作业 · 是为"即席交互式分析"而生的查询引擎</p></div></div>
+
+      <p class="lead">D03 的 Spark 擅长跑<strong>离线批作业</strong>（分钟级、吞吐导向）。但 BI 看板、即席查询需要的是<strong>「点一下，1 秒出结果」</strong>的交互体验。这就是 <strong>OLAP 引擎（也叫 MPP 数据库 / 分析型数据库）</strong>的主场——ClickHouse、StarRocks、Doris、Druid、Trino 都属此类。</p>
+
+      <div class="analogy">Spark 批作业像<strong>叫一辆货车搬一整仓库的货</strong>——量大、可靠，但你得等它装车上路卸货，分钟起步。OLAP 引擎像<strong>便利店收银</strong>——你拿几样东西，扫码、秒结。两者都"处理数据"，但一个为<strong>吞吐</strong>优化、一个为<strong>低延迟交互</strong>优化。OLAP 引擎把"扫十亿行做聚合"压到亚秒，靠的全是榨干硬件的极致工程。</div>
+
+      <div class="def"><strong>OLAP 引擎为什么快？五个支柱</strong>（本篇逐一展开）：
+        <ul style="margin-top:8px">
+          <li><strong>① 列存 + 数据跳过</strong>：只读相关列、用索引跳过无关数据块（D01 列存的极致应用）。</li>
+          <li><strong>② 向量化执行</strong>：一次处理一批数据而非一行，消除逐行虚函数调用开销。</li>
+          <li><strong>③ SIMD + cache 友好</strong>：用 CPU 向量指令并行算一批，数据布局贴合 cache。</li>
+          <li><strong>④ MPP 大规模并行</strong>：把查询拆到多节点多核并行执行，再汇总。</li>
+          <li><strong>⑤ CBO + 预计算</strong>：成本优化器选最优计划，物化视图/预聚合把重活提前算好。</li>
+        </ul>
+      </div>
+
+      <div class="svg-wrap">
+        <svg width="780" height="170" viewBox="0 0 780 170" role="img" aria-label="OLTP vs Spark 批 vs OLAP 引擎">
+          <text x="390" y="22" text-anchor="middle" fill="#7dd3fc" font-size="14" font-weight="bold">三类"处理数据"的系统定位</text>
+          <rect x="30" y="45" width="230" height="100" rx="8" fill="#231a33" stroke="#a78bfa"/>
+          <text x="145" y="70" text-anchor="middle" fill="#c4b5fd" font-size="13" font-weight="bold">OLTP（MySQL）</text>
+          <text x="145" y="92" text-anchor="middle" fill="#94a3b8" font-size="10.5">点查/改单行 · 行存 · 毫秒</text>
+          <text x="145" y="112" text-anchor="middle" fill="#64748b" font-size="10">高并发小事务</text>
+          <text x="145" y="132" text-anchor="middle" fill="#64748b" font-size="10">"办一笔业务"</text>
+          <rect x="275" y="45" width="230" height="100" rx="8" fill="#2a2410" stroke="#fbbf24"/>
+          <text x="390" y="70" text-anchor="middle" fill="#fcd34d" font-size="13" font-weight="bold">Spark 批（D03）</text>
+          <text x="390" y="92" text-anchor="middle" fill="#94a3b8" font-size="10.5">海量 ETL · 列存 · 分钟级</text>
+          <text x="390" y="112" text-anchor="middle" fill="#64748b" font-size="10">高吞吐离线加工</text>
+          <text x="390" y="132" text-anchor="middle" fill="#64748b" font-size="10">"搬一仓库货"</text>
+          <rect x="520" y="45" width="230" height="100" rx="8" fill="#10241c" stroke="#34d399"/>
+          <text x="635" y="70" text-anchor="middle" fill="#6ee7b7" font-size="13" font-weight="bold">OLAP 引擎（本篇）</text>
+          <text x="635" y="92" text-anchor="middle" fill="#94a3b8" font-size="10.5">即席聚合 · 列存 · 亚秒</text>
+          <text x="635" y="112" text-anchor="middle" fill="#64748b" font-size="10">低延迟交互分析</text>
+          <text x="635" y="132" text-anchor="middle" fill="#64748b" font-size="10">"便利店秒结"</text>
+        </svg>
+        <div class="svg-caption">OLAP 引擎专为「交互式分析」而生：扫海量行、低延迟出聚合结果，介于"离线批"与"在线事务"之间的独特生态位。</div>
+      </div>
+    </section>
+
+    <!-- ===== 第 1 章 ===== -->
+    <section class="chapter" id="ch1">
+      <div class="ch-head"><div class="num">01</div><div class="t"><h2>列存引擎内部：以 ClickHouse MergeTree 为例</h2><p class="sub">D01 讲了"为什么列存"，这里讲"列存引擎具体怎么组织数据、怎么跳过"</p></div></div>
+
+      <p class="lead">D01 我们建立了"列存 + Parquet"的直觉。OLAP 引擎把它做到极致。以业界广泛使用、且在许多单机扫描场景表现突出的 <strong>ClickHouse</strong> 的核心存储引擎 <strong>MergeTree</strong> 为例，看数据在引擎内部怎么组织。</p>
+
+      <h3 id="s1-1">1.1 MergeTree：排序 + 分块 + 稀疏索引</h3>
+      <div class="def"><strong>MergeTree（ClickHouse 核心引擎）</strong>三个关键设计：① 数据<strong>按排序键（ORDER BY）物理排序</strong>存储；② 每列数据分成固定行数的<strong>颗粒（granule，默认 8192 行）</strong>压缩存放；③ 维护一个<strong>稀疏索引（sparse index）</strong>——只为每个 granule 的<strong>第一行</strong>记一条索引项（而非每行），所以索引极小、能常驻内存。它和 D01 的 LSM-Tree 同源（后台不断 merge 小 part 成大 part，名字由此而来）。</div>
+
+      <div class="svg-wrap">
+        <svg width="760" height="220" viewBox="0 0 760 220" role="img" aria-label="MergeTree 稀疏索引与颗粒">
+          <text x="380" y="20" text-anchor="middle" fill="#7dd3fc" font-size="14" font-weight="bold">MergeTree：稀疏索引 → 颗粒（granule）→ 列数据块</text>
+          <!-- sparse index -->
+          <rect x="30" y="45" width="150" height="150" rx="8" fill="#231a33" stroke="#a78bfa"/>
+          <text x="105" y="66" text-anchor="middle" fill="#c4b5fd" font-size="11.5" font-weight="bold">稀疏索引</text>
+          <text x="105" y="82" text-anchor="middle" fill="#64748b" font-size="9">（每 granule 一条）</text>
+          <g font-family="monospace" font-size="10" fill="#cbd5e1">
+            <text x="105" y="104" text-anchor="middle">mark0 → id≥1</text>
+            <text x="105" y="124" text-anchor="middle">mark1 → id≥8193</text>
+            <text x="105" y="144" text-anchor="middle">mark2 → id≥16385</text>
+            <text x="105" y="164" text-anchor="middle">mark3 → id≥24577</text>
+            <text x="105" y="184" text-anchor="middle">…</text>
+          </g>
+          <!-- granules -->
+          <text x="460" y="40" text-anchor="middle" fill="#34d399" font-size="11">列数据（按排序键有序，分颗粒压缩）</text>
+          <g font-family="monospace" font-size="9">
+            <rect x="240" y="55" width="120" height="36" rx="4" fill="#10241c" stroke="#34d399"/><text x="300" y="71" text-anchor="middle" fill="#6ee7b7">granule0</text><text x="300" y="84" text-anchor="middle" fill="#94a3b8">8192 行</text>
+            <rect x="240" y="99" width="120" height="36" rx="4" fill="#10241c" stroke="#34d399"/><text x="300" y="115" text-anchor="middle" fill="#6ee7b7">granule1</text><text x="300" y="128" text-anchor="middle" fill="#94a3b8">8192 行</text>
+            <rect x="240" y="143" width="120" height="36" rx="4" fill="#10241c" stroke="#34d399"/><text x="300" y="159" text-anchor="middle" fill="#6ee7b7">granule2</text><text x="300" y="172" text-anchor="middle" fill="#94a3b8">…</text>
+          </g>
+          <!-- columns -->
+          <g font-family="monospace" font-size="9.5">
+            <rect x="430" y="55" width="90" height="124" rx="4" fill="#0c1120" stroke="#475569"/><text x="475" y="120" text-anchor="middle" fill="#7dd3fc" transform="rotate(-90 475 120)">id 列(压缩)</text>
+            <rect x="525" y="55" width="90" height="124" rx="4" fill="#0c1120" stroke="#475569"/><text x="570" y="120" text-anchor="middle" fill="#fbbf24" transform="rotate(-90 570 120)">amount 列</text>
+            <rect x="620" y="55" width="90" height="124" rx="4" fill="#0c1120" stroke="#475569"/><text x="665" y="120" text-anchor="middle" fill="#a78bfa" transform="rotate(-90 665 120)">…其他列</text>
+          </g>
+          <defs><marker id="ar" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#64748b"/></marker></defs>
+          <line x1="180" y1="104" x2="238" y2="73" stroke="#64748b" marker-end="url(#ar)"/>
+          <text x="200" y="208" text-anchor="middle" fill="#64748b" font-size="10">查询时：稀疏索引先定位"目标值落在哪个 granule"，只解压 + 读那几个 granule</text>
+        </svg>
+        <div class="svg-caption">索引"稀疏"在于每 8192 行才记一条——索引小到能放内存。查询先用它定位 granule，再只读那几块的列数据。这是"少读"的极致。</div>
+      </div>
+
+      <h3 id="s1-2">1.2 交互演示：稀疏索引数据跳过</h3>
+      <p>数据按 <code>id</code> 排序，分成 8 个 granule（每块标了 id 范围）。选择一个查询，看引擎如何用稀疏索引<strong>只扫命中的 granule、跳过其余</strong>（对比"无排序键"时只能全扫）：</p>
+
+      <div class="demo" id="skipDemo">
+        <div class="demo-title">交互演示 · 稀疏索引 / 数据跳过（8 个 granule）</div>
+        <div class="demo-controls">
+          <button class="seg active" data-q="eq">WHERE id = 350</button>
+          <button class="seg" data-q="range">WHERE id BETWEEN 250 AND 520</button>
+          <button class="seg" data-q="full">无排序键（只能全扫）</button>
+        </div>
+        <div class="granules" id="granules"></div>
+        <div class="g-readout" id="gReadout"></div>
+      </div>
+      <div class="tip"><strong>排序键是 OLAP 建表的头等大事</strong>：把<strong>最常用于过滤的列</strong>选作排序键，查询就能借稀疏索引大量跳过 granule。选错了排序键，再多机器也救不回来——和 D03"先减少要处理的数据"是同一哲学。此外还有<strong>跳数索引（skipping index）</strong>（min-max、bloom filter、set）进一步在 granule 级别跳过。</div>
+    </section>
+
+    <!-- ===== 第 2 章 ===== -->
+    <section class="chapter" id="ch2">
+      <div class="ch-head"><div class="num">02</div><div class="t"><h2>向量化执行 vs 火山模型</h2><p class="sub">OLAP 引擎快的"第一性原理" · 也是 C++ 老兵最有共鸣的一章</p></div></div>
+
+      <p class="lead">就算只读了该读的数据，怎么<strong>算</strong>也决定性能。传统数据库用<strong>火山模型（逐行处理）</strong>，现代 OLAP 引擎几乎都改用<strong>向量化执行（按批处理）</strong>——这一个改变，常带来<strong>数量级</strong>的提速。</p>
+
+      <h3 id="s2-1">2.1 火山模型为什么慢</h3>
+      <div class="def"><strong>火山模型（Volcano / Iterator Model）</strong>：经典的查询执行模型。每个算子实现一个 <code>next()</code> 接口，<strong>一次返回一行</strong>；上层算子反复调用下层的 <code>next()</code> 把数据一行行"拉"上来。优雅、好组合，但<strong>每行每算子都是一次虚函数调用</strong>——海量行时，调用开销、分支预测失败、cache miss 把 CPU 时间全吃掉了。</div>
+      <div class="analogy">火山模型像<strong>流水线上工人每次只递一个零件给下一站</strong>，每递一次都要喊一声"接好了"（虚函数调用）、对方回应一次。零件上亿时，光"喊话"的时间就压垮了实际加工。向量化像<strong>每次递一整箱（1024 个）零件</strong>——喊一次话搬一箱，"沟通成本"摊薄到几乎为零，而且一箱同类零件能用机械臂（SIMD）一起加工。</div>
+      <div class="def"><strong>向量化执行（Vectorized Execution）</strong>：算子一次处理<strong>一批（batch / vector，通常 1024~8192 行）</strong>的一列数据，而非一行。好处：① <strong>函数调用开销摊薄</strong>（一批一次调用，不是一行一次）；② 内层是<strong>对一段连续同类型数组的紧凑循环</strong>，编译器易优化、cache 命中高；③ 这种循环天然能上 <strong>SIMD</strong>（下一章）。列存 + 向量化是绝配——列存本就把同列数据连续摆好了。</div>
+
+      <h3 id="s2-2">2.2 交互演示：逐行 vs 按批</h3>
+      <p>同一个查询（Scan → Filter → Aggregate，3 个算子）处理 <strong>100 万行</strong>。切换执行模型，点「运行」，看两者的<strong>算子间函数调用次数</strong>差多少（调用开销是火山模型的隐形杀手）：</p>
+
+      <div class="demo" id="vecDemo">
+        <div class="demo-title">交互演示 · 火山模型（逐行） vs 向量化（按批）</div>
+        <div class="demo-controls">
+          <button class="seg active" data-mode="volcano">🌋 火山模型（逐行 next()）</button>
+          <button class="seg" data-mode="vector">📦 向量化（批 = 1024）</button>
+          <button class="run" id="vecRun">▶ 运行查询</button>
+        </div>
+        <div class="tuples" id="vecTuples"></div>
+        <div class="vbar-wrap" id="vecBars"></div>
+        <div class="v-readout" id="vecReadout">选择模型后点「运行查询」。3 个算子（Scan→Filter→Aggregate）× 100 万行。</div>
+      </div>
+      <div class="note">这就是为什么 ClickHouse/StarRocks 比"列存但逐行执行"的老式引擎还要快几倍：<strong>列存解决"少读"，向量化解决"快算"</strong>，两者缺一不可。把"一行一次虚调用"变成"一批一次紧凑循环"，正是从 OLTP 思维转向 OLAP 思维的关键一跃。</div>
+    </section>
+
+    <!-- ===== 第 3 章 ===== -->
+    <section class="chapter" id="ch3">
+      <div class="ch-head"><div class="num">03</div><div class="t"><h2>SIMD 与 CPU 友好</h2><p class="sub">老兵主场 · 把单核的并行潜力榨到底</p></div></div>
+
+      <div class="def"><strong>SIMD（Single Instruction Multiple Data，单指令多数据）</strong>：现代 CPU 的向量指令（SSE/AVX2/AVX-512、ARM NEON），<strong>一条指令同时对多个数据做同样运算</strong>——比如 AVX-512 一次加 16 个 int32。向量化执行的"一批连续同类型数组"正好喂给 SIMD：求和、过滤比较、哈希都能一次算一打。这是<strong>单核内的数据级并行</strong>，和多核/多机的并行叠加。</div>
+      <div class="analogy">标量计算像<strong>用一根筷子一颗一颗夹豆子</strong>；SIMD 像<strong>用一把宽勺一次铲 16 颗</strong>。同样的手速（时钟频率），吞吐却高了一个数量级——前提是豆子得整齐排好（数据连续、对齐），这正是列存 + 向量化创造的条件。</div>
+      <div class="grid cols-3">
+        <div class="card"><h4>数据连续</h4><p style="font-size:13px;color:var(--text-dim)">列存让同列数据在内存里连成一片数组，SIMD 才能批量加载。这是 array-of-structs vs struct-of-arrays 之争（呼应 cpp/perf）。</p></div>
+        <div class="card green"><h4>cache 友好</h4><p style="font-size:13px;color:var(--text-dim)">紧凑顺序访问 → cache 命中高、预取有效。逐行跳着访问则频繁 cache miss。</p></div>
+        <div class="card violet"><h4>无分支 / 可预测</h4><p style="font-size:13px;color:var(--text-dim)">向量化常把过滤写成"算出 bitmap 掩码"而非逐行 if，减少分支预测失败。</p></div>
+      </div>
+      <div class="info"><strong>老兵的会心一刻</strong>：到这里你应该发现——OLAP 引擎的单节点性能优化，和你在 C++ 里做的<strong>完全是同一套</strong>：数据导向设计（SoA）、cache 局部性、SIMD、避免虚调用与分支。Meta 开源的 <strong>Velox</strong>、ClickHouse 的执行层，本质都是"把这套 C++ 性能工程做到极致的列式向量化引擎"。这也是<strong>C++ 老兵转 OLAP 内核/AI Infra 的最大杠杆点</strong>（呼应 cpp/transition_to_ai_infra）。</div>
+    </section>
+
+    <!-- ===== 第 4 章 ===== -->
+    <section class="chapter" id="ch4">
+      <div class="ch-head"><div class="num">04</div><div class="t"><h2>MPP：把单机性能横向放大</h2><p class="sub">单节点已榨干 · 再用大规模并行把吞吐乘上节点数</p></div></div>
+
+      <div class="def"><strong>MPP（Massively Parallel Processing，大规模并行处理）</strong>：把一个查询拆分到<strong>多个节点、每节点多核</strong>同时执行，再把局部结果汇总。每个节点处理自己那份数据分片（shared-nothing 架构，呼应 D01 分片），所以在数据分布均衡且网络/协调不成瓶颈时，吞吐可随节点数接近线性扩展。ClickHouse/StarRocks/Doris/Trino 都是 MPP 引擎。</div>
+      <div class="svg-wrap">
+        <svg width="740" height="200" viewBox="0 0 740 200" role="img" aria-label="MPP scatter-gather 执行">
+          <text x="370" y="20" text-anchor="middle" fill="#7dd3fc" font-size="14" font-weight="bold">MPP：查询分发到各节点并行执行，再汇总（scatter-gather）</text>
+          <rect x="300" y="40" width="140" height="36" rx="7" fill="#231a33" stroke="#a78bfa"/><text x="370" y="63" text-anchor="middle" fill="#c4b5fd" font-size="11">协调节点（Coordinator）</text>
+          <g font-family="monospace" font-size="9.5">
+            <rect x="60" y="110" width="140" height="46" rx="7" fill="#10241c" stroke="#34d399"/><text x="130" y="130" text-anchor="middle" fill="#6ee7b7">节点1：扫分片+局部聚合</text><text x="130" y="146" text-anchor="middle" fill="#94a3b8">部分结果</text>
+            <rect x="300" y="110" width="140" height="46" rx="7" fill="#10241c" stroke="#34d399"/><text x="370" y="130" text-anchor="middle" fill="#6ee7b7">节点2：扫分片+局部聚合</text><text x="370" y="146" text-anchor="middle" fill="#94a3b8">部分结果</text>
+            <rect x="540" y="110" width="140" height="46" rx="7" fill="#10241c" stroke="#34d399"/><text x="610" y="130" text-anchor="middle" fill="#6ee7b7">节点3：扫分片+局部聚合</text><text x="610" y="146" text-anchor="middle" fill="#94a3b8">部分结果</text>
+          </g>
+          <defs><marker id="ar2" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#64748b"/></marker></defs>
+          <line x1="340" y1="76" x2="150" y2="108" stroke="#64748b" marker-end="url(#ar2)"/><text x="220" y="92" fill="#64748b" font-size="9">①下发</text>
+          <line x1="370" y1="76" x2="370" y2="108" stroke="#64748b" marker-end="url(#ar2)"/>
+          <line x1="400" y1="76" x2="590" y2="108" stroke="#64748b" marker-end="url(#ar2)"/>
+          <line x1="130" y1="156" x2="350" y2="180" stroke="#34d399" stroke-dasharray="3 2"/>
+          <line x1="370" y1="156" x2="370" y2="180" stroke="#34d399" stroke-dasharray="3 2"/>
+          <line x1="610" y1="156" x2="390" y2="180" stroke="#34d399" stroke-dasharray="3 2"/>
+          <text x="370" y="195" text-anchor="middle" fill="#6ee7b7" font-size="10">②各节点先本地聚合（减少传输）→ 协调节点最终汇总</text>
+        </svg>
+        <div class="svg-caption">关键优化：<strong>本地预聚合（partial aggregation）</strong>——每个节点先把自己的数据聚合成小结果，只把小结果传给协调节点汇总，极大减少网络传输（呼应 D03 reduceByKey 的 map 端预聚合）。</div>
+      </div>
+      <div class="def"><strong>分布式 Join 策略</strong>（和 D03 同源）：小表 join 大表用 <strong>Broadcast Join</strong>（小表广播到各节点本地 join）；大表 join 大表用 <strong>Shuffle Join</strong>（两表按 join key 重分布到同节点）。<strong>Colocate Join（共置 join）</strong>是 OLAP 特色——若两表按相同 key 分桶存储，join 时数据天然在同节点，<strong>免 shuffle</strong>，StarRocks/Doris 重度依赖它做高性能 join。</div>
+      <div class="note">MPP 引擎通常是<strong>常驻进程</strong>（不像 Spark 每个作业重新拉起 Executor），省去启动开销，这也是它能做到亚秒延迟的原因之一。代价是资源常占用、并发高时可能互相挤占。</div>
+
+      <h3 id="s4-1">4.1 扩展边界与抖动来源</h3>
+      <table>
+        <thead><tr><th>现象</th><th>常见原因</th><th>处置思路</th></tr></thead>
+        <tbody>
+          <tr><td>节点越多，提速不明显</td><td>网络汇聚、协调节点成为瓶颈</td><td>优先做本地预聚合，减少跨节点传输</td></tr>
+          <tr><td>尾部任务明显拖慢</td><td>数据倾斜（热点 key）</td><td>改分桶键、热点拆分、重写聚合路径</td></tr>
+          <tr><td>查询延迟抖动</td><td>内存不足导致 spill 到磁盘</td><td>控制并发、调大内存、优化中间结果规模</td></tr>
+        </tbody>
+      </table>
+      <div class="tip">MPP 调优永远是先少搬数据，再谈加节点。跨节点网络流量通常比 CPU 更先成为上限。</div>
+    </section>
+
+    <!-- ===== 第 5 章 ===== -->
+    <section class="chapter" id="ch5">
+      <div class="ch-head"><div class="num">05</div><div class="t"><h2>CBO · 物化视图 · 预聚合</h2><p class="sub">选对计划 + 把重活提前算好 · 查询时少干活</p></div></div>
+
+      <div class="def"><strong>CBO（Cost-Based Optimizer，基于成本的优化器）</strong>：和 D03 Catalyst 同源。利用表的<strong>统计信息</strong>（行数、列基数、数据分布）估算不同执行计划的"成本"，选最优的——尤其是<strong>多表 join 的顺序与算法选择</strong>（先 join 小的中间结果、选 broadcast 还是 shuffle）。统计信息不准是 CBO 选错计划的常见原因，所以要定期 <code>ANALYZE</code> 收集统计。</div>
+      <div class="def"><strong>物化视图（Materialized View）</strong>：把一个查询的结果<strong>预先算好并存下来</strong>，查询时直接读结果，不再现算。OLAP 引擎的物化视图常能<strong>自动改写</strong>——你查明细表，引擎发现有匹配的物化视图就自动改用它（你无感、却快了 N 倍）。代价：数据更新时物化视图要同步刷新。</div>
+      <div class="def"><strong>预聚合（Pre-aggregation）</strong>：和 D02 的 DWS 层思想一致——把高频的聚合（按天/按品类的销量）<strong>提前算好</strong>。Druid/Doris 的聚合模型在<strong>写入时就边写边聚合</strong>；ClickHouse 用 <code>AggregatingMergeTree</code> 在后台 merge 时聚合。查询十亿明细，实际可能只读了几万行预聚合结果。</div>
+      <div class="analogy">物化视图/预聚合像<strong>餐厅的"预制菜"</strong>：把耗时的炖煮提前做好，客人点单时只需加热摆盘，出餐飞快。代价是要预判哪些菜常点（选对要预聚合的维度组合）、且食材更新时预制菜也得重做（刷新）。</div>
+      <div class="tip">OLAP 调优三板斧：① <strong>选对排序键/分桶键</strong>（让数据跳过 + colocate join 生效）；② <strong>建物化视图/预聚合</strong>（把高频重查提前算）；③ <strong>收集统计信息</strong>（让 CBO 选对计划）。和 D03 一样——<strong>先想办法少干活，再谈并行与资源</strong>。</div>
+    </section>
+
+    <!-- ===== 第 6 章 ===== -->
+    <section class="chapter" id="ch6">
+      <div class="ch-head"><div class="num">06</div><div class="t"><h2>引擎横评与选型</h2><p class="sub">ClickHouse / StarRocks / Doris / Druid / Pinot / Trino / Kylin 各擅胜场</p></div></div>
+      <table>
+        <thead><tr><th>引擎</th><th>定位 / 强项</th><th>弱项</th><th>典型场景</th></tr></thead>
+        <tbody>
+          <tr><td><strong>ClickHouse</strong></td><td class="cell-ok">单表扫描/聚合极快，写入吞吐高</td><td class="cell-mid">复杂多表关联需更谨慎建模与索引设计</td><td>日志/埋点分析、大宽表、监控</td></tr>
+          <tr><td><strong>StarRocks / Doris</strong></td><td class="cell-ok">join 强、有 CBO、兼容 MySQL 协议</td><td>版本演进快，需关注升级与兼容策略</td><td>实时数仓、多表关联报表、统一 OLAP</td></tr>
+          <tr><td><strong>Druid</strong></td><td class="cell-ok">实时摄取 + 预聚合，时序快</td><td class="cell-mid">不擅长明细/join</td><td>实时大屏、时序监控指标</td></tr>
+          <tr><td><strong>Apache Pinot</strong></td><td class="cell-ok">超低延迟、高并发点查，丰富索引（倒排/星树/Bloom）</td><td class="cell-mid">运维组件多、不擅复杂 join</td><td>面向用户的实时分析（如领英「谁看了我」）、高 QPS 看板</td></tr>
+          <tr><td><strong>Trino / Presto</strong></td><td class="cell-ok">联邦查询（跨数据源），存算分离</td><td class="cell-mid">自身不存数据、靠下游</td><td>数据湖即席查询、跨源 join</td></tr>
+          <tr><td><strong>Apache Kylin</strong></td><td class="cell-ok">预计算 Cube，固定报表亚秒响应</td><td class="cell-bad">维度组合爆炸、灵活性差、Cube 构建重</td><td>固定维度的 BI 报表（理念偏传统，新项目少选）</td></tr>
+        </tbody>
+      </table>
+      <div class="def"><strong>三条路线</strong>：① <strong>「自带存储」的 MPP 数据库</strong>（ClickHouse/StarRocks/Doris）——数据导入它自己的列存、性能极致；② <strong>「实时摄取型 OLAP」</strong>（Druid/Pinot）——边摄取边可查、为<strong>高并发、低延迟、面向用户</strong>的实时分析而生，索引和预聚合做得极致，但不擅长复杂明细 join；③ <strong>「查询引擎」</strong>（Trino）——自己不存数据，直接查数据湖（Parquet/Iceberg）、跨源联邦。前两者快但要导数据，后者灵活但受限于底层存储。</div>
+      <div class="def"><strong>实时摄取型 OLAP（Druid / Pinot）凭什么「边写边查」？</strong> 它们把数据按时间切成 <strong>Segment</strong>，新数据先进<strong>可查的内存实时节点</strong>（near-real-time），后台再固化成不可变 Segment 落盘并建索引——这与列存 LSM 的「热数据在内存、冷数据在盘」思想一脉相承，只是为「亚秒查询 + 秒级可见」做了极致裁剪。Pinot 的<strong>星树索引（Star-Tree）</strong>是「按需预聚合」的精巧折中：在空间与查询速度间可调，避免了 Kylin 那种全量 Cube 的维度爆炸。</div>
+      <div class="tip">选型直觉：单大宽表极致扫描 → ClickHouse；复杂多表 join 的实时数仓 → StarRocks/Doris；实时时序大屏/监控 → Druid；<strong>面向 C 端用户、高 QPS + 极低延迟的实时分析 → Pinot</strong>；直接查数据湖、跨源 → Trino；固定维度老 BI 报表 → Kylin（但新项目多被 StarRocks/Doris 取代）。很多公司<strong>多引擎并存</strong>，按场景分流。湖仓（见湖仓表格式专篇 / Iceberg）+ Trino/StarRocks 直查是当下热门组合。</div>
+
+      <h3 id="s6-1">6.1 压测口径与稳定性检查</h3>
+      <div class="def"><strong>同一套 SQL，压测口径不同，结论可能相反</strong>。对比引擎时至少要固定：数据规模、冷热缓存状态、并发度、是否命中物化视图、数据分布（是否倾斜）、压缩率。</div>
+      <table>
+        <thead><tr><th>检查项</th><th>为什么重要</th></tr></thead>
+        <tbody>
+          <tr><td>冷缓存 vs 热缓存</td><td>热缓存结果常优于冷启动，混测会误判引擎能力</td></tr>
+          <tr><td>单并发 vs 多并发</td><td>单查询快不代表高并发稳定，需看尾延迟 P95/P99</td></tr>
+          <tr><td>是否命中 MV/预聚合</td><td>命中与否可带来数量级差异，应单独标注</td></tr>
+          <tr><td>失败重试与资源隔离</td><td>生产稳定性不只看平均延迟，还看抖动与恢复能力</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- ===== 第 7 章 ===== -->
+    <section class="chapter" id="ch7">
+      <div class="ch-head"><div class="num">07</div><div class="t"><h2>小结 · 面试 · 术语表</h2><p class="sub">收束成判断力 · 并接上 D08</p></div></div>
+
+      <h3>一页纸总结</h3>
+      <div class="grid cols-2">
+        <div class="card"><h4>① 定位</h4><p style="font-size:13px;color:var(--text-dim)">OLAP 引擎为"亚秒级交互式聚合"而生，介于 OLTP 与 Spark 批之间。</p></div>
+        <div class="card green"><h4>② 列存 + 数据跳过</h4><p style="font-size:13px;color:var(--text-dim)">MergeTree 排序+颗粒+稀疏索引；选对排序键大量跳过 granule。少读。</p></div>
+        <div class="card amber"><h4>③ 向量化</h4><p style="font-size:13px;color:var(--text-dim)">按批取代逐行（火山），摊薄虚调用、紧凑循环。快算。</p></div>
+        <div class="card violet"><h4>④ SIMD + cache</h4><p style="font-size:13px;color:var(--text-dim)">一条指令算一批、数据连续 cache 友好。单核数据级并行（老兵主场）。</p></div>
+        <div class="card"><h4>⑤ MPP</h4><p style="font-size:13px;color:var(--text-dim)">多节点多核并行 + 本地预聚合 + colocate join；常驻进程低延迟。</p></div>
+        <div class="card green"><h4>⑥ CBO + 预计算</h4><p style="font-size:13px;color:var(--text-dim)">CBO 选最优计划；物化视图/预聚合把重活提前算。先少干活再谈并行。</p></div>
+      </div>
+
+      <h3>面试自测（点击展开）</h3>
+      <details class="qa">
+        <summary><span class="lvl pill cyan">基础</span>OLAP 引擎（如 ClickHouse）为什么能比传统数据库快这么多？</summary>
+        <div class="a">
+          <div class="point"><span class="label">少读</span>列存只读相关列 + 稀疏索引/跳数索引跳过无关数据块。</div>
+          <div class="point"><span class="label">快算</span>向量化执行（按批，摊薄虚调用）+ SIMD + cache 友好布局。</div>
+          <div class="point"><span class="label">并行</span>MPP 多节点多核并行 + 本地预聚合减少传输。</div>
+          <div class="point deep"><span class="label">预计算</span>物化视图/预聚合把高频重查提前算好。</div>
+        </div>
+      </details>
+      <details class="qa">
+        <summary><span class="lvl pill green">核心</span>火山模型和向量化执行有什么区别？为什么向量化快？</summary>
+        <div class="a">
+          <div class="point"><span class="label">火山</span>每个算子 next() 一次返回一行，逐行拉取——每行每算子一次虚函数调用，开销巨大、cache 不友好。</div>
+          <div class="point"><span class="label">向量化</span>算子一次处理一批（1024+ 行）的一列——调用开销摊薄、内层是紧凑数组循环、cache 命中高、能上 SIMD。</div>
+          <div class="point deep"><span class="label">绝配</span>列存把同列数据连续摆好，正好喂给向量化 + SIMD。</div>
+        </div>
+      </details>
+      <details class="qa">
+        <summary><span class="lvl pill amber">深度</span>SIMD 是什么？OLAP 引擎怎么用上它？</summary>
+        <div class="a">
+          <div class="point"><span class="label">SIMD</span>一条 CPU 指令同时对多个数据做同样运算（AVX-512 一次 16 个 int32），单核数据级并行。</div>
+          <div class="point"><span class="label">用上</span>向量化执行的"一批连续同类型数组"正好是 SIMD 的输入；求和/过滤比较/哈希都能批量算。</div>
+          <div class="point deep"><span class="label">前提</span>数据连续、对齐（列存创造的条件）；这正是 C++ 性能工程那一套。</div>
+        </div>
+      </details>
+      <details class="qa">
+        <summary><span class="lvl pill violet">实战</span>ClickHouse 建表时排序键怎么选？为什么重要？</summary>
+        <div class="a">
+          <div class="point"><span class="label">选</span>把<strong>最常用于 WHERE 过滤</strong>的列（及其组合，低基数在前）选作排序键。</div>
+          <div class="point"><span class="label">为何</span>数据按排序键物理有序，稀疏索引才能让查询<strong>跳过大量无关 granule</strong>，少读=快。</div>
+          <div class="point bad"><span class="label">选错</span>过滤列不在排序键上 → 无法跳过、退化成全扫，再多机器也慢。</div>
+        </div>
+      </details>
+      <details class="qa">
+        <summary><span class="lvl pill red">选型</span>ClickHouse、StarRocks、Trino 分别什么时候用？</summary>
+        <div class="a">
+          <div class="point"><span class="label">ClickHouse</span>单大宽表极致扫描/聚合（日志、埋点、监控），多表 join 弱。</div>
+          <div class="point"><span class="label">StarRocks/Doris</span>需要强 join + CBO 的实时数仓、多表报表，兼容 MySQL 协议。</div>
+          <div class="point"><span class="label">Trino</span>不自存数据，直接查数据湖 / 跨源联邦即席查询。</div>
+        </div>
+      </details>
+
+      <h3 id="s7-gloss" style="margin-top:34px">术语表速查 · Glossary</h3>
+      <p>本篇核心名词一次收齐：</p>
+      <div class="glossary">
+        <div class="gl-group">
+          <h4>① 引擎与存储</h4>
+          <div class="gl"><span class="gl-t">OLAP 引擎 / MPP 数据库</span><span class="gl-d">为交互式分析而生的查询引擎，亚秒扫海量行做聚合。ClickHouse/StarRocks/Doris/Druid/Pinot/Trino/Kylin。</span></div>
+          <div class="gl"><span class="gl-t">实时摄取型 OLAP <em>Druid / Pinot</em></span><span class="gl-d">数据按时间切 Segment，新数据先进可查内存节点、后台固化建索引，做到「边写边查」。为高并发低延迟、面向用户的实时分析而生。</span></div>
+          <div class="gl"><span class="gl-t">星树索引 <em>Star-Tree</em></span><span class="gl-d">Pinot 的「按需预聚合」索引：在存储空间与查询速度间可调，避免全量 Cube 的维度爆炸。</span></div>
+          <div class="gl"><span class="gl-t">MergeTree</span><span class="gl-d">ClickHouse 核心引擎：按排序键物理排序 + 分颗粒压缩 + 稀疏索引；后台 merge（LSM 同源）。</span></div>
+          <div class="gl"><span class="gl-t">颗粒 <em>Granule</em></span><span class="gl-d">列数据的固定行数块（默认 8192 行），读取与索引的最小单位。</span></div>
+          <div class="gl"><span class="gl-t">稀疏索引 <em>Sparse Index</em></span><span class="gl-d">每个 granule 只记一条索引（首行），索引极小可常驻内存，用于定位目标 granule。</span></div>
+          <div class="gl"><span class="gl-t">排序键 / 跳数索引</span><span class="gl-d">数据物理排序依据；跳数索引（min-max/bloom/set）进一步在 granule 级跳过无关数据。</span></div>
+        </div>
+        <div class="gl-group">
+          <h4>② 执行模型</h4>
+          <div class="gl"><span class="gl-t">火山模型 <em>Volcano / Iterator</em></span><span class="gl-d">算子 next() 逐行拉取。优雅但每行每算子一次虚调用，海量行时开销巨大。</span></div>
+          <div class="gl"><span class="gl-t">向量化执行 <em>Vectorized</em></span><span class="gl-d">算子一次处理一批（1024+ 行）一列。摊薄调用、紧凑循环、cache 友好、能上 SIMD。</span></div>
+          <div class="gl"><span class="gl-t">SIMD</span><span class="gl-d">单指令多数据，一条 CPU 指令算多个数据。向量化的天然加速器，单核数据级并行。</span></div>
+          <div class="gl"><span class="gl-t">代码生成 / Velox</span><span class="gl-d">codegen 把算子编译成紧凑代码（呼应 D03 Tungsten）；Velox 是可复用的 C++ 向量化执行库。</span></div>
+        </div>
+        <div class="gl-group">
+          <h4>③ 分布式执行</h4>
+          <div class="gl"><span class="gl-t">MPP</span><span class="gl-d">大规模并行处理：查询拆到多节点多核并行，shared-nothing，吞吐随节点近线性扩展。</span></div>
+          <div class="gl"><span class="gl-t">本地预聚合 <em>Partial Aggregation</em></span><span class="gl-d">各节点先本地聚合成小结果再汇总，大减网络传输（呼应 D03 map 端预聚合）。</span></div>
+          <div class="gl"><span class="gl-t">Broadcast / Shuffle / Colocate Join</span><span class="gl-d">广播小表 / 按 key 重分布 / 相同分桶天然同节点免 shuffle（OLAP 特色高性能 join）。</span></div>
+        </div>
+        <div class="gl-group">
+          <h4>④ 优化与预计算</h4>
+          <div class="gl"><span class="gl-t">CBO <em>Cost-Based Optimizer</em></span><span class="gl-d">用统计信息估算计划成本选最优，尤其 join 顺序/算法。需定期 ANALYZE 收集统计。</span></div>
+          <div class="gl"><span class="gl-t">物化视图 <em>Materialized View</em></span><span class="gl-d">预先算好并存储查询结果，常自动改写命中。数据更新需刷新。</span></div>
+          <div class="gl"><span class="gl-t">预聚合 <em>Pre-aggregation</em></span><span class="gl-d">把高频聚合提前算（写入时或后台 merge 时），查询读少量预聚合结果（呼应 D02 DWS）。</span></div>
+          <div class="gl"><span class="gl-t">联邦查询 <em>Federated</em></span><span class="gl-d">一条 SQL 跨多个数据源（湖/库）查询并 join，Trino 的招牌能力。</span></div>
+        </div>
+      </div>
+
+      <div class="tip" style="margin-top:24px"><strong>下一篇预告 · D08：实时数仓与流批一体</strong>。把 D04（Flink）+ D06（Kafka/CDC）+ 本篇（OLAP 引擎）拼成一个完整的<strong>实时数仓</strong>：Lambda vs Kappa 架构、Kafka + Flink + StarRocks 的实时链路、流式维表关联、流批一体落地。从"单点技术"走向"端到端架构"。</div>
+    </section>
+
+  </main>
+</div>
+
+<footer>
+  <div class="made">TECH NOTES · BIG DATA SERIES</div>
+  #D07 OLAP 引擎内核 · <a href="../index.html">返回首页</a> · © 2026 Kavin Chan · MIT
+</footer>
+
+<button class="back-top" id="backTop" onclick="window.scrollTo({top:0,behavior:'smooth'})">↑</button>
+<style>.back-top{position:fixed;bottom:1.5rem;right:1.5rem;width:44px;height:44px;border-radius:50%;background:#141a2c;color:#e4e9f5;border:1px solid #2a3556;cursor:pointer;font-size:18px;display:none;z-index:100;align-items:center;justify-content:center}.back-top:hover{color:#7dd3fc}.back-top.show{display:flex}</style>
+
+<script>
+const progress=document.getElementById('progress');
+const up=()=>{const h=document.documentElement;const m=h.scrollHeight-h.clientHeight;progress.style.width=(m>0?(h.scrollTop/m*100):0)+'%';};
+window.addEventListener('scroll',up,{passive:true});up();
+const tocLinks=document.querySelectorAll('.toc a');
+const secs=document.querySelectorAll('section.chapter');
+const no=new IntersectionObserver(es=>{es.forEach(e=>{if(e.isIntersecting){const id=e.target.id;tocLinks.forEach(a=>a.classList.toggle('active',a.getAttribute('href')==='#'+id));}});},{rootMargin:'-25% 0px -65% 0px'});
+secs.forEach(s=>no.observe(s));
+tocLinks.forEach(a=>{a.addEventListener('click',e=>{const h=a.getAttribute('href');const t=document.querySelector(h);if(t){e.preventDefault();t.scrollIntoView({behavior:'smooth',block:'start'});history.pushState(null,'',h);}});});
+const fe=document.querySelectorAll('.card,.svg-wrap,table,details,.demo,pre');
+const fo=new IntersectionObserver(es=>{es.forEach(e=>{if(e.isIntersecting){e.target.style.opacity='1';e.target.style.transform='translateY(0)';}});},{threshold:0.04});
+fe.forEach(el=>{el.style.opacity='0';el.style.transform='translateY(12px)';el.style.transition='opacity .5s ease, transform .5s ease';fo.observe(el);});
+(function(){var b=document.getElementById('backTop');if(!b)return;function t(){b.classList.toggle('show',window.scrollY>400);}window.addEventListener('scroll',t,{passive:true});t();})();
+
+// ===== 交互演示 A：稀疏索引数据跳过 =====
+(function(){
+  const G=[[1,100],[101,200],[201,300],[301,400],[401,500],[501,600],[601,700],[701,800]];
+  const wrap=document.getElementById('granules');
+  const readout=document.getElementById('gReadout');
+  const segs=document.querySelectorAll('#skipDemo .seg');
+  function scanned(mode){
+    if(mode==='full') return G.map((_,i)=>i);
+    if(mode==='eq'){ const v=350; return G.map((r,i)=>r[0]<=v&&v<=r[1]?i:-1).filter(i=>i>=0); }
+    const lo=250,hi=520; return G.map((r,i)=>(r[1]>=lo&&r[0]<=hi)?i:-1).filter(i=>i>=0);
+  }
+  function render(mode){
+    const sc=scanned(mode);
+    wrap.innerHTML=G.map((r,i)=>{
+      const on=sc.includes(i);
+      return '<div class="granule '+(on?'scan':'skip')+'"><div class="gidx">granule'+i+'</div><div class="grange">'+r[0]+'–'+r[1]+'</div></div>';
+    }).join('');
+    const n=sc.length;
+    if(mode==='full') readout.innerHTML='🐢 <b>无排序键</b>：数据无序，稀疏索引帮不上忙 → 只能<b>全表扫描 8/8</b> 个 granule。这就是没选对排序键的代价。';
+    else if(mode==='eq') readout.innerHTML='⚡ <code>id = 350</code>：稀疏索引定位到 350 落在 granule3（301–400）→ 只扫 <b>'+n+'/8</b> 个 granule，跳过 '+(8-n)+' 个。IO 降到 1/8。';
+    else readout.innerHTML='⚡ <code>id BETWEEN 250 AND 520</code>：范围覆盖 granule2–granule5 → 只扫 <b>'+n+'/8</b> 个，跳过 '+(8-n)+' 个。排序键 + 范围查询是绝配。';
+  }
+  segs.forEach(b=>b.addEventListener('click',()=>{segs.forEach(x=>x.classList.remove('active'));b.classList.add('active');render(b.dataset.q);}));
+  render('eq');
+})();
+
+// ===== 交互演示 B：火山 vs 向量化 =====
+(function(){
+  const N=1000000, OPS=3, BATCH=1024, CELLS=16;
+  const tuplesEl=document.getElementById('vecTuples');
+  const barsEl=document.getElementById('vecBars');
+  const readout=document.getElementById('vecReadout');
+  const runBtn=document.getElementById('vecRun');
+  const segs=document.querySelectorAll('#vecDemo .seg');
+  let mode='volcano', timer=null;
+  const volcanoCalls=N*OPS;
+  const vectorCalls=Math.ceil(N/BATCH)*OPS;
+  function build(){ tuplesEl.innerHTML=Array.from({length:CELLS},(_,i)=>'<div class="tcell" data-i="'+i+'"></div>').join(''); }
+  function bars(){
+    const max=volcanoCalls;
+    barsEl.innerHTML=
+      '<div class="vbar-row"><span class="vlab">火山(逐行)</span><div class="vbar slow" style="width:100%">'+volcanoCalls.toLocaleString()+' 次调用</div></div>'+
+      '<div class="vbar-row"><span class="vlab">向量化(批)</span><div class="vbar fast" style="width:'+Math.max(vectorCalls/max*100,3)+'%">'+vectorCalls.toLocaleString()+' 次</div></div>';
+  }
+  function reset(){ if(timer){clearInterval(timer);timer=null;} build(); barsEl.innerHTML=''; runBtn.disabled=false;
+    readout.innerHTML='选择模型后点「运行查询」。3 个算子（Scan→Filter→Aggregate）× 100 万行。'; }
+  function run(){
+    reset(); runBtn.disabled=true;
+    const cells=[...tuplesEl.children];
+    if(mode==='volcano'){
+      let i=0;
+      timer=setInterval(()=>{
+        if(i>0) cells[i-1].className='tcell done';
+        if(i>=CELLS){ clearInterval(timer);timer=null;runBtn.disabled=false; bars();
+          readout.innerHTML='🌋 <b>火山模型</b>：每行被逐个拉过 3 个算子，<b>每行每算子一次虚函数调用</b> → '+N.toLocaleString()+'×3 = <b>'+volcanoCalls.toLocaleString()+'</b> 次调用。逐行跳访问、cache 不友好——CPU 时间大量耗在"喊话"而非算数。'; return; }
+        cells[i].className='tcell hot'; i++;
+      },110);
+    } else {
+      cells.forEach(c=>c.className='tcell hot');
+      setTimeout(()=>{ cells.forEach(c=>c.className='tcell done'); bars();
+        readout.innerHTML='📦 <b>向量化</b>：每批 1024 行一起过算子，<b>每批每算子才一次调用</b> → ⌈'+N.toLocaleString()+'/1024⌉×3 ≈ <b>'+vectorCalls.toLocaleString()+'</b> 次，比火山少约 <b>'+Math.round(volcanoCalls/vectorCalls)+'×</b>！且批内连续数组可上 SIMD、cache 命中高。'; runBtn.disabled=false; },650);
+    }
+  }
+  segs.forEach(b=>b.addEventListener('click',()=>{segs.forEach(x=>x.classList.remove('active'));b.classList.add('active');mode=b.dataset.mode;reset();}));
+  runBtn.addEventListener('click',run);
+  build();
+})();
+
+console.log('%c Big Data D07 · OLAP 引擎内核 ','background:linear-gradient(90deg,#7dd3fc,#a78bfa);color:#0a0e1a;font-weight:700;padding:4px 12px;border-radius:4px;font-size:13px');
+</script>
+<script src="../assets/site-theme.js" defer></script>
+</body>
+</html>

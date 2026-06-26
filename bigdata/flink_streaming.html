@@ -1,0 +1,723 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Flink 流处理深潜 · 流优先 / 事件时间 / Watermark / State / Checkpoint / Exactly-once</title>
+<link rel="stylesheet" href="../assets/site-theme.css">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<style>
+  /* D04 专属增强：沿用系列视觉系统 */
+  .analogy{background:linear-gradient(135deg,rgba(167,139,250,.08),rgba(125,211,252,.05));
+    border:1px solid var(--border-2);border-left:4px solid var(--accent-2);border-radius:10px;
+    padding:14px 18px;margin:16px 0;font-size:14px;line-height:1.75}
+  .analogy::before{content:"🔌 生活类比";display:inline-block;color:var(--accent-2);font-weight:700;font-size:12px;letter-spacing:.5px;margin-right:10px}
+  .analogy strong{color:var(--text)}
+
+  .def{background:rgba(125,211,252,.05);border:1px solid var(--border);border-left:4px solid var(--accent);
+    border-radius:8px;padding:14px 18px;margin:16px 0;font-size:14px;line-height:1.75}
+  .def::before{content:"📖 名词解释";display:inline-block;color:var(--accent);font-weight:700;font-size:12px;letter-spacing:.5px;margin-right:10px}
+  .def strong{color:var(--text)}
+
+  .glossary{margin:14px 0}
+  .gl-group{margin:20px 0}
+  .gl-group > h4{color:var(--accent);border-left:3px solid var(--accent);padding-left:10px;margin:0 0 10px;font-size:15px}
+  .gl{display:grid;grid-template-columns:210px 1fr;gap:14px;padding:11px 15px;border:1px solid var(--border);
+    border-radius:8px;background:var(--bg-card);margin:7px 0;transition:border-color .15s}
+  .gl:hover{border-color:var(--border-2)}
+  .gl .gl-t{font-weight:600;color:var(--text);font-size:14px}
+  .gl .gl-t em{display:block;font-style:normal;font-family:"JetBrains Mono",monospace;font-size:11px;color:var(--text-mute);margin-top:3px;font-weight:400;letter-spacing:.2px}
+  .gl .gl-d{font-size:13.5px;color:var(--text-dim);line-height:1.7}
+  .gl .gl-d strong{color:var(--accent-4)}
+  .gl .gl-d code{font-size:.85em}
+  @media(max-width:760px){.gl{grid-template-columns:1fr;gap:4px}}
+
+  /* 交互演示外壳 */
+  .demo{background:var(--bg-card);border:1px solid var(--border-2);border-radius:14px;padding:20px;margin:22px 0;box-shadow:var(--shadow)}
+  .demo .demo-title{font-size:13px;text-transform:uppercase;letter-spacing:1.5px;color:var(--accent);font-family:"JetBrains Mono",monospace;margin-bottom:14px;display:flex;align-items:center;gap:8px}
+  .demo .demo-title::before{content:"▶";font-size:10px;color:var(--accent-3)}
+  .demo-controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:16px}
+  .demo button{font-family:inherit;cursor:pointer;border-radius:8px;font-size:13px;padding:8px 14px;border:1px solid var(--border-2);background:var(--bg-card-2);color:var(--text-dim);transition:.15s}
+  .demo button:hover{color:var(--text);border-color:var(--accent)}
+  .demo button.seg.active{background:rgba(125,211,252,.14);color:var(--accent);border-color:var(--accent)}
+  .demo button.run{background:rgba(52,211,153,.14);color:var(--accent-3);border-color:rgba(52,211,153,.4);font-weight:600}
+  .demo button.run:hover{background:rgba(52,211,153,.24)}
+  .demo button.ghost{background:transparent}
+  .demo button:disabled{opacity:.4;cursor:not-allowed}
+
+  /* Watermark 演示 */
+  .wm-stream{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0}
+  .ev{font-family:"JetBrains Mono",monospace;font-size:12px;padding:7px 11px;border-radius:8px;border:1px solid var(--border-2);background:var(--bg-card-2);color:var(--text-mute);min-width:56px;text-align:center;transition:.2s}
+  .ev.pending{opacity:.35}
+  .ev.buffered{border-color:rgba(125,211,252,.5);color:var(--accent);background:rgba(125,211,252,.08)}
+  .ev.fired{border-color:rgba(52,211,153,.5);color:var(--accent-3);background:rgba(52,211,153,.1)}
+  .ev.late{border-color:rgba(248,113,113,.6);color:var(--danger);background:rgba(248,113,113,.12);text-decoration:line-through}
+  .wm-stat{display:flex;flex-wrap:wrap;gap:18px;margin:12px 0;font-family:"JetBrains Mono",monospace;font-size:13px}
+  .wm-stat .v{color:var(--accent-4);font-weight:700;font-size:16px}
+  .wm-fired{margin-top:8px;display:flex;flex-direction:column;gap:6px}
+  .wm-win{font-size:12.5px;padding:7px 11px;border-radius:7px;background:rgba(52,211,153,.08);border-left:3px solid var(--accent-3);color:var(--text-dim)}
+  .wm-readout{margin-top:12px;font-size:13.5px;color:var(--text-dim);line-height:1.8;min-height:42px}
+
+  /* 窗口类型演示 */
+  .win-timeline{position:relative;height:40px;margin:14px 0 6px;border-bottom:1px solid var(--border-2)}
+  .win-tick{position:absolute;bottom:-18px;transform:translateX(-50%);font-size:10px;color:var(--text-mute);font-family:"JetBrains Mono",monospace}
+  .win-dot{position:absolute;top:8px;transform:translateX(-50%);width:24px;height:24px;border-radius:50%;
+    background:rgba(251,191,36,.18);border:1px solid var(--accent-4);color:var(--accent-4);font-size:10px;
+    font-family:"JetBrains Mono",monospace;display:flex;align-items:center;justify-content:center}
+  .win-rows{display:flex;flex-direction:column;gap:6px;margin-top:30px}
+  .win-band-row{position:relative;height:24px}
+  .win-band{position:absolute;height:24px;border-radius:5px;background:rgba(125,211,252,.14);
+    border:1px solid rgba(125,211,252,.45);font-size:10.5px;font-family:"JetBrains Mono",monospace;
+    color:var(--accent);display:flex;align-items:center;padding-left:8px;overflow:hidden;white-space:nowrap}
+  .win-note{margin-top:14px;font-size:13.5px;color:var(--text-dim);line-height:1.7}
+  .win-note b{color:var(--accent)}
+</style>
+</head>
+<body class="tn-shell-overlay">
+<!-- tn-nav:v1 -->
+<style>
+#tn-nav{position:fixed;top:14px;right:14px;z-index:99999;display:flex;gap:6px;align-items:center;
+  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;
+  font-size:12px;line-height:1;font-weight:500;}
+#tn-nav a,#tn-nav .tn-meta{display:inline-flex;align-items:center;gap:4px;
+  background:rgba(20,20,30,.85);color:#fff !important;text-decoration:none !important;
+  padding:7px 11px;border-radius:999px;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+  border:1px solid rgba(255,255,255,.10);box-shadow:0 2px 8px rgba(0,0,0,.18);
+  transition:background .15s,transform .15s;}
+#tn-nav a:hover{background:rgba(56,189,248,.92);transform:translateY(-1px);}
+#tn-nav .tn-meta{background:rgba(20,20,30,.55);cursor:default;}
+@media (max-width:640px){#tn-nav{top:8px;right:8px;font-size:11px;gap:4px;}
+  #tn-nav a,#tn-nav .tn-meta{padding:5px 9px;}}
+@media print{#tn-nav{display:none;}}
+</style>
+<div id="tn-nav">
+  <a href="../index.html" title="&#x8FD4;&#x56DE;&#x4E3B;&#x9875;">&larr; &#x4E3B;&#x9875;</a>
+  <a href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub &#x4ED3;&#x5E93;">&#x1F4C1; Repo</a>
+  <a href="https://github.com/kavinChan13/tech-notes/blob/main/bigdata/flink_streaming.html" target="_blank" rel="noopener" title="&#x672C;&#x6587;&#x6E90;&#x7801;">&#x1F4DD; Source</a>
+  <span class="tn-meta" title="&#x9884;&#x8BA1;&#x9605;&#x8BFB;&#x65F6;&#x957F;">&#x23F1; 55 min</span>
+</div>
+<!-- /tn-nav:v1 -->
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>大数据 D04 · Roadmap</h2>
+    <nav>
+      <ol>
+        <li><a href="#ch0" class="active">流优先 vs 批优先</a></li>
+        <li><a href="#ch1">事件时间与 Watermark</a>
+          <ol>
+            <li><a href="#s1-1">三种时间</a></li>
+            <li><a href="#s1-2">Watermark 原理</a></li>
+            <li><a href="#s1-3">Watermark 演示</a></li>
+          </ol>
+        </li>
+        <li><a href="#ch2">窗口 Window</a>
+          <ol>
+            <li><a href="#s2-1">三类窗口</a></li>
+            <li><a href="#s2-2">窗口演示</a></li>
+          </ol>
+        </li>
+        <li><a href="#ch3">State 状态管理</a>
+          <ol>
+            <li><a href="#s3-1">状态原语选型</a></li>
+            <li><a href="#s3-2">增量 CP 与可伸缩</a></li>
+          </ol>
+        </li>
+        <li><a href="#ch4">Checkpoint 与 Exactly-once</a>
+          <ol>
+            <li><a href="#s4-1">EOS 边界条件</a></li>
+            <li><a href="#s4-2">Checkpoint 调参</a></li>
+          </ol>
+        </li>
+        <li><a href="#ch5">反压 · 流式 Join</a></li>
+        <li><a href="#ch6">CEP · Flink SQL · 流批一体</a></li>
+        <li><a href="#ch7">小结 · 面试 · 术语表</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+
+    <!-- ============= HERO ============= -->
+    <header class="hero">
+      <div class="badge">Big Data · 04 · Stream Engine</div>
+      <h1>Flink 流处理深潜</h1>
+      <p class="sub">D03 的 Spark 是「<strong>批优先</strong>」——流只是把批切得很小。本篇的 Flink 是「<strong>流优先</strong>」——把无界数据流当作一等公民。这套世界观带来一组全新的硬核概念：<strong>事件时间与 Watermark</strong>（如何处理乱序与迟到）、<strong>窗口</strong>（在无限流上怎么做聚合）、<strong>State 与 Checkpoint</strong>（有状态计算如何容错）、<strong>Exactly-once</strong>（故障重放也不丢不重）、<strong>反压</strong>。理解它们，你就理解了实时数仓的引擎担当，也理解了「真正的流」与「微批」的本质差异。</p>
+      <div class="meta">
+        <span>8 章 + 术语表</span>
+        <span>8 张 SVG / 图表</span>
+        <span>2 个交互演示</span>
+        <span>30+ 名词解释</span>
+        <span>对比 Spark · 类比驱动</span>
+        <span>无 CDN · 单文件</span>
+      </div>
+    </header>
+
+    <!-- ============= 第 0 章 ============= -->
+    <section class="chapter" id="ch0">
+      <div class="ch-head">
+        <div class="num">00</div>
+        <div class="t">
+          <h2>流优先 vs 批优先：两种世界观</h2>
+          <p class="sub">Spark 把流当"小批"，Flink 把批当"有界的流" · 这个起点差异决定了一切</p>
+        </div>
+      </div>
+
+      <p class="lead">Spark Streaming 的本质是 <strong>微批（micro-batch）</strong>：把流切成一个个小批次，每隔几百毫秒/几秒跑一次批处理。Flink 则是 <strong>真正的流（true streaming）</strong>：数据一条来就处理一条，延迟可达毫秒级。<strong>「批是有界的流」</strong>——这是 Flink 的核心信条。</p>
+
+      <div class="analogy">微批像<strong>公交车</strong>：你到站后要等下一班车（攒够一个批次窗口）才能走，发车间隔就是延迟下限。真流像<strong>自动扶梯</strong>：你一踏上去就被持续往上送，几乎不用等。公交吞吐高、调度简单；扶梯延迟低、随到随走。两种都能到目的地，但"等不等"的体验天差地别。</div>
+
+      <div class="svg-wrap">
+        <svg width="760" height="200" viewBox="0 0 760 200" role="img" aria-label="微批 vs 真流">
+          <text x="190" y="22" text-anchor="middle" fill="#fbbf24" font-size="13" font-weight="bold">Spark：微批（攒一批再处理）</text>
+          <line x1="40" y1="90" x2="340" y2="90" stroke="#2a3556" stroke-width="2"/>
+          <g fill="#fcd34d"><circle cx="70" cy="90" r="5"/><circle cx="95" cy="90" r="5"/><circle cx="120" cy="90" r="5"/></g>
+          <rect x="58" y="70" width="75" height="40" rx="5" fill="none" stroke="#fbbf24" stroke-dasharray="3 2"/>
+          <text x="95" y="135" text-anchor="middle" fill="#94a3b8" font-size="9.5">批1（攒齐再算）</text>
+          <g fill="#fcd34d"><circle cx="175" cy="90" r="5"/><circle cx="200" cy="90" r="5"/><circle cx="225" cy="90" r="5"/></g>
+          <rect x="163" y="70" width="75" height="40" rx="5" fill="none" stroke="#fbbf24" stroke-dasharray="3 2"/>
+          <text x="200" y="135" text-anchor="middle" fill="#94a3b8" font-size="9.5">批2</text>
+          <g fill="#fcd34d"><circle cx="280" cy="90" r="5"/><circle cx="305" cy="90" r="5"/></g>
+          <rect x="268" y="70" width="55" height="40" rx="5" fill="none" stroke="#fbbf24" stroke-dasharray="3 2"/>
+          <text x="190" y="170" text-anchor="middle" fill="#fbbf24" font-size="10.5">延迟 ≈ 批间隔（秒级）· 吞吐高 · 实现简单</text>
+
+          <line x1="400" y1="35" x2="400" y2="180" stroke="#2a3556" stroke-dasharray="4 4"/>
+
+          <text x="575" y="22" text-anchor="middle" fill="#34d399" font-size="13" font-weight="bold">Flink：真流（来一条算一条）</text>
+          <line x1="430" y1="90" x2="730" y2="90" stroke="#2a3556" stroke-width="2"/>
+          <g fill="#6ee7b7"><circle cx="460" cy="90" r="5"/><circle cx="500" cy="90" r="5"/><circle cx="540" cy="90" r="5"/><circle cx="580" cy="90" r="5"/><circle cx="620" cy="90" r="5"/><circle cx="660" cy="90" r="5"/></g>
+          <g stroke="#34d399" stroke-width="1.2"><line x1="460" y1="75" x2="460" y2="60"/><line x1="500" y1="75" x2="500" y2="60"/><line x1="540" y1="75" x2="540" y2="60"/><line x1="580" y1="75" x2="580" y2="60"/></g>
+          <text x="575" y="170" text-anchor="middle" fill="#34d399" font-size="10.5">延迟 ≈ 毫秒级 · 逐条处理 · 有状态算子</text>
+        </svg>
+        <div class="svg-caption">微批把时间切块、整块处理；真流持续不断逐条推进。Spark 后来也有 Continuous Processing，Flink 也支持批，但二者的「出身」差异塑造了各自的设计。</div>
+      </div>
+
+      <table>
+        <thead><tr><th>维度</th><th>Spark（批优先 / 微批）</th><th>Flink（流优先）</th></tr></thead>
+        <tbody>
+          <tr><td>核心模型</td><td>把流切成小批</td><td>把批看成有界的流</td></tr>
+          <tr><td>延迟</td><td class="cell-mid">秒级（批间隔）</td><td class="cell-ok">毫秒级</td></tr>
+          <tr><td>状态 / 时间语义</td><td class="cell-mid">较弱（后期补强）</td><td class="cell-ok">原生强大（事件时间/Watermark/State）</td></tr>
+          <tr><td>最擅长</td><td>大吞吐离线批 + 准实时</td><td>低延迟实时、复杂事件、实时数仓</td></tr>
+        </tbody>
+      </table>
+      <div class="info">不是「谁取代谁」。批处理（离线数仓、训练）Spark 依然强势；低延迟实时（风控、实时大屏、监控）Flink 是标杆。很多公司<strong>两者并存</strong>：Spark 跑离线，Flink 跑实时（D08 实时数仓会把它们拼起来）。</div>
+    </section>
+
+    <!-- ============= 第 1 章 ============= -->
+    <section class="chapter" id="ch1">
+      <div class="ch-head">
+        <div class="num">01</div>
+        <div class="t">
+          <h2>事件时间与 Watermark</h2>
+          <p class="sub">流处理最硬核、也最考验理解的概念 · 如何在「数据乱序、迟到」的现实里算对结果</p>
+        </div>
+      </div>
+
+      <p class="lead">流处理的头号难题是：<strong>数据不会按发生顺序乖乖到达</strong>。手机离线缓存、网络抖动、分布式乱序——一条「10:00 发生」的事件，可能 10:05 才到。如果按「到达时间」算「10:00 这一分钟的 PV」，结果就错了。Flink 用<strong>事件时间 + Watermark</strong>这套机制来应对。</p>
+
+      <h3 id="s1-1">1.1 三种时间</h3>
+      <div class="grid cols-3">
+        <div class="card amber"><h4>事件时间 Event Time</h4><p style="font-size:13px;color:var(--text-dim)">事件<strong>实际发生</strong>的时间（数据自带的时间戳）。如用户点击的那一刻。<strong>唯一能算出"正确"结果</strong>的时间。</p></div>
+        <div class="card"><h4>处理时间 Processing Time</h4><p style="font-size:13px;color:var(--text-dim)">事件被算子<strong>处理到</strong>的机器时间。最简单、延迟最低，但结果不可复现（取决于到达快慢）。</p></div>
+        <div class="card violet"><h4>摄入时间 Ingestion Time</h4><p style="font-size:13px;color:var(--text-dim)">事件<strong>进入 Flink</strong>的时间。介于两者之间，用得少。</p></div>
+      </div>
+      <div class="svg-wrap">
+        <svg width="720" height="170" viewBox="0 0 720 170" role="img" aria-label="事件时间与处理时间的偏移">
+          <text x="360" y="20" text-anchor="middle" fill="#7dd3fc" font-size="13" font-weight="bold">同一条事件：事件时间 ≠ 处理时间（中间隔着网络/排队延迟）</text>
+          <line x1="60" y1="60" x2="660" y2="60" stroke="#fbbf24" stroke-width="2"/>
+          <text x="60" y="48" fill="#fbbf24" font-size="11">事件时间轴（发生）</text>
+          <circle cx="180" cy="60" r="7" fill="#fbbf24"/><text x="180" y="82" text-anchor="middle" fill="#fcd34d" font-size="10">10:00 点击</text>
+          <line x1="60" y1="130" x2="660" y2="130" stroke="#34d399" stroke-width="2"/>
+          <text x="60" y="118" fill="#34d399" font-size="11">处理时间轴（被算到）</text>
+          <circle cx="420" cy="130" r="7" fill="#34d399"/><text x="420" y="152" text-anchor="middle" fill="#6ee7b7" font-size="10">10:05 才到达处理</text>
+          <line x1="180" y1="67" x2="420" y2="123" stroke="#f472b6" stroke-width="1.4" stroke-dasharray="4 3" marker-end="url(#arx)"/>
+          <text x="300" y="100" text-anchor="middle" fill="#f9a8d4" font-size="10">延迟 5 分钟（乱序之源）</text>
+          <defs><marker id="arx" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#f472b6"/></marker></defs>
+        </svg>
+        <div class="svg-caption">事件 10:00 发生，10:05 才被处理。要算「10:00 这一分钟」的指标，必须用事件时间——但又得等"可能迟到的"数据，这就引出了 Watermark。</div>
+      </div>
+
+      <h3 id="s1-2">1.2 Watermark：流处理的"时间进度条"</h3>
+      <div class="analogy">Watermark 像<strong>考试交卷的"截止广播"</strong>：老师说「事件时间到 10:05 为止的卷子应该都交齐了，开始批改 10:00–10:05 这批」。它不是说"绝对没有更晚的"，而是一个<strong>务实的判断：等到这个点，迟到的就少到可以接受了，该出结果了</strong>。设大了结果更准但更慢，设小了更快但可能漏掉迟到数据——这是<strong>延迟 vs 准确性</strong>的经典权衡。</div>
+      <div class="def"><strong>Watermark（水位线）</strong>：流中穿插的一种特殊标记，声明「<strong>事件时间已经推进到 T，比 T 更早的数据应该基本都到齐了</strong>」。它由数据源根据已见到的最大事件时间生成（常见：<code>watermark = 当前最大事件时间 − 允许的最大乱序时间</code>）。当 Watermark 越过某个窗口的结束边界，该窗口就<strong>触发计算并输出</strong>。它是 Flink 在"乱序无界流"上做出"确定性结果"的关键。<strong>多输入/多分区场景下，下游算子的有效 Watermark 通常取最小值</strong>，因此最慢分区会拖住整体窗口触发（常见现象：watermark stagnation）。</div>
+      <div class="def"><strong>允许迟到（Allowed Lateness）</strong>：Watermark 之后才到的数据叫<strong>迟到数据（late data）</strong>。默认会被丢弃；可设置一段"宽限期"让窗口暂不销毁、迟到数据仍能更新结果；再晚的可以走<strong>侧输出流（side output）</strong>单独收集，避免直接丢失。</div>
+
+      <h3 id="s1-3">1.3 交互演示：Watermark 推进 & 迟到数据</h3>
+      <p>下面是一串<strong>乱序到达</strong>的事件（每个标了事件时间 t）。窗口大小 = 5（即 [0,5)、[5,10)…），允许乱序 = 1（Watermark = 已见最大 t − 1）。逐个点「下一条事件」，观察 Watermark 推进、窗口何时触发、以及迟到数据如何被丢弃：</p>
+
+      <div class="demo" id="wmDemo">
+        <div class="demo-title">交互演示 · Watermark 与迟到数据</div>
+        <div class="demo-controls">
+          <button class="run" id="wmNext">▶ 下一条事件</button>
+          <button class="ghost" id="wmReset">重置</button>
+        </div>
+        <div class="wm-stream" id="wmStream"></div>
+        <div class="wm-stat">
+          <span>已见最大事件时间 maxEventTime = <span class="v" id="wmMax">—</span></span>
+          <span>当前 Watermark = <span class="v" id="wmVal">—</span></span>
+        </div>
+        <div class="wm-fired" id="wmFired"></div>
+        <div class="wm-readout" id="wmReadout">点「下一条事件」开始。事件按<strong>到达顺序</strong>（非事件时间顺序）逐个进入。</div>
+      </div>
+      <div class="note">关键时刻：当事件 <code>E(t=6)</code> 到达，Watermark 推到 5，窗口 <code>[0,5)</code> 触发并输出。随后迟到的 <code>F(t=2)</code> 本属于 <code>[0,5)</code>，但那个窗口已经"交卷"——它被判为<strong>迟到数据丢弃</strong>。这正是 Watermark 的作用：在"等多久"和"算多准"之间画一条务实的线。</div>
+    </section>
+
+    <!-- ============= 第 2 章 ============= -->
+    <section class="chapter" id="ch2">
+      <div class="ch-head">
+        <div class="num">02</div>
+        <div class="t">
+          <h2>窗口 Window：在无限流上做聚合</h2>
+          <p class="sub">流是无界的，但「每分钟 PV」需要边界 · 窗口就是把无限流切成有限片来算</p>
+        </div>
+      </div>
+
+      <p class="lead">流没有尽头，但业务问题总是有界的：「最近 1 分钟的订单量」「每小时 UV」。<strong>窗口（Window）</strong>就是把无界流按时间（或数量）切成一段段有限的"桶"，在每个桶上做聚合。</p>
+
+      <h3 id="s2-1">2.1 三类窗口</h3>
+      <div class="grid cols-3">
+        <div class="card"><h4>滚动窗口 Tumbling</h4><p style="font-size:13px;color:var(--text-dim)">固定大小、<strong>首尾相接不重叠</strong>。如「每 5 秒一个窗口」。每条数据只属于一个窗口。最常用。</p></div>
+        <div class="card violet"><h4>滑动窗口 Sliding</h4><p style="font-size:13px;color:var(--text-dim)">固定大小，但按<strong>更小的步长滑动、会重叠</strong>。如「窗口 5 秒、每 2 秒算一次」。一条数据可属于多个窗口。</p></div>
+        <div class="card green"><h4>会话窗口 Session</h4><p style="font-size:13px;color:var(--text-dim)">没有固定大小，按<strong>活动间隔</strong>切：两条数据间隔超过 gap 就断开成新窗口。适合用户会话分析。</p></div>
+      </div>
+
+      <h3 id="s2-2">2.2 交互演示：三类窗口怎么分组同一串事件</h3>
+      <p>同一串事件（按事件时间分布在时间轴上），切换窗口类型，看它们被分到哪些窗口里——尤其注意<strong>滑动窗口的重叠</strong>和<strong>会话窗口的不定长</strong>：</p>
+
+      <div class="demo" id="winDemo">
+        <div class="demo-title">交互演示 · 滚动 / 滑动 / 会话窗口</div>
+        <div class="demo-controls">
+          <button class="seg active" data-w="tumbling">滚动 Tumbling（size=4）</button>
+          <button class="seg" data-w="sliding">滑动 Sliding（size=4, slide=2）</button>
+          <button class="seg" data-w="session">会话 Session（gap=2）</button>
+        </div>
+        <div class="win-timeline" id="winTimeline"></div>
+        <div class="win-rows" id="winRows"></div>
+        <div class="win-note" id="winNote"></div>
+      </div>
+      <div class="tip">黄点是事件（按事件时间放在轴上），每条蓝色带是一个窗口。<strong>滚动</strong>：窗口不重叠、整齐铺满；<strong>滑动</strong>：窗口层层重叠，一个事件落在多个窗口里（所以计算量更大）；<strong>会话</strong>：窗口长度随数据疏密变化，安静一段就自动断开。</div>
+    </section>
+
+    <!-- ============= 第 3 章 ============= -->
+    <section class="chapter" id="ch3">
+      <div class="ch-head">
+        <div class="num">03</div>
+        <div class="t">
+          <h2>State：有状态计算</h2>
+          <p class="sub">流处理要"记住过去" · 状态是 Flink 区别于无状态管道的灵魂</p>
+        </div>
+      </div>
+
+      <p class="lead">很多流计算需要<strong>记忆</strong>：累计 UV、连续登录天数、上一条事件做差分……这些"到目前为止的中间结果"就是 <strong>State（状态）</strong>。Flink 把状态做成<strong>一等公民</strong>——它帮你管理、持久化、容错恢复状态，你只管用。</p>
+
+      <div class="analogy">无状态算子像<strong>计算器</strong>：算完一个就忘，输入什么输出什么。有状态算子像<strong>记账本</strong>：每来一笔都记在账上、累计起来。Flink 的厉害之处是这个"账本"<strong>跑在内存里飞快，又能定期拍快照存到可靠存储，崩了能从快照恢复</strong>——既快又不怕丢。</div>
+
+      <div class="grid cols-2">
+        <div class="card"><h4>Keyed State（按 key 的状态）</h4><p style="font-size:13px;color:var(--text-dim)">最常用。数据按 key 分流后，每个 key 维护自己的状态（如每个用户的累计消费）。类型：ValueState、ListState、MapState、Reducing/AggregatingState。</p></div>
+        <div class="card violet"><h4>Operator State（算子状态）</h4><p style="font-size:13px;color:var(--text-dim)">与 key 无关，绑定到算子实例。典型用途：Kafka source 记录每个分区读到的 offset。</p></div>
+      </div>
+
+      <div class="def"><strong>State Backend（状态后端）</strong>：决定状态存哪、怎么存。两种主流：① <strong>HashMapStateBackend</strong>——状态放 JVM 堆内存，快但受内存限制；② <strong>RocksDBStateBackend</strong>——状态存本地 RocksDB（可溢写磁盘），能支撑<strong>超大状态（TB 级）</strong>，代价是序列化开销。大状态作业几乎都用 RocksDB——这里又见到了 D01 的 LSM-Tree 老朋友（RocksDB 是 LSM 引擎）。</div>
+      <div class="note">状态会无限增长吗？会——所以要用 <strong>State TTL（过期清理）</strong> 给状态设过期时间，否则像 UV 去重这种状态会越积越大，最终 OOM 或撑爆磁盘。状态治理是有状态流作业的运维重点。</div>
+
+      <h3 id="s3-1">3.1 状态原语：选对类型，少踩坑</h3>
+      <p>Keyed State 不是只有一种。选错类型会带来不必要的序列化和性能问题，这是 Flink 进阶面试的细节考点：</p>
+      <table>
+        <thead><tr><th>状态类型</th><th>存什么</th><th>典型用途 / 注意</th></tr></thead>
+        <tbody>
+          <tr><td><code>ValueState&lt;T&gt;</code></td><td>单个值</td><td>计数器、上一条值（做差分）。最常用。</td></tr>
+          <tr><td><code>ListState&lt;T&gt;</code></td><td>一个列表</td><td>缓存一批待处理元素。别无限 append（要配 TTL/触发清理）。</td></tr>
+          <tr><td><code>MapState&lt;K,V&gt;</code></td><td>一个 map</td><td class="cell-ok">去重、按子键聚合。RocksDB 下<strong>按需读单个 key</strong>，比把大 Map 塞进 ValueState 高效得多。</td></tr>
+          <tr><td><code>Reducing/AggregatingState</code></td><td>增量聚合结果</td><td>边来边聚合（sum/avg），只存结果不存原始值，省内存。</td></tr>
+        </tbody>
+      </table>
+      <div class="warn">高频坑：用 <code>ValueState&lt;Map&gt;</code> 存一个大 Map——每次访问都要<strong>反序列化整个 Map</strong>，状态一大就慢爆。正解是用 <code>MapState</code>，RocksDB 后端能只读写你访问的那个子 key。这正是 D01「按需读 vs 全量读」直觉在状态层的复现。</div>
+
+      <h3 id="s3-2">3.2 增量 Checkpoint 与状态可伸缩</h3>
+      <div class="def"><strong>增量 Checkpoint（Incremental Checkpoint）</strong>：RocksDB 后端独有。普通 checkpoint 每次都把<strong>全量状态</strong>上传到 DFS（对象存储/HDFS），TB 级状态会让 checkpoint 又慢又占带宽。增量 checkpoint 利用 RocksDB 的 LSM 特性——<strong>只上传自上次以来新增/变更的 SST 文件</strong>，把每次 checkpoint 的数据量从「全量」降到「增量」。大状态生产作业几乎必开。代价：恢复时要合并多个增量、且文件清理更复杂。</div>
+      <div class="def"><strong>Changelog State Backend（Flink 1.15+）</strong>：为「让 checkpoint <strong>更频繁、更稳定</strong>」而生。它把状态变更先写一份 changelog 日志（持续上传），checkpoint 时只需确认日志位点，从而大幅缩短 checkpoint 时长、削平毛刺。代价是恢复要回放日志、且多一份写放大。延迟敏感、要求 checkpoint 间隔极短时考虑。</div>
+      <div class="def"><strong>状态可伸缩与 Key Group</strong>：把作业并行度从 4 改到 8（rescale），每个 key 的状态怎么跟着重新分配？Flink 把 keyspace 预先切成固定数量的 <strong>Key Group（键组）</strong>（= 最大并行度 <code>maxParallelism</code>），状态按 key group 为单位分配给各 subtask。扩缩容时<strong>以 key group 为粒度搬迁</strong>，而非逐 key——这就是 Flink 能「带着 TB 状态平滑扩缩容」的关键。<strong>所以 <code>maxParallelism</code> 一旦设定就不能改</strong>（改了 key group 划分就变、老状态无法对应），上线前要预留好。</div>
+      <div class="tip">把 ch4 的 Checkpoint/Savepoint 连起来看：<strong>Checkpoint</strong>（自动、增量、容错恢复）+ <strong>Savepoint</strong>（手动、全量对齐、用于升级/迁移/改并行度）+ <strong>Key Group</strong>（让状态可重分配）= Flink「有状态作业也能像无状态服务一样运维」的完整拼图。这是它区别于「自己用 Redis 存状态」的根本价值。</div>
+    </section>
+
+    <!-- ============= 第 4 章 ============= -->
+    <section class="chapter" id="ch4">
+      <div class="ch-head">
+        <div class="num">04</div>
+        <div class="t">
+          <h2>Checkpoint 与 Exactly-once</h2>
+          <p class="sub">有状态 + 长时间运行 = 一定会遇到故障 · Flink 怎么做到"崩了重启也不丢不重"</p>
+        </div>
+      </div>
+
+      <p class="lead">一个流作业可能跑几个月。机器宕机、网络抖动是常态。Flink 靠 <strong>Checkpoint（检查点）</strong>定期给整个作业的状态拍"一致性快照"，故障后从最近的快照恢复，配合可重放的数据源（如 Kafka），实现 <strong>Exactly-once（精确一次）</strong>。</p>
+
+      <h3 id="s4-1">4.1 EOS 的边界条件（别神化）</h3>
+      <div class="def"><strong>Exactly-once（精确一次）</strong>：即使中途故障重放，每条数据对<strong>状态/结果</strong>的影响有且只有一次（不丢不重）。注意：这通常指"<strong>状态</strong>的精确一次"。要做到端到端精确一次（连下游输出也不重复），还需要<strong>可重放的源</strong>（Kafka offset）+ <strong>支持事务/幂等的 sink</strong>（两阶段提交 2PC）+ 正确的提交协议。任何一环缺失，端到端语义通常会退化为 at-least-once。</div>
+      <div class="warn">很多外部系统并不支持真正事务提交（或跨系统事务成本过高），实践中常见折中是<strong>at-least-once + 业务幂等去重</strong>。因此要先明确你追求的是"状态 EOS"还是"端到端 EOS"。</div>
+
+      <div class="def"><strong>Chandy-Lamport 异步屏障快照（Asynchronous Barrier Snapshotting）</strong>：Flink Checkpoint 的核心算法。做法：往数据流里周期性插入特殊标记 <strong>Barrier（屏障）</strong>，它随数据一起流过每个算子。算子<strong>一收到 barrier，就把自己当前的状态异步快照下来</strong>，然后把 barrier 传给下游。当 barrier 流过整个拓扑，一次全局一致的快照就完成了——<strong>全程几乎不停止数据处理</strong>，这是它的精妙之处。</div>
+
+      <div class="svg-wrap">
+        <svg width="760" height="200" viewBox="0 0 760 200" role="img" aria-label="Checkpoint barrier 流过算子链">
+          <text x="380" y="22" text-anchor="middle" fill="#7dd3fc" font-size="14" font-weight="bold">Checkpoint Barrier 随数据流过算子链，各算子顺势拍快照</text>
+          <defs><marker id="arc" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#64748b"/></marker></defs>
+          <g font-family="monospace" font-size="11">
+            <rect x="40" y="80" width="110" height="50" rx="8" fill="#10172b" stroke="#7dd3fc"/><text x="95" y="110" text-anchor="middle" fill="#7dd3fc">Source</text>
+            <rect x="250" y="80" width="110" height="50" rx="8" fill="#10241c" stroke="#34d399"/><text x="305" y="103" text-anchor="middle" fill="#6ee7b7">map/keyBy</text><text x="305" y="120" text-anchor="middle" fill="#94a3b8" font-size="9">有状态</text>
+            <rect x="460" y="80" width="110" height="50" rx="8" fill="#231a33" stroke="#a78bfa"/><text x="515" y="103" text-anchor="middle" fill="#c4b5fd">window</text><text x="515" y="120" text-anchor="middle" fill="#94a3b8" font-size="9">有状态</text>
+            <rect x="650" y="80" width="80" height="50" rx="8" fill="#1a2138" stroke="#475569"/><text x="690" y="110" text-anchor="middle" fill="#cbd5e1">Sink</text>
+          </g>
+          <line x1="150" y1="105" x2="248" y2="105" stroke="#64748b" marker-end="url(#arc)"/>
+          <line x1="360" y1="105" x2="458" y2="105" stroke="#64748b" marker-end="url(#arc)"/>
+          <line x1="570" y1="105" x2="648" y2="105" stroke="#64748b" marker-end="url(#arc)"/>
+          <!-- barrier -->
+          <line x1="205" y1="60" x2="205" y2="150" stroke="#fbbf24" stroke-width="2.5"/>
+          <text x="205" y="52" text-anchor="middle" fill="#fcd34d" font-size="11" font-weight="bold">🚧 Barrier</text>
+          <text x="205" y="170" text-anchor="middle" fill="#94a3b8" font-size="9.5">流过谁，谁就拍快照</text>
+          <!-- snapshot store -->
+          <rect x="250" y="160" width="320" height="30" rx="6" fill="#0c1120" stroke="#34d399" stroke-dasharray="3 2"/>
+          <text x="410" y="180" text-anchor="middle" fill="#6ee7b7" font-size="10">快照异步写入持久化存储（HDFS / S3）</text>
+        </svg>
+        <div class="svg-caption">Barrier 像流水线上的"分隔板"，把"屏障前"和"屏障后"的数据隔开。各算子在 barrier 到达时记录自己的状态，无需全局停顿。恢复时所有算子回滚到同一个 checkpoint，源重放 barrier 之后的数据。</div>
+      </div>
+
+      <div class="def"><strong>Checkpoint vs Savepoint</strong>：两者机制相同，用途不同。<strong>Checkpoint</strong> 是 Flink <strong>自动周期触发</strong>、用于故障自动恢复的快照，作业停了通常清掉。<strong>Savepoint</strong> 是你<strong>手动触发</strong>、用于运维的快照——升级代码、迁移集群、A/B 切换前打一个，之后从它恢复，状态无损。</div>
+
+      <h3 id="s4-2">4.2 Checkpoint 调参速查（生产常用）</h3>
+      <table>
+        <thead><tr><th>参数</th><th>作用</th><th>建议</th></tr></thead>
+        <tbody>
+          <tr><td><code>execution.checkpointing.interval</code></td><td>两次 checkpoint 间隔</td><td>低延迟链路通常 10s~60s，先从 30s 起步</td></tr>
+          <tr><td><code>execution.checkpointing.timeout</code></td><td>单次 checkpoint 超时</td><td>设置为稳定耗时的 3~5 倍，避免误杀</td></tr>
+          <tr><td><code>execution.checkpointing.min-pause</code></td><td>两次 checkpoint 最小间隔</td><td>防止连续 checkpoint 压垮 IO</td></tr>
+          <tr><td><code>execution.checkpointing.max-concurrent-checkpoints</code></td><td>并发 checkpoint 数</td><td>先用 1，确认稳定后再评估并发</td></tr>
+          <tr><td><code>execution.checkpointing.unaligned</code></td><td>反压场景加速 barrier 对齐</td><td>高反压链路可考虑开启，注意状态体积上升</td></tr>
+        </tbody>
+      </table>
+      <div class="tip">线上排障顺序可固定为：<strong>先看 checkpoint duration / timeout → 再看 backpressure → 再看状态大小与 RocksDB compaction</strong>。这比盲目扩容更高效。</div>
+    </section>
+
+    <!-- ============= 第 5 章 ============= -->
+    <section class="chapter" id="ch5">
+      <div class="ch-head">
+        <div class="num">05</div>
+        <div class="t">
+          <h2>反压 · 流式 Join · 维表关联</h2>
+          <p class="sub">流系统特有的几个工程问题 · 老兵会觉得似曾相识（流控、背压）</p>
+        </div>
+      </div>
+
+      <h3>5.1 反压（Backpressure）</h3>
+      <div class="analogy">反压像<strong>高速公路的连环刹车</strong>：前方堵了（下游算子处理不过来），后车只能跟着减速，一路往后传，最终连入口（数据源）都被迫限流。这是<strong>流系统的自我保护</strong>——避免下游被压垮、数据在内存里堆爆。</div>
+      <div class="def"><strong>反压（Backpressure）</strong>：当某算子处理速度跟不上上游产出速度时，它通过阻塞/限流把"我忙不过来"的信号<strong>逐级往上游传递</strong>，迫使上游降速，直到数据源。Flink 基于<strong>有界缓冲 + 信用（credit-based）流控</strong>实现。<strong>排查时看 Flink UI 的反压指标</strong>：哪个算子标红/High，瓶颈就在它（或它下游）。常见原因：数据倾斜、某算子逻辑重、外部 IO 慢、资源不足。</div>
+      <div class="info">老兵视角：这就是 TCP 流控 / 生产者-消费者背压在分布式流引擎里的翻版。理念完全一致——<strong>用反向的压力信号匹配生产与消费速率</strong>，避免无界堆积。</div>
+
+      <h3>5.2 流式 Join 与维表关联</h3>
+      <p>批处理里 join 很自然，但流是无界的——你不能"等两条流都到齐"再 join。Flink 提供几种流上 join：</p>
+      <table>
+        <thead><tr><th>类型</th><th>做法</th><th>场景</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Window Join</strong></td><td>在同一个窗口内的两条流做 join</td><td>同时段的两类事件关联</td></tr>
+          <tr><td><strong>Interval Join</strong></td><td>流 A 的事件 join 流 B 在 [-下界, +上界] 时间区间内的事件</td><td>下单与支付在 N 分钟内配对</td></tr>
+          <tr><td><strong>维表 Join（Lookup）</strong></td><td>流去关联一张外部维表（DB/缓存）</td><td>给订单流补上商品/用户属性</td></tr>
+        </tbody>
+      </table>
+      <div class="def"><strong>维表关联（Dimension / Lookup Join）</strong>：用流里的 key 去查一张相对静态的维度表（如商品表），补全属性——正是 D02 维度建模在实时侧的落地。难点是维表也会变：实现上常用<strong>缓存 + 定期刷新</strong>，或用 <strong>Temporal Table（时态表）</strong>关联到"事件发生时刻"的维度版本（呼应 D02 的 SCD2！时间点正确性在流里同样关键）。</div>
+    </section>
+
+    <!-- ============= 第 6 章 ============= -->
+    <section class="chapter" id="ch6">
+      <div class="ch-head">
+        <div class="num">06</div>
+        <div class="t">
+          <h2>CEP · Flink SQL · 流批一体</h2>
+          <p class="sub">从底层 API 到声明式 SQL · Flink 的上层能力与统一愿景</p>
+        </div>
+      </div>
+
+      <h3>6.1 CEP：复杂事件处理</h3>
+      <div class="def"><strong>CEP（Complex Event Processing，复杂事件处理）</strong>：在事件流中<strong>匹配特定的模式序列</strong>。比如「同一用户 5 分钟内连续 3 次登录失败 → 触发风控告警」「下单后 30 分钟未支付 → 发提醒」。Flink CEP 让你用类正则的方式声明这种"事件模式"，引擎自动在流上做模式匹配。是风控、监控、营销场景的利器。</div>
+
+      <h3>6.2 Flink SQL：用 SQL 写流</h3>
+      <p>和 Spark 一样，Flink 也提供声明式的 <strong>Table API / SQL</strong>，让你用 SQL 表达流处理——窗口、join、聚合都能写。底层同样有优化器把 SQL 编译成高效的流算子。</p>
+      <pre><span class="c">-- Flink SQL：每 5 分钟滚动窗口，按商品统计销量（事件时间 + Watermark）</span>
+<span class="k">SELECT</span>
+    window_start,
+    product_id,
+    <span class="f">SUM</span>(amount) <span class="k">AS</span> sales
+<span class="k">FROM</span> <span class="k">TABLE</span>(
+    <span class="f">TUMBLE</span>(<span class="k">TABLE</span> orders, <span class="k">DESCRIPTOR</span>(event_time), <span class="k">INTERVAL</span> <span class="s">'5'</span> <span class="k">MINUTES</span>))
+<span class="k">GROUP BY</span> window_start, product_id;</pre>
+      <div class="tip">注意这里的 <code>event_time</code> 和 <code>TUMBLE</code> 窗口——前几章的概念在 SQL 里直接成了语法。声明式让你专注"算什么"，把"怎么高效流式执行"交给引擎。</div>
+
+      <h3>6.3 流批一体（Unified Batch & Stream）</h3>
+      <div class="def"><strong>流批一体</strong>：用<strong>同一套 API、同一段代码</strong>，既能处理无界流（实时），也能处理有界流（批）。Flink 的理念是「批是有界的流」，所以天然统一；Spark 也从批侧努力统一。好处：业务逻辑写一遍，离线回溯和实时计算复用，避免"Lambda 架构"里实时/离线两套代码对不齐的痛（D08 实时数仓会深入 Lambda vs Kappa）。</div>
+      <div class="info">本篇把 Flink 的"流优先"世界观讲透了。它和 D03 的 Spark 不是对立，而是<strong>互补的两种引擎哲学</strong>：批吞吐用 Spark，实时低延迟用 Flink。D08 会把 Kafka + Flink + OLAP 拼成一个完整的实时数仓。</div>
+    </section>
+
+    <!-- ============= 第 7 章 ============= -->
+    <section class="chapter" id="ch7">
+      <div class="ch-head">
+        <div class="num">07</div>
+        <div class="t">
+          <h2>小结 · 面试 · 术语表</h2>
+          <p class="sub">收束成判断力 · 并接上 D05</p>
+        </div>
+      </div>
+
+      <h3>一页纸总结</h3>
+      <div class="grid cols-2">
+        <div class="card"><h4>① 流优先</h4><p style="font-size:13px;color:var(--text-dim)">Flink 把"批看成有界流"，逐条处理、毫秒延迟；Spark 是微批。各擅胜场。</p></div>
+        <div class="card amber"><h4>② 事件时间 + Watermark</h4><p style="font-size:13px;color:var(--text-dim)">用事件时间算"正确"结果；Watermark 是时间进度条，决定窗口何时触发、迟到怎么处理。</p></div>
+        <div class="card violet"><h4>③ 窗口</h4><p style="font-size:13px;color:var(--text-dim)">把无界流切成有限桶：滚动（不重叠）/滑动（重叠）/会话（按间隔）。</p></div>
+        <div class="card green"><h4>④ State</h4><p style="font-size:13px;color:var(--text-dim)">有状态计算的"记账本"；Keyed/Operator State；大状态用 RocksDB backend；记得设 TTL。</p></div>
+        <div class="card"><h4>⑤ Checkpoint + Exactly-once</h4><p style="font-size:13px;color:var(--text-dim)">Barrier 异步快照（Chandy-Lamport）；配可重放源 + 事务 sink 达端到端精确一次。</p></div>
+        <div class="card danger"><h4>⑥ 反压 / Join</h4><p style="font-size:13px;color:var(--text-dim)">反压逐级传导保护系统；流上 join 靠窗口/区间/维表（时态表）。</p></div>
+      </div>
+
+      <h3>面试自测（点击展开）</h3>
+      <details class="qa">
+        <summary><span class="lvl pill cyan">基础</span>事件时间和处理时间有什么区别？为什么流处理偏爱事件时间？</summary>
+        <div class="a">
+          <div class="point"><span class="label">事件时间</span>事件实际发生的时间（数据自带时间戳）。</div>
+          <div class="point"><span class="label">处理时间</span>事件被算子处理到的机器时间，受网络/排队影响。</div>
+          <div class="point deep"><span class="label">为何偏爱</span>只有按事件时间，结果才<strong>正确且可复现</strong>（重放同一批数据得到同样结果）；按处理时间，结果取决于到达快慢，不可复现。</div>
+        </div>
+      </details>
+      <details class="qa">
+        <summary><span class="lvl pill green">核心</span>Watermark 是什么？它怎么解决乱序数据问题？</summary>
+        <div class="a">
+          <div class="point"><span class="label">定义</span>流中穿插的标记，声明"事件时间已推进到 T，比 T 早的数据基本到齐了"。</div>
+          <div class="point"><span class="label">机制</span>常用 <code>WM = 已见最大事件时间 − 允许乱序</code>。WM 越过窗口结束边界 → 窗口触发计算。</div>
+          <div class="point"><span class="label">迟到</span>WM 之后才到的是迟到数据，默认丢弃；可配 allowed lateness 宽限或侧输出收集。</div>
+          <div class="point deep"><span class="label">权衡</span>WM 设大→更准更慢；设小→更快但可能漏。是延迟 vs 准确性的折中。</div>
+        </div>
+      </details>
+      <details class="qa">
+        <summary><span class="lvl pill amber">高频</span>Flink 怎么做到 Exactly-once？是端到端的吗？</summary>
+        <div class="a">
+          <div class="point"><span class="label">机制</span>Checkpoint 用 Chandy-Lamport 屏障快照定期保存一致状态；故障后所有算子回滚到同一 checkpoint。</div>
+          <div class="point"><span class="label">范围</span>默认是<strong>状态</strong>的精确一次。</div>
+          <div class="point"><span class="label">端到端</span>还需<strong>可重放的源</strong>（Kafka offset）+ <strong>事务/幂等 sink</strong>（两阶段提交）才能保证连输出也不重复。</div>
+        </div>
+      </details>
+      <details class="qa">
+        <summary><span class="lvl pill violet">实战</span>Flink 作业延迟变高/吞吐下降，怎么排查反压？</summary>
+        <div class="a">
+          <div class="point"><span class="label">看 UI</span>Flink UI 的 Backpressure 指标，找标红/High 的算子——瓶颈在它或它下游。</div>
+          <div class="point"><span class="label">常见因</span>数据倾斜（某 key 热点）、算子逻辑重、外部 IO（维表/sink）慢、资源不足。</div>
+          <div class="point"><span class="label">解决</span>打散热点 key、增加并行度、异步 IO 访问外部、优化序列化、扩资源。</div>
+        </div>
+      </details>
+      <details class="qa">
+        <summary><span class="lvl pill red">对比</span>Flink 和 Spark Streaming 的本质区别？什么时候选谁？</summary>
+        <div class="a">
+          <div class="point"><span class="label">模型</span>Spark=微批（攒批再算，秒级延迟）；Flink=真流（逐条处理，毫秒延迟）。</div>
+          <div class="point"><span class="label">时间/状态</span>Flink 原生强大（事件时间/Watermark/State/Exactly-once）；Spark 后期补强。</div>
+          <div class="point deep"><span class="label">选型</span>大吞吐离线批 + 准实时→Spark；低延迟实时、复杂事件、实时数仓→Flink。很多团队两者并存。</div>
+        </div>
+      </details>
+
+      <!-- ===== 术语表 ===== -->
+      <h3 id="s7-gloss" style="margin-top:34px">术语表速查 · Glossary</h3>
+      <p>本篇核心名词一次收齐：</p>
+      <div class="glossary">
+        <div class="gl-group">
+          <h4>① 模型与时间</h4>
+          <div class="gl"><span class="gl-t">真流 vs 微批 <em>True Streaming / Micro-batch</em></span><span class="gl-d">Flink 逐条处理（毫秒延迟）；Spark 把流切成小批（秒级延迟）。「批是有界的流」是 Flink 信条。</span></div>
+          <div class="gl"><span class="gl-t">事件时间 <em>Event Time</em></span><span class="gl-d">事件实际发生的时间（数据自带）。唯一能算出正确且可复现结果的时间。</span></div>
+          <div class="gl"><span class="gl-t">处理时间 <em>Processing Time</em></span><span class="gl-d">事件被算子处理到的机器时间。简单、低延迟，但结果不可复现。</span></div>
+          <div class="gl"><span class="gl-t">Watermark <em>水位线</em></span><span class="gl-d">流中标记，声明"事件时间已推进到 T，更早的数据基本到齐"。越过窗口边界即触发计算。</span></div>
+          <div class="gl"><span class="gl-t">迟到数据 <em>Late Data</em></span><span class="gl-d">Watermark 之后才到的数据。默认丢弃，可配宽限期（allowed lateness）或侧输出收集。</span></div>
+        </div>
+        <div class="gl-group">
+          <h4>② 窗口</h4>
+          <div class="gl"><span class="gl-t">窗口 <em>Window</em></span><span class="gl-d">把无界流切成有限片来聚合的机制。</span></div>
+          <div class="gl"><span class="gl-t">滚动窗口 <em>Tumbling</em></span><span class="gl-d">固定大小、首尾相接不重叠，每条数据只属一个窗口。最常用。</span></div>
+          <div class="gl"><span class="gl-t">滑动窗口 <em>Sliding</em></span><span class="gl-d">固定大小、按小步长滑动会重叠，一条数据可属多个窗口。</span></div>
+          <div class="gl"><span class="gl-t">会话窗口 <em>Session</em></span><span class="gl-d">无固定大小，按活动间隔（gap）切分，适合用户会话分析。</span></div>
+          <div class="gl"><span class="gl-t">触发器 <em>Trigger</em></span><span class="gl-d">决定窗口何时输出结果（默认 Watermark 越过窗口末尾时触发）。</span></div>
+        </div>
+        <div class="gl-group">
+          <h4>③ 状态与容错</h4>
+          <div class="gl"><span class="gl-t">State <em>状态</em></span><span class="gl-d">流计算"记住的中间结果"。Keyed State（按 key）/ Operator State（按算子）。</span></div>
+          <div class="gl"><span class="gl-t">State Backend</span><span class="gl-d">状态存储方式：HashMap（堆内存，快）/ RocksDB（本地 LSM，可存 TB 级大状态）。</span></div>
+          <div class="gl"><span class="gl-t">State TTL</span><span class="gl-d">给状态设过期时间，防止无限增长导致 OOM / 磁盘爆。</span></div>
+          <div class="gl"><span class="gl-t">Checkpoint <em>检查点</em></span><span class="gl-d">Flink 自动周期触发的一致性状态快照，用于故障自动恢复。</span></div>
+          <div class="gl"><span class="gl-t">Savepoint <em>保存点</em></span><span class="gl-d">手动触发的快照，用于升级/迁移/回滚等运维操作。</span></div>
+          <div class="gl"><span class="gl-t">增量 Checkpoint</span><span class="gl-d">RocksDB 后端独有：只上传自上次以来变更的 SST 文件，大状态作业大幅降低 checkpoint 数据量与时长。</span></div>
+          <div class="gl"><span class="gl-t">Key Group <em>键组</em></span><span class="gl-d">keyspace 预切的固定分片（= maxParallelism），状态按它分配，扩缩容以键组为粒度搬迁。maxParallelism 设定后不可改。</span></div>
+          <div class="gl"><span class="gl-t">Barrier <em>屏障</em></span><span class="gl-d">插入数据流的标记，流过算子时触发其状态快照（Chandy-Lamport 异步屏障快照）。</span></div>
+          <div class="gl"><span class="gl-t">Exactly-once <em>精确一次</em></span><span class="gl-d">故障重放后每条数据对结果影响有且仅一次。端到端需可重放源 + 事务 sink（2PC）。</span></div>
+        </div>
+        <div class="gl-group">
+          <h4>④ 工程与上层</h4>
+          <div class="gl"><span class="gl-t">反压 <em>Backpressure</em></span><span class="gl-d">下游处理不过来时逐级向上游传递降速信号，保护系统不被压垮。看 UI 定位瓶颈算子。</span></div>
+          <div class="gl"><span class="gl-t">维表 / 时态表 Join <em>Lookup / Temporal</em></span><span class="gl-d">流关联外部维表补属性；时态表关联到"事件发生时刻"的维度版本（呼应 SCD2）。</span></div>
+          <div class="gl"><span class="gl-t">CEP <em>复杂事件处理</em></span><span class="gl-d">在流中匹配事件模式序列（如 5 分钟内连续 3 次失败），用于风控/监控。</span></div>
+          <div class="gl"><span class="gl-t">Flink SQL / Table API</span><span class="gl-d">声明式写流处理，窗口/join/聚合皆可，底层优化器编译成流算子。</span></div>
+          <div class="gl"><span class="gl-t">流批一体</span><span class="gl-d">同一套代码处理有界（批）与无界（流）数据，避免实时/离线两套逻辑对不齐。</span></div>
+        </div>
+      </div>
+
+      <div class="tip" style="margin-top:24px"><strong>下一篇 · D05：高级 SQL（分析型）</strong>——窗口函数、ROLLUP/CUBE、递归 CTE、Join 进阶与执行顺序调优（贯穿数据栈的通用语言）。之后 <strong>D06：数据摄取与消息中枢</strong>（Kafka 深入、CDC、Airflow 编排）把数据"进来"的血管打通。</div>
+    </section>
+
+  </main>
+</div>
+
+<footer>
+  <div class="made">TECH NOTES · BIG DATA SERIES</div>
+  #D04 Flink 流处理深潜 · <a href="../index.html">返回首页</a> · © 2026 Kavin Chan · MIT
+</footer>
+
+<button class="back-top" id="backTop" onclick="window.scrollTo({top:0,behavior:'smooth'})">↑</button>
+<style>.back-top{position:fixed;bottom:1.5rem;right:1.5rem;width:44px;height:44px;border-radius:50%;background:#141a2c;color:#e4e9f5;border:1px solid #2a3556;cursor:pointer;font-size:18px;display:none;z-index:100;align-items:center;justify-content:center}.back-top:hover{color:#7dd3fc}.back-top.show{display:flex}</style>
+
+<script>
+// ===== 1. 进度条 =====
+const progress = document.getElementById('progress');
+const updateProgress = () => { const h=document.documentElement; const max=h.scrollHeight-h.clientHeight; progress.style.width=(max>0?(h.scrollTop/max*100):0)+'%'; };
+window.addEventListener('scroll', updateProgress, {passive:true}); updateProgress();
+
+// ===== 2. TOC active =====
+const tocLinks = document.querySelectorAll('.toc a');
+const sections = document.querySelectorAll('section.chapter');
+const navObserver = new IntersectionObserver(entries => { entries.forEach(e => { if (e.isIntersecting) { const id=e.target.id; tocLinks.forEach(a=>a.classList.toggle('active', a.getAttribute('href')==='#'+id)); } }); }, { rootMargin: '-25% 0px -65% 0px' });
+sections.forEach(s => navObserver.observe(s));
+
+// ===== 3. 平滑滚动 =====
+tocLinks.forEach(a => { a.addEventListener('click', e => { const href=a.getAttribute('href'); const t=document.querySelector(href); if(t){e.preventDefault(); t.scrollIntoView({behavior:'smooth',block:'start'}); history.pushState(null,'',href);} }); });
+
+// ===== 4. fade-in =====
+const fadeEls = document.querySelectorAll('.card, .svg-wrap, table, details, .demo');
+const fadeObserver = new IntersectionObserver(entries => { entries.forEach(e => { if (e.isIntersecting) { e.target.style.opacity='1'; e.target.style.transform='translateY(0)'; } }); }, {threshold:0.05});
+fadeEls.forEach(el => { el.style.opacity='0'; el.style.transform='translateY(12px)'; el.style.transition='opacity .5s ease, transform .5s ease'; fadeObserver.observe(el); });
+
+// ===== 5. back-to-top =====
+(function(){ var btn=document.getElementById('backTop'); if(!btn) return; function tg(){ btn.classList.toggle('show', window.scrollY>400); } window.addEventListener('scroll', tg, {passive:true}); tg(); })();
+
+// ===== 6. 交互演示 A：Watermark =====
+(function(){
+  const EVENTS = [
+    {id:'A',t:2},{id:'B',t:4},{id:'C',t:1},{id:'D',t:3},
+    {id:'E',t:6},{id:'F',t:2},{id:'G',t:8},{id:'H',t:11}
+  ];
+  const WIN = 5, OOO = 1;   // 窗口大小 / 允许乱序
+  const streamEl = document.getElementById('wmStream');
+  const maxEl = document.getElementById('wmMax');
+  const wmEl  = document.getElementById('wmVal');
+  const firedEl = document.getElementById('wmFired');
+  const readEl  = document.getElementById('wmReadout');
+  const nextBtn = document.getElementById('wmNext');
+  const resetBtn= document.getElementById('wmReset');
+  let i, maxSeen, wm, buffers, fired, lateSet;
+
+  function reset(){
+    i=0; maxSeen=-Infinity; wm=null;
+    buffers={}; fired=[]; lateSet=new Set();
+    renderStream(-1);
+    maxEl.textContent='—'; wmEl.textContent='—'; firedEl.innerHTML='';
+    readEl.innerHTML='点「下一条事件」开始。事件按<strong>到达顺序</strong>（非事件时间顺序）逐个进入。';
+    nextBtn.disabled=false;
+  }
+  function renderStream(cur){
+    streamEl.innerHTML = EVENTS.map((e,idx) => {
+      let cls='pending';
+      if (idx<=cur){
+        if (lateSet.has(idx)) cls='late';
+        else { const ws=Math.floor(e.t/WIN)*WIN; cls = fired.includes(ws) ? 'fired':'buffered'; }
+      }
+      return '<span class="ev '+cls+'" title="到达第'+(idx+1)+'">'+e.id+' · t='+e.t+'</span>';
+    }).join('');
+  }
+  function renderFired(){
+    firedEl.innerHTML = fired.map(ws => {
+      const cnt=(buffers[ws]||[]).length;
+      return '<div class="wm-win">✅ 窗口 ['+ws+','+(ws+WIN)+') 已触发 → 含 <b>'+cnt+'</b> 条事件：'+(buffers[ws]||[]).map(x=>x.id).join(', ')+'</div>';
+    }).join('');
+  }
+  function step(){
+    if (i>=EVENTS.length){ readEl.innerHTML='✅ 全部事件处理完毕。点「重置」再来一遍。'; nextBtn.disabled=true; return; }
+    const e = EVENTS[i];
+    const ws = Math.floor(e.t/WIN)*WIN;
+    let msg;
+    if (fired.includes(ws)){
+      lateSet.add(i);
+      msg = '🔴 事件 <b>'+e.id+'(t='+e.t+')</b> 属于窗口 ['+ws+','+(ws+WIN)+')，但该窗口此前已触发（Watermark 已越过）→ <span style="color:#f87171">判为迟到数据，丢弃！</span>';
+    } else {
+      (buffers[ws]=buffers[ws]||[]).push(e);
+      msg = '🔵 事件 <b>'+e.id+'(t='+e.t+')</b> 进入窗口 ['+ws+','+(ws+WIN)+') 的缓冲。';
+    }
+    // 推进 watermark
+    maxSeen = Math.max(maxSeen, e.t);
+    wm = maxSeen - OOO;
+    // 触发所有 end<=wm 且未触发的窗口
+    const newly=[];
+    Object.keys(buffers).map(Number).forEach(w => { if (w+WIN<=wm && !fired.includes(w)){ fired.push(w); newly.push(w); } });
+    fired.sort((a,b)=>a-b);
+    maxEl.textContent=maxSeen; wmEl.textContent=wm;
+    if (newly.length) msg += ' <br>⏰ Watermark 推进到 <b>'+wm+'</b>，越过窗口 '+newly.map(w=>'['+w+','+(w+WIN)+')').join('、')+' 的边界 → <span style="color:#34d399">触发计算并输出！</span>';
+    else msg += ' Watermark = <b>'+wm+'</b>（暂无窗口可触发）。';
+    readEl.innerHTML = msg;
+    renderStream(i); renderFired();
+    i++;
+  }
+  nextBtn.addEventListener('click', step);
+  resetBtn.addEventListener('click', reset);
+  reset();
+})();
+
+// ===== 7. 交互演示 B：窗口类型 =====
+(function(){
+  const TIMES = [1,2,3,6,7,11,13,14];   // 事件时间
+  const MAXT = 16;
+  const tlEl = document.getElementById('winTimeline');
+  const rowsEl = document.getElementById('winRows');
+  const noteEl = document.getElementById('winNote');
+  const segs = document.querySelectorAll('#winDemo .seg');
+  const pct = t => (t/MAXT*100);
+
+  function buildTimeline(){
+    let html='';
+    for (let t=0;t<=MAXT;t+=2) html += '<span class="win-tick" style="left:'+pct(t)+'%">'+t+'</span>';
+    TIMES.forEach((t,idx)=> html += '<span class="win-dot" style="left:'+pct(t)+'%" title="事件时间 '+t+'">e'+(idx+1)+'</span>');
+    tlEl.innerHTML = html;
+  }
+  function windowsFor(type){
+    const res=[];
+    if (type==='tumbling'){ for(let s=0;s<MAXT;s+=4) res.push([s,s+4]); }
+    else if (type==='sliding'){ for(let s=-2;s<MAXT;s+=2){ const a=Math.max(0,s); res.push([a,s+4]); } }
+    else { // session gap=2
+      const sorted=[...TIMES].sort((a,b)=>a-b); let cur=[sorted[0],sorted[0]];
+      for (let k=1;k<sorted.length;k++){ if (sorted[k]-cur[1]<=2) cur[1]=sorted[k]; else { res.push([cur[0],cur[1]]); cur=[sorted[k],sorted[k]]; } }
+      res.push([cur[0],cur[1]]);
+    }
+    return res;
+  }
+  function render(type){
+    const wins = windowsFor(type);
+    rowsEl.innerHTML = wins.map(([a,b]) => {
+      const left=pct(a), w=Math.max(pct(b-a), 3);
+      const cnt = TIMES.filter(t => type==='session' ? (t>=a&&t<=b) : (t>=a&&t<b)).length;
+      return '<div class="win-band-row"><div class="win-band" style="left:'+left+'%;width:'+w+'%">['+a+','+b+') · '+cnt+'</div></div>';
+    }).join('');
+    const notes = {
+      tumbling:'<b>滚动窗口</b>：'+wins.length+' 个等长窗口首尾相接、互不重叠，每个事件恰好落入一个窗口。最常用、最省资源。',
+      sliding:'<b>滑动窗口</b>：'+wins.length+' 个窗口层层重叠（size=4 每 2 滑动一次），同一个事件会落入多个窗口 → 计算量更大，但能做"每 2 秒看最近 4 秒"的平滑统计。',
+      session:'<b>会话窗口</b>：'+wins.length+' 个长度不一的窗口，按"间隔 ≤ 2 就归一组"切分。数据密集处窗口长、空闲处自动断开，适合刻画用户会话。'
+    };
+    noteEl.innerHTML = notes[type];
+  }
+  segs.forEach(b => b.addEventListener('click', () => { segs.forEach(x=>x.classList.remove('active')); b.classList.add('active'); render(b.dataset.w); }));
+  buildTimeline(); render('tumbling');
+})();
+
+console.log('%c Big Data D04 · Flink 流处理深潜 ', 'background:linear-gradient(90deg,#7dd3fc,#a78bfa);color:#0a0e1a;font-weight:700;padding:4px 12px;border-radius:4px;font-size:13px');
+</script>
+<script src="../assets/site-theme.js" defer></script>
+</body>
+</html>
