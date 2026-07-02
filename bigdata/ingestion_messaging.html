@@ -124,10 +124,12 @@
             <li><a href="#s4-1">DDL 变更实战</a></li>
           </ol>
         </li>
-        <li><a href="#ch5">工作流编排 Airflow</a>
+        <li><a href="#ch5">工作流编排</a>
           <ol>
             <li><a href="#s5-1">DAG 调度演示</a></li>
             <li><a href="#s5-2">回填 · SLA</a></li>
+            <li><a href="#s5-3">DolphinScheduler 国企实战</a></li>
+            <li><a href="#s5-4">DataWorks 控制台</a></li>
           </ol>
         </li>
         <li><a href="#ch6">摄取模式选型</a>
@@ -454,7 +456,7 @@
 
     <!-- ===== 第 5 章 ===== -->
     <section class="chapter" id="ch5">
-      <div class="ch-head"><div class="num">05</div><div class="t"><h2>工作流编排：Airflow & 同类</h2><p class="sub">几百个任务、复杂依赖、定时与回填——靠编排器统一调度</p></div></div>
+      <div class="ch-head"><div class="num">05</div><div class="t"><h2>工作流编排：Airflow · DolphinScheduler · DataWorks</h2><p class="sub">几百个任务、复杂依赖、定时与回填——靠编排器统一调度</p></div></div>
 
       <p class="lead">数据平台每天要跑成百上千个任务：抽取、清洗、各层加工、报表生成……它们之间有<strong>依赖</strong>（B 要等 A 完成）、有<strong>时间</strong>（每天凌晨跑）、还可能<strong>失败重试、补跑历史</strong>。<strong>工作流编排器</strong>就是统一管理这些任务的"总调度室"。</p>
 
@@ -491,7 +493,51 @@
         <div class="card amber"><h4>失败处理</h4><p style="font-size:13px;color:var(--text-dim)">自动重试（带退避）、告警、依赖任务阻塞，避免错误数据往下游扩散。</p></div>
         <div class="card green"><h4>SLA 与监控</h4><p style="font-size:13px;color:var(--text-dim)">设定任务应在何时完成；超时告警。配合血缘定位"谁卡住了整条链"。</p></div>
       </div>
-      <div class="info">编排器是数据平台的"心跳"。它和 D02 的分层、dbt 是绝配：dbt 管"模型之间的依赖与转换"，Airflow 管"何时触发、跨系统编排、回填与告警"。两者常配合使用（Airflow 触发 dbt run）。</div>
+      <div class="info">编排器是数据平台的"心跳"。它和 D02 的分层是绝配：编排器管<strong>何时触发、跨系统依赖、回填与告警</strong>，Spark/Hive SQL 管<strong>怎么转换</strong>。互联网常见 Airflow + dbt；<strong>国企/杭州政企项目更常见 DolphinScheduler 或阿里云 DataWorks</strong>（见下文 5.3 / 5.4）。</div>
+
+      <h3 id="s5-3">5.3 DolphinScheduler 国企实战（推荐本地练手）</h3>
+      <p><strong>Apache DolphinScheduler</strong> 是国产开源分布式调度系统，可视化拖拽 DAG，在江浙沪政企、国企信息化项目中出现频率很高。与 <a href="./bigdata_capstone.html">D10 华港集团 Capstone</a> 配套的典型 DAG 如下：</p>
+      <div class="flow-row"><span class="step">T0</span><span class="arrow">→</span><span class="desc"><strong>DataX 同步</strong>：子公司 ERP/MES → Hive ODS（可并行多个 DataX 任务）</span></div>
+      <div class="flow-row"><span class="step">T1</span><span class="arrow">→</span><span class="desc"><strong>质量校验</strong>：ODS 行数 &gt; 0、关键字段非空（Shell/Python 节点）</span></div>
+      <div class="flow-row"><span class="step">T2</span><span class="arrow">→</span><span class="desc"><strong>Spark SQL</strong>：ODS → DWD → DWS → ADS（依赖 T1 成功）</span></div>
+      <div class="flow-row"><span class="step">T3</span><span class="arrow">→</span><span class="desc"><strong>导出报表库</strong>：Sqoop/DataX 把 ADS 写入 MySQL/ClickHouse</span></div>
+      <div class="flow-row"><span class="step">T4</span><span class="arrow">→</span><span class="desc"><strong>告警</strong>：失败发邮件/钉钉；成功写 SLA 日志</span></div>
+      <pre><span class="c"># DolphinScheduler 中 Spark 任务节点典型配置（概念示例）</span>
+<span class="c"># 任务类型：SPARK</span>
+<span class="c"># 主程序：spark-sql 或 spark-submit</span>
+<span class="c"># 脚本参数：</span>
+  --master yarn
+  --deploy-mode cluster
+  -f hdfs:///scripts/dwd_fact_production.sql
+  --hivevar biz_date=${system.biz.date}   <span class="c"># DS 内置日期变量，传给 SQL 里的 ${biz_date}</span>
+
+<span class="c"># Cron：每天 02:00 触发（在 DS「定时管理」里配置）</span>
+  0 2 * * * ?</pre>
+      <table>
+        <thead><tr><th>能力</th><th>DolphinScheduler</th><th>Airflow</th></tr></thead>
+        <tbody>
+          <tr><td>定义方式</td><td>Web UI 拖拽 + 少量参数</td><td>Python 代码定义 DAG</td></tr>
+          <tr><td>国企项目出现率</td><td class="cell-ok">高（国内集成商默认栈）</td><td class="cell-mid">中高（互联网更多）</td></tr>
+          <tr><td>Spark/Hive 集成</td><td>原生 Spark/SQL/Shell 节点</td><td>SparkOperator / BashOperator</td></tr>
+          <tr><td>回填历史</td><td>补数 / 重跑指定业务日期</td><td>backfill CLI</td></tr>
+        </tbody>
+      </table>
+      <div class="tip"><strong>本地跑通最小路径</strong>：Docker 拉取 <code>apache/dolphinscheduler-standalone-server</code> 单机版 → 创建项目 → 按上面 DAG 建 3 个节点（Shell 模拟 DataX、Spark SQL、质量检查）→ 手动触发一次 → 看依赖与日志。不必一开始就接真实 Hadoop 集群，Shell 节点用 <code>echo</code> 模拟也可验证调度逻辑。</div>
+
+      <h3 id="s5-4">5.4 DataWorks 控制台（杭州上云国企备选）</h3>
+      <p>若项目部署在<strong>阿里云</strong>（杭州政务云、省属国企上云很常见），编排常用 <strong>DataWorks</strong> 代替自建 DolphinScheduler。概念与 DS 一一对应，只是界面在云上：</p>
+      <table>
+        <thead><tr><th>DataWorks 概念</th><th>对应什么</th><th>华港集团示例</th></tr></thead>
+        <tbody>
+          <tr><td><strong>数据集成</strong></td><td>类似 DataX</td><td>MySQL → MaxCompute/Hive ODS</td></tr>
+          <tr><td><strong>ODPS SQL / Spark</strong></td><td>计算节点</td><td>DWD/DWS/ADS 分层 SQL</td></tr>
+          <tr><td><strong>业务流程</strong></td><td>DAG 工作流</td><td>同步 → 质检 → 分层 → 导出</td></tr>
+          <tr><td><strong>调度属性</strong></td><td>Cron + 依赖</td><td>每天 02:00，上游成功才跑下游</td></tr>
+          <tr><td><strong>补数据</strong></td><td>回填</td><td>重跑 2026-06-01 全天链路</td></tr>
+        </tbody>
+      </table>
+      <div class="def"><strong>选型建议</strong>：<strong>自建机房 / 私有化 Hadoop</strong> → 优先 DolphinScheduler；<strong>已上阿里云 MaxCompute/DataWorks</strong> → 用 DataWorks 更省事。面试时能说清「业务流程、依赖、补数据、参数化业务日期」即可，不必两套都精通——<strong>调度思想是通用的</strong>。</div>
+      <div class="info">DataWorks 文档入口：<a href="https://help.aliyun.com/zh/dataworks/" target="_blank" rel="noopener">阿里云 DataWorks 帮助中心</a>。MaxCompute SQL 与 Hive SQL 语法高度相似，Capstone 里的 SQL 改少量方言即可迁移。</div>
     </section>
 
     <!-- ===== 第 6 章 ===== -->
