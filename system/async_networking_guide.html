@@ -79,6 +79,12 @@
   html[data-tn-theme="light"] .diagram-wrap svg [stroke="#243352"] {
     stroke: #b9c7db !important;
   }
+  .flow{display:flex;align-items:center;gap:.4rem;margin:.8rem 0;flex-wrap:wrap;}
+  .flow-col{display:flex;flex-direction:column;gap:.35rem;margin:1rem 0;}
+  .flow-step{background:#0d1730;border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:6px;padding:.5rem .8rem;font-size:.82rem;text-align:center;min-width:90px;}
+  .flow-arrow{color:var(--accent);font-size:1.2rem;font-weight:700;}
+  .flow-step.start{border-left-color:var(--green);}.flow-step.end{border-left-color:var(--orange);}.flow-step.phase{border-left-color:var(--yellow);}
+  .diag{margin:1rem 0;}
 </style>
 </head>
 <body class="tn-shell-overlay ps">
@@ -240,7 +246,20 @@
   </table>
 
   <h3 id="s2-3">2.3 Reactor 详细流程图</h3>
-<pre><span class="cm">// 主循环</span>
+
+<div class="flow-col">
+  <div class="flow">
+    <span class="flow-step start">epoll_wait</span>
+    <span class="flow-arrow">→</span>
+    <span class="flow-step">fd 就绪事件</span>
+    <span class="flow-arrow">→</span>
+    <span class="flow-step">dispatch handler</span>
+    <span class="flow-arrow">→</span>
+    <span class="flow-step end">用户 read/write</span>
+  </div>
+</div>
+
+<pre><span class="cm">// 主循环：就绪通知，用户自己读写</span>
 <span class="kw">while</span> (running) {
     <span class="kw">int</span> n = <span class="fn">epoll_wait</span>(ep, events, MAX, timeout_ms);
     <span class="kw">for</span> (<span class="kw">int</span> i = <span class="num">0</span>; i &lt; n; ++i) {
@@ -248,27 +267,32 @@
         <span class="kw">if</span> (events[i].events &amp; EPOLLIN)  handler-&gt;<span class="fn">on_read_ready</span>();
         <span class="kw">if</span> (events[i].events &amp; EPOLLOUT) handler-&gt;<span class="fn">on_write_ready</span>();
     }
-}
-
-<span class="cm">// 用户 handler 内：自己 read/write</span>
-<span class="kw">void</span> <span class="fn">on_read_ready</span>() {
-    <span class="kw">int</span> n = <span class="fn">read</span>(fd, buf, BUFSZ);     <span class="cm">// 不会阻塞 (因为 ready)</span>
-    <span class="fn">process</span>(buf, n);
 }</pre>
 
   <h3 id="s2-4">2.4 Proactor 详细流程图（io_uring）</h3>
-<pre><span class="cm">// 用户提交 IO 请求 + buffer</span>
+
+<div class="flow-col">
+  <div class="flow">
+    <span class="flow-step start">提交 read + buffer</span>
+    <span class="flow-arrow">→</span>
+    <span class="flow-step phase">内核 DMA 填 buffer</span>
+    <span class="flow-arrow">→</span>
+    <span class="flow-step">wait completion</span>
+    <span class="flow-arrow">→</span>
+    <span class="flow-step end">process(cqe→res)</span>
+  </div>
+</div>
+
+<pre><span class="cm">// 用户提交 IO 请求 + buffer，完成时 buffer 已就绪</span>
 <span class="kw">auto</span>* sqe = <span class="fn">io_uring_get_sqe</span>(&amp;ring);
 <span class="fn">io_uring_prep_read</span>(sqe, fd, buf, len, offset);
 <span class="fn">io_uring_sqe_set_data</span>(sqe, ctx);
 <span class="fn">io_uring_submit</span>(&amp;ring);
 
-<span class="cm">// 主循环 wait completion</span>
 <span class="kw">while</span> (running) {
     io_uring_cqe* cqe;
     <span class="fn">io_uring_wait_cqe</span>(&amp;ring, &amp;cqe);
     <span class="kw">auto</span>* ctx = (Ctx*)<span class="fn">io_uring_cqe_get_data</span>(cqe);
-    <span class="cm">// cqe-&gt;res 是 read 字节数, buf 已被内核填好</span>
     <span class="fn">process</span>(ctx, cqe-&gt;res);
     <span class="fn">io_uring_cqe_seen</span>(&amp;ring, cqe);
 }</pre>
@@ -279,6 +303,21 @@
   </div>
 
   <h3 id="s2-5">2.5 Sender/Receiver 详细流程</h3>
+
+<div class="flow-col">
+  <div class="flow">
+    <span class="flow-step start">just()</span>
+    <span class="flow-arrow">→</span>
+    <span class="flow-step">let_value(async_read)</span>
+    <span class="flow-arrow">→</span>
+    <span class="flow-step">then(parse)</span>
+    <span class="flow-arrow">→</span>
+    <span class="flow-step">let_value(async_send)</span>
+    <span class="flow-arrow">→</span>
+    <span class="flow-step end">upon_error</span>
+  </div>
+</div>
+
 <pre><span class="kw">namespace</span> ex = std::execution;
 
 <span class="kw">auto</span> work = ex::<span class="fn">just</span>()
@@ -287,7 +326,6 @@
     | ex::<span class="fn">let_value</span>([&amp;](Req r) { <span class="kw">return</span> async_send(sock, response_of(r)); })
     | ex::<span class="fn">upon_error</span>(log_error);
 
-<span class="cm">// 提交到 scheduler，自己决定何时跑</span>
 ex::<span class="fn">start_detached</span>(std::<span class="fn">move</span>(work), my_scheduler);</pre>
 
   <p>详细见 <a href="../stl/concurrency_patterns_guide.html#s11c">并发模式 §11c</a>。</p>
@@ -564,16 +602,28 @@ sig.<span class="fn">emit</span>(asio::cancellation_type::terminal);   <span cla
   </div>
 
   <h3 id="s6-1">6.1 问题：多线程 io_context 上的 handler 可能并发</h3>
-<pre><span class="cm">// 4 个线程跑同一 io_context，一个 Session 的 handler 可能在不同线程</span>
-<span class="cm">// → Session 状态需要锁 → 性能下降</span></pre>
+
+<div class="grid-2">
+  <div class="panel red">
+    <h4>无 Strand</h4>
+    <div class="flow-col" style="margin:.5rem 0;">
+      <div class="flow"><span class="flow-step">Thread 1 handler</span><span class="flow-arrow">↔</span><span class="flow-step">Thread 2 handler</span></div>
+    </div>
+    <p style="font-size:.88rem;margin:0;">同一 Session 的 handler 可能在不同线程并发执行 → 需要锁 → 性能下降</p>
+  </div>
+  <div class="panel green">
+    <h4>有 Strand</h4>
+    <div class="flow-col" style="margin:.5rem 0;">
+      <div class="flow"><span class="flow-step start">h1</span><span class="flow-arrow">→</span><span class="flow-step">h2</span><span class="flow-arrow">→</span><span class="flow-step end">h3</span></div>
+    </div>
+    <p style="font-size:.88rem;margin:0;">post 到同一 strand 的 handler <strong>永不并发</strong>，严格串行</p>
+  </div>
+</div>
 
   <h3 id="s6-2">6.2 Strand：序列化执行器</h3>
 <pre>asio::strand&lt;asio::io_context::executor_type&gt; strand{io.<span class="fn">get_executor</span>()};
-
-<span class="cm">// 所有 post 到这个 strand 的 handler 永不并发</span>
 asio::<span class="fn">post</span>(strand, []{ <span class="cm">/* h1 */</span> });
-asio::<span class="fn">post</span>(strand, []{ <span class="cm">/* h2 */</span> });
-<span class="cm">// h1 一定先于 h2 跑完</span></pre>
+asio::<span class="fn">post</span>(strand, []{ <span class="cm">/* h2 — 一定在 h1 之后 */</span> });</pre>
 
   <h3 id="s6-3">6.3 每 Session 一个 strand 模式（推荐）</h3>
 <pre><span class="kw">class</span> <span class="type">Session</span> : <span class="kw">public</span> std::enable_shared_from_this&lt;Session&gt; {
