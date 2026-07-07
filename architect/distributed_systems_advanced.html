@@ -1239,62 +1239,335 @@
     </div>
   </div>
 
-  <p>分布式协议 bug 是噩梦——<strong>分支组合爆炸</strong>，单测 catch 不到。形式化验证可<strong>数学证明</strong>协议正确性。</p>
+  <p>分布式协议的 bug 是噩梦级别的：一个协议在<strong>不同的消息乱序、不同的宕机时机、不同的网络分区</strong>组合下，可能有成千上万条执行路径。你的单元测试只能碰到其中<strong>极少数几条</strong>——那些真正致命的 bug，往往藏在"节点 A 刚投完票就宕机、恰好此时 B 收到一条延迟了 3 秒的旧消息"这种<strong>你根本想不到、也很难复现</strong>的时序里。形式化验证换了个思路：不靠"跑几个例子碰运气"，而是<strong>把协议翻译成数学，让计算机把所有可能的执行顺序都替你走一遍</strong>，从而<strong>数学级别地证明</strong>"坏事永远不会发生"。</p>
 
-  <h3 id="s9-1">TLA+ (Lamport)</h3>
+  <div class="analogy">
+    <div class="at">先用大白话理解「形式化验证」到底在干嘛</div>
+    <p>想象你写了一套<strong>红绿灯控制逻辑</strong>。测试就像"派几辆车去路口跑几趟看会不会撞"——跑一万趟没撞，也<strong>不代表第一万零一趟不会撞</strong>。形式化验证则是请来一个<strong>不知疲倦、绝不遗漏的机器人</strong>：它把你的红绿灯系统能进入的<strong>每一种状态</strong>（东西灯 × 南北灯 × 计时器…）都摆出来，把每一种状态能<strong>跳到的下一种状态</strong>都试一遍，只要存在<strong>哪怕一条</strong>路径能走到"两个方向同时绿灯"，它立刻把这条路径（从开机到出事的完整步骤）打印给你看。</p>
+    <p class="map">所以形式化验证 = <b>把系统写成"状态机"</b>（有哪些状态、状态之间怎么跳）+ <b>写下你要它永远满足的规矩</b>（不变式 / invariant）+ <b>让工具穷举所有可达状态去找反例</b>。找不到反例 = 在你建模的范围内<b>数学上证明</b>了规矩成立；找到反例 = 直接给你一条"从初始状态一步步走到违规"的最短剧本。</p>
+  </div>
 
-  <p>Lamport 自己设计的形式化规约语言。用法：</p>
+  <h3 id="s9-1">核心思想：任何 spec 都是这 4 件事</h3>
 
-  <ol>
-    <li>用 TLA+ 写规约（spec）—— 系统 state + transition</li>
-    <li>用 TLC（model checker）<strong>穷举</strong>有限 state space</li>
-    <li>验证 invariant + temporal property</li>
-    <li>发现违反时给反例</li>
-  </ol>
-
-  <h3 id="s9-2">真实用</h3>
-
-  <ul>
-    <li><strong>AWS</strong>—— S3 / DynamoDB / EBS 等核心 service 用 TLA+ 验证（Newcombe 等 2015 paper）</li>
-    <li><strong>Microsoft Azure</strong>—— Cosmos DB 等</li>
-    <li><strong>MongoDB</strong>—— replication protocol</li>
-    <li><strong>Tendermint / Diem</strong>—— consensus protocol</li>
-    <li><strong>etcd</strong>—— 部分</li>
-  </ul>
-
-  <h3 id="s9-3">实战 ROI</h3>
-
-  <p>AWS 2015 paper 报告：</p>
-
-  <ul>
-    <li>TLA+ 验证后发现<strong>多个 production-blocking bug</strong>（手工 review + 测试 miss）</li>
-    <li>1 个 senior engineer × 几周写规约</li>
-    <li>ROI: $$ saved on later P0 incidents</li>
-  </ul>
-
-  <h3 id="s9-4">其他工具</h3>
+  <p>不管用 TLA+ 还是别的工具，你写的规约（specification）本质上永远在描述同样 4 样东西。理解了这 4 样，TLA+ 就不再神秘：</p>
 
   <table>
-    <thead><tr><th>工具</th><th>定位</th></tr></thead>
+    <thead><tr><th>要素</th><th>回答的问题</th><th>转账例子</th></tr></thead>
     <tbody>
-      <tr><td><strong>TLA+ / PlusCal</strong></td><td>主流，Lamport 推</td></tr>
-      <tr><td><strong>P</strong> (Microsoft)</td><td>State machine + event-driven，工程友好</td></tr>
-      <tr><td><strong>Verdi</strong></td><td>Coq 中 Raft 完整证明</td></tr>
-      <tr><td><strong>IronFleet</strong></td><td>Dafny 中分布式系统 framework</td></tr>
-      <tr><td><strong>Spin / PROMELA</strong></td><td>老牌 model checker</td></tr>
-      <tr><td><strong>Alloy</strong></td><td>关系建模 + 自动 SAT solver</td></tr>
+      <tr><td><strong>变量 / State</strong></td><td>系统由哪些"可变的东西"组成？</td><td>两个账户余额 <code>a</code>、<code>b</code></td></tr>
+      <tr><td><strong>Init（初始状态）</strong></td><td>系统一开始长什么样？</td><td><code>a = 3 ∧ b = 3</code></td></tr>
+      <tr><td><strong>Next（迁移关系）</strong></td><td>系统每一步<strong>允许</strong>怎么变？（注意是"允许"，非确定性）</td><td>从 a 转任意金额到 b，或反过来</td></tr>
+      <tr><td><strong>Property（性质）</strong></td><td>你希望它<strong>永远/最终</strong>成立的规矩？</td><td>任何时刻余额都 <code>≥ 0</code></td></tr>
     </tbody>
   </table>
 
-  <h3 id="s9-5">怎么入门 TLA+</h3>
+  <div class="note">关键心智转变：写代码时你在描述"<strong>怎么一步步做</strong>（how）"；写 spec 时你在描述"<strong>系统允许发生什么</strong>（what）"。<code>Next</code> 里的每一步都是"<strong>可以</strong>这样跳"而不是"<strong>必须</strong>这样跳"——正是这种<strong>非确定性（non-determinism）</strong>让工具能替你枚举出你想不到的乱序 / 并发 / 宕机组合。</p></div>
+
+  <h3 id="s9-2">两类性质：Safety（安全性）vs Liveness（活性）</h3>
+
+  <p>所有你想证明的性质都能归到这两类，二者的检查方式和"反例长什么样"完全不同——这是很多人一开始最绕的地方：</p>
+
+  <div class="analogy">
+    <div class="at">红绿灯类比：一句话记住 Safety vs Liveness</div>
+    <p><strong>Safety =「坏事永远不发生」</strong>——例如"永远不会两个方向同时绿灯"。反例是<strong>有限的一条路径</strong>：走 N 步就撞车了，把这 N 步给你看。</p>
+    <p><strong>Liveness =「好事最终一定发生」</strong>——例如"等红灯的车最终一定能等到绿灯放行"。反例是<strong>一条无限的路径</strong>：系统可以永远卡着不让你过（比如永远只放另一个方向），这叫"饿死 / starvation"。</p>
+    <p class="map">口诀：Safety 说的是"<b>Bad things never happen</b>"（something bad never），Liveness 说的是"<b>Good things eventually happen</b>"（something good eventually）。共识里的"两个节点不会同时当选 leader 且提交冲突值"是 safety；"只要网络最终稳定，集群最终能选出 leader 并推进日志"是 liveness。<b>FLP 不可能性</b>（见 §8）正是在说：纯异步下你没法同时白拿 safety + liveness。</p>
+  </div>
+
+  <table>
+    <thead><tr><th></th><th>Safety 安全性</th><th>Liveness 活性</th></tr></thead>
+    <tbody>
+      <tr><td>直觉</td><td>坏事永不发生</td><td>好事最终发生</td></tr>
+      <tr><td>TLA+ 写法</td><td>Invariant（不变式），如 <code>[]NoNegative</code></td><td>Temporal，如 <code>&lt;&gt;Committed</code>、<code>Leads-to (~&gt;)</code></td></tr>
+      <tr><td>反例形态</td><td><strong>有限</strong>路径（走到某个坏状态）</td><td><strong>无限</strong>路径 / 环（永远卡住，好事不来）</td></tr>
+      <tr><td>检查代价</td><td>较便宜（枚举状态即可）</td><td>较贵（要找 lasso 型无限行为，且依赖 fairness 假设）</td></tr>
+      <tr><td>共识例子</td><td>不会选出两个冲突 leader / 不会提交矛盾值</td><td>网络最终稳定后最终能选出 leader 并推进</td></tr>
+    </tbody>
+  </table>
+
+  <h3 id="s9-3">一个完整可读的 TLA+ 例子：并发转账</h3>
+
+  <p>光讲概念没用，来看一个<strong>能从头读到尾</strong>的最小 spec。场景：两个账户各有 3 元，可以互相转账。我们要证明的 safety 是"<strong>余额永远不为负</strong>"。</p>
+
+  <pre><code>---- MODULE Transfer ----
+EXTENDS Integers
+
+CONSTANTS Money           \* 每个账户初始金额（建模时设为 3）
+VARIABLES a, b            \* 两个账户的余额（这就是 State）
+
+\* 类型不变式：a、b 始终是整数（顺手帮你抓住"变量跑飞"的低级错）
+TypeOK == a \in Int /\ b \in Int
+
+\* Init：系统一开始的样子
+Init == a = Money /\ b = Money
+
+\* 从 a 转 amt 到 b —— 注意 amt 是"任意"金额，工具会替你枚举 1..Money 的每一种
+AtoB == \E amt \in 1..Money :
+          /\ a &gt;= amt                    \* ← 关键前提：够钱才允许转
+          /\ a' = a - amt                 \* a' 表示"下一步的 a"
+          /\ b' = b + amt
+
+BtoA == \E amt \in 1..Money :
+          /\ b &gt;= amt
+          /\ a' = a + amt
+          /\ b' = b - amt
+
+\* Next：每一步"允许"发生 AtoB 或 BtoA（\/ 就是非确定性的分叉点）
+Next == AtoB \/ BtoA
+
+\* Spec：从 Init 出发，之后每一步都满足 Next（[] 是"永远"）
+Spec == Init /\ [][Next]_&lt;&lt;a, b&gt;&gt;
+
+\* 我们要证明的 Safety：任何可达状态里余额都不为负
+NoNegative == a &gt;= 0 /\ b &gt;= 0
+====</code></pre>
+
+  <p>逐句拆解几个新手最容易卡住的记号：</p>
+  <ul>
+    <li><code>a'</code>（读作 a-prime）：表示"<strong>迁移后</strong>的 a 值"。<code>a' = a - amt</code> 不是赋值，而是一条<strong>约束</strong>——"下一状态里 a 必须等于当前 a 减 amt"。</li>
+    <li><code>\E amt \in 1..Money</code>（存在量词）：不是"随便挑一个"，而是让工具<strong>把每一个可能的 amt 都当成一条分叉去探索</strong>。</li>
+    <li><code>/\</code> 是逻辑「与」，<code>\/</code> 是逻辑「或」。竖着排的一列 <code>/\</code> 就是"这些条件同时成立"。</li>
+    <li><code>[][Next]_&lt;&lt;a,b&gt;&gt;</code>：<code>[]</code> = always（永远），整句意思是"每一步要么按 Next 变，要么 a、b 保持不变（stuttering）"。这是 TLA+ 的标准骨架，先照抄即可。</li>
+    <li><code>NoNegative</code> 是你交给 TLC 的<strong>不变式</strong>，它会在<strong>每一个</strong>可达状态上检查这句话是否成立。</li>
+  </ul>
+
+  <h3 id="s9-4">TLC 到底在干什么：把状态图走一遍（BFS）</h3>
+
+  <p>TLC（TLA+ 自带的 model checker）拿到上面的 spec 后，做的事情非常机械但极其可靠：<strong>从 Init 出发，做广度优先搜索（BFS），把所有能到达的状态一个个摆出来，每摆出一个就检查一次不变式</strong>。因为有余额检查、且总额守恒 <code>a+b=6</code>，可达状态其实只有 7 个（<code>a</code> 从 0 到 6）：</p>
+
+  <div class="diag">
+    <svg viewBox="0 0 820 210" width="820" height="210" role="img" aria-label="转账系统的可达状态图">
+      <g font-family="Inter, sans-serif" font-size="12">
+        <text x="410" y="20" text-anchor="middle" fill="#f1f5f9" font-weight="700" font-size="13">Transfer spec 的可达状态（a+b 恒为 6，7 个状态全部满足 NoNegative）</text>
+        <!-- states along a line -->
+        <g>
+          <!-- helper: each node -->
+          <g>
+            <circle cx="70" cy="110" r="30" fill="#0d1730" stroke="#7dd3fc" stroke-width="1.5"/>
+            <text x="70" y="106" text-anchor="middle" fill="#e2e8f0">a=0</text>
+            <text x="70" y="122" text-anchor="middle" fill="#94a3b8">b=6</text>
+          </g>
+          <g>
+            <circle cx="185" cy="110" r="30" fill="#0d1730" stroke="#7dd3fc" stroke-width="1.5"/>
+            <text x="185" y="106" text-anchor="middle" fill="#e2e8f0">a=1</text>
+            <text x="185" y="122" text-anchor="middle" fill="#94a3b8">b=5</text>
+          </g>
+          <g>
+            <circle cx="300" cy="110" r="30" fill="#0d1730" stroke="#7dd3fc" stroke-width="1.5"/>
+            <text x="300" y="106" text-anchor="middle" fill="#e2e8f0">a=2</text>
+            <text x="300" y="122" text-anchor="middle" fill="#94a3b8">b=4</text>
+          </g>
+          <g>
+            <circle cx="410" cy="110" r="34" fill="#12233f" stroke="#fbbf24" stroke-width="2.5"/>
+            <text x="410" y="104" text-anchor="middle" fill="#fbbf24" font-weight="700">a=3</text>
+            <text x="410" y="120" text-anchor="middle" fill="#fbbf24">b=3</text>
+            <text x="410" y="162" text-anchor="middle" fill="#fbbf24" font-size="11">Init</text>
+          </g>
+          <g>
+            <circle cx="520" cy="110" r="30" fill="#0d1730" stroke="#7dd3fc" stroke-width="1.5"/>
+            <text x="520" y="106" text-anchor="middle" fill="#e2e8f0">a=4</text>
+            <text x="520" y="122" text-anchor="middle" fill="#94a3b8">b=2</text>
+          </g>
+          <g>
+            <circle cx="635" cy="110" r="30" fill="#0d1730" stroke="#7dd3fc" stroke-width="1.5"/>
+            <text x="635" y="106" text-anchor="middle" fill="#e2e8f0">a=5</text>
+            <text x="635" y="122" text-anchor="middle" fill="#94a3b8">b=1</text>
+          </g>
+          <g>
+            <circle cx="750" cy="110" r="30" fill="#0d1730" stroke="#7dd3fc" stroke-width="1.5"/>
+            <text x="750" y="106" text-anchor="middle" fill="#e2e8f0">a=6</text>
+            <text x="750" y="122" text-anchor="middle" fill="#94a3b8">b=0</text>
+          </g>
+        </g>
+        <g stroke="#475569" stroke-width="1.3" fill="none">
+          <path d="M100 110 H155" marker-end="url(#a9)"/>
+          <path d="M215 110 H270" marker-end="url(#a9)"/>
+          <path d="M330 110 H376" marker-end="url(#a9)"/>
+          <path d="M444 110 H490" marker-end="url(#a9)"/>
+          <path d="M550 110 H605" marker-end="url(#a9)"/>
+          <path d="M665 110 H720" marker-end="url(#a9)"/>
+        </g>
+        <text x="410" y="192" text-anchor="middle" fill="#64748b" font-size="11">← BtoA（b 转给 a）    AtoB（a 转给 b）→    每条边可跳多个 amt，此处只画相邻</text>
+        <defs>
+          <marker id="a9" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto"><path d="M0 0 L7 3 L0 6 Z" fill="#475569"/></marker>
+        </defs>
+      </g>
+    </svg>
+  </div>
+
+  <p>TLC 探完这 7 个状态，发现<strong>没有任何一个违反</strong> <code>NoNegative</code>，于是报告"<strong>Model checking completed. No error found.</strong>"——这就是一次成功的 safety 证明（在 <code>Money=3</code> 这个模型规模内）。</p>
+
+  <div class="demo" id="mcDemo">
+    <div class="demo-head">
+      <div class="dt">微型 Model Checker：亲手看 TLC 怎么找反例</div>
+      <div class="demo-ctrl">
+        <button class="demo-btn" id="mc-guard">当前：❌ 去掉余额检查（有 bug）</button>
+        <button class="demo-btn" id="mc-run">▶ 运行 TLC（BFS 穷举）</button>
+        <button class="demo-btn ghost" id="mc-reset">重置</button>
+      </div>
+    </div>
+    <div class="demo-stage" id="mc-stage"></div>
+    <div class="demo-log" id="mcLog">两个账户各有 3 元。点<b>「运行 TLC」</b>：当前是"<b>去掉余额检查</b>"的 buggy 版本，看它怎么一步步走到余额为负；再点左边按钮切到"<b>有余额检查</b>"，看它穷举所有状态后报告 no error。</div>
+  </div>
+
+  <script>
+  (function(){
+    var guarded=false, N=3;
+    var stage=document.getElementById('mc-stage');
+    var log=document.getElementById('mcLog');
+    var gBtn=document.getElementById('mc-guard');
+    var runBtn=document.getElementById('mc-run');
+    var resetBtn=document.getElementById('mc-reset');
+    if(!stage) return;
+
+    function key(s){return s[0]+','+s[1];}
+    function succ(s){
+      var out=[];
+      for(var amt=1;amt<=N;amt++){
+        if(!(guarded && s[0]<amt)) out.push({s:[s[0]-amt,s[1]+amt],act:'AtoB, amt='+amt});
+        if(!(guarded && s[1]<amt)) out.push({s:[s[0]+amt,s[1]-amt],act:'BtoA, amt='+amt});
+      }
+      return out;
+    }
+    function check(){
+      var init=[N,N], visited={}; visited[key(init)]=true;
+      var q=[{s:init,path:[{s:init,act:'Init'}]}], explored=0;
+      while(q.length){
+        var cur=q.shift(); explored++;
+        var ns=succ(cur.s);
+        for(var i=0;i<ns.length;i++){
+          var st=ns[i].s;
+          if(st[0]<0||st[1]<0) return {bug:true,trace:cur.path.concat([{s:st,act:ns[i].act}])};
+          var k=key(st);
+          if(!visited[k]){ visited[k]=true; q.push({s:st,path:cur.path.concat([{s:st,act:ns[i].act}])}); }
+        }
+        if(explored>5000) break;
+      }
+      return {bug:false,explored:Object.keys(visited).length};
+    }
+    function run(){
+      var r=check();
+      if(r.bug){
+        var rows=r.trace.map(function(t,idx){
+          var neg=(t.s[0]<0||t.s[1]<0);
+          return '<div style="font-family:JetBrains Mono,monospace;font-size:12.5px;padding:3px 0;color:'+(neg?'#f87171':'#e2e8f0')+'">'
+            +'State '+(idx+1)+':  a = '+t.s[0]+'   b = '+t.s[1]
+            +'   <span style="color:#64748b">\\* '+t.act+'</span>'+(neg?'   \u2190 \u4f59\u989d\u4e3a\u8d1f\uff01':'')+'</div>';
+        }).join('');
+        stage.innerHTML='<div style="color:#f87171;font-weight:700;margin-bottom:6px">\u2717 Error: Invariant NoNegative is violated.</div>'+rows;
+        log.innerHTML='TLC \u7528 <b>BFS</b> \u627e\u5230<b>\u6700\u77ed\u53cd\u4f8b</b>\uff08'+(r.trace.length-1)+' \u6b65\uff09\uff1a\u56e0\u4e3a\u6ca1\u6709\u4f59\u989d\u68c0\u67e5\uff0c\u8d26\u6237\u80fd\u900f\u652f\u6210\u8d1f\u6570\u3002\u8fd9\u6761 trace \u5c31\u662f\u53ef\u590d\u73b0\u7684"\u4f5c\u6848\u5267\u672c"\u3002\u5207\u5230"<b>\u6709\u4f59\u989d\u68c0\u67e5</b>"\u518d\u8dd1\u4e00\u6b21\u5bf9\u6bd4\u3002';
+      } else {
+        var cells='';
+        for(var x=0;x<=2*N;x++) cells+='<span style="display:inline-block;margin:3px;padding:5px 8px;border:1px solid #334155;border-radius:6px;font-family:JetBrains Mono,monospace;font-size:12px;color:#7dd3fc">a='+x+',b='+(2*N-x)+'</span>';
+        stage.innerHTML='<div style="color:#4ade80;font-weight:700;margin-bottom:8px">\u2713 Model checking completed. No error found.</div>'
+          +'<div>\u7a77\u4e3e\u4e86\u5168\u90e8 <b style="color:#fbbf24">'+r.explored+'</b> \u4e2a\u53ef\u8fbe\u72b6\u6001\uff0cNoNegative \u6052\u6210\u7acb\uff1a</div>'
+          +'<div style="margin-top:8px">'+cells+'</div>';
+        log.innerHTML='\u52a0\u4e86 <code>a &gt;= amt</code> \u68c0\u67e5\u540e\uff0c\u603b\u989d\u5b88\u6052 a+b='+(2*N)+'\uff0c\u53ef\u8fbe\u72b6\u6001\u53ea\u6709 <b>'+r.explored+'</b> \u4e2a\uff0c\u5168\u90e8\u6ee1\u8db3\u4e0d\u53d8\u5f0f \u2192 \u5728 Money='+N+' \u7684\u89c4\u6a21\u5185<b>\u6570\u5b66\u8bc1\u660e</b>\u4e86\u4f59\u989d\u6c38\u4e0d\u4e3a\u8d1f\u3002';
+      }
+    }
+    gBtn.addEventListener('click',function(){
+      guarded=!guarded;
+      gBtn.textContent = guarded ? '\u5f53\u524d\uff1a\u2705 \u6709\u4f59\u989d\u68c0\u67e5\uff08\u6b63\u786e\uff09' : '\u5f53\u524d\uff1a\u274c \u53bb\u6389\u4f59\u989d\u68c0\u67e5\uff08\u6709 bug\uff09';
+      stage.innerHTML='';
+      log.innerHTML='\u5df2\u5207\u6362\u5230"'+(guarded?'<b>\u6709\u4f59\u989d\u68c0\u67e5</b>':'<b>\u53bb\u6389\u4f59\u989d\u68c0\u67e5</b>')+'"\u3002\u70b9\u300c\u8fd0\u884c TLC\u300d\u770b\u7ed3\u679c\u3002';
+    });
+    runBtn.addEventListener('click',run);
+    resetBtn.addEventListener('click',function(){
+      guarded=false;
+      gBtn.textContent='\u5f53\u524d\uff1a\u274c \u53bb\u6389\u4f59\u989d\u68c0\u67e5\uff08\u6709 bug\uff09';
+      stage.innerHTML='';
+      log.innerHTML='\u5df2\u91cd\u7f6e\u3002\u5f53\u524d\u662f buggy \u7248\u672c\uff0c\u70b9\u300c\u8fd0\u884c TLC\u300d\u770b\u5b83\u600e\u4e48\u8d70\u5230\u8d1f\u4f59\u989d\u3002';
+    });
+  })();
+  </script>
+
+  <h3 id="s9-5">如果协议有 bug：TLC 直接给你"作案剧本"</h3>
+
+  <p>假设我们<strong>忘了写 <code>a &gt;= amt</code> 这行余额检查</strong>（真实系统里这种遗漏太常见了）。那么从 <code>a=0, b=6</code> 出发，还能继续"从 a 转出 1 元"，于是 <code>a</code> 变成 <code>-1</code>。TLC 会在秒级找到这条<strong>最短反例路径</strong>并打印完整 trace：</p>
+
+  <pre><code>Error: Invariant NoNegative is violated.
+The behavior up to this point:
+
+State 1:  a = 3   b = 3      \* Init
+State 2:  a = 0   b = 6      \* AtoB, amt = 3
+State 3:  a = -1  b = 7      \* AtoB, amt = 1   ← a 变成负数，违反 NoNegative！</code></pre>
+
+  <p>这就是形式化验证最值钱的地方：它不只说"有 bug"，而是给你一条<strong>可复现、最短、精确到每一步选了什么 amt</strong> 的执行序列。你拿着这个 trace 回去看代码，立刻知道漏了余额检查。<strong>手工 review + 单测几乎不可能稳定复现这种"必须恰好按某个顺序走"的 corner case</strong>。</p>
+
+  <h3 id="s9-6">PlusCal：更像伪代码的写法</h3>
+
+  <p>很多工程师觉得纯 TLA+ 的"一堆逻辑公式"读着别扭。<strong>PlusCal</strong> 是 Lamport 提供的一层"伪代码语法糖"，写起来像普通带 <code>process / while / if</code> 的程序，再由工具<strong>自动翻译成 TLA+</strong> 交给 TLC 检查。同样的转账，用 PlusCal 描述"两个并发进程各转一次"就直观得多：</p>
+
+  <pre><code>(* --algorithm Transfer
+variables a = 3, b = 3;
+
+process P \in {"p1", "p2"}     \* 两个并发进程，模拟并发转账
+begin
+  Check:  if a &gt;= 1 then       \* 读余额
+  Do:       a := a - 1;         \* 扣 a
+            b := b + 1;         \* 加 b
+          end if;
+end process;
+end algorithm; *)</code></pre>
+
+  <p>妙处在于：TLC 会枚举两个进程<strong>所有可能的交错（interleaving）</strong>。如果你把 <code>Check</code> 和 <code>Do</code> 分成两步（模拟"先读后写"的非原子操作），它就能发现经典的 <strong>read-modify-write 竞态</strong>：两个进程都在 <code>a=1</code> 时通过了 <code>Check</code>，然后各扣一次 → <code>a=-1</code>。这正是并发 bug 的本质，而 PlusCal 让你<strong>不写线程、不加锁</strong>就能把它逼出来。</p>
+
+  <h3 id="s9-7">现实的边界：形式化验证不是银弹</h3>
+
+  <table>
+    <thead><tr><th>局限</th><th>含义</th><th>应对</th></tr></thead>
+    <tbody>
+      <tr><td><strong>状态爆炸</strong></td><td>状态数随变量 / 节点数<strong>指数增长</strong>，大模型 TLC 跑不完</td><td>缩小常量（3 个节点而非 1000）、加 <code>state constraint</code> 限界、用 <strong>symmetry set</strong> 合并对称状态</td></tr>
+      <tr><td><strong>验证的是 spec，不是代码</strong></td><td>证明的是你写的<strong>模型</strong>正确，不代表你的 Java/Go <strong>实现</strong>忠实于模型</td><td>把 spec 当"设计合同"；结合 <strong>trace 校验</strong>（让实现输出的日志去 match spec 的行为）</td></tr>
+      <tr><td><strong>抽象层次的取舍</strong></td><td>建太细跑不动，建太粗漏掉真 bug</td><td>只对<strong>协议核心的 safety</strong>建模（选主、提交规则），忽略无关细节</td></tr>
+      <tr><td><strong>模型检查 ≠ 定理证明</strong></td><td>TLC 只在<strong>有限规模</strong>内穷举；证不了"任意 N 个节点"都对</td><td>需要"对任意 N 成立"时用 <strong>TLAPS / Coq / Dafny</strong> 做机器辅助定理证明（更贵）</td></tr>
+    </tbody>
+  </table>
+
+  <div class="note">实务建议：<strong>先用 TLC 在小规模把设计里的逻辑 bug 找光</strong>（性价比最高，几天就能见效），只有极少数生命攸关的核心协议才值得上升到 Coq/Dafny 的完整定理证明。绝大多数团队卡在"根本没写 spec"，而不是"spec 不够严格"。</p></div>
+
+  <h3 id="s9-8">工具全景对比</h3>
+
+  <table>
+    <thead><tr><th>工具</th><th>类型</th><th>定位 / 何时用</th></tr></thead>
+    <tbody>
+      <tr><td><strong>TLA+ / PlusCal</strong></td><td>Model checking</td><td>主流，Lamport 亲设计；验证<strong>协议设计</strong>的 safety/liveness，工业界事实标准</td></tr>
+      <tr><td><strong>P</strong> (Microsoft)</td><td>State machine + 事件驱动</td><td>更贴近工程师直觉；Azure / Windows 驱动用它验证异步消息系统</td></tr>
+      <tr><td><strong>Alloy</strong></td><td>关系建模 + SAT</td><td>建"结构 / 数据模型"约束，自动找反例；上手快，适合探索性建模</td></tr>
+      <tr><td><strong>Spin / PROMELA</strong></td><td>Model checking（老牌）</td><td>并发协议验证的经典工具，学术 / 通信协议领域用得多</td></tr>
+      <tr><td><strong>Coq + Verdi</strong></td><td>定理证明</td><td>Verdi 在 Coq 里给出了 Raft 的<strong>完整机器验证证明</strong>（对任意 N）</td></tr>
+      <tr><td><strong>Dafny + IronFleet</strong></td><td>定理证明 + 可执行</td><td>微软把"证明"和"能编译运行的实现"绑在一起，端到端保证实现忠于 spec</td></tr>
+    </tbody>
+  </table>
+
+  <p><strong>一句话选型</strong>：想快速验证"我这个分布式协议设计对不对" → <strong>TLA+</strong>；异步消息 / actor 风格系统且要更工程化 → <strong>P</strong>；要证明"对任意节点数都成立"或要实现级保证 → <strong>Coq / Dafny</strong>。</p>
+
+  <h3 id="s9-9">真实采用 + ROI</h3>
+
+  <ul>
+    <li><strong>AWS</strong>—— S3 / DynamoDB / EBS 等核心 service 用 TLA+ 验证（Newcombe 等 2015 CACM paper《How Amazon Web Services Uses Formal Methods》）</li>
+    <li><strong>Microsoft Azure</strong>—— Cosmos DB 一致性协议、以及 P 语言在 Windows 内核 / 网络栈</li>
+    <li><strong>MongoDB</strong>—— replication / 选举协议用 TLA+ 建模</li>
+    <li><strong>Tendermint / Diem(Libra)</strong>—— BFT consensus 协议验证</li>
+    <li><strong>etcd / CockroachDB / TiDB</strong>—— 核心协议部分用 TLA+ 建模</li>
+  </ul>
+
+  <p>AWS 2015 paper 的关键结论（面试常被问）：</p>
+  <ul>
+    <li>在 <strong>DynamoDB / S3</strong> 等系统上，TLA+ 发现了<strong>手工 review + 大量测试都没抓到的 production-blocking bug</strong>——有的反例长达 35 步，人根本推不出来</li>
+    <li>成本：通常 <strong>1 个资深工程师 × 几天到几周</strong>写规约，学习曲线"两三周可上手"</li>
+    <li>ROI：一次严重 P0 故障的代价（数据损坏 / 停服 / 信任）远超写 spec 的投入；且 spec 还能当<strong>活文档</strong>，改协议时重跑即可回归</li>
+  </ul>
+
+  <h3 id="s9-10">怎么入门 TLA+（推荐路线）</h3>
 
   <ol>
-    <li>Leslie Lamport "<strong>TLA+ Video Course</strong>"（YouTube）—— 免费 14 小时</li>
-    <li>书：<strong>"Specifying Systems"</strong>（Lamport 著）—— 经典</li>
-    <li>书：<strong>"Practical TLA+"</strong>（Hillel Wayne）—— 工程师友好</li>
-    <li>用 <strong>TLA+ Toolbox</strong> 或 <strong>VSCode TLA+ extension</strong></li>
-    <li>从<strong>小 example</strong> 开始（Dining Philosophers / Two-Phase Commit）</li>
-    <li>实际项目 spec 关键<strong>safety property</strong> 不全实现</li>
+    <li>Leslie Lamport 的 <strong>"TLA+ Video Course"</strong>（YouTube，免费 ~14 小时）—— 作者亲授</li>
+    <li>书：<strong>《Specifying Systems》</strong>（Lamport 著，免费 PDF）—— 权威参考</li>
+    <li>书：<strong>《Practical TLA+》</strong>（Hillel Wayne 著）—— 面向工程师，最友好的入门</li>
+    <li>工具：<strong>VSCode TLA+ 插件</strong>（最方便）或官方 <strong>TLA+ Toolbox</strong></li>
+    <li>从经典小例子练手：<strong>Dining Philosophers</strong>（死锁）、<strong>Two-Phase Commit</strong>、<strong>Die Hard 水罐问题</strong>（体会"让工具替你解谜"）</li>
+    <li>落到实际项目：<strong>先只对最关键的 safety 不变式建模</strong>（如"绝不双主"、"提交的值不冲突"），不要一上来就想把整个系统建全</li>
   </ol>
 </section>
 
