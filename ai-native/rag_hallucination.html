@@ -1,0 +1,624 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RAG 幻觉治理 · Grounding / 引用溯源 / Faithfulness / 弃权兜底</title>
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<style>
+  .analogy{background:linear-gradient(135deg,rgba(167,139,250,.08),rgba(125,211,252,.05));
+    border:1px solid var(--border-2);border-left:4px solid var(--accent-2);border-radius:10px;
+    padding:14px 18px;margin:16px 0;font-size:14px;line-height:1.75}
+  .analogy::before{content:"🔌 生活类比";display:inline-block;color:var(--accent-2);font-weight:700;
+    font-size:12px;letter-spacing:.5px;margin-right:10px}
+  .analogy strong{color:var(--text)}
+
+  .def{background:rgba(125,211,252,.05);border:1px solid var(--border);border-left:4px solid var(--accent);
+    border-radius:8px;padding:14px 18px;margin:16px 0;font-size:14px;line-height:1.75}
+  .def::before{content:"📖 名词解释";display:inline-block;color:var(--accent);font-weight:700;
+    font-size:12px;letter-spacing:.5px;margin-right:10px}
+  .def strong{color:var(--text)}
+
+  .glossary{margin:14px 0}
+  .gl-group{margin:20px 0}
+  .gl-group > h4{color:var(--accent);border-left:3px solid var(--accent);padding-left:10px;
+    margin:0 0 10px;font-size:15px}
+  .gl{display:grid;grid-template-columns:210px 1fr;gap:14px;padding:11px 15px;border:1px solid var(--border);
+    border-radius:8px;background:var(--bg-card);margin:7px 0;transition:border-color .15s}
+  .gl:hover{border-color:var(--border-2)}
+  .gl .gl-t{font-weight:600;color:var(--text);font-size:14px}
+  .gl .gl-t em{display:block;font-style:normal;font-family:"JetBrains Mono",monospace;
+    font-size:11px;color:var(--text-mute);margin-top:3px;font-weight:400;letter-spacing:.2px}
+  .gl .gl-d{font-size:13.5px;color:var(--text-dim);line-height:1.7}
+  .gl .gl-d strong{color:var(--accent-4)}
+  .gl .gl-d code{font-size:.85em}
+  @media(max-width:760px){.gl{grid-template-columns:1fr;gap:4px}}
+
+  .demo{background:var(--bg-card);border:1px solid var(--border-2);border-radius:14px;
+    padding:20px;margin:22px 0;box-shadow:var(--shadow)}
+  .demo .demo-title{font-size:13px;text-transform:uppercase;letter-spacing:1.5px;color:var(--accent);
+    font-family:"JetBrains Mono",monospace;margin-bottom:14px;display:flex;align-items:center;gap:8px}
+  .demo .demo-title::before{content:"▶";font-size:10px;color:var(--accent-3)}
+  .demo-controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:16px}
+  .demo button{font-family:inherit;cursor:pointer;border-radius:8px;font-size:13px;padding:8px 14px;
+    border:1px solid var(--border-2);background:var(--bg-card-2);color:var(--text-dim);transition:.15s}
+  .demo button:hover{color:var(--text);border-color:var(--accent)}
+  .demo button.seg.active{background:rgba(125,211,252,.14);color:var(--accent);border-color:var(--accent)}
+  .demo button.run{background:rgba(52,211,153,.14);color:var(--accent-3);border-color:rgba(52,211,153,.4);font-weight:600}
+
+  /* faithfulness 检测演示 */
+  .ctx-box{background:var(--code-bg);border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin:10px 0;
+    font-size:13px;line-height:1.8;color:var(--text-dim)}
+  .ctx-box .k{color:var(--accent);font-weight:700}
+  .claim{display:flex;align-items:flex-start;gap:10px;padding:10px 12px;margin:8px 0;border-radius:8px;
+    border:1px solid var(--border);background:var(--bg-card);font-size:13.5px;line-height:1.6;
+    opacity:0;transform:translateY(6px);transition:opacity .4s,transform .4s,border-color .3s,background .3s}
+  .claim.show{opacity:1;transform:translateY(0)}
+  .claim .tag{flex-shrink:0;font-family:"JetBrains Mono",monospace;font-size:10.5px;padding:2px 8px;border-radius:99px;margin-top:2px}
+  .claim.sup{border-color:rgba(52,211,153,.4);background:rgba(52,211,153,.06)}
+  .claim.sup .tag{background:rgba(52,211,153,.16);color:#6ee7b7}
+  .claim.unsup{border-color:rgba(248,113,113,.45);background:rgba(248,113,113,.06)}
+  .claim.unsup .tag{background:rgba(248,113,113,.16);color:#f87171}
+  .claim .txt{color:var(--text-dim)}
+  .claim .txt em{color:#f87171;font-style:normal;text-decoration:underline wavy rgba(248,113,113,.6)}
+  .score-big{font-family:"JetBrains Mono",monospace;font-size:30px;font-weight:700}
+  .fscore-wrap{display:flex;align-items:center;gap:18px;margin-top:14px;padding:14px;border-radius:10px;
+    background:var(--bg-card-2);border:1px solid var(--border)}
+
+  .layers{display:flex;flex-direction:column;gap:2px;margin:16px 0}
+  .lyr{display:grid;grid-template-columns:120px 1fr;gap:14px;padding:12px 16px;border-radius:8px;
+    border:1px solid var(--border);background:var(--bg-card)}
+  .lyr .lh{font-weight:700;font-size:13.5px}
+  .lyr .ld{font-size:13px;color:var(--text-dim);line-height:1.65}
+  .lyr.l1{border-left:4px solid #7dd3fc}
+  .lyr.l2{border-left:4px solid #a78bfa}
+  .lyr.l3{border-left:4px solid #fbbf24}
+  .lyr.l4{border-left:4px solid #34d399}
+  @media(max-width:760px){.lyr{grid-template-columns:1fr;gap:4px}}
+</style>
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav tn-shell-overlay">
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="ai_engineering_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 42 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>AI 工程 · RAG 幻觉治理</h2>
+    <nav>
+      <ol>
+        <li><a href="#ch0" class="active">有检索为何还会编</a></li>
+        <li><a href="#ch1">幻觉的成因链路</a>
+          <ol>
+            <li><a href="#s1-1">三类 RAG 幻觉</a></li>
+            <li><a href="#s1-2">成因归因图</a></li>
+          </ol>
+        </li>
+        <li><a href="#ch2">四道防线总览</a></li>
+        <li><a href="#ch3">事前：Grounding 与拒答</a></li>
+        <li><a href="#ch4">事中：引用与结构化约束</a></li>
+        <li><a href="#ch5">事后：校验与自检</a>
+          <ol>
+            <li><a href="#s5-1">Faithfulness 校验</a></li>
+            <li><a href="#s5-2">交互演示</a></li>
+          </ol>
+        </li>
+        <li><a href="#ch6">评测闭环与兜底</a></li>
+        <li><a href="#ch7">小结 · 面试 · 术语表</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+
+    <!-- HERO -->
+    <header class="hero">
+      <div class="badge">AI Engineering · RAG 进阶</div>
+      <h1>RAG 幻觉治理：让模型「有据才说，无据就认」</h1>
+      <p class="sub">很多人以为「接了 RAG 就不会幻觉」——错。即使检索到了正确文档，模型仍可能<strong>忽略上下文、过度外推、把检索内容和自己的先验混着编</strong>。RAG 幻觉是生产事故的头号来源，也是「Demo 惊艳、上线翻车」的分水岭。本篇建立一套<strong>事前防御 → 事中约束 → 事后校验 → 评测兜底</strong>的四道防线体系，配一个可交互的 <strong>Faithfulness 逐句检测</strong>演示，讲清「怎么让答案有据可依、无据时老实认怂」。</p>
+      <div class="meta-row">
+        <span class="pill red">核心难度 ★★★★☆</span>
+        <span class="pill cyan">RAG · 可信度</span>
+        <span class="pill green">阅读时长 ~42 min</span>
+        <span class="pill amber">前置 RAG 深潜 / Eval</span>
+      </div>
+      <div class="meta">
+        <span>8 章 + 术语表</span>
+        <span>6 张 SVG / 图表</span>
+        <span>1 个交互演示</span>
+        <span>22+ 名词解释</span>
+        <span>四道防线</span>
+        <span>无 CDN · 单文件</span>
+      </div>
+    </header>
+
+    <!-- 第 0 章 -->
+    <section class="chapter" id="ch0">
+      <div class="ch-head">
+        <div class="num">00</div>
+        <div class="t">
+          <h2>接了 RAG，为什么还会「一本正经地胡说」</h2>
+          <p class="sub">检索 ≠ 遵从 · RAG 降低了幻觉，但远没消灭它</p>
+        </div>
+      </div>
+
+      <p class="lead">RAG 的初衷正是治幻觉：给模型喂真实资料，让它「照着资料答」而不是「凭记忆编」。它确实大幅降低了幻觉率——但<strong>没有清零</strong>。因为「把资料放进上下文」和「模型真的遵从资料」是两码事。模型可能：检索给了对的它没看、检索给了错的它照单全收、检索没提到的它自己脑补。<strong>幻觉从"模型编"升级成了"模型没老老实实用检索结果"。</strong></p>
+
+      <div class="analogy">RAG 像<strong>开卷考试</strong>：允许你翻书答题，作弊（凭空捏造）的概率大降。但开卷≠满分——有的学生<strong>没翻到对的那页</strong>（检索失败）、有的<strong>翻到了却看漏了</strong>（忽略上下文）、有的<strong>书上没写就自己瞎补</strong>（过度外推）、还有的<strong>把书上的和自己记的混着写，结果串了</strong>（先验冲突）。幻觉治理，就是把这些"开卷考试还能答错"的漏洞逐个堵上。</div>
+
+      <div class="def"><strong>RAG 幻觉（Hallucination in RAG）</strong>：RAG 系统生成的、<strong>无法由检索到的上下文支撑</strong>的内容。注意它不等于「事实错误」——一个内容可能事实正确但检索里没有（也算幻觉：无据），也可能检索里写了但模型答反了。RAG 语境下衡量的核心是 <strong>Faithfulness（忠实度 / 是否忠于给定上下文）</strong>，而非笼统的"对不对"。</div>
+
+      <div class="warn"><strong>为什么必须专门治理</strong>：在客服、医疗、金融、法律等场景，一句"听起来很专业但其实是编的"回答，比"我不知道"危害大得多——用户会信。RAG 幻觉是这些领域能否上线的<strong>一票否决项</strong>。</div>
+    </section>
+
+    <!-- 第 1 章 -->
+    <section class="chapter" id="ch1">
+      <div class="ch-head">
+        <div class="num">01</div>
+        <div class="t">
+          <h2>幻觉的成因链路：先分类，才能对症</h2>
+          <p class="sub">不同成因要用不同防线，无差别"加 prompt"是治不好的</p>
+        </div>
+      </div>
+
+      <h3 id="s1-1">1.1 三类 RAG 幻觉</h3>
+      <div class="grid cols-3">
+        <div class="card"><h4>① 检索失败型</h4><p style="font-size:13px;color:var(--text-dim)">压根没召回到相关文档（召回差 / 库里就没有），模型只能凭先验编。<strong>根在检索，不在生成。</strong></p></div>
+        <div class="card amber"><h4>② 忽略上下文型</h4><p style="font-size:13px;color:var(--text-dim)">检索对了，但模型没用它——被自身先验带跑，或长上下文里"看漏了"（迷失在中间）。</p></div>
+        <div class="card violet"><h4>③ 过度外推型</h4><p style="font-size:13px;color:var(--text-dim)">上下文只说了一部分，模型自作主张"补全""推断"出上下文没有的结论，听起来很顺但无据。</p></div>
+      </div>
+      <div class="tip"><strong>先分诊再开方</strong>：检索失败型 → 去优化检索/改写（见 <code>rag_deep_dive.html</code> / <code>rag_query_rewriting.html</code>）；忽略上下文型 → 事前 grounding prompt + 事中引用约束；过度外推型 → 事后 faithfulness 校验 + 弃权兜底。<strong>无脑往 prompt 里堆"请不要编"，只对第 ② 类有点用，治不了另外两类。</strong></div>
+
+      <h3 id="s1-2">1.2 成因归因图：一条从提问到幻觉的链路</h3>
+      <div class="svg-wrap">
+        <svg width="760" height="270" viewBox="0 0 760 270" role="img" aria-label="RAG 幻觉成因链路">
+          <text x="380" y="24" text-anchor="middle" fill="#7dd3fc" font-size="15" font-weight="bold">幻觉可能在链路的每一环被引入</text>
+          <!-- pipeline -->
+          <rect x="30" y="70" width="120" height="50" rx="8" fill="#1a2138" stroke="#7dd3fc"/><text x="90" y="92" text-anchor="middle" fill="#e4e9f5" font-size="11" font-weight="bold">Chunking</text><text x="90" y="109" text-anchor="middle" fill="#94a3b8" font-size="9">切碎丢信息</text>
+          <rect x="185" y="70" width="120" height="50" rx="8" fill="#624b14" stroke="#fbbf24"/><text x="245" y="92" text-anchor="middle" fill="#fcd34d" font-size="11" font-weight="bold">检索</text><text x="245" y="109" text-anchor="middle" fill="#94a3b8" font-size="9">召回不全/召回错</text>
+          <rect x="340" y="70" width="120" height="50" rx="8" fill="#3a2862" stroke="#a78bfa"/><text x="400" y="92" text-anchor="middle" fill="#c4b5fd" font-size="11" font-weight="bold">上下文拼装</text><text x="400" y="109" text-anchor="middle" fill="#94a3b8" font-size="9">太长/冲突/顺序</text>
+          <rect x="495" y="70" width="120" height="50" rx="8" fill="#62261f" stroke="#f87171"/><text x="555" y="92" text-anchor="middle" fill="#fca5a5" font-size="11" font-weight="bold">生成</text><text x="555" y="109" text-anchor="middle" fill="#94a3b8" font-size="9">先验覆盖/外推</text>
+          <rect x="650" y="70" width="90" height="50" rx="8" fill="#1c4a2a" stroke="#34d399"/><text x="695" y="92" text-anchor="middle" fill="#6ee7b7" font-size="11" font-weight="bold">答案</text><text x="695" y="109" text-anchor="middle" fill="#94a3b8" font-size="9">可能带幻觉</text>
+          <line x1="150" y1="95" x2="183" y2="95" stroke="#64748b" stroke-width="1.4" marker-end="url(#arF)"/>
+          <line x1="305" y1="95" x2="338" y2="95" stroke="#64748b" stroke-width="1.4" marker-end="url(#arF)"/>
+          <line x1="460" y1="95" x2="493" y2="95" stroke="#64748b" stroke-width="1.4" marker-end="url(#arF)"/>
+          <line x1="615" y1="95" x2="648" y2="95" stroke="#64748b" stroke-width="1.4" marker-end="url(#arF)"/>
+          <!-- causes -->
+          <text x="90" y="150" text-anchor="middle" fill="#7dd3fc" font-size="9.5">切分破坏语义</text>
+          <text x="245" y="150" text-anchor="middle" fill="#fbbf24" font-size="9.5">→ 检索失败型①</text>
+          <text x="400" y="150" text-anchor="middle" fill="#a78bfa" font-size="9.5">→ 迷失在中间</text>
+          <text x="555" y="150" text-anchor="middle" fill="#f87171" font-size="9.5">→ 忽略②/外推③</text>
+          <!-- defense bar -->
+          <rect x="30" y="185" width="710" height="60" rx="10" fill="#0c1120" stroke="#2a3556"/>
+          <text x="385" y="205" text-anchor="middle" fill="#6ee7b7" font-size="11" font-weight="bold">四道防线分别把守不同环节</text>
+          <text x="140" y="228" text-anchor="middle" fill="#7dd3fc" font-size="9.5">事前 grounding</text>
+          <text x="320" y="228" text-anchor="middle" fill="#a78bfa" font-size="9.5">事中引用约束</text>
+          <text x="500" y="228" text-anchor="middle" fill="#fbbf24" font-size="9.5">事后 faithfulness 校验</text>
+          <text x="670" y="228" text-anchor="middle" fill="#34d399" font-size="9.5">弃权兜底</text>
+          <defs><marker id="arF" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#64748b"/></marker></defs>
+        </svg>
+        <div class="svg-caption">幻觉不是单点问题：切分、检索、拼装、生成每一环都可能引入。所以治理也不是"一个 prompt"，而是覆盖全链路的<strong>纵深防御</strong>。</div>
+      </div>
+      <div class="def"><strong>迷失在中间（Lost in the Middle）</strong>：模型对长上下文<strong>开头和结尾</strong>的信息利用最好，<strong>中间</strong>的容易被忽略。这是"忽略上下文型"幻觉的常见诱因——把最相关的片段放在上下文中部，模型可能视而不见。对策：rerank 后把最相关的放到<strong>首尾</strong>，控制上下文长度。</div>
+    </section>
+
+    <!-- 第 2 章 -->
+    <section class="chapter" id="ch2">
+      <div class="ch-head">
+        <div class="num">02</div>
+        <div class="t">
+          <h2>四道防线总览</h2>
+          <p class="sub">纵深防御 · 事前 / 事中 / 事后 / 评测兜底，逐层拦截</p>
+        </div>
+      </div>
+
+      <p class="lead">没有单一"银弹"能消灭幻觉。工程上靠的是<strong>纵深防御（defense in depth）</strong>：在生成前、生成中、生成后、以及长期评测四个环节各设一道关，让幻觉即使漏过前一道，也会被后一道拦下。下面先看全景，后面各章逐一展开。</p>
+
+      <div class="layers">
+        <div class="lyr l1"><div class="lh" style="color:#7dd3fc">① 事前防御</div><div class="ld">生成之前。用 <strong>grounding prompt</strong> 约束"只依据给定资料回答"、<strong>提供检索质量兜底</strong>（召回太差就别硬答）、<strong>允许拒答</strong>。成本最低、性价比最高的第一关。</div></div>
+        <div class="lyr l2"><div class="lh" style="color:#a78bfa">② 事中约束</div><div class="ld">生成过程中。要求<strong>逐句标注引用</strong>（citation）、输出<strong>结构化格式</strong>（先证据后结论）、约束"没有出处的话不要写"。让答案天然可追溯。</div></div>
+        <div class="lyr l3"><div class="lh" style="color:#fbbf24">③ 事后校验</div><div class="ld">答案生成后。做 <strong>faithfulness 校验</strong>（逐句判断是否被上下文支撑）、<strong>引用溯源核对</strong>、<strong>self-check</strong>（模型自查/二次核对），发现不忠实就重生成或标注。</div></div>
+        <div class="lyr l4"><div class="lh" style="color:#34d399">④ 评测兜底</div><div class="ld">长期与线上。用 <strong>faithfulness/groundedness 指标</strong>持续评测、监控<strong>幻觉率</strong>；触发阈值就<strong>弃权（abstain）</strong>、转人工或降级。把治理从"一次性"变成"闭环"。</div></div>
+      </div>
+
+      <div class="analogy">这就像<strong>食品安全的多重把关</strong>：进货前查供应商资质（事前）、加工时全程留样标签（事中）、出厂前抽检化验（事后）、上市后持续抽查+出问题召回（评测兜底）。任何一关都不敢保证 100%，但<strong>四关叠加，漏网的概率被压到可接受</strong>。幻觉治理也是同一个哲学——不追求单点完美，追求纵深可靠。</div>
+      <div class="info">四道防线的<strong>成本与延迟递增</strong>：事前几乎零成本（改 prompt），事中略增（要求引用），事后最贵（额外的校验调用）。工程上按场景取舍：高风险场景（医疗/金融）四道全上；低风险内部工具，事前+事中可能就够。</div>
+    </section>
+
+    <!-- 第 3 章 -->
+    <section class="chapter" id="ch3">
+      <div class="ch-head">
+        <div class="num">03</div>
+        <div class="t">
+          <h2>事前防御：Grounding 与「敢于拒答」</h2>
+          <p class="sub">最便宜的一关 · 用 prompt 把模型"锚"在给定资料上</p>
+        </div>
+      </div>
+
+      <p class="lead">第一道防线在生成之前，核心是两件事：<strong>把模型锚定在检索资料上（grounding）</strong>，以及<strong>给模型"我不知道"的许可（拒答）</strong>。很多幻觉的根源，是模型被"必须给个答案"的隐性压力逼着编——明确告诉它"没有依据就说没有"，能拦下一大批。</p>
+
+      <div class="def"><strong>Grounding（接地 / 锚定）</strong>：通过 prompt 明确要求模型「<strong>只依据提供的上下文回答，不要使用你自己的知识</strong>」，把生成"锚"在给定资料上。它把模型从"开放问答"切换到"阅读理解"模式，是降低幻觉最简单有效的一招。</div>
+
+      <pre><span class="c">// 一个 grounding + 拒答的 system prompt 骨架</span>
+你是一个严格基于资料回答的助手。规则：
+1. <span class="k">只能</span>使用下面【资料】中的信息回答，禁止使用你自己的知识补充。
+2. 如果【资料】不足以回答，直接说「<span class="s">根据现有资料无法回答</span>」，<span class="k">不要</span>猜测。
+3. 每个结论后用 [1][2] 标注它来自哪段资料。
+4. 资料之间若有冲突，指出冲突而不是自行选一个。
+
+【资料】
+[1] {chunk_1}
+[2] {chunk_2}
+...
+【问题】{query}</pre>
+
+      <div class="grid cols-2">
+        <div class="card green"><h4>给"拒答"的许可</h4><p style="font-size:13px;color:var(--text-dim)">明确写"无据时说不知道"。人类客服敢说"这个我需要确认下"，模型也要被允许如此。缺了这句，模型倾向硬编。</p></div>
+        <div class="card amber"><h4>检索质量门槛</h4><p style="font-size:13px;color:var(--text-dim)">若 top-1 相似度低于阈值 / 召回为空，<strong>根本不进生成</strong>，直接返回"没有找到相关资料"。从源头掐断"检索失败型"幻觉。</p></div>
+        <div class="card violet"><h4>冲突显式化</h4><p style="font-size:13px;color:var(--text-dim)">资料互相矛盾时，要求模型"指出冲突"而非默默挑一个。避免它"编一个和稀泥的答案"。</p></div>
+        <div class="card"><h4>约束回答范围</h4><p style="font-size:13px;color:var(--text-dim)">"只回答资料覆盖的部分，未覆盖的明确说明"。防止模型把 80% 有据 + 20% 脑补缝合成一个看不出破绽的整体。</p></div>
+      </div>
+      <div class="warn">Grounding prompt 不是万能：它主要治"忽略上下文型"，对"检索失败型"（库里根本没有）只能靠拒答 + 检索质量门槛兜住。而且过强的 grounding 会让模型变得"死板"（明明能合理推断也拒答），需要按场景调松紧。</div>
+    </section>
+
+    <!-- 第 4 章 -->
+    <section class="chapter" id="ch4">
+      <div class="ch-head">
+        <div class="num">04</div>
+        <div class="t">
+          <h2>事中约束：逐句引用 + 结构化输出</h2>
+          <p class="sub">让答案「自带出处」，把可追溯变成硬约束</p>
+        </div>
+      </div>
+
+      <p class="lead">第二道防线在生成过程中，核心是逼模型<strong>边答边给出处</strong>。当每句话都必须标注"这来自资料[几]"时，模型很难再凭空编——因为编的话没法给出处。引用不仅方便用户核查，还<strong>反向约束了生成</strong>：要引用，就得真的从资料里找依据。</p>
+
+      <div class="def"><strong>引用 / 归因（Citation / Attribution）</strong>：要求模型在答案中<strong>逐句或逐结论标注其依据来自哪段检索资料</strong>（如 [1][3]）。它让答案可被逐条核查，也在生成时约束模型"无出处不下笔"，是可信 RAG 的标配（如 Perplexity、各类 AI 搜索的角标引用）。</div>
+
+      <div class="svg-wrap">
+        <svg width="760" height="180" viewBox="0 0 760 180" role="img" aria-label="带引用的答案结构">
+          <text x="380" y="22" text-anchor="middle" fill="#7dd3fc" font-size="14" font-weight="bold">结构化 + 引用：每个结论都能回溯到资料</text>
+          <rect x="40" y="50" width="200" height="100" rx="8" fill="#0c1120" stroke="#7dd3fc"/>
+          <text x="140" y="72" text-anchor="middle" fill="#7dd3fc" font-size="11" font-weight="bold">检索资料</text>
+          <text x="140" y="96" text-anchor="middle" fill="#94a3b8" font-size="10">[1] 退款 3-5 工作日到账</text>
+          <text x="140" y="118" text-anchor="middle" fill="#94a3b8" font-size="10">[2] 需原路退回</text>
+          <text x="140" y="140" text-anchor="middle" fill="#94a3b8" font-size="10">[3] 生鲜类不支持退</text>
+          <rect x="360" y="40" width="360" height="120" rx="8" fill="#10241c" stroke="#34d399"/>
+          <text x="540" y="62" text-anchor="middle" fill="#6ee7b7" font-size="11" font-weight="bold">生成答案（逐句带引用）</text>
+          <text x="378" y="86" fill="#cbd5e1" font-size="10.5">· 退款一般 3-5 个工作日到账 <tspan fill="#7dd3fc">[1]</tspan></text>
+          <text x="378" y="108" fill="#cbd5e1" font-size="10.5">· 会原路退回到付款账户 <tspan fill="#7dd3fc">[2]</tspan></text>
+          <text x="378" y="130" fill="#cbd5e1" font-size="10.5">· 但生鲜类商品不支持退款 <tspan fill="#7dd3fc">[3]</tspan></text>
+          <text x="378" y="150" fill="#94a3b8" font-size="9.5">（每条都有 [n]，无出处的话写不出来）</text>
+          <line x1="240" y1="96" x2="358" y2="86" stroke="#475569" stroke-width="1.2" marker-end="url(#arC)"/>
+          <line x1="240" y1="118" x2="358" y2="108" stroke="#475569" stroke-width="1.2" marker-end="url(#arC)"/>
+          <line x1="240" y1="140" x2="358" y2="130" stroke="#475569" stroke-width="1.2" marker-end="url(#arC)"/>
+          <defs><marker id="arC" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#475569"/></marker></defs>
+        </svg>
+        <div class="svg-caption">引用把"答案"和"证据"一一挂钩。事后校验（下一章）正是沿着这些 [n] 反查——引用是可核查性的基础设施。</div>
+      </div>
+
+      <div class="grid cols-2">
+        <div class="card"><h4>结构化输出</h4><p style="font-size:13px;color:var(--text-dim)">让模型输出 JSON：<code>{claim, evidence_id, quote}</code>。先证据后结论的结构，天然抑制"先下结论再找理由"式的脑补，也便于程序化校验。</p></div>
+        <div class="card green"><h4>强制引用 / 无引用不输出</h4><p style="font-size:13px;color:var(--text-dim)">规则："每个事实性陈述必须带 [n]；给不出出处的内容，删掉或标为不确定。" 把"可追溯"从建议变成硬约束。</p></div>
+        <div class="card amber"><h4>抽取式优先</h4><p style="font-size:13px;color:var(--text-dim)">高风险场景可要求"尽量引用原文片段"而非改写，抽取式（extractive）比生成式更难跑偏——代价是不够自然。</p></div>
+        <div class="card violet"><h4>区分"资料内 vs 常识"</h4><p style="font-size:13px;color:var(--text-dim)">若允许模型用常识补充，要求它明确标注哪些来自资料、哪些是它的推断，让用户能分辨可信度。</p></div>
+      </div>
+      <div class="tip"><strong>引用要"真"</strong>：模型有时会编出"看起来有 [2] 但 [2] 根本没这内容"的<strong>假引用</strong>。所以引用本身也要被事后校验（下一章）——不能只看"有没有角标"，要核"角标指的那段到底支不支持这句话"。</div>
+    </section>
+
+    <!-- 第 5 章 -->
+    <section class="chapter" id="ch5">
+      <div class="ch-head">
+        <div class="num">05</div>
+        <div class="t">
+          <h2>事后校验：Faithfulness 逐句核对 + 自检</h2>
+          <p class="sub">答案生成后，再过一遍"这句话，资料撑得起吗"</p>
+        </div>
+      </div>
+
+      <h3 id="s5-1">5.1 Faithfulness 校验：把答案拆成句，逐句判定</h3>
+      <p class="lead">最硬核的一道关：把生成的答案<strong>拆成一条条原子陈述（claim）</strong>，对每条判断"检索上下文<strong>是否支撑</strong>它"（supported / not-supported）。支撑的留，不支撑的就是幻觉——重生成、删除、或标注为"不确定"。支撑比例就是 <strong>Faithfulness 分数</strong>。</p>
+
+      <div class="def"><strong>Faithfulness（忠实度） / Groundedness（有据性）</strong>：衡量答案中的陈述<strong>有多少能被检索上下文支撑</strong>。计算方式：拆出 N 条 claim，判定其中 M 条被上下文 entail（蕴含），<strong>Faithfulness = M / N</strong>。它是 RAG 幻觉的核心度量——不看答案"对不对"，只看"忠不忠于给的资料"。</div>
+
+      <div class="def"><strong>NLI / 蕴含判定（Entailment）</strong>：判断"上下文是否蕴含某条陈述"的技术。可用轻量 NLI 模型，也可用 <strong>LLM-as-judge</strong>（让另一个 LLM 判"这句话资料支不支持"）。是 faithfulness 校验和 self-check 的底层判定器。</div>
+
+      <div class="grid cols-3">
+        <div class="card"><h4>拆句 → 判定</h4><p style="font-size:13px;color:var(--text-dim)">答案 → 原子 claim 列表 → 每条与上下文做蕴含判定 → 算支撑比例。RAGAS 等库把这套自动化了。</p></div>
+        <div class="card green"><h4>Self-Check / 二次核对</h4><p style="font-size:13px;color:var(--text-dim)">让模型"复查自己的答案：逐句核对资料，把没依据的标出来"。或采样多次答案看一致性（SelfCheckGPT 思路）。</p></div>
+        <div class="card amber"><h4>不达标怎么办</h4><p style="font-size:13px;color:var(--text-dim)">低于阈值：① 删掉不支撑句；② 带着"请仅用资料"重生成；③ 降级为弃权/转人工（见下一章）。</p></div>
+      </div>
+
+      <h3 id="s5-2">5.2 交互演示：Faithfulness 逐句检测</h3>
+      <p>下面给你一段「检索上下文」和三种不同质量的「生成答案」。点开检测，看系统如何把答案<strong>拆成一句句 claim、逐句判定 supported / unsupported</strong>，并算出 Faithfulness 分数——被标红的就是幻觉句：</p>
+
+      <div class="demo" id="faithDemo">
+        <div class="demo-title">交互演示 · Faithfulness 逐句检测</div>
+        <div class="ctx-box">
+          <span class="k">📄 检索上下文：</span>本店退款一般 3-5 个工作日到账；退款将原路退回到原支付账户；生鲜类商品一经售出不支持退款。
+        </div>
+        <div class="demo-controls">
+          <button class="seg active" data-a="good">答案 A · 忠实</button>
+          <button class="seg" data-a="mix">答案 B · 部分外推</button>
+          <button class="seg" data-a="bad">答案 C · 大量编造</button>
+          <button class="run" id="faithRun">▶ 逐句检测</button>
+        </div>
+        <div id="faithClaims"></div>
+        <div class="fscore-wrap">
+          <div>
+            <div style="font-size:11px;color:var(--text-mute);letter-spacing:1px;text-transform:uppercase">Faithfulness</div>
+            <div class="score-big" id="faithScore" style="color:var(--text-mute)">—</div>
+          </div>
+          <div style="flex:1;font-size:13px;color:var(--text-dim)" id="faithVerdict">选择一个答案，点「逐句检测」开始。</div>
+        </div>
+      </div>
+      <div class="note">同一段上下文，三种答案的 faithfulness 天差地别：A 全部有据（1.0）；B 把"3-5 工作日"擅自说成"24 小时内"、还补了上下文没有的"运费也退"（外推）；C 大量编造退款政策。<strong>校验器只问一件事：这句话，上下文撑得起吗？</strong>——撑不起就是幻觉，与它"听起来多专业"无关。真实系统里判定器是 NLI 模型或 LLM-as-judge，本演示为教学用规则模拟。</div>
+    </section>
+
+    <!-- 第 6 章 -->
+    <section class="chapter" id="ch6">
+      <div class="ch-head">
+        <div class="num">06</div>
+        <div class="t">
+          <h2>评测闭环与兜底：把治理变成长期机制</h2>
+          <p class="sub">离线评测 + 线上监控 + 弃权/人审，闭环收尾</p>
+        </div>
+      </div>
+
+      <p class="lead">前三道防线作用于"单次请求"。第四道把视角拉到<strong>长期</strong>：用指标持续量化幻觉、上线后监控、并在系统"没把握"时优雅地<strong>弃权</strong>而不是硬答。没有评测闭环，你甚至不知道自己的幻觉率是升是降。</p>
+
+      <div class="grid cols-2">
+        <div class="card"><h4>离线评测</h4><p style="font-size:13px;color:var(--text-dim)">用带标注的 eval set 跑 <strong>Faithfulness、Answer Relevance、Context Precision/Recall</strong> 等指标（RAGAS / TruLens）。每次改动前后对比，防止"改好了 A 却退化了 B"。详见 <code>ai_eval.html</code>。</p></div>
+        <div class="card green"><h4>线上监控</h4><p style="font-size:13px;color:var(--text-dim)">对线上流量抽样跑 faithfulness 校验，把<strong>幻觉率</strong>做成看板 + 告警。用户点踩、"这不对"反馈也是重要信号。</p></div>
+        <div class="card amber"><h4>弃权 Abstain</h4><p style="font-size:13px;color:var(--text-dim)">检索质量差 / faithfulness 低 / 置信度低时，<strong>主动说"无法确定"或转人工</strong>，而不是硬编。"我不知道"是特性，不是 bug。</p></div>
+        <div class="card violet"><h4>降级与人审</h4><p style="font-size:13px;color:var(--text-dim)">高风险问题走人工兜底；或降级为"给出相关资料链接让用户自读"，把最终判断交还给人。</p></div>
+      </div>
+
+      <div class="def"><strong>RAGAS / TruLens</strong>：主流 RAG 评测框架。用 LLM-as-judge 自动算 Faithfulness、Answer Relevancy、Context Precision/Recall 等指标，无需大量人工标注，是把幻觉治理"量化 + 闭环"的常用工具。</div>
+      <div class="analogy">弃权就是<strong>老中医的"这个我看不准，建议你去做个检查"</strong>：一个敢说"我不确定"的系统，比一个"什么都敢答"的系统更值得信任。产品设计上要<strong>把"无法确定"做成体面的一等公民</strong>（给替代路径、给人工入口），而不是让它显得像故障。</div>
+      <div class="tip"><strong>治理优先级</strong>：如果预算有限，先做"事前 grounding + 拒答"（几乎免费、收益最大）和"离线 faithfulness 评测"（让你看得见问题）。行有余力再上"逐句事后校验 + 线上监控"这类较贵的重武器。</div>
+    </section>
+
+    <!-- 第 7 章 -->
+    <section class="chapter" id="ch7">
+      <div class="ch-head">
+        <div class="num">07</div>
+        <div class="t">
+          <h2>小结 · 面试 · 术语表</h2>
+          <p class="sub">收束成判断力</p>
+        </div>
+      </div>
+
+      <h3>一页纸总结</h3>
+      <div class="grid cols-3">
+        <div class="card"><h4>① 检索 ≠ 遵从</h4><p style="font-size:13px;color:var(--text-dim)">RAG 降幻觉但不清零：检索失败、忽略上下文、过度外推三类，各有各的成因。</p></div>
+        <div class="card green"><h4>② 纵深四道防线</h4><p style="font-size:13px;color:var(--text-dim)">事前 grounding+拒答 → 事中引用+结构化 → 事后 faithfulness 校验 → 评测闭环+弃权。</p></div>
+        <div class="card amber"><h4>③ Faithfulness 是核心度量</h4><p style="font-size:13px;color:var(--text-dim)">不看"对不对"，看"忠不忠于给的资料"。拆句判定支撑比例，低了就弃权。</p></div>
+      </div>
+
+      <h3>面试自测（点击展开）</h3>
+      <details class="qa">
+        <summary><span class="lvl pill cyan">基础</span>接了 RAG 为什么还会幻觉？有哪几类？</summary>
+        <div class="a">
+          <div class="point"><span class="label">前提</span>"把资料放进上下文" ≠ "模型遵从资料"。</div>
+          <div class="point"><span class="label">三类</span>① 检索失败型（没召回到，只能编）；② 忽略上下文型（召回对了却没用/看漏）；③ 过度外推型（上下文没说的自己补）。</div>
+          <div class="point deep"><span class="label">要点</span>不同类根因不同：①在检索，②③在生成——要分诊对症，不能一个 prompt 打天下。</div>
+        </div>
+      </details>
+      <details class="qa">
+        <summary><span class="lvl pill green">核心</span>什么是 Faithfulness？怎么算？和"答案正确性"有何区别？</summary>
+        <div class="a">
+          <div class="point"><span class="label">定义</span>答案中有多少陈述能被检索上下文支撑。拆出 N 条 claim，M 条被上下文蕴含，Faithfulness = M/N。</div>
+          <div class="point"><span class="label">区别</span>它衡量"忠于给定资料"，不是笼统的"对不对"——一句事实正确但资料没提的话，faithfulness 角度也算无据。</div>
+          <div class="point deep"><span class="label">实现</span>判定用 NLI 模型或 LLM-as-judge；RAGAS/TruLens 把它自动化。</div>
+        </div>
+      </details>
+      <details class="qa">
+        <summary><span class="lvl pill amber">辨析</span>说说治理 RAG 幻觉的四道防线，成本各如何？</summary>
+        <div class="a">
+          <div class="point"><span class="label">事前</span>grounding prompt + 拒答 + 检索质量门槛。几乎零成本，性价比最高。</div>
+          <div class="point"><span class="label">事中</span>逐句引用 + 结构化输出。略增，让答案自带出处、可追溯。</div>
+          <div class="point"><span class="label">事后</span>faithfulness 逐句校验 + self-check。最贵（额外调用），拦漏网的。</div>
+          <div class="point deep"><span class="label">兜底</span>离线评测 + 线上监控 + 弃权/人审。把治理变闭环。按风险取舍层数。</div>
+        </div>
+      </details>
+      <details class="qa">
+        <summary><span class="lvl pill violet">工程</span>模型给了引用 [2]，就一定可信吗？</summary>
+        <div class="a">
+          <div class="point"><span class="label">不一定</span>模型会编"假引用"：标了 [2]，但 [2] 那段其实没这内容。</div>
+          <div class="point"><span class="label">对策</span>引用本身要被事后校验——核对"[2] 指的那段到底支不支持这句话"，而不只是看有没有角标。</div>
+          <div class="point deep"><span class="label">延伸</span>这正是 faithfulness 校验在做的事：把引用当作"待验证的声明"，逐条回查。</div>
+        </div>
+      </details>
+      <details class="qa">
+        <summary><span class="lvl pill red">综合</span>设计一个医疗问答 RAG，如何把幻觉风险压到可上线？</summary>
+        <div class="a">
+          <div class="point"><span class="label">事前</span>强 grounding + 强制拒答 + 高检索质量门槛（召回不够好直接不答）。</div>
+          <div class="point"><span class="label">事中</span>抽取式为主 + 逐句强制引用；区分"资料内"与"一般建议"。</div>
+          <div class="point"><span class="label">事后</span>faithfulness 逐句校验，低于高阈值则不出答案；假引用一律拦截。</div>
+          <div class="point"><span class="label">兜底</span>高风险问题弃权 + 引导就医/转人工；线上持续监控幻觉率 + 明确免责与人工入口。</div>
+          <div class="point deep"><span class="label">原则</span>宁可多说"请咨询医生"，绝不编一个像模像样的错误答案。</div>
+        </div>
+      </details>
+
+      <!-- 术语表 -->
+      <h3 id="s7-gloss" style="margin-top:34px">术语表速查 · Glossary</h3>
+      <div class="glossary">
+        <div class="gl-group">
+          <h4>① 幻觉与成因</h4>
+          <div class="gl"><span class="gl-t">RAG 幻觉 <em>Hallucination</em></span><span class="gl-d">生成的、无法被检索上下文支撑的内容。分检索失败型/忽略上下文型/过度外推型三类。</span></div>
+          <div class="gl"><span class="gl-t">迷失在中间 <em>Lost in the Middle</em></span><span class="gl-d">模型对长上下文首尾利用好、中间易忽略。对策：rerank 后把最相关片段放首尾、控上下文长度。</span></div>
+          <div class="gl"><span class="gl-t">先验冲突</span><span class="gl-d">模型自身记忆（先验）与检索资料矛盾时，可能用先验覆盖资料，导致答案偏离上下文。</span></div>
+        </div>
+        <div class="gl-group">
+          <h4>② 度量与判定</h4>
+          <div class="gl"><span class="gl-t">Faithfulness / Groundedness</span><span class="gl-d">答案陈述被上下文支撑的比例（M/N）。RAG 幻觉的核心度量：看"忠于资料"而非"对不对"。</span></div>
+          <div class="gl"><span class="gl-t">NLI / 蕴含判定 <em>Entailment</em></span><span class="gl-d">判断"上下文是否蕴含某陈述"。可用 NLI 模型或 LLM-as-judge，是校验的底层判定器。</span></div>
+          <div class="gl"><span class="gl-t">Claim 拆分</span><span class="gl-d">把答案拆成原子陈述，逐条做支撑判定，是 faithfulness 计算的前置步骤。</span></div>
+          <div class="gl"><span class="gl-t">Answer Relevancy / Context Precision·Recall</span><span class="gl-d">RAG 评测的配套指标：答案切题度、上下文精度/召回，与 faithfulness 一起构成质量画像。</span></div>
+        </div>
+        <div class="gl-group">
+          <h4>③ 治理手段</h4>
+          <div class="gl"><span class="gl-t">Grounding / 锚定</span><span class="gl-d">prompt 约束"只依据给定资料回答"，切换到阅读理解模式。事前防线核心。</span></div>
+          <div class="gl"><span class="gl-t">引用 / 归因 <em>Citation</em></span><span class="gl-d">逐句标注结论来自哪段资料，让答案可追溯并反向约束生成。需警惕"假引用"。</span></div>
+          <div class="gl"><span class="gl-t">Self-Check / SelfCheckGPT</span><span class="gl-d">让模型自查答案是否有据，或采样多次看一致性来发现幻觉。</span></div>
+          <div class="gl"><span class="gl-t">弃权 <em>Abstain</em></span><span class="gl-d">系统没把握时主动说"无法确定"/转人工，而非硬答。是可信系统的特性。</span></div>
+          <div class="gl"><span class="gl-t">RAGAS / TruLens</span><span class="gl-d">主流 RAG 评测框架，用 LLM-as-judge 自动算 faithfulness 等指标，实现量化闭环。</span></div>
+        </div>
+      </div>
+
+      <div class="tip" style="margin-top:24px"><strong>延伸阅读</strong>：本篇是 <code>rag_deep_dive.html</code> 的"生成可信"进阶补充。检索前的召回优化见 <code>rag_query_rewriting.html</code>；评测方法与 LLM-as-judge 见 <code>ai_eval.html</code>；Guardrail 与 Prompt 注入见 <code>ai_safety.html</code>；线上观测见 <code>llmops.html</code>。改写（提召回）+ Rerank（提精度）+ 本篇（提可信）是 RAG 三个正交质量杠杆。</div>
+    </section>
+
+  </main>
+</div>
+
+<footer>
+  <div class="made">TECH NOTES · AI ENGINEERING SERIES</div>
+  RAG 幻觉治理 · <a href="../index.html">返回首页</a> · © 2026 Kavin Chan · MIT
+</footer>
+
+<button class="back-top" id="backTop" onclick="window.scrollTo({top:0,behavior:'smooth'})">↑</button>
+<style>.back-top{position:fixed;bottom:1.5rem;right:1.5rem;width:44px;height:44px;border-radius:50%;background:color-mix(in srgb, var(--accent) 13%, var(--bg-card));color:#e4e9f5;border:1px solid #2a3556;cursor:pointer;font-size:18px;display:none;z-index:100;align-items:center;justify-content:center}.back-top:hover{color:#7dd3fc}.back-top.show{display:flex}</style>
+
+<script>
+// ===== 进度条 / TOC / 平滑滚动 / fade / back-top =====
+const progress = document.getElementById('progress');
+const updateProgress = () => {
+  const h = document.documentElement;
+  const max = h.scrollHeight - h.clientHeight;
+  progress.style.width = (max > 0 ? (h.scrollTop / max * 100) : 0) + '%';
+};
+window.addEventListener('scroll', updateProgress, {passive:true});
+updateProgress();
+
+const tocLinks = document.querySelectorAll('.toc a');
+const sections = document.querySelectorAll('section.chapter');
+const navObserver = new IntersectionObserver(entries => {
+  entries.forEach(e => {
+    if (e.isIntersecting) {
+      const id = e.target.id;
+      tocLinks.forEach(a => a.classList.toggle('active', a.getAttribute('href') === '#' + id));
+    }
+  });
+}, { rootMargin: '-25% 0px -65% 0px' });
+sections.forEach(s => navObserver.observe(s));
+
+tocLinks.forEach(a => {
+  a.addEventListener('click', e => {
+    const href = a.getAttribute('href');
+    const target = document.querySelector(href);
+    if (target) { e.preventDefault(); target.scrollIntoView({behavior:'smooth', block:'start'}); history.pushState(null, '', href); }
+  });
+});
+
+const fadeEls = document.querySelectorAll('.card, .svg-wrap, table, details, .demo, .layers');
+const fadeObserver = new IntersectionObserver(entries => {
+  entries.forEach(e => { if (e.isIntersecting) { e.target.style.opacity='1'; e.target.style.transform='translateY(0)'; } });
+}, {threshold:0.05});
+fadeEls.forEach(el => { el.style.opacity='0'; el.style.transform='translateY(12px)'; el.style.transition='opacity .5s ease, transform .5s ease'; fadeObserver.observe(el); });
+
+(function(){
+  var btn = document.getElementById('backTop');
+  if (!btn) return;
+  function tg(){ btn.classList.toggle('show', window.scrollY > 400); }
+  window.addEventListener('scroll', tg, { passive: true });
+  tg();
+})();
+
+// ===== 交互演示：Faithfulness 逐句检测 =====
+(function(){
+  // 每条 claim: {text, sup(是否被上下文支撑), why(判定说明), bad(需高亮的错误片段)}
+  const ANSWERS = {
+    good: {
+      label:'答案 A · 忠实',
+      claims:[
+        {text:'退款一般 3-5 个工作日到账。', sup:true, why:'与上下文完全一致'},
+        {text:'退款会原路退回到原支付账户。', sup:true, why:'上下文明确写明'},
+        {text:'生鲜类商品不支持退款。', sup:true, why:'上下文明确写明'},
+      ],
+      verdict:'三句全部有据可依，无幻觉。这是我们要的答案：只说资料撑得起的话。'
+    },
+    mix: {
+      label:'答案 B · 部分外推',
+      claims:[
+        {text:'退款会原路退回原账户。', sup:true, why:'上下文支撑'},
+        {text:'退款通常 24 小时内 到账。', sup:false, why:'上下文说的是 3-5 工作日，被擅自改写', bad:'24 小时内'},
+        {text:'运费也会一并退还。', sup:false, why:'上下文完全没提运费，属外推脑补', bad:'运费也会一并退还'},
+      ],
+      verdict:'3 句里 2 句无据：把"3-5 工作日"编成"24 小时"，还凭空补了"退运费"。这类"看着专业其实偷改/加料"最危险。'
+    },
+    bad: {
+      label:'答案 C · 大量编造',
+      claims:[
+        {text:'所有商品 7 天无理由退款。', sup:false, why:'上下文未提 7 天无理由，且与"生鲜不退"冲突', bad:'所有商品 7 天无理由'},
+        {text:'退款可选择退到银行卡或余额。', sup:false, why:'上下文说原路退回，此为编造', bad:'可选择退到银行卡或余额'},
+        {text:'退款秒到账，无需等待。', sup:false, why:'与"3-5 工作日"直接矛盾', bad:'秒到账，无需等待'},
+      ],
+      verdict:'几乎整段都是编的，还与资料矛盾。faithfulness 极低——这种答案宁可弃权也不能发出去。'
+    },
+  };
+  const segs = document.querySelectorAll('#faithDemo .seg');
+  const runBtn = document.getElementById('faithRun');
+  const claimsEl = document.getElementById('faithClaims');
+  const scoreEl = document.getElementById('faithScore');
+  const verdictEl = document.getElementById('faithVerdict');
+  let cur = 'good';
+
+  function reset(){
+    claimsEl.innerHTML = '';
+    scoreEl.textContent = '—'; scoreEl.style.color = 'var(--text-mute)';
+    verdictEl.textContent = '点「逐句检测」开始拆句判定。';
+  }
+  function run(){
+    const a = ANSWERS[cur];
+    claimsEl.innerHTML = '';
+    let supCount = 0;
+    a.claims.forEach((c,i) => {
+      const div = document.createElement('div');
+      div.className = 'claim ' + (c.sup ? 'sup' : 'unsup');
+      let txt = c.text;
+      if (c.bad){ txt = txt.replace(c.bad, '<em>'+c.bad+'</em>'); }
+      div.innerHTML = '<span class="tag">'+(c.sup?'✓ 有据':'✗ 无据')+'</span>'+
+        '<span class="txt">'+txt+'<br><span style="font-size:11.5px;color:var(--text-mute)">判定：'+c.why+'</span></span>';
+      claimsEl.appendChild(div);
+      if (c.sup) supCount++;
+      setTimeout(()=>div.classList.add('show'), 120 + i*350);
+    });
+    const total = a.claims.length;
+    const score = supCount/total;
+    setTimeout(()=>{
+      scoreEl.textContent = score.toFixed(2);
+      scoreEl.style.color = score>=0.99 ? '#34d399' : (score>=0.5 ? '#fbbf24' : '#f87171');
+      verdictEl.innerHTML = '<b>'+supCount+'/'+total+' 句有据</b> · ' + a.verdict;
+    }, 120 + total*350 + 200);
+  }
+  segs.forEach(b => b.addEventListener('click', () => {
+    segs.forEach(x=>x.classList.remove('active')); b.classList.add('active');
+    cur = b.dataset.a; reset();
+  }));
+  runBtn.addEventListener('click', run);
+  reset();
+})();
+
+console.log('%c AI Engineering · RAG 幻觉治理 ', 'background:linear-gradient(90deg,#7dd3fc,#a78bfa);color:#0a0e1a;font-weight:700;padding:4px 12px;border-radius:4px;font-size:13px');
+</script>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

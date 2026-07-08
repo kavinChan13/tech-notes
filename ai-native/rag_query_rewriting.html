@@ -1,0 +1,685 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RAG Query 改写与查询理解 · Multi-Query / HyDE / Step-back / 分解 / 指代消解</title>
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<style>
+  /* 沿用 D02 视觉系统 */
+  .analogy{background:linear-gradient(135deg,rgba(167,139,250,.08),rgba(125,211,252,.05));
+    border:1px solid var(--border-2);border-left:4px solid var(--accent-2);border-radius:10px;
+    padding:14px 18px;margin:16px 0;font-size:14px;line-height:1.75}
+  .analogy::before{content:"🔌 生活类比";display:inline-block;color:var(--accent-2);font-weight:700;
+    font-size:12px;letter-spacing:.5px;margin-right:10px}
+  .analogy strong{color:var(--text)}
+
+  .def{background:rgba(125,211,252,.05);border:1px solid var(--border);border-left:4px solid var(--accent);
+    border-radius:8px;padding:14px 18px;margin:16px 0;font-size:14px;line-height:1.75}
+  .def::before{content:"📖 名词解释";display:inline-block;color:var(--accent);font-weight:700;
+    font-size:12px;letter-spacing:.5px;margin-right:10px}
+  .def strong{color:var(--text)}
+
+  .glossary{margin:14px 0}
+  .gl-group{margin:20px 0}
+  .gl-group > h4{color:var(--accent);border-left:3px solid var(--accent);padding-left:10px;
+    margin:0 0 10px;font-size:15px}
+  .gl{display:grid;grid-template-columns:210px 1fr;gap:14px;padding:11px 15px;border:1px solid var(--border);
+    border-radius:8px;background:var(--bg-card);margin:7px 0;transition:border-color .15s}
+  .gl:hover{border-color:var(--border-2)}
+  .gl .gl-t{font-weight:600;color:var(--text);font-size:14px}
+  .gl .gl-t em{display:block;font-style:normal;font-family:"JetBrains Mono",monospace;
+    font-size:11px;color:var(--text-mute);margin-top:3px;font-weight:400;letter-spacing:.2px}
+  .gl .gl-d{font-size:13.5px;color:var(--text-dim);line-height:1.7}
+  .gl .gl-d strong{color:var(--accent-4)}
+  .gl .gl-d code{font-size:.85em}
+  @media(max-width:760px){.gl{grid-template-columns:1fr;gap:4px}}
+
+  /* 交互演示外壳 */
+  .demo{background:var(--bg-card);border:1px solid var(--border-2);border-radius:14px;
+    padding:20px;margin:22px 0;box-shadow:var(--shadow)}
+  .demo .demo-title{font-size:13px;text-transform:uppercase;letter-spacing:1.5px;color:var(--accent);
+    font-family:"JetBrains Mono",monospace;margin-bottom:14px;display:flex;align-items:center;gap:8px}
+  .demo .demo-title::before{content:"▶";font-size:10px;color:var(--accent-3)}
+  .demo-controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:16px}
+  .demo button{font-family:inherit;cursor:pointer;border-radius:8px;font-size:13px;padding:8px 14px;
+    border:1px solid var(--border-2);background:var(--bg-card-2);color:var(--text-dim);transition:.15s}
+  .demo button:hover{color:var(--text);border-color:var(--accent)}
+  .demo button.seg.active{background:rgba(125,211,252,.14);color:var(--accent);border-color:var(--accent)}
+  .demo button.run{background:rgba(52,211,153,.14);color:var(--accent-3);border-color:rgba(52,211,153,.4);font-weight:600}
+  .demo button.run:hover{background:rgba(52,211,153,.24)}
+  .demo button.ghost{background:transparent}
+
+  /* query 改写演示 */
+  .rw-io{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:760px){.rw-io{grid-template-columns:1fr}}
+  .rw-box{background:var(--bg-card-2);border:1px solid var(--border);border-radius:10px;padding:14px}
+  .rw-box h5{font-size:12px;text-transform:uppercase;letter-spacing:1px;color:var(--text-mute);margin-bottom:10px}
+  .rw-orig{font-family:"JetBrains Mono",monospace;font-size:13.5px;color:#fbbf24;
+    background:var(--code-bg);border:1px dashed var(--border-2);border-radius:8px;padding:10px 12px;margin-bottom:12px}
+  .rw-q{font-family:"JetBrains Mono",monospace;font-size:12.5px;color:var(--text-dim);
+    background:var(--bg-3);border-left:3px solid var(--accent);border-radius:0 6px 6px 0;padding:8px 12px;margin:6px 0;
+    opacity:0;transform:translateX(-8px);transition:opacity .4s ease,transform .4s ease}
+  .rw-q.show{opacity:1;transform:translateX(0)}
+  .rw-strat{font-size:13px;color:var(--text-dim);line-height:1.7;margin-top:6px}
+  .doc-hit{display:flex;align-items:center;gap:8px;font-size:12.5px;padding:7px 10px;margin:5px 0;
+    border-radius:8px;border:1px solid var(--border);background:var(--bg-card)}
+  .doc-hit .bar{flex:1;height:8px;background:var(--code-bg);border-radius:99px;overflow:hidden}
+  .doc-hit .bar > i{display:block;height:100%;background:linear-gradient(90deg,#34d399,#7dd3fc);width:0;
+    transition:width .6s ease}
+  .doc-hit .sc{font-family:"JetBrains Mono",monospace;color:var(--accent-3);width:44px;text-align:right}
+  .doc-hit.miss{opacity:.4}
+  .doc-hit .nm{width:150px;color:var(--text-dim)}
+</style>
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav tn-shell-overlay">
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="ai_engineering_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 38 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>AI 工程 · RAG Query 改写</h2>
+    <nav>
+      <ol>
+        <li><a href="#ch0" class="active">原始 query 为什么不够</a></li>
+        <li><a href="#ch1">查询理解全景</a>
+          <ol>
+            <li><a href="#s1-1">改写在流水线的位置</a></li>
+            <li><a href="#s1-2">意图识别与路由</a></li>
+          </ol>
+        </li>
+        <li><a href="#ch2">Multi-Query 多查询</a></li>
+        <li><a href="#ch3">HyDE 假设文档</a></li>
+        <li><a href="#ch4">Step-back 后退提问</a></li>
+        <li><a href="#ch5">子问题分解（多跳）</a></li>
+        <li><a href="#ch6">会话式改写 / 指代消解</a></li>
+        <li><a href="#ch7">交互演示 · 选型 · 落地</a>
+          <ol>
+            <li><a href="#s7-1">改写策略演示</a></li>
+            <li><a href="#s7-2">怎么选 · 成本权衡</a></li>
+          </ol>
+        </li>
+        <li><a href="#ch8">小结 · 面试 · 术语表</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+
+    <!-- HERO -->
+    <header class="hero">
+      <div class="badge">AI Engineering · RAG 进阶</div>
+      <h1>RAG Query 改写与查询理解</h1>
+      <p class="sub">RAG 的效果，一半输在「检索前」。用户的原始问题往往<strong>又短、又模糊、又口语、还带指代</strong>——直接拿去检索，向量对不上、关键词命不中。<strong>Query 改写（Query Rewriting / Transformation）</strong>就是在检索之前，把「人话」翻译成「更适合被检索到」的一个或多个查询。本篇系统讲透 <strong>Multi-Query、HyDE、Step-back、子问题分解、会话式改写</strong>五大主力技术，配一个可交互的改写演示，帮你建立「什么场景该用哪一招」的判断力。</p>
+      <div class="meta-row">
+        <span class="pill red">核心难度 ★★★☆☆</span>
+        <span class="pill cyan">RAG · 检索前</span>
+        <span class="pill green">阅读时长 ~38 min</span>
+        <span class="pill amber">前置 RAG 深潜</span>
+      </div>
+      <div class="meta">
+        <span>9 章 + 术语表</span>
+        <span>6 张 SVG / 图表</span>
+        <span>1 个交互演示</span>
+        <span>20+ 名词解释</span>
+        <span>5 大改写技术</span>
+        <span>无 CDN · 单文件</span>
+      </div>
+    </header>
+
+    <!-- 第 0 章 -->
+    <section class="chapter" id="ch0">
+      <div class="ch-head">
+        <div class="num">00</div>
+        <div class="t">
+          <h2>原始 query 为什么不够用</h2>
+          <p class="sub">「问得烂」是 RAG 检索失败最被低估的原因</p>
+        </div>
+      </div>
+
+      <p class="lead"><code>rag_deep_dive.html</code> 讲了 chunking、embedding、hybrid、rerank——那些都在优化「<strong>怎么把库里的东西找出来</strong>」。但还有个前提被忽视：<strong>你拿去找的那句 query 本身好不好</strong>。真实用户的提问，和知识库里文档的写法，常常「说的不是一种话」。检索是拿 query 去匹配文档，两边对不上，后面 rerank 再强也白搭——<strong>召回不到的东西，永远排不出来</strong>。</p>
+
+      <div class="analogy">原始 query 直接检索，像<strong>你用大白话问图书管理员</strong>：「那个……讲赚钱的书？」管理员一脸茫然。会问的人（Query 改写）会先把它翻译成检索友好的说法：「个人理财 / 投资入门 / 财务规划」几个方向分别去书架找，再把结果汇总。<strong>你问题问得好，书架命中率就高</strong>——改写做的就是「替用户把问题问好」。</div>
+
+      <div class="def"><strong>Query 改写 / 查询变换（Query Rewriting / Query Transformation）</strong>：在检索<strong>之前</strong>，用 LLM（或规则）把用户的原始查询，改写、扩展或分解成一个或多个「更利于检索命中」的查询，再送去检索。它是 RAG 里成本最低、收益却常被低估的一环——因为它治的是「召回」这个上游，而召回是整条链路的天花板。</div>
+
+      <table>
+        <thead><tr><th>原始 query 的毛病</th><th>后果</th><th>对应的改写招式</th></tr></thead>
+        <tbody>
+          <tr><td>太短 / 太宽泛（"性能怎么优化？"）</td><td class="cell-bad">召回一堆泛泛而谈</td><td>Step-back / Multi-Query</td></tr>
+          <tr><td>用词和文档不一致（口语 vs 术语）</td><td class="cell-bad">向量对不上、关键词命不中</td><td>Multi-Query / HyDE</td></tr>
+          <tr><td>一句话里含多个子问题</td><td class="cell-mid">检索被"平均"、每个都答不全</td><td>子问题分解</td></tr>
+          <tr><td>多轮对话里的指代（"它贵吗？"）</td><td class="cell-bad">脱离上下文根本没法检索</td><td>会话式改写 / 指代消解</td></tr>
+          <tr><td>问法抽象、缺乏可匹配的实体词</td><td class="cell-mid">向量漂移、召回噪声大</td><td>HyDE / Step-back</td></tr>
+        </tbody>
+      </table>
+      <div class="info">改写不是「越多越好」。每多一次改写就多一次 LLM 调用（延迟 + 成本），多召回一批也会引入噪声。本篇最后一章会给出「什么场景值得上、怎么权衡」的决策表。先把五大招式逐个讲清。</div>
+    </section>
+
+    <!-- 第 1 章 -->
+    <section class="chapter" id="ch1">
+      <div class="ch-head">
+        <div class="num">01</div>
+        <div class="t">
+          <h2>查询理解全景：改写在流水线的哪一步</h2>
+          <p class="sub">先看地图，再逐个拆招</p>
+        </div>
+      </div>
+
+      <h3 id="s1-1">1.1 改写在 RAG 流水线里的位置</h3>
+      <div class="svg-wrap">
+        <svg width="760" height="230" viewBox="0 0 760 230" role="img" aria-label="Query 改写在 RAG 流水线中的位置">
+          <text x="380" y="24" text-anchor="middle" fill="#7dd3fc" font-size="15" font-weight="bold">RAG 流水线：改写是「检索之前」的关键一步</text>
+          <rect x="30" y="70" width="110" height="56" rx="8" fill="#1a2138" stroke="#7dd3fc"/><text x="85" y="94" text-anchor="middle" fill="#e4e9f5" font-size="11.5" font-weight="bold">用户 query</text><text x="85" y="112" text-anchor="middle" fill="#94a3b8" font-size="9.5">"它贵吗？"</text>
+          <rect x="180" y="60" width="130" height="76" rx="8" fill="#3a2862" stroke="#a78bfa" stroke-width="1.8"/><text x="245" y="86" text-anchor="middle" fill="#c4b5fd" font-size="12" font-weight="bold">① 查询理解</text><text x="245" y="104" text-anchor="middle" fill="#c4b5fd" font-size="11" font-weight="bold">+ 改写 ★</text><text x="245" y="122" text-anchor="middle" fill="#94a3b8" font-size="9">意图/分解/扩展/消解</text>
+          <rect x="350" y="70" width="110" height="56" rx="8" fill="#624b14" stroke="#fbbf24"/><text x="405" y="94" text-anchor="middle" fill="#fcd34d" font-size="11.5" font-weight="bold">② 检索</text><text x="405" y="112" text-anchor="middle" fill="#94a3b8" font-size="9.5">向量 + BM25</text>
+          <rect x="500" y="70" width="110" height="56" rx="8" fill="#1c4a2a" stroke="#34d399"/><text x="555" y="94" text-anchor="middle" fill="#6ee7b7" font-size="11.5" font-weight="bold">③ Rerank</text><text x="555" y="112" text-anchor="middle" fill="#94a3b8" font-size="9.5">精排 top-k</text>
+          <rect x="650" y="70" width="90" height="56" rx="8" fill="#62261f" stroke="#f87171"/><text x="695" y="94" text-anchor="middle" fill="#fca5a5" font-size="11.5" font-weight="bold">④ 生成</text><text x="695" y="112" text-anchor="middle" fill="#94a3b8" font-size="9.5">LLM 答</text>
+          <line x1="140" y1="98" x2="178" y2="98" stroke="#64748b" stroke-width="1.5" marker-end="url(#arR)"/>
+          <line x1="310" y1="98" x2="348" y2="98" stroke="#64748b" stroke-width="1.5" marker-end="url(#arR)"/>
+          <line x1="460" y1="98" x2="498" y2="98" stroke="#64748b" stroke-width="1.5" marker-end="url(#arR)"/>
+          <line x1="610" y1="98" x2="648" y2="98" stroke="#64748b" stroke-width="1.5" marker-end="url(#arR)"/>
+          <text x="245" y="168" text-anchor="middle" fill="#a78bfa" font-size="11" font-weight="bold">本篇聚焦这一步</text>
+          <text x="380" y="196" text-anchor="middle" fill="#94a3b8" font-size="10.5">改写决定「能召回什么」——它是召回率的上游，是整条链的天花板</text>
+          <text x="380" y="214" text-anchor="middle" fill="#64748b" font-size="10">对比：Rerank（③）只能在「已召回的候选」里排序，召回不到的它无能为力</text>
+          <defs><marker id="arR" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#64748b"/></marker></defs>
+        </svg>
+        <div class="svg-caption">改写属于「① 查询理解」。它和 Rerank（③）是两个互补的杠杆：<strong>改写提升召回上限</strong>（把对的文档捞进候选池），<strong>Rerank 提升精度</strong>（把候选池里对的排到前面）。</div>
+      </div>
+
+      <h3 id="s1-2">1.2 先分诊：意图识别与查询路由</h3>
+      <p>并不是每个 query 都需要改写，甚至不是每个都需要检索。一个成熟的查询理解层，往往先做一次<strong>分诊（路由）</strong>：</p>
+      <div class="grid cols-2">
+        <div class="card"><h4>要不要检索？</h4><p style="font-size:13px;color:var(--text-dim)">"你好""帮我总结上一段"这类，不需要走知识库，直接让 LLM 回答，省一次检索。</p></div>
+        <div class="card green"><h4>查哪个库 / 哪种检索？</h4><p style="font-size:13px;color:var(--text-dim)">问产品文档 vs 问代码 vs 问表格数据，路由到不同索引 / 不同检索方式（向量 / SQL / 关键词）。</p></div>
+        <div class="card amber"><h4>是简单还是复杂问题？</h4><p style="font-size:13px;color:var(--text-dim)">简单事实题一次检索即可；复杂 / 多跳题才启用分解或 Multi-Query，避免无脑加成本。</p></div>
+        <div class="card violet"><h4>要不要消解上下文？</h4><p style="font-size:13px;color:var(--text-dim)">多轮对话里带指代（它/那个/上面说的），先补全成独立可检索的问题（见第 6 章）。</p></div>
+      </div>
+      <div class="def"><strong>查询路由（Query Routing）</strong>：根据 query 的意图 / 类型，把它分派到最合适的处理路径（是否检索、查哪个数据源、用哪种改写策略）。它让「改写」变得<strong>按需触发</strong>而非一刀切，是控制成本与延迟的关键闸门。</div>
+      <div class="tip">工程上，路由和改写常合并成<strong>一次 LLM 调用</strong>：给模型一个 prompt，让它同时输出「意图分类 + 是否需检索 + 改写后的查询」，用结构化 JSON 返回。一次调用拿到全部决策，省延迟。</div>
+    </section>
+
+    <!-- 第 2 章 -->
+    <section class="chapter" id="ch2">
+      <div class="ch-head">
+        <div class="num">02</div>
+        <div class="t">
+          <h2>Multi-Query：一问变多问</h2>
+          <p class="sub">同一个意图，换几种说法分别检索，再合并去重</p>
+        </div>
+      </div>
+
+      <p class="lead">最直觉的一招：让 LLM 把原始 query <strong>改写成多个语义等价、但用词/角度不同</strong>的查询，分别去检索，再把结果<strong>合并去重</strong>。它对付的是「用户用词和文档用词对不上」——多个说法总有一个能命中。</p>
+
+      <div class="analogy">Multi-Query 像<strong>问路问三个人</strong>：同样想去火车站，你分别问「火车站怎么走」「高铁站在哪」「坐车去市中心站」，三个人给的路线合起来，比只问一个人更全、更不容易被单个人的口误带偏。多个查询版本 = 多个「问路的说法」，合并召回 = 汇总大家的答案。</div>
+
+      <div class="svg-wrap">
+        <svg width="760" height="230" viewBox="0 0 760 230" role="img" aria-label="Multi-Query 扇出与合并">
+          <rect x="30" y="90" width="140" height="50" rx="8" fill="#1a2138" stroke="#fbbf24"/><text x="100" y="112" text-anchor="middle" fill="#fcd34d" font-size="11" font-weight="bold">原始 query</text><text x="100" y="128" text-anchor="middle" fill="#94a3b8" font-size="9.5">"怎么提升接口速度"</text>
+          <rect x="240" y="30" width="180" height="38" rx="7" fill="#10172b" stroke="#7dd3fc"/><text x="330" y="53" text-anchor="middle" fill="#cbd5e1" font-size="10.5">"API 性能优化方法"</text>
+          <rect x="240" y="96" width="180" height="38" rx="7" fill="#10172b" stroke="#7dd3fc"/><text x="330" y="119" text-anchor="middle" fill="#cbd5e1" font-size="10.5">"降低接口响应延迟"</text>
+          <rect x="240" y="162" width="180" height="38" rx="7" fill="#10172b" stroke="#7dd3fc"/><text x="330" y="185" text-anchor="middle" fill="#cbd5e1" font-size="10.5">"数据库 / 缓存调优"</text>
+          <line x1="170" y1="108" x2="238" y2="52" stroke="#a78bfa" stroke-width="1.4" marker-end="url(#arM)"/>
+          <line x1="170" y1="115" x2="238" y2="115" stroke="#a78bfa" stroke-width="1.4" marker-end="url(#arM)"/>
+          <line x1="170" y1="122" x2="238" y2="178" stroke="#a78bfa" stroke-width="1.4" marker-end="url(#arM)"/>
+          <text x="330" y="18" text-anchor="middle" fill="#a78bfa" font-size="10.5">LLM 扇出 3 个变体</text>
+          <rect x="470" y="70" width="120" height="90" rx="8" fill="#1c4a2a" stroke="#34d399"/><text x="530" y="98" text-anchor="middle" fill="#6ee7b7" font-size="11" font-weight="bold">各自检索</text><text x="530" y="118" text-anchor="middle" fill="#94a3b8" font-size="9.5">top-k × 3</text><text x="530" y="138" text-anchor="middle" fill="#94a3b8" font-size="9.5">候选并集</text>
+          <line x1="420" y1="49" x2="468" y2="90" stroke="#64748b" stroke-width="1.3" marker-end="url(#arM)"/>
+          <line x1="420" y1="115" x2="468" y2="115" stroke="#64748b" stroke-width="1.3" marker-end="url(#arM)"/>
+          <line x1="420" y1="181" x2="468" y2="140" stroke="#64748b" stroke-width="1.3" marker-end="url(#arM)"/>
+          <rect x="640" y="85" width="100" height="60" rx="8" fill="#62261f" stroke="#f87171"/><text x="690" y="110" text-anchor="middle" fill="#fca5a5" font-size="11" font-weight="bold">去重 + RRF</text><text x="690" y="128" text-anchor="middle" fill="#94a3b8" font-size="9.5">→ 精排</text>
+          <line x1="590" y1="115" x2="638" y2="115" stroke="#64748b" stroke-width="1.3" marker-end="url(#arM)"/>
+          <defs><marker id="arM" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#94a3b8"/></marker></defs>
+        </svg>
+        <div class="svg-caption">扇出（fan-out）→ 并行检索 → 合并去重。合并常用 <strong>RRF（Reciprocal Rank Fusion，倒数排名融合）</strong>把多路结果排名融合成一份，再交给 rerank。</div>
+      </div>
+
+      <div class="def"><strong>RRF（Reciprocal Rank Fusion）</strong>：把多路检索结果按「1/(k+排名)」累加分数后重排的融合方法。它只看排名不看原始分数，天然抹平不同检索通道的分数量纲差异，是合并 Multi-Query / Hybrid 多路结果的常用手段（<code>rag_deep_dive.html</code> 的 Hybrid 章有细讲）。</div>
+      <div class="warn">Multi-Query 的代价：① 多一次 LLM 调用生成变体；② 检索次数翻几倍；③ 召回并集变大 → 更依赖后面的 rerank 去噪。适合<strong>召回率是瓶颈</strong>的场景，不适合对延迟极敏感的实时问答。</div>
+    </section>
+
+    <!-- 第 3 章 -->
+    <section class="chapter" id="ch3">
+      <div class="ch-head">
+        <div class="num">03</div>
+        <div class="t">
+          <h2>HyDE：先让模型「瞎编」一个答案</h2>
+          <p class="sub">Hypothetical Document Embeddings · 用假设答案去检索，而不是用问题</p>
+        </div>
+      </div>
+
+      <p class="lead">HyDE 的洞察很妙：<strong>问题和答案，往往不在同一个向量空间的位置。</strong> 用户的问题很短（"RAG 幻觉怎么办"），而知识库里的答案是一整段陈述文字。直接拿「问题」去和「答案段落」比相似度，天然有落差。HyDE 的做法是：<strong>先让 LLM 凭空生成一个"假设的答案"</strong>（哪怕内容是编的、可能不准），再用<strong>这个假设答案的向量</strong>去检索——因为「假答案」和「真答案文档」在措辞、结构上更像，命中率更高。</p>
+
+      <div class="analogy">找一本书，你只记得<strong>大概讲什么</strong>。HyDE 像你先<strong>自己写一段"这本书大概会这么说"的摘要</strong>，再拿这段摘要去书架比对——比起只用「书名关键词」找，用「一整段像样的内容」去找，明显更容易撞上真正那本书。假答案哪怕细节是错的也没关系，它的<strong>"文体和用词"和真文档更接近</strong>，这才是检索要的。</div>
+
+      <div class="svg-wrap">
+        <svg width="760" height="200" viewBox="0 0 760 200" role="img" aria-label="HyDE 流程">
+          <rect x="20" y="80" width="120" height="46" rx="8" fill="#1a2138" stroke="#fbbf24"/><text x="80" y="100" text-anchor="middle" fill="#fcd34d" font-size="11" font-weight="bold">问题（短）</text><text x="80" y="116" text-anchor="middle" fill="#94a3b8" font-size="9">"RAG 幻觉咋办"</text>
+          <rect x="200" y="60" width="180" height="86" rx="8" fill="#3a2862" stroke="#a78bfa" stroke-width="1.6"/><text x="290" y="86" text-anchor="middle" fill="#c4b5fd" font-size="11.5" font-weight="bold">LLM 生成假设答案</text><text x="290" y="106" text-anchor="middle" fill="#94a3b8" font-size="9.5">"可通过引用溯源、</text><text x="290" y="122" text-anchor="middle" fill="#94a3b8" font-size="9.5">faithfulness 校验、</text><text x="290" y="138" text-anchor="middle" fill="#94a3b8" font-size="9.5">弃权机制来降低…"</text>
+          <rect x="440" y="72" width="130" height="62" rx="8" fill="#10172b" stroke="#7dd3fc"/><text x="505" y="98" text-anchor="middle" fill="#7dd3fc" font-size="11" font-weight="bold">对假答案</text><text x="505" y="116" text-anchor="middle" fill="#94a3b8" font-size="9.5">做 embedding</text>
+          <rect x="630" y="72" width="110" height="62" rx="8" fill="#1c4a2a" stroke="#34d399"/><text x="685" y="98" text-anchor="middle" fill="#6ee7b7" font-size="11" font-weight="bold">检索真文档</text><text x="685" y="116" text-anchor="middle" fill="#94a3b8" font-size="9">命中率↑</text>
+          <line x1="140" y1="103" x2="198" y2="103" stroke="#64748b" stroke-width="1.4" marker-end="url(#arH)"/>
+          <line x1="380" y1="103" x2="438" y2="103" stroke="#64748b" stroke-width="1.4" marker-end="url(#arH)"/>
+          <line x1="570" y1="103" x2="628" y2="103" stroke="#64748b" stroke-width="1.4" marker-end="url(#arH)"/>
+          <text x="380" y="184" text-anchor="middle" fill="#94a3b8" font-size="10">关键：用「假设答案」的向量检索，而非「问题」的向量——答案↔答案 更同构</text>
+          <defs><marker id="arH" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#64748b"/></marker></defs>
+        </svg>
+        <div class="svg-caption">HyDE = Hypothetical Document Embeddings。用假设文档而非原始问题去嵌入检索，缩小「问题↔文档」的向量鸿沟。</div>
+      </div>
+
+      <div class="tip"><strong>什么时候 HyDE 有用</strong>：问题短、抽象、和文档措辞差距大（尤其专业领域）。<strong>什么时候慎用</strong>：如果 LLM 对该领域一无所知，编出的假答案会跑偏，反而把检索带歪；此时可结合原始 query 一起检索（HyDE + 原问题双路召回）兜底。</div>
+      <div class="warn">HyDE 每次要多一次生成调用（延迟↑），且假答案质量受模型知识影响。它是「用生成换召回」，务必用 eval 验证在你的数据上确实带来净收益，别当银弹无脑上。</div>
+    </section>
+
+    <!-- 第 4 章 -->
+    <section class="chapter" id="ch4">
+      <div class="ch-head">
+        <div class="num">04</div>
+        <div class="t">
+          <h2>Step-back：先退一步问更本质的问题</h2>
+          <p class="sub">Step-back Prompting · 用「上位概念」召回背景知识，再回答具体问题</p>
+        </div>
+      </div>
+
+      <p class="lead">有些问题太<strong>具体</strong>，直接检索反而捞不到有用的背景。Step-back 的思路是：先让 LLM 把问题「<strong>后退一步</strong>」抽象成一个更宏观、更本质的问题，用它去检索<strong>背景/原理知识</strong>，再结合原始具体问题作答。它对付的是「只见树木不见森林」——先把森林（原理）找到，再看这棵树（细节）。</p>
+
+      <div class="analogy">学生问："2008 年 9 月雷曼倒闭那周，某某债券为什么暴跌？" 直接查这个日期太细，可能查不到。<strong>好老师会先退一步</strong>："先搞清楚——金融危机中信用债为什么会集体抛售？" 把这个原理弄懂了，再回头看那一周的具体表现就顺理成章。Step-back 就是让模型自己扮演这位「先讲原理再讲细节」的老师。</div>
+
+      <div class="svg-wrap">
+        <svg width="760" height="180" viewBox="0 0 760 180" role="img" aria-label="Step-back 提问">
+          <rect x="30" y="70" width="180" height="52" rx="8" fill="#1a2138" stroke="#fbbf24"/><text x="120" y="92" text-anchor="middle" fill="#fcd34d" font-size="11" font-weight="bold">具体问题</text><text x="120" y="110" text-anchor="middle" fill="#94a3b8" font-size="9.5">"v3.2 的超时参数默认值？"</text>
+          <rect x="290" y="30" width="200" height="46" rx="8" fill="#3a2862" stroke="#a78bfa" stroke-width="1.6"/><text x="390" y="50" text-anchor="middle" fill="#c4b5fd" font-size="11" font-weight="bold">后退问题（更本质）</text><text x="390" y="67" text-anchor="middle" fill="#94a3b8" font-size="9.5">"这个组件的超时机制怎么设计的？"</text>
+          <rect x="290" y="108" width="200" height="42" rx="8" fill="#10172b" stroke="#7dd3fc"/><text x="390" y="133" text-anchor="middle" fill="#cbd5e1" font-size="10.5">原始具体问题（保留）</text>
+          <rect x="560" y="66" width="180" height="60" rx="8" fill="#1c4a2a" stroke="#34d399"/><text x="650" y="90" text-anchor="middle" fill="#6ee7b7" font-size="11" font-weight="bold">两路都检索</text><text x="650" y="108" text-anchor="middle" fill="#94a3b8" font-size="9.5">背景原理 + 具体细节</text>
+          <line x1="210" y1="90" x2="288" y2="53" stroke="#a78bfa" stroke-width="1.4" marker-end="url(#arB)"/>
+          <line x1="210" y1="100" x2="288" y2="128" stroke="#64748b" stroke-width="1.3" marker-end="url(#arB)"/>
+          <line x1="490" y1="53" x2="558" y2="90" stroke="#64748b" stroke-width="1.3" marker-end="url(#arB)"/>
+          <line x1="490" y1="128" x2="558" y2="102" stroke="#64748b" stroke-width="1.3" marker-end="url(#arB)"/>
+          <defs><marker id="arB" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#94a3b8"/></marker></defs>
+        </svg>
+        <div class="svg-caption">Step-back 生成一个更抽象的「后退问题」召回原理/背景，与原始具体问题的检索结果合并后一起送给 LLM 作答。</div>
+      </div>
+
+      <div class="tip">Step-back 与 Multi-Query 的区别：Multi-Query 是「<strong>同一层次</strong>的换说法」（横向扩展），Step-back 是「<strong>抽象层次上移</strong>」（纵向后退）。前者补召回的<strong>广度</strong>，后者补召回的<strong>背景深度</strong>。复杂推理题两者可叠加。</div>
+    </section>
+
+    <!-- 第 5 章 -->
+    <section class="chapter" id="ch5">
+      <div class="ch-head">
+        <div class="num">05</div>
+        <div class="t">
+          <h2>子问题分解：多跳问题拆成几步</h2>
+          <p class="sub">Query Decomposition · 一个复杂问题拆成若干可独立检索的子问题</p>
+        </div>
+      </div>
+
+      <p class="lead">有些问题一句话里其实藏着<strong>多个需要分别查证</strong>的子问题，或者需要「先查 A、拿 A 的结果再查 B」的<strong>多跳（multi-hop）</strong>推理。整句直接检索会「四不像」：每个子问题都只召回一点点，哪个都答不全。分解就是把它拆开，各自检索，再汇总作答。</p>
+
+      <div class="analogy">问："我们团队用的框架和竞品比，哪个更省内存、社区哪个更活跃？" 这其实是<strong>两个独立调查</strong>拼在一起。像做尽调：你不会拿整句去搜，而是拆成「① 两个框架的内存占用对比」「② 两个框架的社区活跃度」分别查资料，最后写成一份综合报告。分解 = 把「大问题」拆成「几张独立的调查任务卡」。</div>
+
+      <div class="def"><strong>子问题分解（Query Decomposition）</strong>：让 LLM 把一个复合/多跳问题拆成若干个更简单、可独立检索的子问题，分别检索作答后再汇总。分两类：<strong>并行分解</strong>（子问题彼此独立，可同时查）与<strong>串行/多跳分解</strong>（后一步依赖前一步的答案，须顺序执行）。</div>
+
+      <div class="grid cols-2">
+        <div class="card green"><h4>并行分解</h4><p style="font-size:13px;color:var(--text-dim)">"A 和 B 各自的优缺点？" → 拆成"A 的优缺点" + "B 的优缺点"，同时检索，最后对比汇总。子问题间无依赖。</p></div>
+        <div class="card amber"><h4>串行 / 多跳分解</h4><p style="font-size:13px;color:var(--text-dim)">"张三的经理审批了几个项目？" → 先查"张三的经理是谁"，拿到答案（李四）再查"李四审批的项目数"。后一跳依赖前一跳。</p></div>
+      </div>
+
+      <div class="svg-wrap">
+        <svg width="760" height="210" viewBox="0 0 760 210" role="img" aria-label="多跳分解">
+          <text x="380" y="22" text-anchor="middle" fill="#7dd3fc" font-size="14" font-weight="bold">多跳分解：后一步用前一步的答案</text>
+          <rect x="30" y="80" width="150" height="50" rx="8" fill="#1a2138" stroke="#fbbf24"/><text x="105" y="100" text-anchor="middle" fill="#fcd34d" font-size="10.5" font-weight="bold">复合问题</text><text x="105" y="118" text-anchor="middle" fill="#94a3b8" font-size="9">"张三经理审批了几个项目"</text>
+          <rect x="230" y="46" width="160" height="46" rx="8" fill="#10172b" stroke="#7dd3fc"/><text x="310" y="66" text-anchor="middle" fill="#7dd3fc" font-size="10.5" font-weight="bold">跳 1：张三的经理是谁？</text><text x="310" y="83" text-anchor="middle" fill="#6ee7b7" font-size="9.5">→ 检索得「李四」</text>
+          <rect x="440" y="46" width="180" height="46" rx="8" fill="#10172b" stroke="#7dd3fc"/><text x="530" y="66" text-anchor="middle" fill="#7dd3fc" font-size="10.5" font-weight="bold">跳 2：李四审批了几个项目？</text><text x="530" y="83" text-anchor="middle" fill="#6ee7b7" font-size="9.5">→ 检索得「7 个」</text>
+          <rect x="640" y="120" width="100" height="46" rx="8" fill="#62261f" stroke="#f87171"/><text x="690" y="140" text-anchor="middle" fill="#fca5a5" font-size="10.5" font-weight="bold">汇总作答</text><text x="690" y="157" text-anchor="middle" fill="#94a3b8" font-size="9.5">"7 个"</text>
+          <line x1="180" y1="100" x2="228" y2="72" stroke="#64748b" stroke-width="1.3" marker-end="url(#arD)"/>
+          <line x1="390" y1="69" x2="438" y2="69" stroke="#a78bfa" stroke-width="1.6" marker-end="url(#arD)"/>
+          <text x="415" y="34" text-anchor="middle" fill="#a78bfa" font-size="9.5">代入「李四」</text>
+          <line x1="530" y1="92" x2="650" y2="120" stroke="#64748b" stroke-width="1.3" marker-end="url(#arD)"/>
+          <defs><marker id="arD" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#94a3b8"/></marker></defs>
+        </svg>
+        <div class="svg-caption">多跳问题必须串行：跳 1 的答案（李四）代入跳 2。这类"检索→推理→再检索"的循环，正是 Agentic RAG 的雏形。</div>
+      </div>
+      <div class="info">串行多跳本质上是「<strong>检索 + 推理交替</strong>」，和 Agent 的 ReAct 循环是同一回事——当分解需要动态决定「下一步查什么」时，RAG 就演化成了 <strong>Agentic RAG</strong>（见 <code>agent_architecture.html</code>）。分解是从「静态 RAG」通向「Agent」的桥。</div>
+    </section>
+
+    <!-- 第 6 章 -->
+    <section class="chapter" id="ch6">
+      <div class="ch-head">
+        <div class="num">06</div>
+        <div class="t">
+          <h2>会话式改写：把「它」补全成能检索的问题</h2>
+          <p class="sub">多轮对话里的指代消解与上下文补全 · 最实用、最容易被漏掉</p>
+        </div>
+      </div>
+
+      <p class="lead">前面几招是「把好问题变得更好」，这一招是「<strong>把根本没法检索的问题变得能检索</strong>」。多轮对话里，用户第二句往往省略主语、带指代："<em>那它多少钱？</em>""<em>换成大号呢？</em>"——单独拿这句去检索，向量和关键词都无从下手。会话式改写就是结合前几轮对话，把它<strong>补全成一个自包含（standalone）的独立问题</strong>。</p>
+
+      <div class="analogy">这就是<strong>客服接电话</strong>的基本功。客户说「那这个能退吗？」，新手客服一脸懵；老客服脑子里会自动补全成「客户上一句问的那款蓝色 XL 卫衣，能退货吗？」——因为他<strong>记得刚才聊了什么</strong>。会话式改写就是给检索系统装上这份「记得刚才聊了什么」的能力，把口语里的省略和指代还原成完整问题。</div>
+
+      <div class="def"><strong>会话式改写 / 指代消解（Conversational Query Rewriting / Coreference Resolution）</strong>：结合对话历史，把当前这轮带省略、指代（它/那个/上面）的追问，改写成一个不依赖上下文、可独立检索的完整查询（standalone query）。它是多轮 RAG / 聊天机器人的<strong>必备前置步骤</strong>，缺了它多轮对话的检索几乎必然崩。</div>
+
+      <table>
+        <thead><tr><th>对话历史</th><th>用户新追问</th><th>改写后（standalone）</th></tr></thead>
+        <tbody>
+          <tr><td>问：ThinkPad X1 多重？<br>答：约 1.1kg。</td><td class="cell-mid">"它续航呢？"</td><td class="cell-ok">"ThinkPad X1 的电池续航是多久？"</td></tr>
+          <tr><td>在聊「年假政策」</td><td class="cell-mid">"那病假呢？"</td><td class="cell-ok">"公司的病假政策是怎样的？"</td></tr>
+          <tr><td>问：如何创建索引？<br>答：用 CREATE INDEX…</td><td class="cell-mid">"删除呢？"</td><td class="cell-ok">"如何删除数据库索引？"</td></tr>
+        </tbody>
+      </table>
+      <div class="tip"><strong>实现要点</strong>：不要把整段对话历史一股脑塞进检索（噪声大、还超长）。正确做法是先用一次轻量 LLM 调用做「改写成 standalone query」，只把这一句干净的查询送去检索。历史只用于「改写」，不用于「检索」。</div>
+      <div class="warn">别过度改写：如果新问题其实已经自包含（换了全新话题），强行拼历史反而会把旧话题的词带进来污染检索。改写 prompt 里要允许模型判断「本轮是否延续上文」，独立话题就原样透传。</div>
+    </section>
+
+    <!-- 第 7 章 -->
+    <section class="chapter" id="ch7">
+      <div class="ch-head">
+        <div class="num">07</div>
+        <div class="t">
+          <h2>交互演示 · 选型 · 工程落地</h2>
+          <p class="sub">亲手切换策略看召回变化 · 再收束成一张决策表</p>
+        </div>
+      </div>
+
+      <h3 id="s7-1">7.1 交互演示：不同改写策略，召回怎么变</h3>
+      <p>下面给你一个「问得不好」的原始 query，以及一个小知识库（5 篇文档）。切换不同改写策略，看它生成的查询、以及每篇文档的<strong>召回相似度</strong>如何变化——注意原本命不中的文档，怎么被改写"救"回来：</p>
+
+      <div class="demo" id="rwDemo">
+        <div class="demo-title">交互演示 · Query 改写策略对召回的影响</div>
+        <div class="demo-controls">
+          <button class="seg active" data-s="none">原始 query（不改写）</button>
+          <button class="seg" data-s="multi">Multi-Query</button>
+          <button class="seg" data-s="hyde">HyDE</button>
+          <button class="seg" data-s="stepback">Step-back</button>
+          <button class="seg" data-s="decomp">子问题分解</button>
+        </div>
+        <div class="rw-io">
+          <div class="rw-box">
+            <h5>原始 query</h5>
+            <div class="rw-orig">"怎么让它跑得更快？"（模糊、带指代）</div>
+            <h5 id="rwStratTitle">改写后送去检索的查询</h5>
+            <div id="rwQueries"></div>
+            <div class="rw-strat" id="rwStrat"></div>
+          </div>
+          <div class="rw-box">
+            <h5>知识库召回结果（相似度）</h5>
+            <div id="rwDocs"></div>
+            <div class="rw-strat" id="rwSummary" style="margin-top:12px"></div>
+          </div>
+        </div>
+      </div>
+      <div class="note">观察：原始 query "怎么让它跑得更快" 因为模糊 + 指代，几乎命不中具体文档；一旦改写（补全为"API 性能优化""数据库调优"等），相关文档的相似度就被显著拉高、进入召回。这就是改写「治召回上游」的直观体现。<strong>注意演示里的分数是为教学示意手工设定的，非真实向量计算。</strong></div>
+
+      <h3 id="s7-2">7.2 怎么选：一张决策表 + 成本权衡</h3>
+      <table>
+        <thead><tr><th>场景 / 症状</th><th>首选策略</th><th>额外成本</th></tr></thead>
+        <tbody>
+          <tr><td>多轮对话、带指代追问</td><td class="cell-ok">会话式改写（几乎必做）</td><td>+1 次轻量 LLM</td></tr>
+          <tr><td>用户用词和文档差异大</td><td>Multi-Query 或 HyDE</td><td class="cell-mid">+1 生成 & N 倍检索</td></tr>
+          <tr><td>问题短、抽象、专业领域</td><td>HyDE（模型懂该领域时）</td><td class="cell-mid">+1 次生成</td></tr>
+          <tr><td>问题太宏观 / 缺背景</td><td>Step-back</td><td class="cell-mid">+1 生成 & 2 路检索</td></tr>
+          <tr><td>一句含多个子问题 / 多跳</td><td class="cell-ok">子问题分解</td><td class="cell-bad">+多次生成与检索</td></tr>
+          <tr><td>简单事实题 / 延迟极敏感</td><td>不改写，直接检索</td><td class="cell-ok">0</td></tr>
+        </tbody>
+      </table>
+      <div class="analogy">改写策略像<strong>做菜的火候</strong>：不是每道菜都要猛火爆炒。简单的凉拌（事实题）直接上；难处理的硬菜（复杂/多跳）才值得多几道工序（分解 + 多路召回）。<strong>无脑给所有 query 都上全套改写 = 每盘凉菜都拿去爆炒</strong>——又慢又贵还未必好吃。</div>
+      <div class="tip"><strong>工程落地三原则</strong>：① 用<strong>路由</strong>按需触发改写，别一刀切（第 1 章）；② 改写 + 意图分类<strong>合并成一次结构化 LLM 调用</strong>省延迟；③ 上线前用 <strong>eval</strong>（<code>ai_eval.html</code>）量化「改写前后召回率 / 端到端答案质量」的净收益——改写不是免费的，要用数据证明它值。</div>
+      <div class="info">改写（提召回）+ Rerank（提精度）+ 幻觉治理（提可信，见 <code>rag_hallucination.html</code>）是 RAG 三个正交的质量杠杆。本篇管住了"检索前"，rerank 管"检索后排序"，幻觉治理管"生成时别编"——三者合起来才是生产级 RAG。</div>
+    </section>
+
+    <!-- 第 8 章 -->
+    <section class="chapter" id="ch8">
+      <div class="ch-head">
+        <div class="num">08</div>
+        <div class="t">
+          <h2>小结 · 面试 · 术语表</h2>
+          <p class="sub">收束成判断力</p>
+        </div>
+      </div>
+
+      <h3>一页纸总结</h3>
+      <div class="grid cols-3">
+        <div class="card"><h4>① 改写治召回上游</h4><p style="font-size:13px;color:var(--text-dim)">召回不到的，rerank 再强也救不了。改写是整条链的天花板，成本低收益常被低估。</p></div>
+        <div class="card green"><h4>② 五招各治一病</h4><p style="font-size:13px;color:var(--text-dim)">Multi-Query（换说法）、HyDE（用假答案）、Step-back（退一步）、分解（拆多跳）、会话改写（补指代）。</p></div>
+        <div class="card amber"><h4>③ 按需触发</h4><p style="font-size:13px;color:var(--text-dim)">用路由分诊，简单题不改写，复杂题才上重招。改写不免费，要用 eval 证明净收益。</p></div>
+      </div>
+
+      <h3>面试自测（点击展开）</h3>
+      <details class="qa">
+        <summary><span class="lvl pill cyan">基础</span>为什么 RAG 需要 Query 改写？它和 Rerank 有什么分工？</summary>
+        <div class="a">
+          <div class="point"><span class="label">动因</span>用户 query 短/模糊/口语/带指代，与文档措辞对不上，直接检索召回差。</div>
+          <div class="point"><span class="label">分工</span>改写在检索<strong>前</strong>，提升<strong>召回上限</strong>（把对的文档捞进候选池）；Rerank 在检索<strong>后</strong>，提升<strong>精度</strong>（把候选池里对的排前面）。</div>
+          <div class="point deep"><span class="label">关键</span>召回不到的文档，Rerank 永远排不出来——所以改写是天花板。</div>
+        </div>
+      </details>
+      <details class="qa">
+        <summary><span class="lvl pill green">核心</span>HyDE 的原理是什么？为什么用「假答案」检索反而更准？</summary>
+        <div class="a">
+          <div class="point"><span class="label">原理</span>先让 LLM 生成一个假设性答案，再用假答案的向量去检索真文档。</div>
+          <div class="point"><span class="label">为什么</span>问题（短）和答案文档（长陈述）在向量空间位置有落差；而"假答案↔真答案"在措辞/文体上更同构，相似度更高。</div>
+          <div class="point bad"><span class="label">风险</span>模型不懂该领域时假答案跑偏会带歪检索；可与原始 query 双路召回兜底，并用 eval 验证。</div>
+        </div>
+      </details>
+      <details class="qa">
+        <summary><span class="lvl pill amber">辨析</span>Multi-Query、Step-back、子问题分解，三者有何不同？</summary>
+        <div class="a">
+          <div class="point"><span class="label">Multi-Query</span>同层次换说法（横向扩展），补召回<strong>广度</strong>。</div>
+          <div class="point"><span class="label">Step-back</span>抽象层次上移（纵向后退），补召回<strong>背景/原理</strong>。</div>
+          <div class="point"><span class="label">分解</span>把复合/多跳问题拆成可独立检索的子问题，处理<strong>复杂度</strong>；串行分解即"检索+推理"交替，是 Agentic RAG 雏形。</div>
+        </div>
+      </details>
+      <details class="qa">
+        <summary><span class="lvl pill violet">工程</span>多轮对话的 RAG，为什么必须做会话式改写？怎么做？</summary>
+        <div class="a">
+          <div class="point"><span class="label">必须</span>追问常带指代/省略（"它续航呢"），单独检索无从下手，多轮 RAG 会崩。</div>
+          <div class="point"><span class="label">做法</span>用一次轻量 LLM 调用，结合历史把追问改写成 standalone 独立问题，只把这句干净查询送检索；历史只用于改写不用于检索。</div>
+          <div class="point bad"><span class="label">陷阱</span>新话题别强拼历史词污染检索；prompt 要允许模型判断是否延续上文。</div>
+        </div>
+      </details>
+      <details class="qa">
+        <summary><span class="lvl pill red">综合</span>改写不是免费的，你怎么决定「哪个 query 该用哪种改写」？</summary>
+        <div class="a">
+          <div class="point"><span class="label">路由分诊</span>先判断：要不要检索、查哪个库、简单还是复杂、要不要消解指代——按需触发对应策略。</div>
+          <div class="point"><span class="label">合并调用</span>路由 + 意图分类 + 改写合并成一次结构化 LLM 调用，省延迟。</div>
+          <div class="point"><span class="label">数据说话</span>用 eval 量化改写前后的召回率与端到端答案质量，只保留净收益为正的策略；简单题/延迟敏感场景直接不改写。</div>
+        </div>
+      </details>
+
+      <!-- 术语表 -->
+      <h3 id="s8-gloss" style="margin-top:34px">术语表速查 · Glossary</h3>
+      <div class="glossary">
+        <div class="gl-group">
+          <h4>① 查询理解</h4>
+          <div class="gl"><span class="gl-t">Query 改写 <em>Query Rewriting/Transformation</em></span><span class="gl-d">检索前把原始查询改写/扩展/分解成更利于命中的查询。治"召回"上游，是 RAG 链路天花板。</span></div>
+          <div class="gl"><span class="gl-t">查询路由 <em>Query Routing</em></span><span class="gl-d">按意图/类型把 query 分派到不同处理路径（是否检索、查哪个库、用哪种改写），实现按需触发。</span></div>
+          <div class="gl"><span class="gl-t">意图识别 <em>Intent Detection</em></span><span class="gl-d">判断 query 属于哪类（闲聊/事实/复杂/多跳），决定后续检索与改写策略。</span></div>
+        </div>
+        <div class="gl-group">
+          <h4>② 五大改写技术</h4>
+          <div class="gl"><span class="gl-t">Multi-Query</span><span class="gl-d">把一问改写成多个等价变体分别检索再合并去重，补召回广度。常用 RRF 融合。</span></div>
+          <div class="gl"><span class="gl-t">HyDE <em>Hypothetical Doc Embeddings</em></span><span class="gl-d">先让 LLM 生成假设答案，用假答案向量检索真文档，缩小"问题↔文档"向量鸿沟。</span></div>
+          <div class="gl"><span class="gl-t">Step-back Prompting</span><span class="gl-d">把问题后退成更抽象的"后退问题"召回背景/原理，再结合原问题作答。补召回深度。</span></div>
+          <div class="gl"><span class="gl-t">子问题分解 <em>Decomposition</em></span><span class="gl-d">把复合/多跳问题拆成可独立检索的子问题；串行分解即"检索+推理"交替（Agentic RAG 雏形）。</span></div>
+          <div class="gl"><span class="gl-t">会话式改写 / 指代消解</span><span class="gl-d">结合对话历史把带指代/省略的追问补全成 standalone 独立问题。多轮 RAG 必备。</span></div>
+        </div>
+        <div class="gl-group">
+          <h4>③ 相关概念</h4>
+          <div class="gl"><span class="gl-t">RRF <em>Reciprocal Rank Fusion</em></span><span class="gl-d">按 1/(k+排名) 融合多路检索结果，抹平不同通道分数量纲。合并 Multi-Query/Hybrid 常用。</span></div>
+          <div class="gl"><span class="gl-t">Standalone Query</span><span class="gl-d">不依赖上下文、可独立检索的完整问题。会话式改写的产物。</span></div>
+          <div class="gl"><span class="gl-t">Agentic RAG</span><span class="gl-d">检索与推理动态交替（决定下一步查什么）的 RAG，是分解/多跳的进阶形态，趋近 Agent。</span></div>
+          <div class="gl"><span class="gl-t">召回率 / 精度 <em>Recall / Precision</em></span><span class="gl-d">召回率=该找到的找到了多少（改写提升它）；精度=找到的里对的占比（Rerank 提升它）。</span></div>
+        </div>
+      </div>
+
+      <div class="tip" style="margin-top:24px"><strong>延伸阅读</strong>：本篇是 <code>rag_deep_dive.html</code> 的"检索前"进阶补充。检索后的 Hybrid/Rerank 见该篇；生成时"别编"见 <code>rag_hallucination.html</code>；评测方法见 <code>ai_eval.html</code>；多跳走向 Agent 见 <code>agent_architecture.html</code>。</div>
+    </section>
+
+  </main>
+</div>
+
+<footer>
+  <div class="made">TECH NOTES · AI ENGINEERING SERIES</div>
+  RAG Query 改写与查询理解 · <a href="../index.html">返回首页</a> · © 2026 Kavin Chan · MIT
+</footer>
+
+<button class="back-top" id="backTop" onclick="window.scrollTo({top:0,behavior:'smooth'})">↑</button>
+<style>.back-top{position:fixed;bottom:1.5rem;right:1.5rem;width:44px;height:44px;border-radius:50%;background:color-mix(in srgb, var(--accent) 13%, var(--bg-card));color:#e4e9f5;border:1px solid #2a3556;cursor:pointer;font-size:18px;display:none;z-index:100;align-items:center;justify-content:center}.back-top:hover{color:#7dd3fc}.back-top.show{display:flex}</style>
+
+<script>
+// ===== 进度条 / TOC / 平滑滚动 / fade / back-top =====
+const progress = document.getElementById('progress');
+const updateProgress = () => {
+  const h = document.documentElement;
+  const max = h.scrollHeight - h.clientHeight;
+  progress.style.width = (max > 0 ? (h.scrollTop / max * 100) : 0) + '%';
+};
+window.addEventListener('scroll', updateProgress, {passive:true});
+updateProgress();
+
+const tocLinks = document.querySelectorAll('.toc a');
+const sections = document.querySelectorAll('section.chapter');
+const navObserver = new IntersectionObserver(entries => {
+  entries.forEach(e => {
+    if (e.isIntersecting) {
+      const id = e.target.id;
+      tocLinks.forEach(a => a.classList.toggle('active', a.getAttribute('href') === '#' + id));
+    }
+  });
+}, { rootMargin: '-25% 0px -65% 0px' });
+sections.forEach(s => navObserver.observe(s));
+
+tocLinks.forEach(a => {
+  a.addEventListener('click', e => {
+    const href = a.getAttribute('href');
+    const target = document.querySelector(href);
+    if (target) { e.preventDefault(); target.scrollIntoView({behavior:'smooth', block:'start'}); history.pushState(null, '', href); }
+  });
+});
+
+const fadeEls = document.querySelectorAll('.card, .svg-wrap, table, details, .demo');
+const fadeObserver = new IntersectionObserver(entries => {
+  entries.forEach(e => { if (e.isIntersecting) { e.target.style.opacity='1'; e.target.style.transform='translateY(0)'; } });
+}, {threshold:0.05});
+fadeEls.forEach(el => { el.style.opacity='0'; el.style.transform='translateY(12px)'; el.style.transition='opacity .5s ease, transform .5s ease'; fadeObserver.observe(el); });
+
+(function(){
+  var btn = document.getElementById('backTop');
+  if (!btn) return;
+  function tg(){ btn.classList.toggle('show', window.scrollY > 400); }
+  window.addEventListener('scroll', tg, { passive: true });
+  tg();
+})();
+
+// ===== 交互演示：Query 改写策略对召回的影响 =====
+(function(){
+  // 知识库 5 篇文档（含"基线"相似度：对原始模糊 query）
+  const DOCS = [
+    {name:'API 性能优化实践', base:0.34},
+    {name:'数据库索引与缓存调优', base:0.30},
+    {name:'系统性能诊断方法论（原理）', base:0.28},
+    {name:'团队协作与代码评审', base:0.22},
+    {name:'产品需求文档模板', base:0.12},
+  ];
+  // 每种策略对各文档相似度的"加成"（教学示意，非真实向量）
+  const STRAT = {
+    none: {
+      title:'原始 query（不改写）',
+      queries:['怎么让它跑得更快？'],
+      strat:'模糊 + 指代"它"，向量漂移、关键词命不中——相关文档相似度普遍偏低，好文档排不进召回。',
+      boost:[0,0,0,0,0],
+      summary:'仅 1 篇勉强过线（阈值 0.35）。「问得烂」直接拖垮召回。'
+    },
+    multi: {
+      title:'Multi-Query（3 个等价变体）',
+      queries:['API 接口性能优化方法','如何降低服务响应延迟','数据库/缓存性能调优技巧'],
+      strat:'换多种说法覆盖不同用词，前两篇技术文档被显著拉高、双双进入召回。',
+      boost:[0.42,0.40,0.14,0.03,0],
+      summary:'召回 2~3 篇高相关文档。补的是"广度"——多个说法总有一个命中。'
+    },
+    hyde: {
+      title:'HyDE（假设答案的向量）',
+      queries:['[假设答案] 提升接口速度可从减少 DB 查询、加缓存、异步化、连接池、索引优化等入手…'],
+      strat:'用一整段"像答案的文字"检索，与真答案文档文体同构，技术类命中最强。',
+      boost:[0.46,0.44,0.16,0.02,0],
+      summary:'技术文档相似度最高。适合问题短、和文档措辞差距大的场景。'
+    },
+    stepback: {
+      title:'Step-back（后退到原理）',
+      queries:['系统性能问题一般如何诊断与优化？（后退问题）','怎么让它跑得更快？（原问题保留）'],
+      strat:'后退问题把"性能诊断方法论（原理）"这篇背景文档召回，补齐了原本缺的背景深度。',
+      boost:[0.30,0.24,0.45,0.05,0],
+      summary:'把"原理/背景"那篇救了回来。补的是"深度"，适合宏观/缺背景的问题。'
+    },
+    decomp: {
+      title:'子问题分解',
+      queries:['子问题①：接口层面如何优化性能？','子问题②：数据库层面如何调优？'],
+      strat:'把宽泛问题拆成两个明确子问题，分别命中对应文档，各自答全再汇总。',
+      boost:[0.40,0.42,0.10,0.04,0],
+      summary:'两篇分别被两个子问题精准命中。适合一句含多方面的复合问题。'
+    },
+  };
+  const THRESH = 0.35;
+  const segs = document.querySelectorAll('#rwDemo .seg');
+  const titleEl = document.getElementById('rwStratTitle');
+  const qEl = document.getElementById('rwQueries');
+  const stratEl = document.getElementById('rwStrat');
+  const docsEl = document.getElementById('rwDocs');
+  const sumEl = document.getElementById('rwSummary');
+
+  function render(key){
+    const s = STRAT[key];
+    titleEl.textContent = '改写后送去检索的查询 · ' + s.title;
+    qEl.innerHTML = '';
+    s.queries.forEach((q,i) => {
+      const d = document.createElement('div');
+      d.className = 'rw-q'; d.textContent = q;
+      qEl.appendChild(d);
+      setTimeout(()=>d.classList.add('show'), 60 + i*120);
+    });
+    stratEl.innerHTML = '<b style="color:var(--accent)">策略：</b>' + s.strat;
+    // docs
+    const scored = DOCS.map((d,i)=>({name:d.name, score: Math.min(0.99, d.base + s.boost[i])}))
+                       .sort((a,b)=>b.score-a.score);
+    docsEl.innerHTML = scored.map(d => {
+      const hit = d.score >= THRESH;
+      return '<div class="doc-hit'+(hit?'':' miss')+'">'+
+        '<span class="nm">'+(hit?'✅ ':'⬜ ')+d.name+'</span>'+
+        '<span class="bar"><i data-w="'+Math.round(d.score*100)+'"></i></span>'+
+        '<span class="sc">'+d.score.toFixed(2)+'</span></div>';
+    }).join('');
+    // animate bars
+    requestAnimationFrame(()=>{
+      docsEl.querySelectorAll('.bar > i').forEach(bar=>{ bar.style.width = bar.dataset.w+'%'; });
+    });
+    const nHit = scored.filter(d=>d.score>=THRESH).length;
+    sumEl.innerHTML = '<b style="color:var(--accent-3)">召回 '+nHit+' 篇</b>（阈值 '+THRESH+'）· '+s.summary;
+  }
+  segs.forEach(b => b.addEventListener('click', () => {
+    segs.forEach(x=>x.classList.remove('active')); b.classList.add('active');
+    render(b.dataset.s);
+  }));
+  render('none');
+})();
+
+console.log('%c AI Engineering · RAG Query 改写 ', 'background:linear-gradient(90deg,#7dd3fc,#a78bfa);color:#0a0e1a;font-weight:700;padding:4px 12px;border-radius:4px;font-size:13px');
+</script>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>
