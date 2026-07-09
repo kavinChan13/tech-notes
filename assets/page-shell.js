@@ -94,7 +94,7 @@
   function boot() {
     if (!$('.ps')) return;
     bindScrollSpy();
-    bindBackTop();
+    /* back-to-top is handled globally by site-theme-toggle.js (single handler) */
     bindAnchorJump();
   }
 

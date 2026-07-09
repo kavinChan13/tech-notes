@@ -43,6 +43,31 @@
   if (saved === 'dark') root.setAttribute('data-theme', 'dark');
   else if (saved === 'light') root.removeAttribute('data-theme');
 
+  // --- Back-to-top: guarantee every page has one working button with a
+  //     consistent >400px show threshold (creates it if missing, and wires a
+  //     toggle even on pages whose own button lacked a working handler). ---
+  function ensureBackTop() {
+    if (!document.body) return;
+    var btn = document.querySelector('.back-top');
+    if (!btn) {
+      btn = document.createElement('button');
+      btn.className = 'back-top';
+      btn.id = 'backTop';
+      btn.type = 'button';
+      btn.setAttribute('aria-label', '回到顶部');
+      btn.innerHTML = '↑';
+      document.body.appendChild(btn);
+    }
+    if (btn.dataset.tnBt) return;
+    btn.dataset.tnBt = '1';
+    if (!btn.getAttribute('onclick') && !btn.onclick) {
+      btn.addEventListener('click', function () { window.scrollTo({ top: 0, behavior: 'smooth' }); });
+    }
+    function toggle() { btn.classList.toggle('show', window.scrollY > 400); }
+    window.addEventListener('scroll', toggle, { passive: true });
+    toggle();
+  }
+
   function bind() {
     syncButtons(currentTheme());
     ['tn-theme-toggle', 'themeBtn'].forEach(function (id) {
@@ -53,6 +78,7 @@
         apply(currentTheme() === 'dark' ? 'light' : 'dark');
       });
     });
+    ensureBackTop();
   }
 
   if (document.readyState === 'loading') {
