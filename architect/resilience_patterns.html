@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>限流 · 熔断 · 降级 · 隔离 — 弹性与过载保护 — Tech Notes</title>
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<link rel="stylesheet" href="../assets/page-shell.css">
+<style>
+  .analogy{position:relative;margin:20px 0;padding:18px 20px 18px 58px;border-radius:12px;
+    background:linear-gradient(135deg,rgba(251,191,36,.09),rgba(167,139,250,.07));
+    border:1px solid rgba(251,191,36,.28);}
+  .analogy::before{content:"🎯";position:absolute;left:16px;top:16px;font-size:24px;}
+  .analogy .at{font-weight:700;color:var(--accent-4);font-size:14px;margin-bottom:6px;letter-spacing:.3px;}
+  .analogy p{margin:6px 0;font-size:14px;line-height:1.75;}
+  .analogy .map{margin-top:10px;font-size:13px;color:var(--text-dim);}
+  .analogy .map b{color:var(--accent-2);}
+  .cmp{width:100%;border-collapse:collapse;margin:16px 0;font-size:13.5px;}
+  .cmp th,.cmp td{border:1px solid var(--border);padding:9px 12px;text-align:left;vertical-align:top;line-height:1.6;}
+  .cmp th{background:color-mix(in srgb, var(--accent) 13%, var(--bg-card));color:var(--accent-2);font-weight:700;}
+  .cmp td strong{color:var(--accent-4);}
+  .states{display:flex;gap:12px;flex-wrap:wrap;margin:18px 0;}
+  .st{flex:1;min-width:160px;border:1px solid var(--border);border-radius:10px;padding:14px;background:var(--bg-card);}
+  .st h5{margin:0 0 6px;font-size:14px;}
+  .st.closed{border-left:4px solid var(--green);}
+  .st.open{border-left:4px solid var(--red);}
+  .st.half{border-left:4px solid var(--orange);}
+  .st p{font-size:12.5px;color:var(--text-dim);line-height:1.6;margin:4px 0;}
+</style>
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav ps tn-shell-overlay">
+
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="system_architecture_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 38 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+
+<div class="progress" id="progress"></div>
+<div class="layout">
+  <aside class="toc">
+    <h2>弹性与过载保护 · Roadmap</h2>
+    <nav>
+      <ol>
+        <li><a href="#s1">为什么会雪崩</a></li>
+        <li><a href="#s2">限流（Rate Limiting）</a></li>
+        <li><a href="#s3">熔断（Circuit Breaker）</a></li>
+        <li><a href="#s4">降级（Fallback）</a></li>
+        <li><a href="#s5">隔离（Bulkhead）</a></li>
+        <li><a href="#s6">超时与重试</a></li>
+        <li><a href="#s7">负载脱落与自适应</a></li>
+        <li><a href="#s8">组合成防线</a></li>
+        <li><a href="#s9">take-aways</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+
+    <header class="hero">
+      <div class="badge">Architecture · Resilience · 2026</div>
+      <h1>限流 · 熔断 · 降级 · 隔离</h1>
+      <p class="sub">过载保护与弹性设计：令牌桶/漏桶限流 · 熔断三态机 · 优雅降级 · 舱壁隔离 · 超时重试 · 自适应负载脱落</p>
+      <div class="meta-row">
+        <span class="pill red">核心难度 ★★★★☆</span>
+        <span class="pill cyan">高可用</span>
+        <span class="pill green">阅读时长 ~38 min</span>
+        <span class="pill amber">前置 分布式基础</span>
+      </div>
+    </header>
+
+    <section class="chapter" id="s1">
+      <div class="ch-head"><div class="num">01</div><div class="t"><h2>为什么会雪崩</h2><div class="sub">局部故障如何演变成全站崩溃</div></div></div>
+      <p>分布式系统里，一个慢服务能拖垮整条链路：A 调 B，B 变慢 → A 的线程/连接被 B 的请求占满等待 → A 也变慢 → 调 A 的 C 也被拖垮……<strong>故障沿调用链逐级放大</strong>，这就是<strong>级联失败（cascading failure）/ 雪崩</strong>。弹性设计的目标不是「永不失败」，而是<strong>让失败被控制在局部、快速失败、优雅退化</strong>。</p>
+      <div class="analogy">
+        <div class="at">生活类比：电路保险丝 + 泄洪闸</div>
+        <p>家里电流过大时，<strong>保险丝</strong>会先熔断，牺牲一路电保住整栋楼不着火（熔断）。水库水位过高时，<strong>泄洪闸</strong>主动放掉一部分水，避免大坝整体溃堤（限流 + 负载脱落）。系统的弹性组件就是这些「主动牺牲局部换取整体存活」的机制——<strong>宁可拒绝部分请求，也不要全盘崩溃</strong>。</p>
+        <div class="map">映射：<b>保险丝</b>=熔断 · <b>泄洪</b>=限流/脱落 · <b>分区断电</b>=隔离 · <b>保住整栋楼</b>=系统可用</div>
+      </div>
+      <div class="card">
+        <div class="card-title">🧩 四类核心手段</div>
+        <ul>
+          <li><strong>限流</strong>：控制入口流量，超出容量的请求拒绝/排队——防被打垮。</li>
+          <li><strong>熔断</strong>：下游故障时快速失败、停止调用，给它恢复时间——防被拖垮。</li>
+          <li><strong>降级</strong>：核心不可用时返回兜底结果，保证基本可用——保体验。</li>
+          <li><strong>隔离</strong>：把资源分池，一个依赖出问题不波及其它——限爆炸半径。</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="chapter" id="s2">
+      <div class="ch-head"><div class="num">02</div><div class="t"><h2>限流：控制入口水位</h2><div class="sub">令牌桶 / 漏桶 / 滑动窗口</div></div></div>
+      <p>限流保护系统不被超出其容量的流量打垮。四种经典算法：</p>
+      <table class="cmp">
+        <thead><tr><th>算法</th><th>原理</th><th>特点</th></tr></thead>
+        <tbody>
+          <tr><td>固定窗口计数</td><td>每窗口计数，超阈值拒绝</td><td>简单；<strong>临界点</strong>问题（窗口交界可 2 倍突发）</td></tr>
+          <tr><td>滑动窗口</td><td>细分小窗口滑动统计</td><td>平滑临界问题，精度高，开销略大</td></tr>
+          <tr><td>漏桶（Leaky Bucket）</td><td>请求入桶，恒定速率流出</td><td><strong>强制平滑</strong>输出，不允许突发；多余请求溢出</td></tr>
+          <tr><td>令牌桶（Token Bucket）</td><td>匀速产令牌，取到令牌才放行</td><td><strong>允许突发</strong>（桶里攒的令牌），最常用</td></tr>
+        </tbody>
+      </table>
+      <div class="analogy">
+        <div class="at">漏桶 vs 令牌桶</div>
+        <p><strong>漏桶</strong>像一个底部有小孔的水桶：不管你倒水多快，出水永远匀速——适合需要<strong>平滑限速</strong>（如保护下游第三方）。<strong>令牌桶</strong>像停车场匀速发号，攒着的号可以一次放一批车进——允许<strong>合理突发</strong>（如用户偶尔的操作峰值）。大多数业务限流用令牌桶，因为完全不允许突发的体验太差。</p>
+        <div class="map">映射：<b>漏桶</b>=恒定输出 · <b>令牌桶</b>=允许攒突发 · <b>令牌数</b>=突发上限</div>
+      </div>
+      <div class="card">
+        <div class="card-title">🏗️ 单机 vs 分布式限流</div>
+        <ul>
+          <li><strong>单机限流</strong>：本地令牌桶（如 Guava RateLimiter / Sentinel），无网络开销、无单点，但只管本实例。</li>
+          <li><strong>分布式限流</strong>：Redis + Lua 脚本原子计数，做<strong>全局配额</strong>；代价是每次请求一次 Redis 往返 + 单点风险。</li>
+          <li><strong>两级方案</strong>：本地粗粒度挡大流量 + 中心细粒度控全局配额，兼顾性能与准确。</li>
+          <li><strong>维度</strong>：可按 全局 / 接口 / 用户 / 租户 / IP 分层限流。</li>
+        </ul>
+      </div>
+      <p>算法与集中式实现细节见面试题 <a href="../interview/backend_system_design.html#sd2">分布式限流器设计</a>。</p>
+    </section>
+
+    <section class="chapter" id="s3">
+      <div class="ch-head"><div class="num">03</div><div class="t"><h2>熔断：给故障下游喘息</h2><div class="sub">三态状态机</div></div></div>
+      <p>当下游持续失败/超时，继续调用只会浪费资源、拖慢自己、还妨碍下游恢复。<strong>熔断器</strong>像保险丝：错误率超阈值就「跳闸」，一段时间内快速失败不再真正调用，给下游恢复窗口。</p>
+      <div class="states">
+        <div class="st closed"><h5>🟢 Closed（关闭）</h5><p>正常放行，统计失败率。失败率/慢调用超阈值 → 转 Open。</p></div>
+        <div class="st open"><h5>🔴 Open（打开）</h5><p>直接快速失败（走降级），不调下游。等待冷却时间 → 转 Half-Open。</p></div>
+        <div class="st half"><h5>🟡 Half-Open（半开）</h5><p>放少量探测请求：成功够多 → 回 Closed；仍失败 → 退回 Open。</p></div>
+      </div>
+      <div class="card">
+        <div class="card-title">🎛️ 关键参数与要点</div>
+        <ul>
+          <li><strong>触发条件</strong>：错误率阈值（如 50%）+ 最小请求数（样本太少不熔断，避免误判）+ 慢调用比例。</li>
+          <li><strong>冷却时间</strong>：Open 持续多久后试探（如 5s）。太短下游没缓过来，太长影响可用。</li>
+          <li><strong>半开探测</strong>：只放几个请求验证，避免恢复瞬间又被打垮。</li>
+          <li>熔断必须配<strong>降级</strong>：跳闸后返回什么？见下一节。Hystrix（已停更）/ Resilience4j / Sentinel 是常见实现。</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="chapter" id="s4">
+      <div class="ch-head"><div class="num">04</div><div class="t"><h2>降级：优雅退化</h2><div class="sub">保住核心，牺牲非核心</div></div></div>
+      <p>降级是「<strong>系统压力大或依赖不可用时，主动降低服务质量以保证核心可用</strong>」。它是熔断跳闸后的兜底，也是大促预案的核心。</p>
+      <table class="cmp">
+        <thead><tr><th>降级方式</th><th>示例</th></tr></thead>
+        <tbody>
+          <tr><td>返回默认值 / 缓存</td><td>推荐服务挂了，返回热门榜兜底；实时价挂了用缓存价。</td></tr>
+          <tr><td>关闭非核心功能</td><td>大促时关掉「猜你喜欢」「评论」，保住下单支付主链路。</td></tr>
+          <tr><td>异步化 / 延迟处理</td><td>写操作先入队，稍后处理，返回「处理中」。</td></tr>
+          <tr><td>降低精度</td><td>用近似统计（HyperLogLog）代替精确去重。</td></tr>
+        </tbody>
+      </table>
+      <div class="card">
+        <div class="card-title">🎯 降级设计原则</div>
+        <ul>
+          <li><strong>先分级</strong>：明确哪些是核心链路（下单/支付）绝不能降，哪些可降。</li>
+          <li><strong>自动 + 手动</strong>：熔断触发自动降级；大促用<strong>降级开关</strong>手动一键切。</li>
+          <li><strong>兜底要有意义</strong>：返回的默认值要业务可接受，别返回空导致前端崩。</li>
+          <li>降级也要<strong>可观测 + 可恢复</strong>：降级期间打点告警，压力过后自动/手动恢复。</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="chapter" id="s5">
+      <div class="ch-head"><div class="num">05</div><div class="t"><h2>隔离：限制爆炸半径</h2><div class="sub">舱壁模式（Bulkhead）</div></div></div>
+      <p>隔离把资源（线程池、连接、实例）<strong>分舱</strong>，让一个依赖的故障不耗尽全局资源、不波及其它依赖。</p>
+      <div class="analogy">
+        <div class="at">生活类比：轮船的水密隔舱</div>
+        <p>大船船体分成多个<strong>水密隔舱</strong>：即使一个舱破洞进水，水也被封在这个舱里，其它舱照常浮起，船不沉。系统给每个下游依赖分配<strong>独立的线程池/连接池</strong>：即使「支付服务」变慢占满它自己的池，「商品服务」的池不受影响，整体不被一个慢依赖拖垮。</p>
+        <div class="map">映射：<b>隔舱</b>=独立资源池 · <b>一舱进水</b>=一个依赖故障 · <b>船不沉</b>=系统整体存活</div>
+      </div>
+      <div class="card">
+        <div class="card-title">🧱 隔离粒度</div>
+        <ul>
+          <li><strong>线程池隔离</strong>：每个下游依赖一个线程池（Hystrix 经典做法），强隔离但线程开销大。</li>
+          <li><strong>信号量隔离</strong>：用计数器限并发，轻量无额外线程，但不能隔离超时（调用方线程仍会等）。</li>
+          <li><strong>实例/集群隔离</strong>：核心业务与非核心部署到不同集群，故障域彻底分开。</li>
+          <li><strong>租户隔离</strong>：大客户与普通客户资源分池，防单租户打爆全局（noisy neighbor）。</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="chapter" id="s6">
+      <div class="ch-head"><div class="num">06</div><div class="t"><h2>超时与重试：双刃剑</h2><div class="sub">用不好会放大故障</div></div></div>
+      <p><strong>超时</strong>是所有弹性手段的地基——没有超时，一个卡住的调用会永久占用资源。<strong>重试</strong>能提高成功率，但用不好会把下游打死（重试风暴）。</p>
+      <div class="card">
+        <div class="card-title">⏱️ 超时</div>
+        <ul>
+          <li>每个远程调用<strong>必设超时</strong>，且要合理（P99 + buffer，不是拍脑袋 30s）。</li>
+          <li><strong>超时预算传播</strong>：A(1s) 调 B，B 调 C 的超时不能大于剩余预算（deadline 沿链路递减，gRPC 原生支持）。</li>
+        </ul>
+      </div>
+      <div class="card">
+        <div class="card-title">🔁 重试（谨慎）</div>
+        <ul>
+          <li><strong>只重试幂等操作</strong>——非幂等写重试会重复下单/扣款（配合<a href="./api_design.html#s5">幂等键</a>）。</li>
+          <li><strong>指数退避 + 抖动（jitter）</strong>：避免所有客户端同时重试形成尖峰（惊群）。</li>
+          <li><strong>限制重试次数 + 重试预算</strong>：全局限制重试占比（如 ≤10%），防重试风暴放大故障。</li>
+          <li>只对<strong>可重试错误</strong>（超时、503）重试；4xx/业务错误不重试。</li>
+        </ul>
+      </div>
+      <div class="analogy">
+        <div class="at">反模式：重试风暴</div>
+        <p>下游抖动一下 → 所有客户端立刻重试 → 请求量瞬间翻几倍 → 本来能自愈的下游被重试流量彻底打死 → 更多超时 → 更多重试……<strong>重试在故障时会火上浇油</strong>。所以要退避 + 抖动 + 预算，并配合熔断（跳闸后连重试都停）。</p>
+      </div>
+    </section>
+
+    <section class="chapter" id="s7">
+      <div class="ch-head"><div class="num">07</div><div class="t"><h2>负载脱落与自适应限流</h2><div class="sub">从静态阈值到动态自愈</div></div></div>
+      <p>静态限流阈值很难设准：设低了浪费容量，设高了保护不住。现代做法是<strong>自适应</strong>——根据系统实时状态动态调节。</p>
+      <ul>
+        <li><strong>负载脱落（Load Shedding）</strong>：当 CPU / 队列积压 / RT 超阈值时，主动丢弃部分请求（优先丢低优先级），保住系统不崩。Google SRE 的核心实践。</li>
+        <li><strong>自适应限流</strong>：以延迟/成功率为反馈信号动态调整放行量（类似 TCP 拥塞控制 / Netflix concurrency-limits / Sentinel BBR），无需人工调阈值。</li>
+        <li><strong>优先级 + 公平</strong>：过载时按请求优先级脱落（保交易、丢日志上报）；防单用户独占（加权公平）。</li>
+      </ul>
+      <div class="card">
+        <div class="card-title">📊 前提：可观测</div>
+        <p>所有弹性策略都依赖度量：QPS、RT（P99）、错误率、饱和度（CPU/队列）。没有监控就没有自适应，也无法验证策略是否生效。参见 <a href="./observability_engineering.html">可观测性工程</a>。</p>
+      </div>
+    </section>
+
+    <section class="chapter" id="s8">
+      <div class="ch-head"><div class="num">08</div><div class="t"><h2>组合成一条防线</h2><div class="sub">它们不是替代，而是叠加</div></div></div>
+      <p>这些手段各管一段，实际系统把它们串成<strong>纵深防御</strong>：</p>
+      <div class="card">
+        <div class="card-title">🛡️ 一次请求的防护链</div>
+        <ul>
+          <li><strong>① 入口限流</strong>（网关）：挡住超容量流量，返回 429。</li>
+          <li><strong>② 隔离</strong>：请求进入该依赖的独立资源池，不影响其它。</li>
+          <li><strong>③ 超时</strong>：调用下游设合理 deadline，不无限等。</li>
+          <li><strong>④ 熔断</strong>：下游持续失败则跳闸，快速失败。</li>
+          <li><strong>⑤ 重试</strong>（幂等 + 退避 + 预算）：处理瞬时抖动。</li>
+          <li><strong>⑥ 降级</strong>：以上都失败时返回兜底结果。</li>
+          <li><strong>⑦ 负载脱落</strong>：系统整体过载时主动丢低优先级请求。</li>
+        </ul>
+      </div>
+      <p>记忆口诀：<strong>限流挡在门外，隔离分而治之，超时不无限等，熔断快速失败，重试小心翼翼，降级兜底保命，脱落断尾求生。</strong></p>
+    </section>
+
+    <section class="chapter" id="s9">
+      <div class="ch-head"><div class="num">09</div><div class="t"><h2>关键 take-aways</h2></div></div>
+      <div class="card">
+        <div class="card-title">🎯 一页速记</div>
+        <ul>
+          <li>弹性的目标不是「不失败」，而是<strong>把失败控制在局部、快速失败、优雅退化</strong>。</li>
+          <li><strong>限流</strong>：令牌桶允许突发（最常用）；分布式用 Redis+Lua 或两级方案。</li>
+          <li><strong>熔断</strong>：Closed → Open → Half-Open 三态，配错误率阈值 + 冷却 + 探测，必配降级。</li>
+          <li><strong>降级</strong>：先分级，核心不降；自动（熔断触发）+ 手动（大促开关）。</li>
+          <li><strong>隔离</strong>：舱壁模式限爆炸半径，线程池/信号量/集群/租户隔离。</li>
+          <li><strong>超时必设、重试谨慎</strong>（幂等 + 退避抖动 + 预算），否则重试风暴放大故障。</li>
+          <li>进阶：<strong>负载脱落 + 自适应限流</strong>，依赖可观测做动态自愈。</li>
+        </ul>
+      </div>
+    </section>
+
+<div class="footer-nav">
+  <a href="./microservices_architecture.html">🧩 微服务架构</a>
+  <a href="./api_design.html">🔌 API 设计</a>
+  <a href="./observability_engineering.html">🔭 可观测性</a>
+  <a href="../interview/backend_system_design.html">🏗 后端系统设计</a>
+  <a href="../index.html">🏠 主页</a>
+</div>
+
+  </main>
+</div>
+
+<footer>
+  Tech Notes · 限流熔断降级隔离 · <a href="./microservices_architecture.html">微服务架构</a> · <a href="../index.html">返回首页</a> · © 2026 Kavin Chan · MIT
+</footer>
+
+<script src="../assets/page-shell.js" defer></script>
+
+<button class="back-top" id="backTop" onclick="window.scrollTo({top:0,behavior:'smooth'})">↑</button>
+
+<script>
+  (function(){
+    var btn = document.getElementById('backTop');
+    if (!btn) return;
+    function tg(){ btn.classList.toggle('show', window.scrollY > 400); }
+    window.addEventListener('scroll', tg, { passive: true });
+    tg();
+  })();
+</script>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>
