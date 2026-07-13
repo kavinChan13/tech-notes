@@ -171,11 +171,17 @@ footer{border-top:1px solid var(--border);background:var(--bg-soft);margin-top:v
 .cmdk-in{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--border);}
 .cmdk-in svg{width:18px;height:18px;color:var(--ink-3);}
 .cmdk-in input{border:0;outline:0;flex:1;background:transparent;font:inherit;font-size:15px;color:var(--ink-1);}
-.cmdk-list{max-height:420px;overflow:auto;}
-.cmdk-item{display:flex;justify-content:space-between;gap:12px;padding:11px 16px;border-bottom:1px solid var(--border);cursor:pointer;}
+.cmdk-list{max-height:min(60vh,520px);overflow:auto;}
+.cmdk-item{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;padding:11px 16px;border-bottom:1px solid var(--border);cursor:pointer;}
 .cmdk-item.active,.cmdk-item:hover{background:var(--accent-soft);}
-.cmdk-item .t{font-size:14px;}
-.cmdk-item .c{font-family:var(--mono);font-size:11px;color:var(--ink-3);}
+.cmdk-main{min-width:0;flex:1;}
+.cmdk-line{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;}
+.cmdk-item .t{font-size:14px;font-weight:500;color:var(--ink-1);}
+.cmdk-sub{font-size:12px;color:var(--ink-3);}
+.cmdk-sub::before{content:"› ";}
+.cmdk-snip{margin-top:3px;font-size:12px;line-height:1.5;color:var(--ink-2);overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;}
+.cmdk-snip mark{background:var(--accent-soft);color:var(--accent);padding:0 1px;border-radius:3px;font-weight:600;}
+.cmdk-item .c{font-family:var(--mono);font-size:11px;color:var(--ink-3);white-space:nowrap;flex:none;padding-top:2px;}
 .cmdk-empty{padding:24px;text-align:center;color:var(--ink-3);font-size:13px;}
 
 @media(max-width:1100px){
@@ -831,24 +837,52 @@ footer{border-top:1px solid var(--border);background:var(--bg-soft);margin-top:v
   </div>
 </div>
 
+<script src="./assets/search-index.js"></script>
 <script>
 // Theme toggle
 const tb=document.getElementById('themeBtn'),root=document.documentElement;
 const saved=localStorage.getItem('theme');if(saved)root.setAttribute('data-theme',saved);
 tb.onclick=()=>{const d=root.getAttribute('data-theme')==='dark';root.setAttribute('data-theme',d?'light':'dark');localStorage.setItem('theme',d?'light':'dark');};
 
-// Search index
-const idx=[...document.querySelectorAll('.domain a[href]:not(.more)')].map(a=>({
-  t:a.textContent.trim(),
-  c:a.closest('.domain').querySelector('h3').textContent.trim(),
-  h:a.getAttribute('href')
-}));
+// Full-text search (index built by scripts/build_search_index.py)
+const INDEX=window.TN_SEARCH_INDEX||[];
 const el={k:document.getElementById('cmdk'),i:document.getElementById('cmdkInput'),l:document.getElementById('cmdkList')};
 let active=0,res=[];
+const esc=s=>s.replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+// build a snippet around the first match, with the query highlighted
+function snippet(text,q){
+  const i=text.toLowerCase().indexOf(q);
+  if(i<0)return esc(text.slice(0,120))+(text.length>120?'…':'');
+  const a=Math.max(0,i-50),pre=a>0?'…':'';
+  const seg=text.slice(a,i+q.length+70),post=(a+seg.length)<text.length?'…':'';
+  const rel=i-a;
+  return pre+esc(seg.slice(0,rel))+'<mark>'+esc(seg.slice(rel,rel+q.length))+'</mark>'+esc(seg.slice(rel+q.length))+post;
+}
+// find best matching section within a page: prefer heading match, else body
+function match(entry,q){
+  let body=null;
+  if(entry.t.toLowerCase().includes(q))return{sec:entry.s[0]||{a:'',h:'',x:''},where:'title'};
+  for(const sec of entry.s){
+    if(sec.h&&sec.h.toLowerCase().includes(q))return{sec,where:'head'};
+    if(!body&&sec.x.toLowerCase().includes(q))body={sec,where:'body'};
+  }
+  return body;
+}
+function render(q){
+  q=q.trim().toLowerCase();active=0;
+  if(!q){res=[];el.l.innerHTML='<div class="cmdk-empty">输入关键词，搜索所有文章正文</div>';return;}
+  res=[];
+  for(const e of INDEX){
+    const m=match(e,q);
+    if(!m)continue;
+    const src=m.where==='title'?e.t:(m.sec.x||e.t);
+    res.push({t:e.t,c:e.c,h:e.u+(m.sec.a?('#'+m.sec.a):''),sub:m.sec.h||'',snip:snippet(src,q)});
+    if(res.length>=30)break;
+  }
+  el.l.innerHTML=res.length?res.map((x,n)=>`<div class="cmdk-item ${n===0?'active':''}" data-h="${x.h}" role="option"><div class="cmdk-main"><div class="cmdk-line"><span class="t">${esc(x.t)}</span>${x.sub?`<span class="cmdk-sub">${esc(x.sub)}</span>`:''}</div><div class="cmdk-snip">${x.snip}</div></div><span class="c">${esc(x.c)}</span></div>`).join(''):'<div class="cmdk-empty">无结果</div>';
+}
 function open(){el.k.classList.add('open');el.i.value='';render('');el.i.focus();}
 function close(){el.k.classList.remove('open');}
-function render(q){q=q.toLowerCase();res=idx.filter(x=>(x.t+' '+x.c).toLowerCase().includes(q)).slice(0,20);active=0;
-  el.l.innerHTML=res.length?res.map((x,n)=>`<div class="cmdk-item ${n===0?'active':''}" data-h="${x.h}" role="option"><span class="t">${x.t}</span><span class="c">${x.c}</span></div>`).join(''):'<div class="cmdk-empty">无结果</div>';}
 el.i.addEventListener('input',e=>render(e.target.value));
 ['searchTriggerNav','searchTriggerHero'].forEach(id=>{
   const node=document.getElementById(id);
@@ -864,7 +898,8 @@ document.addEventListener('keydown',e=>{
   if(e.key==='ArrowUp'){e.preventDefault();active=Math.max(active-1,0);upd();}
   if(e.key==='Enter'&&res[active])location.href=res[active].h;
 });
-function upd(){[...el.l.children].forEach((c,n)=>c.classList.toggle('active',n===active));}
+function upd(){[...el.l.children].forEach((c,n)=>c.classList.toggle('active',n===active));
+  const a=el.l.children[active];if(a)a.scrollIntoView({block:'nearest'});}
 el.l.addEventListener('click',e=>{const it=e.target.closest('.cmdk-item');if(it)location.href=it.dataset.h;});
 
 // Sticky TOC — highlight active section on scroll
