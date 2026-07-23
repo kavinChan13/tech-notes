@@ -129,13 +129,31 @@ CHUNK_BG = [
 REPLACEMENTS.extend(CHUNK_BG)
 
 
-def iter_html():
-    for p in ROOT.rglob('*.html'):
-        if p.parts and p.parts[0] in SKIP_TOP:
-            continue
-        if p.parts and p.parts[0].startswith('.'):
-            continue
-        yield p
+def iter_html(extra_roots: list[pathlib.Path] | None = None):
+    roots = extra_roots or [ROOT]
+    seen: set[pathlib.Path] = set()
+    for base in roots:
+        for p in base.rglob('*.html'):
+            if p in seen:
+                continue
+            if p.parts and p.parts[0] in SKIP_TOP:
+                continue
+            if p.parts and p.parts[0].startswith('.') and 'bili-to-note' not in p.parts:
+                continue
+            seen.add(p)
+            yield p
+
+
+BORDER_HEX = [
+    (re.compile(r'(border(?:-(?:left|right|top|bottom))?:\s*\d+px\s+(?:solid|dashed)\s*)#2a3556', re.I),
+     r'\1var(--border-2)'),
+    (re.compile(r'(border(?:-(?:left|right|top|bottom))?:\s*\d+px\s+(?:solid|dashed)\s*)#1f2740', re.I),
+     r'\1var(--border)'),
+    (re.compile(r'(border:\s*\d+px\s+(?:solid|dashed)\s*)#2a3556', re.I),
+     r'\1var(--border-2)'),
+    (re.compile(r'(border:\s*\d+px\s+(?:solid|dashed)\s*)#1f2740', re.I),
+     r'\1var(--border)'),
+]
 
 
 def fix_text(text: str) -> tuple[str, int]:
@@ -146,13 +164,17 @@ def fix_text(text: str) -> tuple[str, int]:
         count = text.count(old)
         text = text.replace(old, new)
         n += count
+    for pat, repl in BORDER_HEX:
+        text, c = pat.subn(repl, text)
+        n += c
     return text, n
 
 
 def main():
+    extra = [ROOT / '.cursor' / 'skills' / 'bili-to-note']
     changed = 0
     total = 0
-    for p in iter_html():
+    for p in iter_html([ROOT, *extra]):
         t = p.read_text(encoding='utf-8')
         if 'assets/article.css' not in t:
             continue
