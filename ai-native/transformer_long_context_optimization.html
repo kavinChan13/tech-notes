@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Transformer 长文本优化四大技术 · Transformer — Tech Notes</title>
+<meta name="description" content="FlashAttention · GQA/MQA · PagedAttention · RoPE Scaling — 从算子融合到百万 Token 的工程全景">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<link rel="stylesheet" href="../assets/kh-guide.css">
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav">
+
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="ai_engineering_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 17 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>T15 · Transformer</h2>
+    <nav>
+      <ol>
+        <li><a href="#ch1" class="active">核心瓶颈：长文本的三重诅咒</a></li>
+        <li><a href="#ch2">四大技术协同全景</a></li>
+        <li><a href="#flashattention-io">技术一：FlashAttention — IO 感知的算子融合</a></li>
+        <li><a href="#gqa-mqa-kv-cache">技术二：GQA/MQA — 参数共享压缩 KV Cache</a></li>
+        <li><a href="#pagedattention">技术三：PagedAttention — 显存分页管理</a></li>
+        <li><a href="#rope-scaling">技术四：RoPE Scaling — 频率欺骗与外推延长</a></li>
+        <li><a href="#ring-attention-sliding-window">分布式长序列：Ring Attention 与 Sliding Window</a></li>
+        <li><a href="#1m-token">1M+ Token 工程实践</a></li>
+        <li><a href="#ch9">技术全景对比</a></li>
+        <li><a href="#q-a-8">Q&amp;A（8 题）</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+    <header class="hero">
+      <div class="badge">T15 · Transformer</div>
+      <h1>Transformer 长文本优化四大技术</h1>
+      <p class="sub">FlashAttention · GQA/MQA · PagedAttention · RoPE Scaling — 从算子融合到百万 Token 的工程全景</p>
+      <div class="meta-row">
+        <span class="pill cyan">Transformer</span>
+        <span class="pill green">阅读 ~17 min</span>
+        <span class="pill amber">10 章</span>
+      </div>
+    </header>
+
+    <section class="chapter" id="ch1">
+      <div class="ch-head"><div class="num">01</div><div class="t"><h2>核心瓶颈：长文本的三重诅咒</h2><div class="sub">Transformer 处理长文本的性能崩塌来自三个独立但叠加的瓶颈：自注意力 O(N²)…</div></div></div>
+      <div class="intuition-box">
+<p>Transformer 处理长文本的性能崩塌来自三个独立但叠加的瓶颈：自注意力 <span class="term">O(N²)</span> 的计算爆炸、GPU 显存带宽的物理限制（"显存墙"）、以及位置编码在训练分布之外的外推失效。三者必须同时解决，单独优化任何一个都无法突破天花板。</p>
+</div>
+
+<h3>1.1 计算复杂度：O(N²) 的指数墙</h3>
+<p>标准自注意力机制要求每个 Token 与序列中所有其他 Token 做点积运算。对于长度为 N 的序列，注意力矩阵大小为 N×N，计算量为 O(N²·d)。当 N 从 4K 增长到 128K 时，计算量增长 1024 倍——这意味着原本 1 秒完成的计算需要 17 分钟。</p>
+
+<div class="formula">
+Attention(Q, K, V) = softmax(QK<sup>T</sup> / √d<sub>k</sub>) · V &nbsp;&nbsp;→&nbsp;&nbsp; QK<sup>T</sup> 形状: [N × N]
+</div>
+
+<h3>1.2 硬件矛盾：显存墙</h3>
+<p>现代 GPU 面临严重的<span class="term">计算-带宽失衡</span>：NVIDIA A100 的 FP16 算力达 312 TFLOPS，但 HBM 带宽仅 2 TB/s。这意味着每搬运 1 字节数据的成本相当于执行约 150 次浮点运算。标准 Attention 实现需要将完整的 N×N 注意力矩阵写入 HBM 再读回，数据搬运成本远超计算成本——Attention 是<strong>内存带宽受限</strong>（memory-bound）而非计算受限（compute-bound）的操作。</p>
+
+<h3>1.3 外推性缺陷：位置编码的 OOD 问题</h3>
+<p>无论使用绝对位置编码还是 <span class="term">RoPE</span>（旋转位置编码），当推理序列长度超过训练时见过的最大长度时，模型会遇到训练分布之外的位置信号。高频维度的旋转角度进入模型从未见过的相位区间，注意力权重崩塌，输出变成乱码。这就是"4K 训练的模型在 8K 处崩溃"的根本原因。</p>
+
+<table>
+<tr><th>瓶颈层级</th><th>具体表现</th><th>量化影响 (N=128K)</th><th>对应优化技术</th></tr>
+<tr><td>算法层：O(N²) 计算</td><td>注意力矩阵 128K × 128K = 16G 个元素</td><td>单层注意力 ~64GB 显存</td><td><span class="term">FlashAttention</span></td></tr>
+<tr><td>架构层：KV Cache 膨胀</td><td>每 Token 每层存 K+V，随序列线性增长</td><td>70B 模型 ~30GB/请求</td><td><span class="term">GQA/MQA</span> + <span class="term">PagedAttention</span></td></tr>
+<tr><td>模型层：位置编码 OOD</td><td>高频旋转进入未见相位</td><td>困惑度爆炸、输出乱码</td><td><span class="term">RoPE Scaling</span> / <span class="term">YaRN</span></td></tr>
+</table>
+    </section>
+
+    <section class="chapter" id="ch2">
+      <div class="ch-head"><div class="num">02</div><div class="t"><h2>四大技术协同全景</h2><div class="sub">四大优化技术分别瞄准不同层级的瓶颈：FlashAttention 解决算子层的 I/O 效率…</div></div></div>
+      <div class="intuition-box">
+<p>四大优化技术分别瞄准不同层级的瓶颈：FlashAttention 解决算子层的 I/O 效率、GQA/MQA 减少架构层的 KV Cache 体积、PagedAttention 优化系统层的显存管理、RoPE Scaling 突破模型层的外推限制。它们互相正交、可叠加使用。</p>
+</div>
+
+<div class="flow">
+  <div class="flow-title">长文本优化 · 五大技术层级协同全景</div>
+  <div class="flow-node"><div class="nlabel">算子层 · FlashAttention v1→v4</div><div class="nsub">IO-aware 分块 + 算子融合 → HBM IO ↓80%，显存 O(N²)→O(N)</div></div>
+  <div class="flow-arrow" data-label="协同"></div>
+  <div class="flow-node"><div class="nlabel">架构层 · GQA / MQA / MLA</div><div class="nsub">多 Query 头共享 KV 组 → KV Cache 显存 ↓60%（32→8 组）</div></div>
+  <div class="flow-arrow" data-label="协同"></div>
+  <div class="flow-node"><div class="nlabel">系统层 · PagedAttention (vLLM)</div><div class="nsub">虚拟内存分页管理 KV Cache → 碎片→0，并发吞吐 ↑4×</div></div>
+  <div class="flow-arrow" data-label="协同"></div>
+  <div class="flow-node"><div class="nlabel">模型层 · RoPE Scaling</div><div class="nsub">PI→NTK→YaRN→LongRoPE 频率缩放 → 外推 4K→128K→1M→4M</div></div>
+  <div class="flow-arrow" data-label="协同"></div>
+  <div class="flow-node good"><div class="nlabel">分布式层 · Ring Attention 等</div><div class="nsub">序列切分多 GPU、环形传 KV → 有效长度 × 设备数（Gemini 1M+）</div></div>
+</div>
+
+<p>上图展示了五大技术层级如何协同工作。在实际部署中（如 vLLM 推理框架），一个典型的请求会同时经过所有层：RoPE Scaling 让模型支持长位置编码 → FlashAttention 加速注意力计算 → GQA 压缩 KV Cache 体积 → PagedAttention 管理显存分配 → Ring Attention 在多卡间分配超长序列。</p>
+
+<div class="highlight">
+<strong>核心洞见：</strong>四大技术是正交的——FlashAttention 不改变数学结果（exact attention），GQA 改变注意力头的组织方式，PagedAttention 改变显存管理策略，RoPE Scaling 改变位置信号。它们可以任意组合，生产环境通常全部叠加使用。
+</div>
+    </section>
+
+    <section class="chapter" id="flashattention-io">
+      <div class="ch-head"><div class="num">03</div><div class="t"><h2>技术一：FlashAttention — IO 感知的算子融合</h2><div class="sub">FlashAttention 的核心洞察： 现代 GPU 上，Attention 的瓶颈不是…</div></div></div>
+      <div class="intuition-box">
+<p>FlashAttention 的核心洞察：<strong>现代 GPU 上，Attention 的瓶颈不是算力不够，而是数据搬运太慢</strong>。通过将计算重新组织为"分块处理 + 片上融合"，将数据搬运量降低 80%，同时保持数学上完全精确的注意力结果（非近似）。</p>
+</div>
+
+<h3>3.1 FlashAttention v1（2022，NeurIPS）</h3>
+<p>Tri Dao 等人在 Stanford 提出的开创性工作。核心思想是 <span class="term">IO-aware</span> 算法设计：明确考虑 GPU 的 HBM（高带宽显存，容量大但带宽有限）和 SRAM（片上缓存，容量小但带宽极高）之间的数据搬运成本。</p>
+<p>三个关键技术使其成为可能：<strong>① 分块计算（Tiling）</strong>将 Q/K/V 切分为适配 SRAM 大小的 Block，逐块计算注意力；<strong>② 在线 Softmax</strong> 通过维护行最大值和指数和的递推统计量，在不需要完整注意力矩阵的前提下逐块计算 softmax；<strong>③ 重计算（Recomputation）</strong>在前向传播时不保存完整注意力矩阵，反向传播时从 Q/K/V 重新计算，用少量额外计算换取 O(N²) → O(N) 的显存节省。</p>
+
+<h3>3.2 FlashAttention v2（2023）— 更好的并行性</h3>
+<p>v1 在 A100 上仅达到理论峰值吞吐的 25-35%。v2 通过三个关键优化将利用率提升至 50-73%：<strong>① 减少非矩阵乘法运算</strong>，将 rescaling 操作推迟到最终步骤；<strong>② 调整循环顺序</strong>，将 Q 放在外循环、K/V 放在内循环，提高了每次迭代的并行度；<strong>③ 优化 warp 级工作分配</strong>，让 GPU 的 4 个 warp 之间减少同步开销和共享内存读写。</p>
+<p>v2 在 A100 上实现了 2-3x 的端到端加速，在 H100 上达到 50-73% 的理论峰值利用率。同时原生支持 <span class="term">MQA</span>（Multi-Query Attention）和 <span class="term">GQA</span>（Grouped-Query Attention），只需传入更少的 KV 头即可。</p>
+
+<h3>3.3 FlashAttention v3（2024）— Hopper 架构专属优化</h3>
+<p>v3 针对 H100/H800 的 <span class="term">Hopper 架构</span>进行深度优化，利用三大硬件新特性：<strong>① WGMMA 异步 Tensor Core 指令</strong>，实现 GEMM 计算和数据搬运的重叠执行（overlap）；<strong>② TMA（Tensor Memory Accelerator）</strong>，专用硬件引擎处理异步数据搬运；<strong>③ FP8 低精度支持</strong>，在 H100 上实现 1.5-2.0x 的额外吞吐提升，误差控制在可接受范围。</p>
+
+<h3>3.4 FlashAttention v4（2025）— 面向最新硬件</h3>
+<p>v4 进一步适配 NVIDIA 最新一代 GPU 架构，持续追求更高的硬件利用率。FlashAttention 家族已成为几乎所有主流 LLM 的标准组件——从 LLaMA、Mistral、Qwen 到 GPT 系列，PyTorch 的 <code>scaled_dot_product_attention</code> 函数已原生集成。</p>
+
+<table>
+<tr><th>版本</th><th>年份</th><th>核心优化</th><th>目标硬件</th><th>A100/H100 利用率</th></tr>
+<tr><td>FA-v1</td><td>2022</td><td>Tiling + Online Softmax + Recomputation</td><td>A100 (Ampere)</td><td>25-35%</td></tr>
+<tr><td>FA-v2</td><td>2023</td><td>减少非 matmul 运算 + 循环重排 + Warp 优化</td><td>A100 / H100</td><td>50-73%</td></tr>
+<tr><td>FA-v3</td><td>2024</td><td>WGMMA + TMA 异步 + FP8 低精度</td><td>H100 (Hopper)</td><td>~82% (FP8)</td></tr>
+<tr><td>FA-v4</td><td>2025</td><td>下一代架构适配</td><td>B200 (Blackwell)</td><td>TBD</td></tr>
+</table>
+
+<div class="highlight">
+<strong>关键数字：</strong>FlashAttention 在 2K 序列长度时显存节省约 10 倍，4K 时约 20 倍；端到端 wall-clock 加速 2-7.6x。2024 年获得 Stanford 开源软件首届大奖，从 75+ 个项目中脱颖而出。
+</div>
+
+<p>关于 FlashAttention 的详细数学推导和 CUDA 实现，参见 <a href="efficient_attention.html">T04 高效注意力</a>。</p>
+    </section>
+
+    <section class="chapter" id="gqa-mqa-kv-cache">
+      <div class="ch-head"><div class="num">04</div><div class="t"><h2>技术二：GQA/MQA — 参数共享压缩 KV Cache</h2><div class="sub">Multi-Head Attention 的每个头都独立维护 K 和 V 向量，KV Cac…</div></div></div>
+      <div class="intuition-box">
+<p>Multi-Head Attention 的每个头都独立维护 K 和 V 向量，KV Cache 大小与头数成正比。<span class="term">GQA</span>（Grouped-Query Attention）让多个 Query 头共享同一组 KV，在几乎不损失模型质量的前提下将 KV Cache 压缩 60-87%。</p>
+</div>
+
+<h3>4.1 从 MHA 到 MQA 到 GQA 的演进</h3>
+<p><span class="term">MHA</span>（Multi-Head Attention）是标准做法：每个注意力头有独立的 Q、K、V 投影。32 个头的模型意味着 32 组 KV Cache。<span class="term">MQA</span>（Multi-Query Attention，Shazeer 2019）是激进方案：所有 Query 头共享<strong>同一组</strong> K 和 V，KV Cache 直接缩小到 1/32，但模型质量有明显下降。<span class="term">GQA</span>（Grouped-Query Attention，Ainslie et al. 2023）是折中方案：将 Query 头分成若干组，每组共享一组 KV。LLaMA 2（70B）使用 8 组 GQA，将 KV Cache 缩小到 1/4（32 heads → 8 groups），质量损失可忽略。</p>
+
+<h3>4.2 MLA：DeepSeek 的更激进方案</h3>
+<p><span class="term">MLA</span>（Multi-head Latent Attention，DeepSeek-V2 2024）进一步将 KV Cache 压缩为低秩向量。核心思想是用一个低秩联合压缩矩阵将 K 和 V 投影到低维隐空间，推理时只缓存压缩后的向量，需要时再解压缩。MLA 将 KV Cache 缩小到 MHA 的 5-13%，同时保持与 GQA 相当的模型质量。</p>
+
+<table>
+<tr><th>方案</th><th>KV 头数</th><th>KV Cache 相对大小</th><th>质量影响</th><th>代表模型</th></tr>
+<tr><td>MHA</td><td>= Query 头数 (32)</td><td>100%</td><td>基线</td><td>GPT-4, 早期 LLaMA</td></tr>
+<tr><td>MQA</td><td>1</td><td>~3% (1/32)</td><td>下降明显</td><td>PaLM, Falcon</td></tr>
+<tr><td>GQA (8组)</td><td>8</td><td>~25% (8/32)</td><td>几乎无损</td><td>LLaMA 2 70B, Mistral</td></tr>
+<tr><td>MLA</td><td>低秩压缩</td><td>~5-13%</td><td>接近无损</td><td>DeepSeek-V2/V3</td></tr>
+</table>
+
+<div class="highlight">
+<strong>工程建议：</strong>对于新训练的模型，GQA (8 组) 是当前的最佳实践——在 KV Cache 显存和模型质量之间取得最优平衡。MLA 适合追求极致 KV Cache 压缩的场景，但实现复杂度更高。
+</div>
+    </section>
+
+    <section class="chapter" id="pagedattention">
+      <div class="ch-head"><div class="num">05</div><div class="t"><h2>技术三：PagedAttention — 显存分页管理</h2><div class="sub">PagedAttention 借鉴操作系统的 虚拟内存分页 思想，将 KV Cache 切分…</div></div></div>
+      <div class="intuition-box">
+<p>PagedAttention 借鉴操作系统的<span class="term">虚拟内存分页</span>思想，将 KV Cache 切分为固定大小的 Block，通过逻辑-物理地址映射表管理分散的显存空间。解决了连续预分配导致的 60-80% 显存碎片化浪费，将推理并发吞吐量提升 2-4 倍。</p>
+</div>
+
+<h3>5.1 传统 KV Cache 的碎片化问题</h3>
+<p>传统推理框架为每个请求预分配连续显存空间，大小按<strong>最大可能序列长度</strong>计算。但实际上大多数请求远未达到最大长度，预分配的显存中 60-80% 从未被使用，却被独占——这就是<span class="term">内部碎片</span>。加上不同请求生命周期不同步导致的<span class="term">外部碎片</span>，整体显存利用率仅 20-40%。</p>
+
+<h3>5.2 PagedAttention 的核心设计</h3>
+<p>vLLM 团队（Kwon et al., 2023）提出的 PagedAttention 将 KV Cache 切分为固定大小的 Block（如 16 tokens），逻辑上连续但物理上分散存储在 HBM 中，通过 Block Table（类似操作系统的页表）维护逻辑到物理的映射。这使得：</p>
+<ul>
+<li><strong>零内部碎片</strong>：只按需分配，最后一个 Block 的浪费不超过 Block 大小</li>
+<li><strong>零外部碎片</strong>：分散的 Block 可以被任意请求复用</li>
+<li><strong>跨请求共享</strong>：多个请求可以共享相同的 KV Block（如 System Prompt 的 KV Cache），实现 <span class="term">Copy-on-Write</span> 语义</li>
+<li><strong>灵活调度</strong>：支持 Parallel Sampling、Beam Search 等高级采样策略的高效实现</li>
+</ul>
+
+<table>
+<tr><th>指标</th><th>传统 KV Cache</th><th>PagedAttention</th></tr>
+<tr><td>显存利用率</td><td>20-40%</td><td>80%+</td></tr>
+<tr><td>内部碎片</td><td>60-80% 浪费</td><td>接近 0</td></tr>
+<tr><td>外部碎片</td><td>显著</td><td>接近 0</td></tr>
+<tr><td>跨请求共享</td><td>不支持</td><td>Copy-on-Write</td></tr>
+<tr><td>并发吞吐量</td><td>基线</td><td>2-4x 提升</td></tr>
+</table>
+
+<p>关于 KV Cache 推理机制的详细讨论，参见 <a href="../llm/kv_cache_inference.html">L05 KV Cache 推理</a>。</p>
+    </section>
+
+    <section class="chapter" id="rope-scaling">
+      <div class="ch-head"><div class="num">06</div><div class="t"><h2>技术四：RoPE Scaling — 频率欺骗与外推延长</h2><div class="sub">RoPE 通过旋转 Q/K 向量编码位置信息，但高频维度在超出训练长度时进入模型从未见过的相…</div></div></div>
+      <div class="intuition-box">
+<p>RoPE 通过旋转 Q/K 向量编码位置信息，但高频维度在超出训练长度时进入模型从未见过的相位区间。Scaling 技术的本质是<strong>调整旋转频率</strong>，使得在更长的序列中，模型看到的旋转角度仍然落在训练分布内——本质上是"骗"模型以为自己在处理短文本。</p>
+</div>
+
+<h3>6.1 RoPE 基础回顾</h3>
+<p><span class="term">RoPE</span>（Rotary Position Embedding，Su et al. 2021）对 Q 和 K 向量的每对维度施加位置相关的旋转：位置 m 处的向量被旋转角度 m·θ<sub>i</sub>，其中 θ<sub>i</sub> = base<sup>-2i/d</sup>。关键性质是旋转后的点积只依赖相对位置 (m-n)，天然支持相对位置编码。低频维度（i 小）编码长距离关系，高频维度（i 大）编码短距离区分。</p>
+
+<div class="formula">
+q'<sub>m</sub> = R(m·θ) · q &nbsp;&nbsp;→&nbsp;&nbsp; ⟨q'<sub>m</sub>, k'<sub>n</sub>⟩ = ⟨q, R((n-m)·θ) · k⟩ &nbsp;&nbsp;→&nbsp;&nbsp; 仅依赖相对位置 (n-m)
+</div>
+
+<h3>6.2 为什么直接外推会崩溃？</h3>
+<p>以 LLaMA 2（训练长度 4K，base=10000）为例：当推理长度超过 4K 时，高频维度的旋转角度进入了训练时从未见过的相位区域。具体地，位置 4096 处最高频维度的旋转角度为 4096 × θ<sub>0</sub> = 4096 × 1.0 = 4096 弧度，模型已经学好了这个范围内的模式。但位置 100000 处的角度为 100000 弧度——远超训练分布，注意力权重变得不可预测，困惑度飙升，输出变成乱码。</p>
+
+<h3>6.3 四种 Scaling 方案演进</h3>
+
+<p><strong>① 线性位置插值 PI（Position Interpolation，Chen et al. 2023）</strong></p>
+<p>最简单的方案：将位置索引等比压缩回训练范围内。如果训练长度 4K、目标 16K，则将每个位置除以 4。效果是所有旋转角度都缩小到训练分布内。但问题在于：高频维度的角度间距被压缩，丧失了局部位置区分能力——相邻 Token 的旋转角度差异过小，模型无法有效区分它们。适合 2-4x 扩展，更大倍数质量明显下降。</p>
+
+<p><strong>② NTK-aware Scaling（bloc97，2023 中）</strong></p>
+<p>核心洞察：不同频率的维度应该被<strong>不同程度</strong>地缩放。通过修改 RoPE base 值实现非均匀缩放：</p>
+
+<div class="formula">
+new_base = base × scale<sup>D/(D-2)</sup> &nbsp;&nbsp;→&nbsp;&nbsp; θ'<sub>i</sub> = new_base<sup>-2i/D</sup>
+</div>
+
+<p>效果：高频维度几乎不变（保留局部区分力），低频维度被拉伸（覆盖更长距离）。比 PI 质量更好，适合 2-4x 扩展。</p>
+
+<p><strong>③ YaRN（Yet another RoPE extensioN，Peng et al. 2023 末）</strong></p>
+<p>YaRN 引入三个关键改进：<strong>① 动态 NTK 缩放</strong>——自动识别哪些频率维度需要调整（"需要插值的"）和哪些不需要（"保持原样的"），通过温度参数控制；<strong>② 注意力缩放</strong>——对 softmax 的 logits 乘以 ln(scale) 的温度修正因子，缓解长序列的注意力熵变化；<strong>③ 分段处理</strong>——对不同频率区间应用不同策略（插值/外推/保持）。YaRN 可以在<strong>零微调</strong>的情况下将 LLaMA 2 的上下文从 4K 扩展到 32K（8x），微调约 100M tokens 后扩展到 128K。</p>
+
+<p><strong>④ LongRoPE（Ding et al.，Microsoft Research，2024）</strong></p>
+<p>LongRoPE 是当前的前沿方案：通过<strong>进化搜索</strong>算法为 RoPE 的每个维度独立搜索最优缩放因子（非均匀），并为不同位置范围（近距离 vs 远距离）使用不同的缩放策略。原始论文将 LLaMA 2 7B 从 4K 扩展到 <strong>2M tokens</strong>（512 倍），仅需约 1000 步微调（序列长度上限 256K）。LongRoPE2（2025）进一步引入"needle-driven"困惑度信号优化搜索，在 LLaMA 3 8B 上达到 128K 上下文，短文本性能保留 98.5%+。该技术已被用于 Phi-3-mini-128k-instruct 的生产部署。</p>
+
+<table>
+<tr><th>方案</th><th>核心思想</th><th>扩展倍数</th><th>是否需微调</th><th>代表应用</th></tr>
+<tr><td>线性 PI</td><td>位置索引等比压缩</td><td>2-4x</td><td>轻量微调</td><td>LLaMA 1 扩展</td></tr>
+<tr><td>NTK-aware</td><td>修改 base 实现非均匀缩放</td><td>2-4x</td><td>零/轻量微调</td><td>社区方案</td></tr>
+<tr><td>YaRN</td><td>动态 NTK + 温度修正 + 分段</td><td>4-32x</td><td>零/100M tokens</td><td>LLaMA 2 扩展</td></tr>
+<tr><td>LongRoPE</td><td>进化搜索逐维度最优缩放</td><td>最高 512x</td><td>~1000 步微调</td><td>Phi-3-128K</td></tr>
+<tr><td>LongRoPE2</td><td>needle-driven 搜索 + 混合训练</td><td>32-128x</td><td>10B tokens</td><td>Phi 系列</td></tr>
+</table>
+
+<h3>6.4 ALiBi：另一种路线</h3>
+<p><span class="term">ALiBi</span>（Attention with Linear Biases，Press et al. 2022）采用完全不同的策略：不修改位置编码本身，而是在注意力分数上加一个与距离成正比的线性偏置项。偏置斜率在训练时固定，推理时可以通过调整斜率实现长度外推。ALiBi 的优势是不依赖训练长度，天然支持外推；劣势是线性偏置可能不如 RoPE 的旋转编码灵活。BLOOM、MPT 等模型采用此方案。</p>
+
+<div class="practice-grid">
+  <div class="do">
+    <ul>
+      <li>新训练模型：直接用长序列训练 + RoPE（base=500000 如 LLaMA 3.1）</li>
+      <li>已有模型短扩展(2-4x)：NTK-aware Scaling</li>
+      <li>已有模型长扩展(8x+)：YaRN + 轻量持续预训练</li>
+      <li>追求极致(1M+)：LongRoPE 进化搜索 + 持续预训练</li>
+      <li>配合 RoPE Scaling 使用 100M+ tokens 的持续预训练以巩固效果</li>
+    </ul>
+  </div>
+  <div class="dont">
+    <ul>
+      <li>直接外推：不做任何 Scaling 就喂长文本（输出乱码）</li>
+      <li>只用 PI 做大倍数扩展（高频信息丢失）</li>
+      <li>忽略 base 参数：LLaMA 3.1 的 base=500000 比 base=10000 天然支持更长上下文</li>
+      <li>只做 Scaling 不做持续预训练（效果不稳固）</li>
+      <li>忽略 "Lost in the Middle"：即使 RoPE 扩展成功，模型对中间位置信息的注意力仍偏弱</li>
+    </ul>
+  </div>
+</div>
+    </section>
+
+    <section class="chapter" id="ring-attention-sliding-window">
+      <div class="ch-head"><div class="num">07</div><div class="t"><h2>分布式长序列：Ring Attention 与 Sliding Window</h2><div class="sub">当单张 GPU 的显存无法容纳完整序列时， Ring Attention 将序列切分到多个…</div></div></div>
+      <div class="intuition-box">
+<p>当单张 GPU 的显存无法容纳完整序列时，<span class="term">Ring Attention</span> 将序列切分到多个 GPU 上，通过环形拓扑传递 KV Block，每张卡只需处理一个子块的注意力计算。有效序列长度 = 单卡序列长度 × 设备数。</p>
+</div>
+
+<h3>7.1 Sliding Window Attention</h3>
+<p><span class="term">Sliding Window Attention</span> 限制每个 Token 只能关注其周围固定大小的窗口（如 4096 tokens），将计算复杂度从 O(N²) 降到 O(N·W)。Mistral 7B 使用 4096 的窗口大小，通过多层堆叠实现信息的远距离传播（每层传播 W 个位置，L 层可传播 W×L 个位置）。<span class="term">Longformer</span>（Beltagy et al. 2020）进一步引入"局部 + 全局"注意力模式：大多数 Token 只看窗口内，少数特殊 Token（如 [CLS]）可以全局关注。</p>
+
+<h3>7.2 Ring Attention</h3>
+<p><span class="term">Ring Attention</span>（Liu et al. 2023）是序列并行（Sequence Parallelism）的核心方案：将输入序列均分到 N 个 GPU 上，每张卡持有 Q/K/V 的一个子块。计算时，每张卡先计算本地子块的注意力，然后将 KV Block 沿环形拓扑传递给下一张卡，同时接收上一张卡的 KV Block。经过 N-1 轮传递后，每张卡都完成了对所有 KV 的注意力计算。关键优势是<strong>通信和计算可以重叠</strong>（overlap）：传递 KV Block 的同时可以计算当前 Block 的注意力。</p>
+
+<h3>7.3 Context Parallelism 与 Gemini 的实践</h3>
+<p>Google 的 Gemini 1.5 Pro 支持 1M+ tokens 的上下文，其背后正是 Ring Attention 的变体 + Infini-attention 机制。Stripe Attention（Brandon et al. 2023）进一步优化了 Ring Attention 的负载均衡：将序列以条纹方式切分（而非连续切分），使得每个 GPU 在不同时间步处理的注意力负载更均匀。MTraining（2025）进一步引入动态稀疏 Ring Attention，在 32×A100 集群上将 Qwen2.5-3B 的上下文从 32K 扩展到 512K tokens，训练吞吐量提升 6x。</p>
+
+<table>
+<tr><th>方案</th><th>复杂度</th><th>全局信息</th><th>扩展方式</th><th>代表</th></tr>
+<tr><td>Sliding Window</td><td>O(N·W) 线性</td><td>多层堆叠传播</td><td>单卡</td><td>Mistral 7B</td></tr>
+<tr><td>Longformer</td><td>O(N·W + N·G)</td><td>全局 Token + 局部</td><td>单卡</td><td>Longformer</td></tr>
+<tr><td>Ring Attention</td><td>O(N²/P) 每卡</td><td>完整全局注意力</td><td>多卡并行</td><td>Gemini 1.5</td></tr>
+<tr><td>Striped Ring</td><td>O(N²/P) 均衡</td><td>完整 + 负载均衡</td><td>多卡并行</td><td>MTraining</td></tr>
+</table>
+    </section>
+
+    <section class="chapter" id="1m-token">
+      <div class="ch-head"><div class="num">08</div><div class="t"><h2>1M+ Token 工程实践</h2><div class="sub">百万级上下文的工程实现是 全栈协同 的结果：位置编码扩展提供数学基础、FlashAttent…</div></div></div>
+      <div class="intuition-box">
+<p>百万级上下文的工程实现是<strong>全栈协同</strong>的结果：位置编码扩展提供数学基础、FlashAttention 提供单卡效率、Ring Attention 提供多卡扩展、KV Cache 管理提供系统支撑。没有任何单一技术可以独立实现这一目标。</p>
+</div>
+
+<h3>8.1 Gemini 1.5 Pro：原生 1M+ 上下文</h3>
+<p>Gemini 1.5 Pro（2024）是首个大规模部署百万 Token 上下文的模型。其技术栈包括：MoE（Mixture of Experts）架构减少每 Token 激活参数、Infini-attention 机制管理超长序列的注意力、Ring Attention 变体实现多卡序列并行。在"大海捞针"（Needle-in-a-Haystack）测试中，Gemini 1.5 Pro 在 1M tokens 的 haystack 中实现了 >99.7% 的 needle 召回率。</p>
+
+<h3>8.2 Claude 系列：高效 200K+ 上下文</h3>
+<p>Anthropic 的 Claude 3.5 Sonnet 和 Claude 4.5 系列将上下文扩展到 200K+ tokens，特别在密集推理任务（如代码库分析）中表现出色。Claude 的架构优化侧重于"有效上下文"（effective context）——不仅接受长输入，还能在长序列中维持高质量推理。这与 Gemini 的"超长上下文"策略形成互补。</p>
+
+<h3>8.3 UltraLong：128K → 4M 的高效训练 Recipe</h3>
+<p>NVIDIA 的 UltraLong（2025）提供了一个从 128K 对齐模型扩展到 4M tokens 的完整训练方案：使用 YaRN-based RoPE Scaling + 特殊文档分隔符进行持续预训练，再用短上下文 SFT 保持指令跟随能力。UltraLong-8B（基于 LLaMA-3.1-Instruct）在多个长上下文 benchmark 上达到 SOTA，同时短文本性能无明显退化。</p>
+
+<table>
+<tr><th>模型/系统</th><th>上下文长度</th><th>核心技术栈</th><th>关键指标</th></tr>
+<tr><td>Gemini 1.5 Pro</td><td>1M+</td><td>MoE + Infini-attention + Ring Attn</td><td>Needle recall >99.7% @1M</td></tr>
+<tr><td>Claude 3.5/4.5</td><td>200K+</td><td>有效上下文优化 + 密集推理</td><td>代码分析强项</td></tr>
+<tr><td>UltraLong-8B</td><td>4M</td><td>YaRN + 持续预训练 + SFT</td><td>长文本 SOTA @8B 规模</td></tr>
+<tr><td>LLaMA 3.1</td><td>128K</td><td>RoPE base=500K + GQA</td><td>原生长上下文</td></tr>
+<tr><td>Phi-3-mini-128K</td><td>128K</td><td>LongRoPE + 轻量微调</td><td>小模型长上下文</td></tr>
+</table>
+
+<div class="highlight">
+<strong>生产实践数据：</strong>以 LLaMA 3（70B）在 A100 80GB 集群上的长文本推理为例，四技术全栈组合效果：FlashAttention v2 加速 2-3x → GQA (8组) KV Cache 压缩 4x → PagedAttention 显存利用率从 30% 提升至 85% → RoPE Scaling (YaRN) 支持 128K 位置。综合效果：单请求支持 128K tokens，并发吞吐量提升约 20-30x（相比无优化的朴素实现）。
+</div>
+    </section>
+
+    <section class="chapter" id="ch9">
+      <div class="ch-head"><div class="num">09</div><div class="t"><h2>技术全景对比</h2></div></div>
+      <table>
+<tr><th>维度</th><th>FlashAttention</th><th>GQA/MQA</th><th>PagedAttention</th><th>RoPE Scaling</th><th>Ring Attention</th></tr>
+<tr><td>解决层级</td><td>算子 I/O</td><td>架构设计</td><td>系统管理</td><td>数学外推</td><td>分布式并行</td></tr>
+<tr><td>核心收益</td><td>速度 2-7.6x</td><td>KV Cache ↓60-97%</td><td>并发 ↑2-4x</td><td>长度 ↑4-512x</td><td>长度 ×设备数</td></tr>
+<tr><td>数学精确性</td><td>精确（非近似）</td><td>有损（近似）</td><td>精确</td><td>有损（近似）</td><td>精确</td></tr>
+<tr><td>是否需要训练</td><td>否（推理即用）</td><td>是（架构设计时）</td><td>否（推理即用）</td><td>零/轻量微调</td><td>否（推理即用）</td></tr>
+<tr><td>典型组合</td><td colspan="5">全部叠加使用：FlashAttention + GQA + PagedAttention + RoPE Scaling + Ring Attention</td></tr>
+</table>
+
+<div class="practice-grid">
+  <div class="do">
+    <ul>
+      <li>所有模型默认启用 FlashAttention（零成本加速）</li>
+      <li>新训练模型用 GQA (8组) 而非 MHA</li>
+      <li>推理框架选择支持 PagedAttention 的（vLLM / TGI）</li>
+      <li>长上下文扩展优先 YaRN + 持续预训练</li>
+      <li>超长序列训练（1M+）使用 Ring Attention + Context Parallelism</li>
+      <li>配合 Needle-in-Haystack 和 RULER 评估有效上下文能力</li>
+    </ul>
+  </div>
+  <div class="dont">
+    <ul>
+      <li>只依赖单一技术（如只用 FlashAttention 不做 RoPE Scaling）</li>
+      <li>用 MQA 代替 GQA（质量损失不值得）</li>
+      <li>忽略 KV Cache 管理（显存是长文本的第一瓶颈）</li>
+      <li>只看名义上下文长度、忽略有效上下文能力</li>
+      <li>在单卡上硬撑超长序列（应使用多卡 Ring Attention）</li>
+      <li>忽略 "Lost in the Middle" 现象的评估</li>
+    </ul>
+  </div>
+</div>
+    </section>
+
+    <section class="chapter" id="q-a-8">
+      <div class="ch-head"><div class="num">10</div><div class="t"><h2>Q&amp;A（8 题）</h2></div></div>
+      <details class="qa">
+<summary>FlashAttention 为什么能加速但不改变注意力结果？它不是近似算法吗？</summary>
+<div class="a">FlashAttention 不是近似算法，它计算的是<strong>数学上完全精确</strong>的标准注意力。加速来自于重新组织计算顺序：将 Q/K/V 分块加载到 SRAM 中计算，利用"在线 Softmax"技巧逐块更新统计量，最终结果与标准实现完全一致（bitwise identical，忽略浮点精度差异）。它减少的是 HBM 读写次数（I/O），而不是改变数学运算本身。</div>
+</details>
+
+<details class="qa">
+<summary>GQA 的组数怎么选？为什么不直接全用 MQA？</summary>
+<div class="a">MQA（1 组 KV）虽然显存压缩最激进（1/32），但多个实验表明其模型质量有明显下降——尤其在需要细粒度注意力模式的任务上。GQA 8 组是实验验证的最佳甜蜜点：KV Cache 缩小到 1/4，但模型质量几乎无损。组数的选择取决于模型规模：小模型（7B）可用 4-8 组，大模型（70B+）的冗余度更高，8 组通常足够。LLaMA 2 70B、Mistral、Qwen2.5 均采用 GQA。</div>
+</details>
+
+<details class="qa">
+<summary>PagedAttention 的 Block 大小怎么选？太小或太大有什么问题？</summary>
+<div class="a">vLLM 默认 Block 大小为 16 tokens。太小（如 1 token）会导致 Block Table 过于庞大，管理开销增加，且 SRAM 利用率低；太大（如 256 tokens）会重新引入内部碎片（最后一个 Block 浪费的空间变大）。实践中 16-32 是较优范围。此外 Block 大小还影响 GPU kernel 的效率——太小的 Block 无法充分利用 Tensor Core 的并行计算能力。</div>
+</details>
+
+<details class="qa">
+<summary>RoPE Scaling 中 YaRN 和 NTK-aware 的区别是什么？什么时候用哪个？</summary>
+<div class="a">NTK-aware Scaling 通过修改 RoPE base 值实现全局的非均匀缩放——所有维度按同一公式调整，只是高频和低频的缩放幅度不同。YaRN 在此基础上增加了三个关键改进：① 自动识别哪些维度需要插值、哪些保持原样（动态阈值）；② 注意力温度修正（乘以 ln(scale) 因子）；③ 对不同频率区间分段处理。简单扩展 2-4x 用 NTK-aware 即可，8x+ 扩展推荐 YaRN。超长扩展（128K+）推荐 LongRoPE 的进化搜索方案。</div>
+</details>
+
+<details class="qa">
+<summary>Ring Attention 的通信开销有多大？什么场景下值得用？</summary>
+<div class="a">Ring Attention 每步需要传递 KV Block，通信量为 O(N·d/P)（N 序列长度、d 头维度、P 设备数）。关键是通信和计算可以 overlap：传递 KV 的同时计算当前 Block 的注意力。当序列长度超过单卡 SRAM/HBM 容量限制（通常 >64K tokens）时必须使用。Gemini 1.5 Pro 的 1M+ 上下文正是通过 Ring Attention 变体实现的。对于 <32K tokens 的场景，单卡 + FlashAttention 通常足够，不需要引入分布式复杂度。</div>
+</details>
+
+<details class="qa">
+<summary>"Lost in the Middle" 是什么？和长文本优化有什么关系？</summary>
+<div class="a">"Lost in the Middle"（Liu et al. 2024）指模型在处理长上下文时，对序列开头和结尾的信息记忆良好，但对中间位置的信息注意力明显下降的现象。这与注意力机制的 softmax 分布特性有关——模型倾向于关注少数"注意力汇"（attention sinks，通常是最初几个 token）和最近的 token。即使 RoPE Scaling 成功扩展了上下文长度，这个现象仍然存在。缓解方案包括：在训练时引入中间位置信息的监督信号、使用 StreamingLLM 保留 attention sinks、以及分层注意力机制。</div>
+</details>
+
+<details class="qa">
+<summary>FlashAttention 和 Sliding Window Attention 能一起用吗？</summary>
+<div class="a">完全可以，而且这是常见的组合。Sliding Window 限制每个 Token 只关注窗口内的 Token（减少计算量），FlashAttention 加速窗口内的注意力计算（减少 I/O）。Mistral 7B 就是这样做的：使用 4096 的滑动窗口 + FlashAttention 加速。FlashAttention 的官方实现已经原生支持 sliding window mask，只需传入窗口大小参数即可。</div>
+</details>
+
+<details class="qa">
+<summary>未来趋势：线性注意力（Linear Attention）能取代这些技术吗？</summary>
+<div class="a">线性注意力（如 Mamba、RWKV 等 SSM 方案）用核函数近似 softmax，将复杂度降到 O(N)，理论上是最优雅的解法。但目前的问题是：① 模型质量在复杂推理任务上仍与标准注意力有差距；② 难以做到"完美召回"（recall），不适合需要精确检索的任务。更可能的趋势是混合架构（如 Jamba）：大多数层用线性注意力处理局部信息，少量层用标准注意力（+ FlashAttention）处理需要全局关注的部分。这类似于 CNN+Transformer 的混合思路。</div>
+</details>
+    </section>
+
+    <footer>
+      <div class="made">TECH NOTES · Transformer · 整理自 AI Knowledge Hub</div>
+    </footer>
+  </main>
+</div>
+
+<script>
+(function(){var bar=document.getElementById('progress');function u(){var h=document.documentElement;bar.style.width=h.scrollTop/(h.scrollHeight-h.clientHeight)*100+'%';}window.addEventListener('scroll',u,{passive:true});u();})();
+(function(){var links=document.querySelectorAll('aside.toc nav a');var secs=Array.from(document.querySelectorAll('section.chapter'));if(!secs.length)return;function u(){var y=window.scrollY+100,cur=secs[0];for(var i=0;i<secs.length;i++){if(secs[i].offsetTop<=y)cur=secs[i];}var id=cur.id;links.forEach(function(a){a.classList.toggle('active',a.getAttribute('href')==='#'+id);});}window.addEventListener('scroll',u,{passive:true});u();})();
+</script>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

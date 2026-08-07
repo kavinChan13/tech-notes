@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>大模型 API 调用稳定性 · AI 工程 — Tech Notes</title>
+<meta name="description" content="LLM API Stability — 告别 try-catch 裸奔，三层铁甲防线：智能重试、熔断降级、结果缓存，构建生产级容错体系">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<link rel="stylesheet" href="../assets/kh-guide.css">
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav">
+
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="ai_engineering_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 7 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>E11 · AI 工程</h2>
+    <nav>
+      <ol>
+        <li><a href="#overview" class="active">概览</a></li>
+        <li><a href="#ch1">「许愿式编程」的三大定时炸弹</a></li>
+        <li><a href="#ch2">第一层防线：智能重试</a></li>
+        <li><a href="#ch3">第二层防线：熔断降级</a></li>
+        <li><a href="#ch4">第三层防线：结果缓存与本地兜底</a></li>
+        <li><a href="#ch5">进阶优化策略</a></li>
+        <li><a href="#q-a">Q&amp;A</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+    <header class="hero">
+      <div class="badge">E11 · AI 工程</div>
+      <h1>大模型 API 调用稳定性</h1>
+      <p class="sub">LLM API Stability — 告别 try-catch 裸奔，三层铁甲防线：智能重试、熔断降级、结果缓存，构建生产级容错体系</p>
+      <div class="meta-row">
+        <span class="pill cyan">AI 工程</span>
+        <span class="pill green">阅读 ~7 min</span>
+        <span class="pill amber">7 章</span>
+      </div>
+    </header>
+
+    <section class="chapter" id="overview">
+      <div class="ch-head"><div class="num">00</div><div class="t"><h2>概览</h2><div class="sub">核心考察的不是你会不会写 try-catch，而是系统设计思维 —— 故障降级、重试机制、熔…</div></div></div>
+      <div class="intuition-box"><p>核心考察的不是你会不会写 try-catch，而是系统设计思维 —— 故障降级、重试机制、熔断限流。异常捕获 ≠ 稳定性保障，「许愿式编程」在生产环境就是定时炸弹。</p></div>
+    </section>
+
+    <section class="chapter" id="ch1">
+      <div class="ch-head"><div class="num">01</div><div class="t"><h2>「许愿式编程」的三大定时炸弹</h2><div class="sub">典型的错误做法：一个 try-catch 了事</div></div></div>
+      <p>典型的错误做法：一个 try-catch 了事。</p>
+
+<div class="highlight">典型的错误链路是：请求失败 → 直接吞异常 → 返回空值给上层。这样做看似“没有报错”，实际上把真实问题转移成了用户失败、线程堆积和监控失真。</div>
+
+<h3>三个生产事故场景</h3>
+
+<table>
+<tr><th>场景</th><th>触发条件</th><th>后果</th></tr>
+<tr><td><strong>API 抖动</strong></td><td>服务偶尔返回 5xx</td><td>直接 return None → 用户请求失败 → 用户流失</td></tr>
+<tr><td><strong>API 限流</strong></td><td>并发上来，返回 429</td><td>不做处理 → 疯狂重试 → IP 被永久拉黑 → 服务瘫痪</td></tr>
+<tr><td><strong>服务雪崩</strong></td><td>上游响应变慢</td><td>线程全卡在等待 → 连接池打满 → 整个系统崩溃</td></tr>
+</table>
+
+<div class="highlight">异常捕获 ≠ 稳定性保障。真正需要关注的是故障降级、重试机制、熔断限流等系统设计思维，而不是基础语法。</div>
+
+<div class="intuition-box"><p>生产环境中，LLM API 的 P99 延迟通常在 8-15 秒，任何裸调用（无超时、无重试、无熔断）都相当于把系统的命脉交给了概率——出来混，迟早要还。</p></div>
+
+<div class="highlight">
+<strong>📊 生产案例</strong>：某电商平台在 2025 年双十一期间，因未对 LLM 客服 API 做限流保护，429 错误在高峰期达到每分钟 12,000 次，导致自动重试风暴，IP 被服务商封禁 47 分钟，直接影响订单咨询转化率下降约 8.3%。
+</div>
+    </section>
+
+    <section class="chapter" id="ch2">
+      <div class="ch-head"><div class="num">02</div><div class="t"><h2>第一层防线：智能重试</h2><div class="sub">让偶发故障「自动愈合」，但要避免「雪上加霜」</div></div></div>
+      <p>让偶发故障「自动愈合」，但要避免「雪上加霜」。</p>
+
+<h3>智能重试三要素</h3>
+
+<table>
+<tr><th>要素</th><th>含义</th><th>实现</th></tr>
+<tr><td><strong>可重试错误判断</strong></td><td>只对特定错误重试</td><td>5xx 系列 / 429 / 网络超时 → 重试；4xx 其他 → 不重试</td></tr>
+<tr><td><strong>指数退避</strong></td><td>重试间隔成倍增加</td><td>1s → 2s → 4s → 8s，避免短时间冲击服务</td></tr>
+<tr><td><strong>最大重试次数</strong></td><td>设置截止阈值</td><td>最多 3 次，超过则进入下一层防线</td></tr>
+</table>
+
+<div class="arch-diagram">智能重试决策:
+
+收到响应 / 异常
+   |
+   +-- 5xx / 429 / 网络超时 ----> 可重试
+   |                              |
+   |                              +--> 按 1s -> 2s -> 4s 退避
+   |                              +--> 最多 3 次
+   |
+   +-- 普通 4xx -----------------> 不重试
+   |
+   +-- 重试耗尽 -----------------> 进入熔断/降级层</div>
+
+<div class="intuition-box"><p>指数退避 + 随机抖动（Jitter）是生产标配。纯指数退避在大规模并发下仍可能产生「重试风暴」，加上 <span class="term">Full Jitter</span>（在 0 到退避上限之间取随机值）可有效打散请求波峰。</p></div>
+
+<div class="highlight">
+<strong>📊 生产案例</strong>：某 SaaS 平台接入 3 家 LLM 供应商后，通过指数退避（base=1s, max=16s）+ Full Jitter 策略，将 429 限流错误从日均 3,400 次降至 180 次，降幅达 94.7%，API 调用成本因重试命中率提升而降低约 12%。
+</div>
+    </section>
+
+    <section class="chapter" id="ch3">
+      <div class="ch-head"><div class="num">03</div><div class="t"><h2>第二层防线：熔断降级</h2><div class="sub">当 API 持续失败时，立刻「切断」请求，避免拖垮整个系统</div></div></div>
+      <p>当 API 持续失败时，立刻「切断」请求，避免拖垮整个系统。这就是<span class="term">熔断器模式</span>（Circuit Breaker Pattern）。</p>
+
+<h3>熔断器三态</h3>
+
+<div class="arch-diagram">熔断器状态机
+
+┌──────────┐  失败率 > 50%  ┌──────────┐
+│  CLOSED  │──────────────→│   OPEN   │
+│ (正常通行) │               │ (直接断路) │
+└──────────┘               └────┬─────┘
+     ↑                          │
+     │                    超时后(30s)
+     │  成功                     ↓
+     │                    ┌──────────┐
+     └────────────────────│ HALF-OPEN│
+                          │(试探恢复) │
+                          └──────────┘</div>
+
+<table>
+<tr><th>状态</th><th>行为</th><th>转移条件</th></tr>
+<tr><td><strong>Closed（关闭）</strong></td><td>正常通行，记录失败数</td><td>失败率 > 阈值 → 转为 Open</td></tr>
+<tr><td><strong>Open（打开）</strong></td><td>直接断路，不发送请求</td><td>超时后 → 转为 Half-Open</td></tr>
+<tr><td><strong>Half-Open（半开）</strong></td><td>试探性发送少量请求</td><td>成功 → 转为 Closed；失败 → 回到 Open</td></tr>
+</table>
+
+<h3>服务降级兜底</h3>
+
+<p>熔断器「打开」时，不直接抛错，而是：</p>
+<ul>
+<li>返回<strong>默认值</strong>（如预设的标准回答）</li>
+<li>返回<strong>缓存快照</strong>（上次成功的结果）</li>
+<li>返回<strong>友好提示</strong>（「服务繁忙，请稍后重试」）</li>
+</ul>
+    </section>
+
+    <section class="chapter" id="ch4">
+      <div class="ch-head"><div class="num">04</div><div class="t"><h2>第三层防线：结果缓存与本地兜底</h2><div class="sub">对相同或相似的请求，没必要每次都调用昂贵的 API</div></div></div>
+      <h3>4.1 请求结果缓存</h3>
+
+<p>对相同或相似的请求，没必要每次都调用昂贵的 API。</p>
+
+<table>
+<tr><th>方案</th><th>实现</th><th>适用场景</th></tr>
+<tr><td><strong>Redis 集群</strong></td><td>基于 Prompt 哈希生成 Key</td><td>分布式系统，多实例共享缓存</td></tr>
+<tr><td><strong>本地缓存</strong></td><td>Guava Cache / functools.lru_cache</td><td>单实例，低延迟需求</td></tr>
+</table>
+
+<div class="arch-diagram">请求结果缓存流程:
+
+用户请求
+   |
+   +--> 生成稳定缓存键
+   |
+   +--> 先查缓存
+          |
+          +-- 命中 --> 直接返回结果
+          |
+          +-- 未命中 --> 调用 LLM API
+                         |
+                         +--> 成功结果写回缓存
+                         +--> 设置 TTL，平衡实时性与成本</div>
+
+<h3>4.2 本地兜底</h3>
+
+<p>所有防线失效后的「最终防线」—— 当重试、熔断、缓存全部耗尽时：</p>
+<ul>
+<li>返回预设的<strong>确定性回答</strong></li>
+<li>调用<strong>轻量级本地模型</strong>（如 1B 参数的小模型）</li>
+<li><strong>底线</strong>：杜绝向用户展示原始错误代码或空白页面</li>
+</ul>
+
+<div class="practice-grid">
+<div class="do">
+<ul>
+<li>只对 5xx/429/超时做重试，不盲目重试所有错误</li>
+<li>用指数退避避免短时间冲击服务</li>
+<li>引入熔断器防止服务雪崩</li>
+<li>缓存高频请求的结果，减少 API 调用</li>
+<li>始终提供本地兜底方案</li>
+</ul>
+</div>
+<div class="dont">
+<ul>
+<li>不要 try-catch 后直接 return None</li>
+<li>不要对 4xx 客户端错误做重试</li>
+<li>不要无限重试（设最大次数上限）</li>
+<li>不要向用户展示原始错误码</li>
+<li>不要忽略 429 限流（会被封 IP）</li>
+</ul>
+</div>
+</div>
+    </section>
+
+    <section class="chapter" id="ch5">
+      <div class="ch-head"><div class="num">05</div><div class="t"><h2>进阶优化策略</h2><div class="sub">在生产环境中，单一 LLM 供应商的 SLA （Service Level Agreemen…</div></div></div>
+      <table>
+<tr><th>策略</th><th>原理</th><th>效果</th></tr>
+<tr><td><strong>请求合并</strong></td><td>多个请求打包成一个批量请求</td><td>减少网络开销和连接数</td></tr>
+<tr><td><strong>优先级队列</strong></td><td>不同重要性的请求分配不同资源</td><td>保障核心业务稳定性</td></tr>
+<tr><td><strong>多提供商冗余</strong></td><td>主 API 不可用时切换备用供应商</td><td>提升整体可用性</td></tr>
+<tr><td><strong>健康检查</strong></td><td>定期探测 API 健康状态</td><td>提前感知故障，主动切换</td></tr>
+</table>
+
+<h3>5.1 多提供商故障转移架构</h3>
+
+<p>在生产环境中，单一 LLM 供应商的<span class="term">SLA</span>（Service Level Agreement，服务等级协议）通常承诺 99.9% 可用性，即每月允许约 43 分钟宕机。通过<span class="term">多提供商冗余</span>可将整体可用性提升至 99.99%（月宕机 ≤ 4.3 分钟）。</p>
+
+<div class="flow">
+  <div class="flow-title">多提供商故障转移（Failover）架构</div>
+  <div class="flow-node accent"><div class="nlabel">用户请求 → 负载均衡 / 路由层</div><div class="nsub">基于健康评分动态分配流量</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">多提供商冗余</div><div class="nsub">Provider A（主选） ∥ B（备选 1） ∥ C（备选 2）</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">健康探针（每 10s）→ 健康评分聚合器</div><div class="nsub">滑动窗口统计各 Provider 成功率</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">切换逻辑</div><div class="nsub">A 评分 &lt; 0.5 → 切 B；B &lt; 0.5 → 切 C；全部 &lt; 0.5 → 触发全局降级</div></div>
+</div>
+
+<h3>5.2 可观测性与告警</h3>
+
+<p>稳定性保障的最后一环是<span class="term">可观测性</span>（Observability）。没有监控的稳定性系统等于盲人开车。核心指标包括：</p>
+
+<table>
+<tr><th>指标</th><th>含义</th><th>告警阈值参考</th></tr>
+<tr><td><strong>P50 / P95 / P99 延迟</strong></td><td>请求耗时的分位数</td><td>P99 > 15s 触发告警</td></tr>
+<tr><td><strong>错误率</strong></td><td>5xx + 超时 / 总请求数</td><td>> 5% 触发熔断器介入</td></tr>
+<tr><td><strong>重试率</strong></td><td>需要重试的请求占比</td><td>> 15% 排查根因</td></tr>
+<tr><td><strong>缓存命中率</strong></td><td>缓存命中 / 总查询</td><td>< 30% 检查缓存策略</td></tr>
+<tr><td><strong>熔断器状态</strong></td><td>当前处于 Closed / Open / Half-Open</td><td>Open 持续 > 5min 人工介入</td></tr>
+</table>
+
+<div class="intuition-box"><p>可观测性的三大支柱：Metrics（指标）、Logs（日志）、Traces（链路追踪）。对于 LLM API 调用链路，Traces 尤为重要——一次用户请求可能串联多个模型调用，任何一环的延迟都需要可追溯。</p></div>
+
+<div class="highlight">
+<strong>📊 生产案例</strong>：某金融科技公司通过部署 Prometheus + Grafana 监控体系，对 LLM API 的 P99 延迟、错误率、熔断器状态进行实时告警。上线后平均故障发现时间（MTTD）从 18 分钟缩短至 2.5 分钟，平均故障恢复时间（MTTR）从 45 分钟缩短至 8 分钟，月度 API 相关工单减少 73%。
+</div>
+    </section>
+
+    <section class="chapter" id="q-a">
+      <div class="ch-head"><div class="num">06</div><div class="t"><h2>Q&amp;A</h2></div></div>
+      <details class="qa">
+<summary>如何保证大模型 API 调用的稳定性？</summary>
+<div class="a">三层防线：(1) 智能重试 —— 对 5xx/429/超时做指数退避重试（1s→2s→4s），最多 3 次；(2) 熔断降级 —— 引入熔断器模式，失败率超阈值时直接断路，避免服务雪崩；(3) 结果缓存 + 本地兜底 —— 缓存高频请求结果，所有防线失效时返回预设答案或调用本地小模型。核心思想：假设系统一定会出错，建立完整的事前预防机制。</div>
+</details>
+
+<details class="qa">
+<summary>为什么不能对所有错误都做重试？</summary>
+<div class="a">因为 4xx 客户端错误（如 400 Bad Request、401 Unauthorized）是请求本身的问题，重试不会改变结果，只会浪费资源和时间。只有 5xx 服务端错误（服务暂时不可用）、429（限流，稍后重试可能成功）、网络超时（瞬时问题）才值得重试。盲目重试所有错误 = 对错误的请求无限浪费资源。</div>
+</details>
+
+<details class="qa">
+<summary>熔断器的三种状态是怎么工作的？</summary>
+<div class="a">Closed（正常通行，记录失败数）→ 失败率超阈值时转为 Open（直接断路，不发送请求）→ 超时后转为 Half-Open（试探性发送少量请求）→ 成功则回到 Closed，失败则回到 Open。熔断器的核心价值：当上游服务持续故障时，快速失败而非长时间等待，保护下游系统不被拖垮。</div>
+</details>
+
+<details class="qa">
+<summary>指数退避的原理是什么？为什么要用指数而不是固定间隔？</summary>
+<div class="a">指数退避（Exponential Backoff）让重试间隔成倍增加（1s→2s→4s→8s）。原因是：(1) 如果服务因过载而限流，所有客户端同时以固定间隔重试会形成「惊群效应」，加剧服务压力；(2) 指数增长的间隔给服务恢复留出更多时间；(3) 不同客户端的退避时间自然错开，避免同步重试。固定间隔的问题是所有客户端会在同一时刻同时重试。</div>
+</details>
+
+<details class="qa">
+<summary>什么是服务雪崩（Cascading Failure）？怎么防止？</summary>
+<div class="a">服务雪崩指上游 API 响应变慢 → 所有线程卡在等待 → 无法处理新请求 → 数据库连接池打满 → 整个系统崩溃。防止方式：(1) 熔断器 —— 快速失败而非长时间等待；(2) 超时控制 —— 每个请求设置合理超时（如 30s）；(3) 线程池隔离 —— API 调用使用独立线程池，不影响其他业务；(4) 限流 —— 控制并发请求数量。核心思想：隔离故障域，防止一个组件的故障扩散到整个系统。</div>
+</details>
+
+<details class="qa">
+<summary>请求合并（Request Batching）什么时候用？有什么限制？</summary>
+<div class="a">当多个请求在短时间内到达且可以容忍短暂延迟时使用。原理：把 N 个请求打包成一个批量请求发给 API，减少网络开销和连接数。限制：(1) 增加单次请求延迟（需要等待凑够批次或超时）；(2) 不适合实时性要求高的场景；(3) API 必须支持批量接口。适用场景：后台批处理、非实时的数据分析、离线任务。</div>
+</details>
+
+<details class="qa">
+<summary>多提供商冗余架构中，如何处理不同供应商的输出差异？</summary>
+<div class="a">核心挑战：不同 LLM 供应商即使收到相同 Prompt，输出格式和质量也可能不同。解决方案：(1) <strong>统一适配层</strong> —— 在路由层与供应商之间加入适配器，标准化输入输出格式（如统一 JSON Schema）；(2) <strong>Prompt 模板隔离</strong> —— 为每个供应商维护专属 Prompt 模板，针对其模型特性微调；(3) <strong>输出校验</strong> —— 对返回结果做格式校验和语义一致性检查，不合格时自动切换到下一个供应商重试；(4) <strong>A/B 测试基线</strong> —— 定期用标准测试集评估各供应商的输出质量，作为流量分配权重依据。生产实践中，头部供应商承载 70-80% 流量，备选供应商承载 20-30%，确保备选线路始终处于「热备」状态。</div>
+</details>
+
+<details class="qa">
+<summary>缓存的 Key 应该怎么设计？语义相似但文本不同的请求能命中缓存吗？</summary>
+<div class="a">基础方案是对 Prompt 文本做哈希（如 SHA-256）作为缓存 Key，但语义相似而文本不同的请求无法命中。进阶方案：(1) <strong>语义缓存</strong> —— 用 Embedding 模型将 Prompt 转为向量，在向量数据库（如 Milvus、Pinecone）中做相似度检索，余弦相似度 > 0.95 时复用缓存结果；(2) <strong>归一化预处理</strong> —— 对 Prompt 做去停用词、排序、小写化等标准化处理后再哈希，提升命中率；(3) <strong>分层缓存</strong> —— L1 精确匹配（本地 LRU，延迟 < 1ms）、L2 语义匹配（向量库，延迟 ~50ms）、L3 穿透到 API。注意：语义缓存需要评估「复用旧答案」对业务的影响，对准确性要求高的场景（如金融计算）应只用精确匹配。</div>
+</details>
+
+<details class="qa">
+<summary>限流（Rate Limiting）和重试（Retry）是什么关系？如何协同工作？</summary>
+<div class="a">两者是互补关系：限流是「主动防御」—— 控制自身发出的请求速率，避免触发服务商的 429 限制；重试是「被动恢复」—— 在请求失败后尝试再次执行。协同机制：(1) <strong>令牌桶 / 漏桶算法</strong>在客户端侧做请求整形，确保请求速率始终低于服务商配额（如服务商限制 60 RPM，则客户端自限至 50 RPM 留缓冲）；(2) 当 429 发生时，解析响应头 <code>Retry-After</code> 字段获取服务商建议的等待时间，优先使用该值而非指数退避；(3) 全局维护「配额消耗计数器」，当剩余配额 < 20% 时主动降速，为高优先级请求预留额度。核心原则：宁可自己限流丢失部分请求，也不要触发服务商限流导致全局封禁。</div>
+</details>
+    </section>
+
+    <footer>
+      <div class="made">TECH NOTES · AI 工程 · 整理自 AI Knowledge Hub</div>
+    </footer>
+  </main>
+</div>
+
+<script>
+(function(){var bar=document.getElementById('progress');function u(){var h=document.documentElement;bar.style.width=h.scrollTop/(h.scrollHeight-h.clientHeight)*100+'%';}window.addEventListener('scroll',u,{passive:true});u();})();
+(function(){var links=document.querySelectorAll('aside.toc nav a');var secs=Array.from(document.querySelectorAll('section.chapter'));if(!secs.length)return;function u(){var y=window.scrollY+100,cur=secs[0];for(var i=0;i<secs.length;i++){if(secs[i].offsetTop<=y)cur=secs[i];}var id=cur.id;links.forEach(function(a){a.classList.toggle('active',a.getAttribute('href')==='#'+id);});}window.addEventListener('scroll',u,{passive:true});u();})();
+</script>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

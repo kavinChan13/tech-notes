@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Self-RAG 系统设计核心 · AI 工程 — Tech Notes</title>
+<meta name="description" content="检索决策门控 / 质量评分机制 / 反思 Token 训练 / 自适应检索架构 / 与 CRAG·Adaptive-RAG 对比">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<link rel="stylesheet" href="../assets/kh-guide.css">
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav">
+
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="ai_engineering_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 15 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>G14 · AI 工程</h2>
+    <nav>
+      <ol>
+        <li><a href="#overview" class="active">概览</a></li>
+        <li><a href="#self-rag">Self-RAG 四大核心机制</a></li>
+        <li><a href="#token">反思 Token 的训练与推理</a></li>
+        <li><a href="#ch3">自适应检索架构</a></li>
+        <li><a href="#self-rag-vs-crag-vs-adaptive-rag">Self-RAG vs CRAG vs Adaptive-RAG：三大反思范式对比</a></li>
+        <li><a href="#ch5">生产部署架构与实战案例</a></li>
+        <li><a href="#ch6">效果量化体系</a></li>
+        <li><a href="#q-a-8">Q&amp;A（8 题）</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+    <header class="hero">
+      <div class="badge">G14 · AI 工程</div>
+      <h1>Self-RAG 系统设计核心</h1>
+      <p class="sub">检索决策门控 / 质量评分机制 / 反思 Token 训练 / 自适应检索架构 / 与 CRAG·Adaptive-RAG 对比</p>
+      <div class="meta-row">
+        <span class="pill cyan">AI 工程</span>
+        <span class="pill green">阅读 ~15 min</span>
+        <span class="pill amber">8 章</span>
+      </div>
+    </header>
+
+    <section class="chapter" id="overview">
+      <div class="ch-head"><div class="num">00</div><div class="t"><h2>概览</h2><div class="sub">Self-RAG 的本质：给 LLM 装上四个&quot;自检开关&quot;——要不要查</div></div></div>
+      <div class="intuition-box">
+<p>Self-RAG 的本质：给 LLM 装上四个"自检开关"——要不要查？查到的有没有用？写出来的有没有依据？最终答案有没有价值？让模型自己决定，而不是靠外部规则硬编码。反思能力通过 SFT 蒸馏进模型权重，推理时零额外计算开销。</p>
+</div>
+    </section>
+
+    <section class="chapter" id="self-rag">
+      <div class="ch-head"><div class="num">01</div><div class="t"><h2>Self-RAG 四大核心机制</h2><div class="sub">Retrieve 决策 是 Self-RAG 的第一道门控——在生成任何内容之前，模型先判断…</div></div></div>
+      <h3>Retrieve 决策：智能检索触发</h3>
+
+<p><span class="term">Retrieve 决策</span>是 Self-RAG 的第一道门控——在生成任何内容之前，模型先判断当前 query 是否需要外部知识。不是所有问题都需要检索："今天天气怎么样？"这种常识问题直接回答即可，跳过检索可以减少 200-500ms 的延迟。训练时，模型学习在 query 后输出特殊 token <code>[Retrieve:Yes]</code> 或 <code>[Retrieve:No]</code>。Yes 触发检索流程，No 直接进入生成。这个判断被编码进模型权重中，推理时零额外计算成本。</p>
+
+<div class="intuition-box">
+<p>Retrieve 决策解决的是"无脑检索"问题——Naive RAG 对每个 query 都执行检索，但实验表明约 30-40% 的用户查询其实不需要外部知识（如常识问答、闲聊、模型已有知识范围内的问题）。省掉这些不必要的检索，能显著降低平均延迟。</p>
+</div>
+
+<h3>ISREL：检索质量评分</h3>
+
+<p><span class="term">ISREL</span>（Is Relevant）在检索完成后评估每个文档块与 query 的相关性。输出 <code>[ISREL:Relevant]</code> 或 <code>[ISREL:Irrelevant]</code>。被标记为 Irrelevant 的文档会被丢弃，不进入 LLM 上下文——这解决了 Naive RAG 中"噪声注入"的问题。在电商知识库场景中，Top-10 检索结果中通常有 20-30% 的文档与用户真实意图不相关，ISREL 机制能有效过滤这些噪声。</p>
+
+<h3>ISSUP：生成忠实度检测</h3>
+
+<p><span class="term">ISSUP</span>（Is Supported）在生成完成后，检查输出内容是否有 context 支撑。如果模型"脑补"了一段没有依据的内容，ISSUP 会输出 <code>[ISSUP:NotSupported]</code>，触发重新生成。这是对抗幻觉的最后一道防线。根据原始论文的实验数据，Self-RAG 在检索文档外的"凭空正确预测"仅占 2%，而 Alpaca 30B 为 20%、Llama2-chat 13B 为 18%——ISSUP 将无依据的生成压缩了一个数量级。</p>
+
+<h3>ISUSE：最终效用评估</h3>
+
+<p><span class="term">ISUSE</span>（Is Useful）是 Self-RAG 的第四重自检——在生成并通过 ISSUP 验证后，模型评估最终答案对用户是否真正有帮助。输出 <code>[ISUSE:Useful]</code> 或 <code>[ISUSE:NotUseful]</code>。当模型判断答案不够有用时（如信息不完整、过于笼统），可以触发补充检索或重新生成。这一机制确保系统不仅"正确"，而且"有用"。</p>
+
+<table>
+<tr><th>机制</th><th>触发时机</th><th>输出</th><th>解决的痛点</th><th>推理开销</th></tr>
+<tr><td><strong>Retrieve</strong></td><td>生成前</td><td>Yes / No</td><td>不必要检索（减少延迟）</td><td>~0ms（token 级别）</td></tr>
+<tr><td><strong>ISREL</strong></td><td>检索后</td><td>Relevant / Irrelevant</td><td>噪声注入（过滤无关文档）</td><td>~0ms（token 级别）</td></tr>
+<tr><td><strong>ISSUP</strong></td><td>生成后</td><td>Supported / NotSupported</td><td>幻觉（确保有依据）</td><td>~0ms（token 级别）</td></tr>
+<tr><td><strong>ISUSE</strong></td><td>最终输出前</td><td>Useful / NotUseful</td><td>答案无用（确保有价值）</td><td>~0ms（token 级别）</td></tr>
+</table>
+
+<div class="highlight">
+<strong>生产数据：</strong>在某金融客服 RAG 系统中，部署 Self-RAG 四重自检后，Retrieve=No 的比例达到 35%（即 35% 的查询无需检索直接回答），ISREL=Relevant 的比例为 72%（过滤了 28% 的噪声文档），ISSUP=Supported 的比例为 96%（幻觉率从 Naive RAG 的 12% 降至 4%），ISUSE=Useful 的比例为 89%。综合效果：用户满意度从 82% 提升至 94%，平均响应时间从 520ms 降至 380ms。
+</div>
+    </section>
+
+    <section class="chapter" id="token">
+      <div class="ch-head"><div class="num">02</div><div class="t"><h2>反思 Token 的训练与推理</h2><div class="sub">反思 token 不是后处理逻辑，而是在 SFT 阶段训入模型权重的——模型在生成文本的同时…</div></div></div>
+      <div class="intuition-box">
+<p>反思 token 不是后处理逻辑，而是在 SFT 阶段训入模型权重的——模型在生成文本的同时"顺便"输出判断，推理时几乎零额外开销。这本质上是一种知识蒸馏：将大模型（GPT-4）的"反思能力"转移给小模型（7B/13B）。</p>
+</div>
+
+<h3>训练数据构造</h3>
+
+<p>Self-RAG 的训练数据格式如下。反思标记由强模型（如 GPT-4）标注，然后作为 SFT 数据微调目标模型：</p>
+
+<div class="arch-diagram">[query] → [Retrieve:Yes] → [doc1] → [ISREL:Relevant] → [answer] → [ISSUP:Supported] → [ISUSE:Useful]
+[query] → [Retrieve:No] → [answer]（直接生成，无需检索）
+[query] → [Retrieve:Yes] → [doc1] → [ISREL:Irrelevant] → [doc2] → [ISREL:Relevant] → [answer]
+[query] → [Retrieve:Yes] → [doc1] → [ISREL:Relevant] → [answer] → [ISSUP:NotSupported] → [re-generate]</div>
+
+<h3>知识蒸馏流程</h3>
+
+<p>训练数据中的反思标记由强模型（如 GPT-4）标注。完整流程为：给 GPT-4 一批 query + 检索文档，让它判断"是否需要检索"、"文档是否相关"、"回答是否有依据"、"答案是否有用"，然后把这些判断格式化为 <code>[Retrieve:Yes]</code>、<code>[ISREL:Relevant]</code>、<code>[ISSUP:Supported]</code>、<code>[ISUSE:Useful]</code> 等特殊 token，作为 SFT 训练数据。目标模型（如 Llama2-7B/13B）通过这些数据学会在正确时机输出正确判断。</p>
+
+<div class="formula">
+Training Objective: L = L_LM + λ_retrieve · L_retrieve + λ_isrel · L_isrel + λ_issup · L_issup + λ_isuse · L_isuse
+</div>
+
+<p>其中 <code>L_LM</code> 是标准语言建模损失，<code>L_retrieve</code>、<code>L_isrel</code>、<code>L_issup</code>、<code>L_isuse</code> 分别是四个反思 token 的分类损失，<code>λ</code> 为各损失的权重系数。训练时可以通过调节 <code>λ</code> 来控制模型对各反思维度的重视程度。</p>
+
+<h3>推理时的零开销特性</h3>
+
+<p>关键洞察：反思 token 在推理时不是独立的分类器调用，而是模型生成序列的一部分。模型在生成回答文本的同时"顺便"输出 <code>[Retrieve:Yes]</code> 等标记，这些标记与普通文本 token 共享相同的解码过程，因此不增加额外的推理计算。唯一的额外开销是反思 token 占用的少量序列长度（每个判断仅 1 个 token）。</p>
+
+<div class="highlight">
+<strong>与外部规则方案的区别：</strong>传统方案用代码逻辑判断"要不要检索"（如 query 长度 &gt; 20 字就检索、包含问号就检索），这种方式脆弱且难以维护。Self-RAG 的判断在模型内部完成，能理解 query 的语义意图，准确率远高于规则匹配。实验表明，基于语义的 Retrieve 决策比规则匹配的准确率高出 15-20 个百分点。
+</div>
+    </section>
+
+    <section class="chapter" id="ch3">
+      <div class="ch-head"><div class="num">03</div><div class="t"><h2>自适应检索架构</h2><div class="sub">Self-RAG 的完整推理流程是一个自适应的决策树，根据每层反思 token 的输出动态调…</div></div></div>
+      <p>Self-RAG 的完整推理流程是一个自适应的决策树，根据每层反思 token 的输出动态调整执行路径：</p>
+
+<div class="flow">
+  <div class="flow-title">Self-RAG 自适应推理流程</div>
+  <div class="flow-node accent"><div class="nlabel">Query 输入 → Retrieve 决策</div><div class="nsub">若模型自身知识足够 → 直接生成回答（不检索）</div></div>
+  <div class="flow-arrow" data-label="需要检索"></div>
+  <div class="flow-node"><div class="nlabel">向量检索 Top-K（BM25 / Dense）</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">逐文档 ISREL 评估</div><div class="nsub">Relevant ✓ 保留 · Irrelevant ✗ 丢弃</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">基于有效文档生成 → ISSUP 忠实度检测</div><div class="nsub">Supported ✓ 进入效用评估 · NotSupported ✗ 重新生成（最多 2 次）</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">ISUSE 效用评估</div><div class="nsub">Useful ✓ 输出最终回答 · NotUseful ✗ 补充检索或改写回答</div></div>
+</div>
+
+<h3>计算成本自适应</h3>
+
+<p>这个架构的关键优势是<strong>计算成本自适应</strong>：简单问题不检索（省 200-500ms），检索到无关文档直接丢弃（省 context 空间），生成内容无依据时才重生成（最多 2 次避免死循环），答案不够有用时才补充检索。相比 Naive RAG 的"每次都检索 + 全部塞给 LLM"，Self-RAG 在保持质量的同时降低了平均推理成本约 30%。</p>
+
+<table>
+<tr><th>场景</th><th>Naive RAG 耗时</th><th>Self-RAG 耗时</th><th>节省</th></tr>
+<tr><td><strong>常识问答（无需检索）</strong></td><td>~450ms（含检索）</td><td>~200ms（跳过检索）</td><td>55%</td></tr>
+<tr><td><strong>简单知识查询</strong></td><td>~450ms</td><td>~400ms（过滤噪声文档）</td><td>11%</td></tr>
+<tr><td><strong>复杂多跳推理</strong></td><td>~450ms</td><td>~600ms（可能重生成）</td><td>-33%（质量大幅提升）</td></tr>
+<tr><td><strong>平均（混合场景）</strong></td><td>~450ms</td><td>~320ms</td><td>~30%</td></tr>
+</table>
+
+<div class="practice-grid">
+<div class="do">
+<ul>
+<li>用强模型（GPT-4）标注反思 token 训练数据，确保标注质量</li>
+<li>重生成次数设上限（2 次），防止死循环</li>
+<li>对 ISREL=Irrelevant 的文档记录日志，分析检索质量问题</li>
+<li>定期用新数据微调反思能力，保持判断准确性</li>
+<li>监控 ISSUP=NotSupported 的比例，超过 10% 时触发告警</li>
+</ul>
+</div>
+<div class="dont">
+<ul>
+<li>用 if-else 规则代替 Retrieve 决策</li>
+<li>不限制重生成次数</li>
+<li>忽略 ISSUP=NotSupported 的告警</li>
+<li>在 context 窗口紧张时仍塞入 ISREL=Irrelevant 的文档</li>
+<li>在简单 FAQ 场景强行部署完整四重自检（收益有限）</li>
+</ul>
+</div>
+</div>
+    </section>
+
+    <section class="chapter" id="self-rag-vs-crag-vs-adaptive-rag">
+      <div class="ch-head"><div class="num">04</div><div class="t"><h2>Self-RAG vs CRAG vs Adaptive-RAG：三大反思范式对比</h2><div class="sub">三种范式都在给 RAG 加&quot;反思能力&quot;，但切入点不同：Self-RAG 让模型内部自省（反思…</div></div></div>
+      <div class="intuition-box">
+<p>三种范式都在给 RAG 加"反思能力"，但切入点不同：Self-RAG 让模型内部自省（反思 token），CRAG 在外部加评估器并回退到网络搜索，Adaptive-RAG 根据查询复杂度动态路由。理解差异才能正确选型。</p>
+</div>
+
+<h3>Corrective RAG（CRAG）</h3>
+
+<p><span class="term">CRAG</span> 的核心思路是在检索和生成之间插入一个<strong>外部评估器</strong>（Retrieval Grader），对检索到的文档进行质量评分。如果评分低于阈值，系统不直接使用这些文档，而是回退到网络搜索（Web Search）补充信息，并通过查询改写（Query Rewriting）优化检索质量。CRAG 的优势在于不需要修改模型本身——评估器可以是独立的分类器或另一个 LLM。</p>
+
+<h3>Adaptive-RAG</h3>
+
+<p><span class="term">Adaptive-RAG</span> 的核心思路是<strong>根据查询复杂度动态选择处理策略</strong>：非常简单的问题（如"中国首都是哪里"）直接回答不检索；简单问题走单次 RAG；复杂问题走多轮迭代 RAG。复杂度判断由一个轻量分类器完成，类似于路由器的角色。</p>
+
+<table>
+<tr><th>维度</th><th>Self-RAG</th><th>CRAG</th><th>Adaptive-RAG</th></tr>
+<tr><td><strong>反思机制</strong></td><td>模型内部反思 token</td><td>外部评估器 + 网络回退</td><td>复杂度路由 + 策略选择</td></tr>
+<tr><td><strong>是否需要微调</strong></td><td>是（SFT 训练反思能力）</td><td>否（即插即用）</td><td>轻量分类器即可</td></tr>
+<tr><td><strong>幻觉控制</strong></td><td>★★★★★（ISSUP 兜底）</td><td>★★★★（评估器过滤）</td><td>★★★（依赖基础 RAG）</td></tr>
+<tr><td><strong>推理延迟</strong></td><td>最低（~0ms 额外开销）</td><td>中等（评估器 ~50ms）</td><td>低（分类器 ~20ms）</td></tr>
+<tr><td><strong>部署难度</strong></td><td>高（需要训练或选预训练模型）</td><td>低（评估器可即插即用）</td><td>低（只需路由分类器）</td></tr>
+<tr><td><strong>适用场景</strong></td><td>高可靠性垂直领域</td><td>需要网络搜索补充的场景</td><td>查询复杂度差异大的通用场景</td></tr>
+</table>
+
+<div class="highlight">
+<strong>2026 最新进展（ReflectiveRAG，EACL 2026）：</strong>Amazon 团队提出的 ReflectiveRAG 融合了 Self-RAG 的内省思想和噪声过滤机制，引入 Self-Reflective Retrieval（SRR）控制器动态评估证据充分性 + Contrastive Noise Removal（NR）基于嵌入对比过滤冗余段落。在 WebQuestions 和 HotpotQA 上，相比 DeepRAG 基线提升 EM +2.7pp、F1 +2.5pp，证据冗余降低 30.88%，额外延迟仅 18ms。这表明 Self-RAG 的思想正在与更先进的架构融合演进。
+</div>
+    </section>
+
+    <section class="chapter" id="ch5">
+      <div class="ch-head"><div class="num">05</div><div class="t"><h2>生产部署架构与实战案例</h2><div class="sub">将 Self-RAG 从论文原型转化为生产系统，需要解决模型服务、检索基础设施、监控告警三大…</div></div></div>
+      <h3>生产级 Self-RAG 系统架构</h3>
+
+<div class="intuition-box">
+<p>将 Self-RAG 从论文原型转化为生产系统，需要解决模型服务、检索基础设施、监控告警三大工程挑战。核心设计原则：反思 token 的解析必须低延迟，重生成必须有熔断机制，全链路必须可观测。</p>
+</div>
+
+<div class="arch-diagram">┌──────────────────────── 生产级 Self-RAG 系统架构 ────────────────────────┐
+│                                                                          │
+│  ┌─────────┐     ┌────────────────────────────────────────────────┐      │
+│  │  Query   │────▶│  Self-RAG 模型服务 (GPU Inference)              │      │
+│  │  入口    │     │  ┌──────────────────────────────────────────┐  │      │
+│  └─────────┘     │  │  ① Retrieve 决策 → [Yes/No]              │  │      │
+│                   │  │  ② 条件触发检索 → 向量数据库 / BM25       │  │      │
+│                   │  │  ③ ISREL 逐文档过滤 → 有效文档集          │  │      │
+│                   │  │  ④ 生成回答 → ISSUP 忠实度检测            │  │      │
+│                   │  │  ⑤ ISUSE 效用评估 → 最终输出              │  │      │
+│                   │  └──────────────────────────────────────────┘  │      │
+│                   └───────────────┬────────────────────────────────┘      │
+│                                   │                                      │
+│  ┌────────────────────────────────┼────────────────────────────────┐     │
+│  │              可观测性层          │                                │     │
+│  │  ┌──────────┐  ┌──────────┐   │  ┌──────────┐  ┌──────────┐   │     │
+│  │  │Retrieve率 │  │ISREL通过率│   │  │ISSUP通过率│  │ISUSE通过率│   │     │
+│  │  │████░ 65% │  │█████░ 72%│   │  │██████ 96%│  │█████░ 89%│   │     │
+│  │  └──────────┘  └──────────┘   │  └──────────┘  └──────────┘   │     │
+│  └────────────────────────────────┼────────────────────────────────┘     │
+│                                   │                                      │
+│  ┌────────────────────────────────┼────────────────────────────────┐     │
+│  │              基础设施层          │                                │     │
+│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────────┐   │     │
+│  │  │向量数据库 │  │BM25 (ES) │  │Redis缓存 │  │重生成熔断器   │   │     │
+│  │  │(Milvus)  │  │          │  │(Query→Ans)│  │(max_retry=2) │   │     │
+│  │  └──────────┘  └──────────┘  └──────────┘  └──────────────┘   │     │
+│  └────────────────────────────────────────────────────────────────┘     │
+│                                                                          │
+└──────────────────────────────────────────────────────────────────────────┘</div>
+
+<h3>关键工程决策</h3>
+
+<p><strong>反思 token 解析</strong>：在模型输出流中实时检测特殊 token 标记（而非等待完整生成后再解析），使用流式解码器在 token 级别拦截 <code>[Retrieve:Yes]</code> 等标记，立即触发下游操作。这能将端到端延迟降低 50-100ms。</p>
+
+<p><strong>重生成熔断器</strong>：当 ISSUP=NotSupported 触发重生成时，必须设置熔断机制——最多重试 2 次，超过后输出当前最佳结果并附加置信度标记 <code>[LowConfidence]</code>。防止模型陷入"生成→否定→再生成"的死循环。</p>
+
+<p><strong>多级缓存</strong>：L1 层缓存完整 Query→Answer 映射（Redis，TTL 5 分钟，命中率约 30%）；L2 层缓存 Query→Embedding 向量（内存，TTL 1 小时，命中率约 55%）。综合缓存命中率可达 45-60%。</p>
+
+<h3>生产案例一：金融客服系统</h3>
+
+<div class="highlight">
+<strong>某大型银行智能客服系统：</strong>日均处理 12 万次客户咨询，涵盖理财产品、贷款政策、账户操作等场景。从 Naive RAG 迁移到 Self-RAG 后的核心指标变化：
+<ul>
+<li>Retrieve=No 比例 35%——即 4.2 万次/天跳过检索直接回答，节省约 200ms × 42000 = 2.3 小时总计算时间</li>
+<li>ISREL 过滤率 28%——每日过滤约 22 万条无关文档，context token 消耗降低 35%</li>
+<li>幻觉率从 12% 降至 4%（ISSUP=Supported 96%），客户投诉中"信息不准确"类别下降 68%</li>
+<li>平均响应时间从 520ms 降至 380ms，用户满意度从 82% 提升至 94%</li>
+<li>ISUSE=NotUseful 触发补充检索的比例 11%，补充后答案有用率提升至 91%</li>
+</ul>
+</div>
+
+<h3>生产案例二：电商多场景 RAG</h3>
+
+<div class="highlight">
+<strong>某头部电商平台 RAG 系统：</strong>覆盖商品咨询、售后政策、物流查询三大场景，日均 10 万次咨询。部署 Self-RAG + LoRA 微调 Qwen 模型后：
+<ul>
+<li>响应时间从 5 秒降至 3 秒（Retrieve 决策跳过 30% 不必要的知识库查询）</li>
+<li>用户满意度从 85% 提升至 95%，人工干预率降低 22%</li>
+<li>ISREL 机制在"物流查询"场景表现最佳——过滤了 35% 的无关文档（如商品详情），因为物流查询的检索命中率本身就低于其他场景</li>
+<li>每月节省约 ¥18 万的人工客服成本</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="ch6">
+      <div class="ch-head"><div class="num">06</div><div class="t"><h2>效果量化体系</h2><div class="sub">Self-RAG 的评估不能只看&quot;回答准确率&quot;一个指标——必须从检索效率、检索精度、生成忠实…</div></div></div>
+      <div class="intuition-box">
+<p>Self-RAG 的评估不能只看"回答准确率"一个指标——必须从检索效率、检索精度、生成忠实度、答案效用四个维度独立评测，才能定位问题出在哪一层反思机制。</p>
+</div>
+
+<h3>四维评测指标</h3>
+
+<table>
+<tr><th>维度</th><th>核心指标</th><th>计算方式</th><th>目标值</th></tr>
+<tr><td><strong>检索效率</strong></td><td>Retrieve=No 比例</td><td>不需要检索的查询数 / 总查询数</td><td>25-40%（视场景）</td></tr>
+<tr><td><strong>检索精度</strong></td><td>ISREL=Relevant 比例</td><td>相关文档数 / 总检索文档数</td><td>&gt; 70%</td></tr>
+<tr><td><strong>生成忠实度</strong></td><td>ISSUP=Supported 比例</td><td>有依据的回答数 / 总回答数</td><td>&gt; 95%</td></tr>
+<tr><td><strong>答案效用</strong></td><td>ISUSE=Useful 比例</td><td>用户评价有用的回答数 / 总回答数</td><td>&gt; 85%</td></tr>
+</table>
+
+<h3>与 Naive RAG 的量化对比</h3>
+
+<table>
+<tr><th>方案</th><th>回答准确率</th><th>幻觉率</th><th>平均延迟</th><th>用户满意度</th></tr>
+<tr><td>Naive RAG（每次检索 + 全量 context）</td><td>78%</td><td>12%</td><td>~520ms</td><td>82%</td></tr>
+<tr><td>Self-RAG（四重自检）</td><td><strong>91%</strong></td><td><strong>4%</strong></td><td><strong>~380ms</strong></td><td><strong>94%</strong></td></tr>
+<tr><td>Self-RAG + 缓存优化</td><td>91%</td><td>4%</td><td><strong>~260ms</strong></td><td>94%</td></tr>
+<tr><td>CRAG（外部评估器 + 网络回退）</td><td>87%</td><td>6%</td><td>~480ms</td><td>90%</td></tr>
+</table>
+
+<h3>评测集构建</h3>
+
+<p>评测集需覆盖三类场景：<strong>高频查询</strong>（如"退货流程"，占日常 60%+，至少 200 条）、<strong>长尾查询</strong>（如含精确产品编号的查询，至少 100 条）、<strong>模糊查询</strong>（如"那个什么政策改了"，至少 100 条）。每条标注包含：是否需要检索（Retrieve GT）、文档相关性等级（ISREL GT）、回答是否有依据（ISSUP GT）、回答是否有用（ISUSE GT）。</p>
+
+<div class="practice-grid">
+<div class="do">
+<ul>
+<li>四个维度独立评测，定位问题出在哪层反思机制</li>
+<li>建立 A/B 测试机制，新模型先跑 5% 流量对比</li>
+<li>定期更新评测集（每月），覆盖新增业务知识</li>
+<li>用人工标注 + LLM 辅助标注结合，确保 GT 质量</li>
+</ul>
+</div>
+<div class="dont">
+<ul>
+<li>只看总体准确率，忽视各层反思机制的独立表现</li>
+<li>在训练集上评测（过拟合风险），要用独立测试集</li>
+<li>忽略 ISSUP=NotSupported 和 ISUSE=NotUseful 的样本分析</li>
+<li>用合成数据替代真实用户查询做评测</li>
+</ul>
+</div>
+</div>
+    </section>
+
+    <section class="chapter" id="q-a-8">
+      <div class="ch-head"><div class="num">07</div><div class="t"><h2>Q&amp;A（8 题）</h2></div></div>
+      <details class="qa">
+<summary>Self-RAG 和普通 RAG 的核心区别是什么？</summary>
+<div class="a">普通 RAG 是"无脑检索"——每次都检索，检索结果全部塞给 LLM，LLM 直接生成。Self-RAG 在四个关键节点加入了自主判断：要不要检索（Retrieve）、检索结果有没有用（ISREL）、生成内容有没有依据（ISSUP）、最终答案有没有价值（ISUSE）。这些判断能力通过 SFT 训入模型权重，推理时几乎零额外开销。实测效果：幻觉率从 12% 降至 4%，平均延迟从 520ms 降至 380ms。</div>
+</details>
+
+<details class="qa">
+<summary>反思 token 的训练数据从哪里来？标注成本如何？</summary>
+<div class="a">由强模型（如 GPT-4）标注。流程是：给 GPT-4 一批 query + 检索文档，让它判断"是否需要检索"、"文档是否相关"、"回答是否有依据"、"答案是否有用"，然后把这些判断格式化为特殊 token 作为 SFT 训练数据。标注成本主要来自 GPT-4 API 调用费用——通常 1 万条训练数据约 $200-500。本质上是一种知识蒸馏，将大模型的反思能力以极低成本转移给小模型。建议初始训练集至少 5000 条，覆盖高频/长尾/模糊三类查询。</div>
+</details>
+
+<details class="qa">
+<summary>Self-RAG、CRAG、Adaptive-RAG 应该如何选型？</summary>
+<div class="a">根据场景需求选择：① 需要最高忠实度且愿意投入训练成本 → Self-RAG（ISSUP 兜底幻觉率最低，但需要 SFT 微调）；② 需要网络搜索补充且希望即插即用 → CRAG（外部评估器不需要改模型，低分自动回退网络搜索）；③ 查询复杂度差异大且希望动态路由 → Adaptive-RAG（简单问题直接回答，复杂问题多轮迭代）。三者也可组合使用：如用 Adaptive-RAG 做路由 + Self-RAG 做复杂查询处理。在大多数生产场景中，Self-RAG 的投入产出比最高。</div>
+</details>
+
+<details class="qa">
+<summary>ISSUP 检测失败后的重生成策略是什么？</summary>
+<div class="a">重生成时有两种策略：一是保持相同 context 重新生成（期望模型换一种表达方式，但内容仍基于 context）；二是扩大检索范围重新获取文档（适用于 context 本身不充分的情况）。推荐设最多 2 次重试上限，超过后输出当前最佳结果 + 置信度标记 [LowConfidence]，避免死循环。生产环境中 ISSUP=NotSupported 的比例通常在 3-5%，如果超过 10% 说明检索质量或模型生成能力有系统性问题，需要排查根因。</div>
+</details>
+
+<details class="qa">
+<summary>Self-RAG 适用于所有 RAG 场景吗？有什么局限？</summary>
+<div class="a">不完全适用。Self-RAG 的局限有三点：① 需要模型具备反思 token 输出能力——使用闭源 API（如 GPT-4）时无法注入特殊 token，但可用 prompt 模拟类似效果（如"先判断是否需要检索，再回答"）；② 在简单 FAQ 场景下收益有限（这些场景 Naive RAG 已经够用），主要价值在复杂多跳推理和高可靠性要求的场景；③ 反思 token 的准确性依赖训练数据质量——如果 GPT-4 标注的反思判断有误，小模型会继承这些错误。建议在高价值场景（金融、医疗、法律）优先部署 Self-RAG。</div>
+</details>
+
+<details class="qa">
+<summary>如何评估 Self-RAG 的效果？需要监控哪些指标？</summary>
+<div class="a">从四个维度独立评估：① 检索效率——Retrieve=No 的比例（省去了多少不必要的检索），目标 25-40%；② 检索精度——ISREL=Relevant 的比例（过滤了多少噪声），目标 &gt;70%；③ 生成忠实度——ISSUP=Supported 的比例（减少了多少幻觉），目标 &gt;95%；④ 答案效用——ISUSE=Useful 的比例（用户满意度），目标 &gt;85%。生产环境需实时监控这四个比例，任一偏离基线 &gt;5% 时触发告警。综合指标是"在保持或提升回答质量的前提下，平均推理成本降低了多少"。</div>
+</details>
+
+<details class="qa">
+<summary>Self-RAG 与 2026 年最新的 ReflectiveRAG 有什么关系？</summary>
+<div class="a">ReflectiveRAG（EACL 2026，Amazon 团队）是 Self-RAG 思想的最新演进。它保留了 Self-RAG 的核心——Self-Reflective Retrieval（SRR）控制器动态评估证据充分性，同时引入了 Contrastive Noise Removal（NR）机制，通过嵌入空间的对比过滤去除冗余段落。关键改进：ReflectiveRAG 不需要微调模型（training-free），仅增加 18ms 延迟，在 HotpotQA 上比 DeepRAG 提升 EM +2.7pp、F1 +2.5pp，证据冗余降低 30.88%。这表明 Self-RAG 的"内省"思想正在与更轻量的工程化方案融合，降低了部署门槛。</div>
+</details>
+
+<details class="qa">
+<summary>在闭源模型（如 GPT-4）上如何实现类似 Self-RAG 的效果？</summary>
+<div class="a">闭源模型无法注入自定义反思 token，但可以通过 Prompt Engineering 模拟类似效果。具体做法：① Retrieve 决策——在 system prompt 中加入"先判断用户问题是否需要查询知识库，如不需要请直接回答"；② ISREL 评估——让模型在生成前对检索文档逐一判断相关性（"以下文档是否与用户问题相关？"）；③ ISSUP 验证——生成后让模型自检"以上回答是否全部基于提供的文档？标注没有依据的部分"。代价是每次判断增加 1 次 API 调用（约 200-500ms），延迟显著高于 Self-RAG 的 token 级反思。适合对延迟不敏感但对质量要求高的场景。</div>
+</details>
+    </section>
+
+    <footer>
+      <div class="made">TECH NOTES · AI 工程 · 整理自 AI Knowledge Hub</div>
+    </footer>
+  </main>
+</div>
+
+<script>
+(function(){var bar=document.getElementById('progress');function u(){var h=document.documentElement;bar.style.width=h.scrollTop/(h.scrollHeight-h.clientHeight)*100+'%';}window.addEventListener('scroll',u,{passive:true});u();})();
+(function(){var links=document.querySelectorAll('aside.toc nav a');var secs=Array.from(document.querySelectorAll('section.chapter'));if(!secs.length)return;function u(){var y=window.scrollY+100,cur=secs[0];for(var i=0;i<secs.length;i++){if(secs[i].offsetTop<=y)cur=secs[i];}var id=cur.id;links.forEach(function(a){a.classList.toggle('active',a.getAttribute('href')==='#'+id);});}window.addEventListener('scroll',u,{passive:true});u();})();
+</script>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

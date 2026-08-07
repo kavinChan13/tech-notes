@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>模型可解释性 · AI 安全 — Tech Notes</title>
+<meta name="description" content="Model Explainability — SHAP、LIME、Attention 可视化与 LLM 推理链解释">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<link rel="stylesheet" href="../assets/kh-guide.css">
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav">
+
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="ai_engineering_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 12 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>U04 · AI 安全</h2>
+    <nav>
+      <ol>
+        <li><a href="#ch1" class="active">可解释性概述</a></li>
+        <li><a href="#shap-shapley-additive-explanations">SHAP — SHapley Additive exPlanations</a></li>
+        <li><a href="#lime-local-interpretable-model-agnostic-explanations">LIME — Local Interpretable Model-agnostic Explanations</a></li>
+        <li><a href="#integrated-gradients">Integrated Gradients 与梯度方法</a></li>
+        <li><a href="#attention">Attention 可视化</a></li>
+        <li><a href="#llm">LLM 推理链解释</a></li>
+        <li><a href="#ch7">可解释性与性能权衡</a></li>
+        <li><a href="#q-a">Q&amp;A</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+    <header class="hero">
+      <div class="badge">U04 · AI 安全</div>
+      <h1>模型可解释性</h1>
+      <p class="sub">Model Explainability — SHAP、LIME、Attention 可视化与 LLM 推理链解释</p>
+      <div class="meta-row">
+        <span class="pill cyan">AI 安全</span>
+        <span class="pill green">阅读 ~12 min</span>
+        <span class="pill amber">8 章</span>
+      </div>
+    </header>
+
+    <section class="chapter" id="ch1">
+      <div class="ch-head"><div class="num">01</div><div class="t"><h2>可解释性概述</h2><div class="sub">可解释性与准确性之间存在权衡：越复杂的模型（如 LLM）越难解释</div></div></div>
+      <h3>为什么需要可解释性</h3>
+<table>
+<tr><th>驱动因素</th><th>说明</th><th>示例</th></tr>
+<tr><td><strong>合规要求</strong></td><td>EU AI Act 要求高风险 AI 决策可解释</td><td>信贷审批拒绝时必须解释原因</td></tr>
+<tr><td><strong>信任建立</strong></td><td>用户需要理解 AI 的推理过程</td><td>医疗诊断建议附带推理依据</td></tr>
+<tr><td><strong>调试优化</strong></td><td>理解模型错误的原因</td><td>发现模型过度依赖某个无关特征</td></tr>
+<tr><td><strong>安全审计</strong></td><td>验证模型没有学到有害模式</td><td>检测模型是否对特定群体有偏差</td></tr>
+</table>
+
+<h3>可解释性分类体系</h3>
+<table>
+<tr><th>维度</th><th>分类</th><th>说明</th><th>代表方法</th></tr>
+<tr><td rowspan="2"><strong>范围</strong></td><td>全局解释</td><td>理解模型整体行为</td><td>特征重要性、决策规则</td></tr>
+<tr><td>局部解释</td><td>解释单个预测</td><td>SHAP、LIME</td></tr>
+<tr><td rowspan="2"><strong>时机</strong></td><td>固有可解释</td><td>模型本身可解释</td><td>线性模型、决策树</td></tr>
+<tr><td>事后解释</td><td>对黑盒模型做事后解释</td><td>SHAP、LIME、Grad-CAM</td></tr>
+<tr><td rowspan="2"><strong>依赖性</strong></td><td>模型无关</td><td>适用于任何模型</td><td>SHAP(KernelSHAP)、LIME</td></tr>
+<tr><td>模型特定</td><td>利用模型内部结构</td><td>TreeSHAP、Attention、梯度</td></tr>
+</table>
+
+<p class="highlight">可解释性与准确性之间存在权衡：越复杂的模型（如 LLM）越难解释。实践中的策略是"分层解释"——对终端用户用自然语言解释，对技术团队用特征归因，对审计员用完整的决策链。</p>
+
+<div class="interview-box">
+<ul>
+<li>可解释性的四大驱动力：合规（法规强制）、信任（用户接受度）、调试（改进模型）、安全（发现偏差）</li>
+<li>全局 vs 局部、固有 vs 事后、模型无关 vs 模型特定——三个正交的分类维度</li>
+<li>LLM 的可解释性特别难——参数量巨大、行为非线性、输出空间无限</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="shap-shapley-additive-explanations">
+      <div class="ch-head"><div class="num">02</div><div class="t"><h2>SHAP — SHapley Additive exPlanations</h2><div class="sub">SHAP 基于合作博弈论中的 Shapley 值，将每个特征视为&quot;参与者&quot;，计算其对预测结果…</div></div></div>
+      <h3>Shapley 值的数学原理</h3>
+<p>SHAP 基于合作博弈论中的 Shapley 值，将每个特征视为"参与者"，计算其对预测结果的边际贡献。</p>
+
+<pre><code># Shapley 值公式：
+# φ_i = Σ_{S⊆N\{i}} [|S|!(|N|-|S|-1)! / |N|!] × [f(S∪{i}) - f(S)]
+#
+# 直觉：对于特征 i，遍历所有可能的特征子集 S，
+# 计算"加入特征 i 后预测值的变化"的加权平均
+
+import shap
+
+# 表格数据的 SHAP 解释
+model = xgboost.XGBClassifier().fit(X_train, y_train)
+explainer = shap.TreeExplainer(model)
+shap_values = explainer.shap_values(X_test)
+
+# 单个样本的 SHAP 解释
+shap.force_plot(
+    explainer.expected_value,
+    shap_values[0],
+    X_test.iloc[0]
+)
+
+# 全局特征重要性
+shap.summary_plot(shap_values, X_test)</code></pre>
+
+<h3>SHAP 变体对比</h3>
+<table>
+<tr><th>变体</th><th>适用模型</th><th>时间复杂度</th><th>精确性</th></tr>
+<tr><td><strong>KernelSHAP</strong></td><td>任何模型（模型无关）</td><td>O(2^M) 近似</td><td>近似</td></tr>
+<tr><td><strong>TreeSHAP</strong></td><td>树模型（XGBoost/RF/LightGBM）</td><td>O(TLD²)</td><td>精确</td></tr>
+<tr><td><strong>DeepSHAP</strong></td><td>深度神经网络</td><td>O(单次前向传播)</td><td>近似</td></tr>
+<tr><td><strong>PartitionSHAP</strong></td><td>文本/图像数据</td><td>O(特征组数)</td><td>近似</td></tr>
+</table>
+
+<pre><code># 文本数据的 SHAP 解释
+import shap
+
+explainer = shap.Explainer(
+    sentiment_model,
+    masker=shap.maskers.Text(tokenizer)
+)
+
+shap_values = explainer(["这家餐厅的食物非常美味，服务也很周到"])
+shap.text_plot(shap_values)
+# 输出: "美味" → +0.32, "周到" → +0.28, "非常" → +0.15
+# 可视化: 红色=正向贡献, 蓝色=负向贡献</code></pre>
+
+<div class="interview-box">
+<ul>
+<li>SHAP 的理论优势：唯一同时满足局部准确性、一致性、缺失性三个公理的归因方法</li>
+<li>TreeSHAP 是实践中最常用的——精确且高效，但限于树模型</li>
+<li>对 LLM 的局限：输入是高维 token 序列，计算完整 Shapley 值不可行，通常用 PartitionSHAP 近似</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="lime-local-interpretable-model-agnostic-explanations">
+      <div class="ch-head"><div class="num">03</div><div class="t"><h2>LIME — Local Interpretable Model-agnostic Explanations</h2><div class="sub">在预测点附近生成扰动样本，用简单的可解释模型（如线性模型）拟合局部行为</div></div></div>
+      <h3>LIME 核心思想</h3>
+<p>在预测点附近生成扰动样本，用简单的可解释模型（如线性模型）拟合局部行为。</p>
+
+<pre><code># LIME 工作流程：
+# 1. 选择要解释的样本 x
+# 2. 在 x 附近生成 N 个扰动样本（随机开关特征）
+# 3. 用原模型对扰动样本做预测
+# 4. 按距离 x 的远近加权
+# 5. 用加权线性回归拟合局部模型
+# 6. 线性模型的系数即为特征重要性
+
+import lime
+from lime.lime_text import LimeTextExplainer
+
+explainer = LimeTextExplainer(class_names=["负面", "正面"])
+
+explanation = explainer.explain_instance(
+    "这家餐厅的食物非常美味，但服务态度很差",
+    classifier.predict_proba,
+    num_features=10,
+    num_samples=5000
+)
+
+explanation.show_in_notebook()
+# 输出:
+# "美味" → +0.25 (正面)
+# "很差" → -0.38 (负面)
+# "服务态度" → -0.12 (负面)</code></pre>
+
+<h3>SHAP vs LIME 对比</h3>
+<table>
+<tr><th>维度</th><th>SHAP</th><th>LIME</th></tr>
+<tr><td>理论基础</td><td>Shapley 值（博弈论，有公理保证）</td><td>局部线性近似（无理论最优保证）</td></tr>
+<tr><td>一致性</td><td>满足（相同模型相同解释）</td><td>不保证（随机采样导致结果波动）</td></tr>
+<tr><td>计算效率</td><td>TreeSHAP 快，KernelSHAP 慢</td><td>中等（取决于采样数）</td></tr>
+<tr><td>全局解释</td><td>支持（聚合局部 SHAP）</td><td>不直接支持</td></tr>
+<tr><td>适用性</td><td>表格、文本、图像</td><td>表格、文本、图像</td></tr>
+<tr><td>稳定性</td><td>高（确定性计算）</td><td>低（采样随机性）</td></tr>
+</table>
+
+<div class="interview-box">
+<ul>
+<li>LIME 的优势是直觉简单——"在局部用简单模型解释复杂模型"</li>
+<li>LIME 的最大弱点是不稳定性——多次运行可能得到不同解释</li>
+<li>实践选择：有树模型用 TreeSHAP（精确+快），其他模型优先 KernelSHAP（有理论保证），LIME 作为快速探索工具</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="integrated-gradients">
+      <div class="ch-head"><div class="num">04</div><div class="t"><h2>Integrated Gradients 与梯度方法</h2></div></div>
+      <h3>Integrated Gradients 原理</h3>
+<pre><code># Integrated Gradients 核心思想：
+# 从一个"基线"（如全零输入）到实际输入，
+# 沿路径积分梯度，得到每个特征的贡献度
+#
+# IG_i(x) = (x_i - x'_i) × ∫₀¹ ∂F(x' + α(x-x'))/∂x_i dα
+#
+# 其中 x 是实际输入，x' 是基线
+
+import torch
+from captum.attr import IntegratedGradients
+
+model = load_pretrained_model()
+ig = IntegratedGradients(model)
+
+# 文本分类的 IG 解释
+input_ids = tokenizer.encode("这部电影非常精彩", return_tensors="pt")
+baseline = torch.zeros_like(input_ids)  # 全零基线
+
+attributions = ig.attribute(
+    inputs=input_ids,
+    baselines=baseline,
+    target=1,  # 正面情感类别
+    n_steps=50  # 积分步数
+)
+
+# attributions: 每个 token 的贡献度
+# "精彩" → 0.45, "非常" → 0.22, "电影" → 0.08</code></pre>
+
+<h3>梯度方法家族</h3>
+<table>
+<tr><th>方法</th><th>原理</th><th>优点</th><th>缺点</th></tr>
+<tr><td><strong>Vanilla Gradient</strong></td><td>∂y/∂x，直接计算输出对输入的梯度</td><td>最快</td><td>梯度噪声大、饱和问题</td></tr>
+<tr><td><strong>Gradient × Input</strong></td><td>梯度 × 输入值</td><td>简单改进</td><td>仍有噪声</td></tr>
+<tr><td><strong>Integrated Gradients</strong></td><td>路径积分梯度</td><td>有公理保证、稳定</td><td>需要选择基线</td></tr>
+<tr><td><strong>SmoothGrad</strong></td><td>多次加噪声求梯度平均</td><td>视觉上更清晰</td><td>计算量大</td></tr>
+<tr><td><strong>Grad-CAM</strong></td><td>用最后一层卷积的梯度加权</td><td>CNN 可视化标准</td><td>仅限 CNN</td></tr>
+</table>
+
+<h3>Captum 工具库</h3>
+<pre><code># Captum (PyTorch 官方可解释性库) 示例
+from captum.attr import (
+    IntegratedGradients,
+    LayerConductance,
+    TokenReferenceBase
+)
+
+# Layer Conductance: 理解中间层的贡献
+lc = LayerConductance(model, model.transformer.layer[11])
+layer_attr = lc.attribute(
+    inputs=input_ids,
+    baselines=baseline,
+    target=1
+)
+
+# 可视化每层的信息流
+# 发现: 第 8-10 层对情感分类贡献最大
+# → 这些层可能编码了情感语义</code></pre>
+
+<div class="interview-box">
+<ul>
+<li>Integrated Gradients 是唯一同时满足"敏感性"和"实现不变性"公理的梯度方法</li>
+<li>基线选择很关键——文本用全零/padding embedding，图像用全黑/全灰</li>
+<li>Captum 是 PyTorch 生态的标准可解释性工具——支持 IG、Layer Conductance 等多种方法</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="attention">
+      <div class="ch-head"><div class="num">05</div><div class="t"><h2>Attention 可视化</h2></div></div>
+      <h3>Attention 权重的可解释性争议</h3>
+<table>
+<tr><th>观点</th><th>论据</th><th>代表论文</th></tr>
+<tr><td><strong>Attention ≈ 解释</strong></td><td>高注意力权重表示模型"关注"该 token</td><td>早期 Transformer 工作</td></tr>
+<tr><td><strong>Attention ≠ 解释</strong></td><td>注意力权重和梯度归因不一致，随机注意力也能保持性能</td><td>Jain & Wallace, 2019</td></tr>
+<tr><td><strong>条件性解释</strong></td><td>某些 head 的注意力有语义含义，但不是所有</td><td>Clark et al., 2019</td></tr>
+</table>
+
+<h3>Attention 可视化实现</h3>
+<pre><code># 使用 BertViz 可视化 Attention
+from bertviz import model_view, head_view
+from transformers import AutoTokenizer, AutoModel
+
+tokenizer = AutoTokenizer.from_pretrained("bert-base-chinese")
+model = AutoModel.from_pretrained("bert-base-chinese",
+                                   output_attentions=True)
+
+inputs = tokenizer("北京是中国的首都", return_tensors="pt")
+outputs = model(**inputs)
+attention = outputs.attentions  # (num_layers, batch, num_heads, seq, seq)
+
+# 模型视图：所有层所有 head 的全景
+model_view(attention, tokenizer.convert_ids_to_tokens(inputs["input_ids"][0]))
+
+# Head 视图：单个 head 的详细注意力模式
+head_view(attention, tokenizer.convert_ids_to_tokens(inputs["input_ids"][0]))
+
+# 典型发现：
+# Head 8-11: "北京" 强烈注意 "首都" → 语义关系
+# Head 3-5: 对角线模式 → 位置编码
+# Head 1: 全注意 [CLS] → 全局信息聚合</code></pre>
+
+<h3>Attention Rollout</h3>
+<pre><code># Attention Rollout: 跨层追踪注意力流
+import numpy as np
+
+def attention_rollout(attentions, head_fusion="mean"):
+    """
+    将多层注意力矩阵"展开"为输入到输出的整体注意力流。
+    每层: A_rolled = A_current × A_previous
+    """
+    num_layers = len(attentions)
+
+    # 融合多 head（取平均或最大）
+    if head_fusion == "mean":
+        attention_matrices = [att.mean(dim=1) for att in attentions]
+    elif head_fusion == "max":
+        attention_matrices = [att.max(dim=1).values for att in attentions]
+
+    # 逐层滚动
+    rollout = torch.eye(attention_matrices[0].size(-1))
+    for attention in attention_matrices:
+        # 加上残差连接的恒等映射
+        attention_with_residual = 0.5 * attention + 0.5 * torch.eye(
+            attention.size(-1)
+        )
+        # 行归一化
+        attention_with_residual /= attention_with_residual.sum(dim=-1,
+                                                                keepdim=True)
+        rollout = torch.matmul(attention_with_residual, rollout)
+
+    return rollout</code></pre>
+
+<div class="interview-box">
+<ul>
+<li>Attention 权重作为解释有争议——不能简单地说"模型看了哪里就是靠哪里做决策"</li>
+<li>Attention Rollout 比单层 Attention 更可靠——它考虑了跨层的信息流和残差连接</li>
+<li>实践中推荐组合使用：Attention 用于探索性分析，SHAP/IG 用于严格的特征归因</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="llm">
+      <div class="ch-head"><div class="num">06</div><div class="t"><h2>LLM 推理链解释</h2></div></div>
+      <h3>LLM 可解释性的独特挑战</h3>
+<table>
+<tr><th>挑战</th><th>说明</th><th>现有方案</th></tr>
+<tr><td><strong>规模</strong></td><td>数十亿参数，无法逐个分析</td><td>探针（Probing）、稀疏自编码器</td></tr>
+<tr><td><strong>输出空间</strong></td><td>输出是自由文本而非类别</td><td>Chain-of-Thought、自我解释</td></tr>
+<tr><td><strong>涌现行为</strong></td><td>大模型出现小模型没有的能力</td><td>机制解释性（Mechanistic Interpretability）</td></tr>
+<tr><td><strong>黑盒 API</strong></td><td>商用模型无法访问内部权重</td><td>输入扰动、对比解释</td></tr>
+</table>
+
+<h3>Chain-of-Thought 作为解释</h3>
+<pre><code># CoT 推理链：让 LLM 显式展示推理步骤
+cot_prompt = """
+请一步步分析以下问题，展示你的推理过程：
+
+问题：一家公司Q2收入1.2亿，Q3收入0.9亿，应该投资吗？
+
+推理过程：
+1. 收入变化分析：Q3 vs Q2 下降了 25%（从 1.2 亿降到 0.9 亿）
+2. 趋势判断：连续季度收入下降是负面信号
+3. 需要更多信息：
+   - 下降原因是否是季节性因素？
+   - 行业整体趋势如何？
+   - 公司利润率是否改善？
+4. 基于现有信息的初步判断：收入显著下降，需谨慎
+
+结论：仅凭收入数据不建议投资，需要更多维度的分析。
+"""
+
+# CoT 作为解释的局限性：
+# - 模型可能在"解释"一个已经做出的决定（事后合理化）
+# - CoT 步骤不一定反映真实的内部计算过程
+# - 但对用户而言，CoT 仍然是最直观的解释方式</code></pre>
+
+<h3>反事实解释（Counterfactual Explanations）</h3>
+<pre><code># 反事实解释：如果输入不同，结果会怎样？
+class CounterfactualExplainer:
+    def explain(self, model, input_text, prediction):
+        """
+        找到最小的输入变化使预测翻转
+        """
+        original_tokens = tokenize(input_text)
+        counterfactuals = []
+
+        for i, token in enumerate(original_tokens):
+            for replacement in self.get_alternatives(token):
+                modified = original_tokens.copy()
+                modified[i] = replacement
+                modified_text = detokenize(modified)
+                new_pred = model.predict(modified_text)
+
+                if new_pred != prediction:
+                    counterfactuals.append({
+                        "original": token,
+                        "changed_to": replacement,
+                        "position": i,
+                        "original_prediction": prediction,
+                        "new_prediction": new_pred,
+                        "edit_distance": 1
+                    })
+
+        # 返回编辑距离最小的反事实
+        return sorted(counterfactuals, key=lambda x: x["edit_distance"])
+
+# 示例输出：
+# "这家餐厅的食物非常[美味]" → 正面
+# "这家餐厅的食物非常[难吃]" → 负面
+# 解释：将"美味"改为"难吃"会翻转预测，
+#       说明"美味"是该预测的关键词</code></pre>
+
+<div class="interview-box">
+<ul>
+<li>CoT 是最实用的 LLM 解释方式，但要意识到其局限——可能是"事后合理化"而非真实推理过程</li>
+<li>反事实解释对用户最直观："如果X不同，结果会是Y"——但计算成本高</li>
+<li>LLM 的"真正可解释性"仍是开放问题——机制解释性（Mechanistic Interpretability）是前沿方向</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="ch7">
+      <div class="ch-head"><div class="num">07</div><div class="t"><h2>可解释性与性能权衡</h2></div></div>
+      <h3>可解释性-性能光谱</h3>
+<table>
+<tr><th>模型类型</th><th>可解释性</th><th>性能</th><th>适用场景</th></tr>
+<tr><td>线性回归/逻辑回归</td><td style="color:var(--green)">★★★★★</td><td>★★☆☆☆</td><td>法规要求完全透明的场景</td></tr>
+<tr><td>决策树</td><td style="color:var(--green)">★★★★☆</td><td>★★★☆☆</td><td>规则明确、业务逻辑清晰</td></tr>
+<tr><td>随机森林/XGBoost</td><td style="color:var(--accent)">★★★☆☆</td><td>★★★★☆</td><td>表格数据、特征工程成熟</td></tr>
+<tr><td>深度神经网络</td><td style="color:var(--orange)">★★☆☆☆</td><td>★★★★★</td><td>图像、语音、复杂模式</td></tr>
+<tr><td>LLM（GPT-4/Claude）</td><td style="color:var(--red)">★☆☆☆☆</td><td>★★★★★</td><td>通用语言理解和生成</td></tr>
+</table>
+
+<h3>实践策略</h3>
+<pre><code># 分层解释策略
+explanation_layers = {
+    "终端用户": {
+        "方法": "自然语言解释 (CoT)",
+        "示例": "我们拒绝了这笔贷款申请，主要原因是：\n"
+                "1. 负债率 68% (阈值 50%)\n"
+                "2. 信用记录中有 2 次逾期",
+        "重点": "简洁、可理解、可操作"
+    },
+    "业务分析师": {
+        "方法": "SHAP 特征重要性 + 可视化",
+        "示例": "SHAP force plot 显示 debt_ratio 和 "
+                "credit_history 是主要负向因素",
+        "重点": "可量化、可对比、可追踪"
+    },
+    "技术团队": {
+        "方法": "完整的特征归因 + 模型内部分析",
+        "示例": "IG 归因 + Attention 分析 + 中间层探针",
+        "重点": "完整、精确、可复现"
+    },
+    "审计/合规": {
+        "方法": "决策日志 + Model Card + 完整审计链",
+        "示例": "模型版本 v2.3, 决策依据 5 个特征, "
+                "偏差测试通过, SHAP 报告附后",
+        "重点": "可追溯、合规证据、完整记录"
+    }
+}</code></pre>
+
+<div class="interview-box">
+<ul>
+<li>可解释性和性能的权衡是核心设计决策——不是越可解释越好</li>
+<li>分层解释策略：不同受众需要不同粒度和形式的解释</li>
+<li>高风险场景（医疗、金融、法律）可解释性优先级高于性能</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="q-a">
+      <div class="ch-head"><div class="num">08</div><div class="t"><h2>Q&amp;A</h2><div class="sub">核心区别在理论基础：SHAP 基于合作博弈论的 Shapley 值，是唯一同时满足局部准确性…</div></div></div>
+      <details class="qa">
+<summary>SHAP 和 LIME 的核心区别是什么？各自的优缺点？</summary>
+<p class="answer">核心区别在理论基础：SHAP 基于合作博弈论的 Shapley 值，是唯一同时满足局部准确性、一致性、缺失性三个公理的归因方法，保证了理论上的最优性和唯一性；LIME 基于"局部线性近似"，在预测点附近用简单模型拟合，没有理论最优保证。SHAP 优点：结果稳定（确定性计算）、有全局解释能力（聚合局部值）、理论保证强；缺点：KernelSHAP 计算慢（指数级复杂度），TreeSHAP 限于树模型。LIME 优点：实现简单、直觉清晰、模型无关；缺点：结果不稳定（依赖随机采样）、超参数敏感（采样数、邻域大小）、不支持全局解释。实践建议：树模型用 TreeSHAP，深度模型用 DeepSHAP 或 IG，快速探索用 LIME。</p>
+</details>
+
+<details class="qa">
+<summary>Attention 权重能否作为模型解释的依据？</summary>
+<p class="answer">这是一个有争议的问题：①反对方（Jain & Wallace, 2019）指出注意力权重与梯度归因不一致，且随机替换注意力权重不显著影响性能，说明注意力权重不可靠地反映特征重要性；②支持方认为某些 attention head 确实捕获了有意义的语言学模式（如语法依赖、共指消解）；③折中观点：Attention 可以作为探索性分析工具，但不能作为严格的因果解释。最佳实践：使用 Attention Rollout（跨层追踪注意力流，考虑残差连接）比单层 attention 更可靠；将 Attention 与 Integrated Gradients 等梯度方法结合使用；在需要合规级解释的场景中，不依赖 Attention 作为唯一证据。</p>
+</details>
+
+<details class="qa">
+<summary>Integrated Gradients 的原理和优势是什么？</summary>
+<p class="answer">Integrated Gradients（IG）的核心思想是：从一个"基线输入"（如全零向量）到实际输入，沿直线路径积分梯度，得到每个特征的贡献度。公式：IG_i(x) = (x_i - x'_i) × ∫₀¹ ∂F(x'+α(x-x'))/∂x_i dα。直觉理解：不是看"当前点的梯度"（瞬时变化率），而是看"从无到有的整个变化过程"。优势：①满足两个关键公理——敏感性（如果某特征改变导致预测变化，其归因值非零）和实现不变性（功能相同的模型给出相同归因）；②唯一满足这两个公理的梯度方法（Vanilla Gradient 不满足敏感性，因为梯度可能为零）；③计算高效——只需要前向和反向传播，不需要采样。局限：需要选择合适的基线，且基线的选择会影响结果。</p>
+</details>
+
+<details class="qa">
+<summary>LLM 的 Chain-of-Thought 是否等于真正的可解释性？</summary>
+<p class="answer">CoT 不等于真正的可解释性，但它是当前最实用的 LLM 解释方式。原因分析：①CoT 可能是"事后合理化"——模型先得出结论，再生成看似合理的推理步骤（类似人类的认知偏差），研究表明 CoT 步骤和模型内部计算过程并不完全一致；②CoT 可能"编造推理"——模型生成的推理链可能包含看似合理但实际错误的逻辑步骤（幻觉延伸到推理过程）；③CoT 的忠实性无法验证——我们无法确定 CoT 步骤真正反映了模型的"思考过程"。但 CoT 的实际价值：①对用户最直观——自然语言解释比 SHAP 数值更易理解；②可发现逻辑错误——即使 CoT 不完全忠实，暴露的推理链也有助于发现明显的逻辑缺陷；③可审计——CoT 提供了可记录、可检查的"决策依据"。正确做法：将 CoT 视为"用户可理解的解释"而非"真实的模型内部机制"。</p>
+</details>
+
+<details class="qa">
+<summary>如何在高风险场景中平衡可解释性和模型性能？</summary>
+<p class="answer">三种策略：①分层解释——用高性能黑盒模型做预测，用可解释方法提供事后解释。例如用 GPT-4 做信贷评估，同时用 SHAP 提供特征重要性解释，用 CoT 提供自然语言解释；②可解释代理——训练一个简单的可解释模型（如决策树）模拟黑盒模型的行为，当两者一致时用黑盒结果+简单模型解释，不一致时触发人工审核；③混合架构——关键决策因素用可解释模型（逻辑回归/决策树），辅助分析用复杂模型。例如信贷审批：基础规则（负债率、收入比）用可解释模型决定"通过/拒绝"边界，模型只在边界附近的"灰区"发挥作用。合规建议：EU AI Act 要求高风险 AI 决策"可以向受影响者解释"——不是要求模型内部完全透明，而是要求能给出有意义的、可理解的解释。</p>
+</details>
+    </section>
+
+    <footer>
+      <div class="made">TECH NOTES · AI 安全 · 整理自 AI Knowledge Hub</div>
+    </footer>
+  </main>
+</div>
+
+<script>
+(function(){var bar=document.getElementById('progress');function u(){var h=document.documentElement;bar.style.width=h.scrollTop/(h.scrollHeight-h.clientHeight)*100+'%';}window.addEventListener('scroll',u,{passive:true});u();})();
+(function(){var links=document.querySelectorAll('aside.toc nav a');var secs=Array.from(document.querySelectorAll('section.chapter'));if(!secs.length)return;function u(){var y=window.scrollY+100,cur=secs[0];for(var i=0;i<secs.length;i++){if(secs[i].offsetTop<=y)cur=secs[i];}var id=cur.id;links.forEach(function(a){a.classList.toggle('active',a.getAttribute('href')==='#'+id);});}window.addEventListener('scroll',u,{passive:true});u();})();
+</script>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,1425 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Trae Agent 架构深度解析 · AI 工程 — Tech Notes</title>
+<meta name="description" content="从 Agent Runtime 到 Test-time Scaling：一个面向软件工程的 Agent Operating System 全景解析 基于 GitHub 源码 + arXiv:2507.23370 技术报告">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<link rel="stylesheet" href="../assets/kh-guide.css">
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav">
+
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="ai_engineering_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 32 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>AI 工程</h2>
+    <nav>
+      <ol>
+        <li><a href="#overview" class="active">概览</a></li>
+        <li><a href="#ch1">项目定位与设计哲学</a></li>
+        <li><a href="#ch2">整体架构概览</a></li>
+        <li><a href="#agent-runtime">Agent Runtime 核心</a></li>
+        <li><a href="#tool-framework">Tool Framework 工具框架</a></li>
+        <li><a href="#context-engineering">Context Engineering 上下文工程</a></li>
+        <li><a href="#lakeview">Lakeview 步骤摘要机制</a></li>
+        <li><a href="#agent-loop">Agent Loop 工程</a></li>
+        <li><a href="#memory">Memory 机制</a></li>
+        <li><a href="#agent-test-time-scaling">多 Agent 搜索推理（Test-time Scaling）</a></li>
+        <li><a href="#prompt-engineering">Prompt Engineering 提示词工程</a></li>
+        <li><a href="#sandbox-docker">Sandbox 与 Docker 沙箱</a></li>
+        <li><a href="#trajectory">Trajectory 全链路记录</a></li>
+        <li><a href="#llm-provider">LLM Provider 抽象层</a></li>
+        <li><a href="#mcp">MCP 协议集成</a></li>
+        <li><a href="#ckg">CKG 代码知识图谱</a></li>
+        <li><a href="#agent">市场 Agent 架构对比</a></li>
+        <li><a href="#ch17">设计模式总览</a></li>
+        <li><a href="#ch18">二次开发指南</a></li>
+        <li><a href="#ch19">参考资料</a></li>
+        <li><a href="#q-a">Q&amp;A</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+    <header class="hero">
+      <div class="badge">AI 工程</div>
+      <h1>Trae Agent 架构深度解析</h1>
+      <p class="sub">从 Agent Runtime 到 Test-time Scaling：一个面向软件工程的 Agent Operating System 全景解析 基于 GitHub 源码 + arXiv:2507.23370 技术报告</p>
+      <div class="meta-row">
+        <span class="pill cyan">AI 工程</span>
+        <span class="pill green">阅读 ~32 min</span>
+        <span class="pill amber">21 章</span>
+      </div>
+    </header>
+
+    <section class="chapter" id="overview">
+      <div class="ch-head"><div class="num">00</div><div class="t"><h2>概览</h2></div></div>
+      <div class="intuition-box">
+  <strong>Trae Agent 不是一个简单的 CLI 工具，而是一套完整的 Software Engineering Agent Runtime。</strong>
+  它的核心价值不在于命令行界面，而在于背后的 Agent 编排引擎、工具框架、上下文工程、以及独创的 Test-time Scaling 搜索推理机制。在 SWE-bench Verified 上以 Pass@1 = 75.20% 位居榜首。<sup class="ref"><a href="#ref-1">[1]</a></sup>
+</div>
+    </section>
+
+    <section class="chapter" id="ch1">
+      <div class="ch-head"><div class="num">01</div><div class="t"><h2>项目定位与设计哲学</h2><div class="sub">Trae Agent 是由字节跳动（ByteDance）开源的、基于 LLM 的通用软件工程…</div></div></div>
+      <h3>1.1 Trae Agent 是什么？</h3>
+<p>Trae Agent 是由字节跳动（ByteDance）开源的、基于 LLM 的通用软件工程智能体。它接收自然语言指令，自主完成从代码理解、Bug 定位、复现测试、修复编码到验证通过的完整软件工程工作流。</p>
+
+<h3>1.2 核心定位</h3>
+<p>官方论文将其定义为：</p>
+<div class="formula">
+  Trae Agent = Agent-based Ensemble Reasoning for Repository-level Issue Resolution
+</div>
+
+<p>它不是聊天机器人，不是 IDE 插件，而是一个 <span class="term">General Purpose Software Engineering Agent</span>，能完成：</p>
+<ul>
+  <li><strong>代码编写与重构</strong>——理解需求并修改多个文件</li>
+  <li><strong>Bug 修复</strong>——从 Issue 描述到复现到修复到验证</li>
+  <li><strong>测试生成</strong>——编写回归测试和单元测试</li>
+  <li><strong>代码审查</strong>——分析代码质量并提出改进建议</li>
+  <li><strong>仓库分析</strong>——理解项目结构、依赖关系和模块边界</li>
+  <li><strong>文档生成</strong>——基于代码生成技术文档</li>
+</ul>
+
+<h3>1.3 与其他 CLI Agent 的本质区别</h3>
+<p>官方 README 明确强调其 <strong>research-friendly design</strong> 定位<sup class="ref"><a href="#ref-2">[2]</a></sup>：</p>
+<table>
+<tr><th>维度</th><th>普通 CLI Agent</th><th>Trae Agent</th></tr>
+<tr><td>架构透明度</td><td>黑盒，难以修改</td><td>模块化分层，每层可独立替换</td></tr>
+<tr><td>推理方式</td><td>单次生成</td><td>Generator-Pruner-Selector 搜索推理</td></tr>
+<tr><td>可观测性</td><td>日志有限</td><td>全链路 Trajectory 记录 + Lakeview 摘要</td></tr>
+<tr><td>可扩展性</td><td>工具固定</td><td>统一 Tool 接口 + MCP 协议动态扩展</td></tr>
+<tr><td>研究友好度</td><td>低</td><td>支持 Replay、Ablation Study、Benchmark</td></tr>
+</table>
+
+<div class="key-point">
+  设计哲学总结：Trae Agent 的核心不是"更好的 Prompt"，而是更好的 <strong>Agent Runtime</strong>。LLM 是可替换的零件，Runtime 才是引擎。
+</div>
+    </section>
+
+    <section class="chapter" id="ch2">
+      <div class="ch-head"><div class="num">02</div><div class="t"><h2>整体架构概览</h2><div class="sub">整个系统可以拆解为六个层次，从用户接口到执行引擎层层递进：</div></div></div>
+      <h3>2.1 分层架构</h3>
+<p>整个系统可以拆解为六个层次，从用户接口到执行引擎层层递进：</p>
+
+<div class="flow">
+  <div class="flow-title">Trae Agent 整体分层架构</div>
+  <div class="flow-node accent"><div class="nlabel">CLI / API Layer</div><div class="nsub">cli.py（click 框架）· run / interactive</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Agent Orchestrator</div><div class="nsub">Agent (Facade) → TraeAgent → BaseAgent (Loop)</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">核心三支柱</div>
+    <ul class="pairs">
+      <li><b>Planner</b><span>System Prompt + Sequential Thinking</span></li>
+      <li><b>Context</b><span>Lakeview + Trajectory + CKG</span></li>
+      <li><b>Tool Manager</b><span>ToolExecutor / DockerToolExecutor</span></li>
+    </ul>
+  </div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">LLM Provider Layer</div><div class="nsub">OpenAI / Anthropic / Gemini / Doubao / Ollama …</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">Execution Layer</div><div class="nsub">Bash / FileEdit / CKG / MCP / Docker Sandbox</div></div>
+</div>
+
+<h3>2.2 核心数据流</h3>
+<div class="flow">
+  <div class="flow-title">User Task (Issue 描述 / 自然语言指令)</div>
+  <div class="flow-node accent"><div class="nlabel">CLI 解析参数 + 加载配置 (YAML/JSON)</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Agent.new_task() 构建 System Prompt + User Message</div><div class="nsub">(注入项目路径、Issue 描述)</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">BaseAgent.execute_task() 进入主循环</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">LLMClient.chat() 调用 LLM</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">记录 Trajectory</div><div class="nsub">返回 Response (thought + tool_calls)</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">_tool_call_handler() 执行工具</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">ToolExecutor (本地) 或 DockerToolExecutor (容器内)</div><div class="nsub">工具结果 → LLMMessage 追加到对话 · reflect_on_result() 反思</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">_finalize_step()</div><div class="nsub">TrajectoryRecorder 记录步骤 · CLIConsole 更新 UI · LakeView 生成步骤摘要 (可选)</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">检查 task_done 工具是否被调用</div><div class="nsub">否 → step_number++ → 继续循环 · 是 → 验证 patch (可选) → 结束</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">Trajectory 文件 (JSON) + Git Patch (可选)</div></div>
+</div>
+
+<h3>2.3 项目目录结构</h3>
+<div class="flow">
+  <div class="flow-title">trae_agent/</div>
+  <div class="flow-node accent"><div class="nlabel">agent/ # Agent 核心编排</div><div class="nsub">agent.py # 门面入口 (Facade) · base_agent.py # 抽象基类 + Agent 主循环 · trae_agent.py # TraeAgent 具体实现 · agent_basics.py # 数据模型 (AgentStep, AgentState) · docker_manager.py # Docker 容器生命周期管理</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">tools/ # 工具框架</div><div class="nsub">base.py # Tool 抽象接口 + ToolExecutor · bash_tool.py # Bash 持久会话工具 · edit_tool.py # str_replace 编辑工具 · json_edit_tool.py # JSON 结构编辑工具 · sequential_thinking_tool.py # 链式思维工具 · task_done_tool.py # 任务完成信号工具 · mcp_tool.py # MCP 协议适配器 · docker_tool_executor.py # Docker 工具执行代理 · ckg/ # 代码知识图谱 (CKG) · base.py · ckg_database.py</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">prompt/ # 提示词工程</div><div class="nsub">agent_prompt.py # System Prompt 定义</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">utils/ # 基础设施</div><div class="nsub">config.py # YAML/JSON 配置系统 · lake_view.py # Lakeview 步骤摘要 · trajectory_recorder.py # 轨迹记录器 · mcp_client.py # MCP 客户端 · constants.py # 常量定义 · cli/ # CLI 控制台 (simple/rich) · llm_clients/ # LLM 客户端 (7种 Provider) · base_client.py · llm_client.py · openai_client.py · anthropic_client.py · google_client.py · ...</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">cli.py # CLI 入口 (click 框架)</div><div class="nsub">evaluation/ # 评估系统</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">patch_selection/ # Generator-Pruner-Selector</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">selector.py</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">analysis.py</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">trae_selector/</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">selector_agent.py # Selector Agent</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">selector_evaluation.py # 评估编排</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">sandbox.py # SWE-bench Docker 沙箱</div></div>
+</div>
+    </section>
+
+    <section class="chapter" id="agent-runtime">
+      <div class="ch-head"><div class="num">03</div><div class="t"><h2>Agent Runtime 核心</h2><div class="sub">扮演 Facade 角色，对调用者屏蔽内部复杂性</div></div></div>
+      <div class="highlight">Agent Runtime 是整个系统的心脏。LLM 是可替换的零件，Runtime 才是引擎——它负责编排思考、工具调用、状态管理和生命周期控制。</div>
+
+<h3>3.1 三层 Agent 类体系</h3>
+
+<div class="module-card">
+<h4>Agent（门面层）</h4>
+<p>扮演 <span class="term">Facade</span> 角色，对调用者屏蔽内部复杂性。</p>
+<ul>
+  <li>根据 <code>agent_type</code> 参数实例化具体 Agent（工厂模式）</li>
+  <li>持有 <code>TrajectoryRecorder</code> 和 <code>CLIConsole</code> 的引用</li>
+  <li><code>run()</code> 方法编排完整生命周期：初始化任务 → MCP 工具注册 → 执行任务 → 清理资源</li>
+</ul>
+</div>
+
+<div class="module-card">
+<h4>BaseAgent（抽象基类 - Agent Loop 核心）</h4>
+<p>这是整个系统<strong>最重要的文件</strong>，定义了 <span class="term">Think-Act-Reflect</span> 循环。</p>
+
+<p><strong>主循环 <code>execute_task()</code>：</strong></p>
+<pre><code>while step_number <= max_steps:
+    1. 创建 AgentStep (状态 = THINKING)
+    2. _run_llm_step() → 调用 LLM 获取响应
+    3. 检查是否完成 (task_done) 或出错
+    4. _finalize_step() → 记录轨迹 + 更新 UI
+    5. step_number++</code></pre>
+
+<p><strong>单步执行 <code>_run_llm_step()</code>：</strong></p>
+<ol>
+  <li>设置状态为 <code>THINKING</code>，调用 <code>LLMClient.chat()</code></li>
+  <li>检查 LLM 是否调用 <code>task_done</code> 工具（完成信号）</li>
+  <li>若完成 → 进一步验证（如检查 git diff 是否产生有效 patch）</li>
+  <li>若未完成 → 提取 <code>tool_calls</code> 交给 <code>_tool_call_handler</code></li>
+</ol>
+
+<p><strong>工具调用 <code>_tool_call_handler()</code>：</strong></p>
+<ul>
+  <li>支持 <strong>并行</strong>（<code>asyncio.gather</code>）和 <strong>串行</strong> 两种执行模式</li>
+  <li>工具结果转化为 <code>LLMMessage</code> 追加到对话历史</li>
+  <li>调用 <code>reflect_on_result()</code> 进行反思（工具失败时生成反思消息）</li>
+</ul>
+</div>
+
+<div class="module-card">
+<h4>TraeAgent（具体实现）</h4>
+<p>面向软件工程任务的具体 Agent，覆写了关键模板方法：</p>
+<table>
+<tr><th>覆写方法</th><th>职责</th></tr>
+<tr><td><code>new_task()</code></td><td>构建初始消息：System Prompt + User Message（含项目路径和 Issue 描述）</td></tr>
+<tr><td><code>llm_indicates_task_completed()</code></td><td>检测 LLM 是否调用了 <code>task_done</code> 工具（而非文本关键词匹配）</td></tr>
+<tr><td><code>_is_task_completed()</code></td><td>若配置 <code>must_patch=true</code>，验证 git diff 是否产生有效 patch</td></tr>
+<tr><td><code>reflect_on_result()</code></td><td>返回 <code>None</code>（禁用默认反思，由 SequentialThinking 工具替代）</td></tr>
+<tr><td><code>execute_task()</code></td><td>在父类执行完成后，finalize 轨迹记录并可选写出 patch 文件</td></tr>
+</table>
+</div>
+
+<h3>3.2 状态机模型</h3>
+<p>Agent 的执行过程可以用清晰的状态机描述：</p>
+
+<div class="flow">
+  <div class="flow-title">AgentState:   IDLE → RUNNING → COMPLETED / ERROR</div>
+  <div class="flow-node accent"><div class="nlabel">AgentStepState (每个步骤内部):</div><div class="nsub">THINKING CALLING_TOOL REFLECTING THINKING (下一步)</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">COMPLETED / ERROR</div></div>
+</div>
+
+<h3>3.3 数据模型</h3>
+<table>
+<tr><th>数据类</th><th>职责</th><th>关键字段</th></tr>
+<tr><td><code>AgentStep</code></td><td>单步执行数据</td><td>step_number, state, thought, tool_calls, tool_results, llm_response, reflection, error, llm_usage</td></tr>
+<tr><td><code>AgentExecution</code></td><td>整体执行数据</td><td>task, steps[], final_result, success, total_tokens, execution_time, agent_state</td></tr>
+<tr><td><code>LLMMessage</code></td><td>统一消息格式</td><td>role, content, tool_call, tool_result</td></tr>
+<tr><td><code>LLMResponse</code></td><td>统一响应格式</td><td>content, usage, model, finish_reason, tool_calls</td></tr>
+<tr><td><code>LLMUsage</code></td><td>Token 统计</td><td>input_tokens, output_tokens, cache_tokens, reasoning_tokens（支持 <code>__add__</code> 累加）</td></tr>
+</table>
+    </section>
+
+    <section class="chapter" id="tool-framework">
+      <div class="ch-head"><div class="num">04</div><div class="t"><h2>Tool Framework 工具框架</h2><div class="sub">所有工具继承自 Tool 抽象基类，实现四个核心方法：</div></div></div>
+      <div class="highlight">工具系统是 Trae Agent 最大的亮点之一。所有工具实现统一接口，Agent 不知道工具如何实现，只知道工具名称、JSON 参数和返回结果。</div>
+
+<h3>4.1 工具抽象接口</h3>
+<p>所有工具继承自 <code>Tool</code> 抽象基类，实现四个核心方法：</p>
+
+<div class="flow">
+  <div class="flow-title">Tool (ABC)</div>
+  <div class="flow-node accent"><div class="nlabel">get_name() → str # 工具名称</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">get_description() → str # 工具描述 (注入到 System Prompt)</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">get_parameters() → list # 参数定义列表 (生成 JSON Schema)</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">execute(arguments) → async # 异步执行，返回 ToolExecResult</div></div>
+</div>
+
+<p><strong>JSON Schema 生成的特殊处理：</strong>为兼容 OpenAI 的 strict mode，所有参数标记为 <code>required</code>，可选参数通过 type union <code>[type, "null"]</code> 实现；嵌套对象需要 <code>additionalProperties: false</code>。</p>
+
+<h3>4.2 ToolExecutor 工具执行管理器</h3>
+<div class="module-card">
+<h4>核心职责</h4>
+<ul>
+  <li><strong>工具注册：</strong>从全局 <code>tools_registry</code> 加载工具实例</li>
+  <li><strong>名称模糊匹配：</strong><code>_normalize_name()</code> 将工具名转小写并移除下划线，实现容错匹配</li>
+  <li><strong>并行执行：</strong><code>parallel_tool_call()</code> 使用 <code>asyncio.gather</code> 并行执行多个工具</li>
+  <li><strong>串行执行：</strong><code>sequential_tool_call()</code> 按顺序逐一执行</li>
+  <li><strong>资源清理：</strong><code>close_tools()</code> 确保所有工具资源正确释放</li>
+</ul>
+</div>
+
+<h3>4.3 内置工具详解</h3>
+
+<table>
+<tr><th>工具</th><th>功能</th><th>设计要点</th></tr>
+<tr>
+  <td><strong>BashTool</strong></td>
+  <td>执行任意 Shell 命令</td>
+  <td>
+    <ul style="margin:0">
+      <li>持久化 Shell 会话（<code>_BashSession</code>），命令间状态保持</li>
+      <li>哨兵机制（Sentinel）：追加特殊标记判断命令完成和退出码</li>
+      <li>120 秒超时，支持会话重启</li>
+      <li>延迟启动：首次执行时才创建子进程</li>
+    </ul>
+  </td>
+</tr>
+<tr>
+  <td><strong>TextEditorTool</strong><br>(str_replace_based_edit_tool)</td>
+  <td>精确文件编辑</td>
+  <td>
+    <ul style="margin:0">
+      <li>四个子命令：<code>view</code> / <code>create</code> / <code>str_replace</code> / <code>insert</code></li>
+      <li>Replace-based Editing：查找/替换而非重写整文件</li>
+      <li>要求 <code>old_str</code> 唯一匹配，多匹配时报错并指出行号</li>
+      <li>操作后返回上下文 snippet（前后 4 行）帮助 LLM 确认</li>
+    </ul>
+  </td>
+</tr>
+<tr>
+  <td><strong>JSONEditTool</strong></td>
+  <td>JSON 结构化编辑</td>
+  <td>面向 JSON 文件的结构化编辑，保证格式正确性</td>
+</tr>
+<tr>
+  <td><strong>SequentialThinkingTool</strong></td>
+  <td>结构化分步思考</td>
+  <td>
+    <ul style="margin:0">
+      <li>维护 <code>thought_history</code> 列表和 <code>branches</code> 字典</li>
+      <li>支持修订（<code>is_revision</code>）和分支（<code>branch_from_thought</code>）</li>
+      <li>动态调整 <code>total_thoughts</code>，允许超出初始估计</li>
+      <li>无外部副作用，纯"思维白板"</li>
+    </ul>
+  </td>
+</tr>
+<tr>
+  <td><strong>TaskDoneTool</strong></td>
+  <td>任务完成信号</td>
+  <td>无参数，执行后返回 "Task done."，作为 Agent 循环终止信号</td>
+</tr>
+<tr>
+  <td><strong>CKGTool</strong></td>
+  <td>代码结构查询</td>
+  <td>基于 tree-sitter AST 解析的代码知识图谱（详见第 15 节）</td>
+</tr>
+</table>
+
+<h3>4.4 Replace-based Editing 设计哲学</h3>
+
+<div class="practice-grid">
+<div class="do">
+  <strong>Replace-based Editing：</strong><br>
+  <ul style="margin:.5rem 0 0 1rem">
+    <li>Token 消耗少（只传 diff）</li>
+    <li>生成 diff 清晰</li>
+    <li>合并冲突少</li>
+    <li>Patch 稳定性高</li>
+  </ul>
+</div>
+<div class="dont">
+  <strong>Whole File Rewrite：</strong><br>
+  <ul style="margin:.5rem 0 0 1rem">
+    <li>Token 消耗大（整文件）</li>
+    <li>容易产生无关 diff</li>
+    <li>合并冲突多</li>
+    <li>长文件容易截断或遗漏</li>
+  </ul>
+</div>
+</div>
+
+<h3>4.5 全局工具注册表</h3>
+<pre><code>tools_registry = {
+    "bash":                        BashTool,
+    "str_replace_based_edit_tool": TextEditorTool,
+    "json_edit_tool":              JSONEditTool,
+    "sequentialthinking":          SequentialThinkingTool,
+    "task_done":                   TaskDoneTool,
+    "ckg":                         CKGTool,
+}</code></pre>
+<p>新增工具只需：继承 <code>Tool</code> → 实现四个方法 → 注册到此字典。</p>
+    </section>
+
+    <section class="chapter" id="context-engineering">
+      <div class="ch-head"><div class="num">05</div><div class="t"><h2>Context Engineering 上下文工程</h2><div class="sub">与传统 Chat 不同，Trae Agent 的上下文在每一步都会重新组织：</div></div></div>
+      <div class="highlight">上下文工程是 Agent 系统的核心挑战之一。Trae Agent 的上下文不是"一次 Prompt → 一次回答"，而是在 Agent Loop 中持续演化、压缩、重组的动态信息流。</div>
+
+<h3>5.1 上下文组成</h3>
+<div class="flow">
+  <div class="flow-title">每一步 LLM 调用时的 Context =</div>
+  <div class="flow-node accent"><div class="nlabel">System Prompt (固定)</div><div class="nsub">角色定义 + 工作流指导 + 工具使用说明</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">+ Project Context (任务初始化时注入)</div><div class="nsub">项目根路径 + Issue 描述</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">+ Conversation History (持续累积)</div><div class="nsub">之前的 thought + tool_calls + tool_results</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">+ Lakeview Summaries (压缩历史)</div><div class="nsub">之前步骤的精炼摘要</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">+ CKG Query Results (按需注入)</div><div class="nsub">代码结构信息</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">+ Current Step Input</div><div class="nsub">当前步骤的工具返回 / 用户输入</div></div>
+</div>
+
+<h3>5.2 上下文的动态演化</h3>
+<p>与传统 Chat 不同，Trae Agent 的上下文在每一步都会重新组织：</p>
+
+<table>
+<tr><th>阶段</th><th>上下文变化</th></tr>
+<tr><td>任务初始化</td><td>System Prompt + User Message（Issue 描述 + 项目路径）</td></tr>
+<tr><td>LLM 思考</td><td>追加 LLM 的 thought（推理过程）</td></tr>
+<tr><td>工具调用</td><td>追加 tool_call 请求 + tool_result 观察</td></tr>
+<tr><td>反思</td><td>追加反思消息（如工具失败时的分析）</td></tr>
+<tr><td>Lakeview 摘要</td><td>为当前步骤生成短摘要，未来可压缩历史</td></tr>
+<tr><td>下一步</td><td>完整历史 + 新输入 → 送入 LLM</td></tr>
+</table>
+
+<h3>5.3 上下文压缩策略</h3>
+<p>Agent 执行过程中上下文不可避免地膨胀。Trae Agent 采用多层压缩：</p>
+
+<div class="module-card">
+<h4>层级 1：Lakeview 步骤摘要</h4>
+<p>每一步生成精炼摘要（task 描述 10 词 + details 30 词 + 标签 emoji），替代原始冗长的工具输出。</p>
+</div>
+
+<div class="module-card">
+<h4>层级 2：输出截断</h4>
+<p>工具输出超过阈值时自动截断（<code>maybe_truncate</code>），防止单次输出淹没上下文。</p>
+</div>
+
+<div class="module-card">
+<h4>层级 3：Sequential Thinking 替代长文本推理</h4>
+<p>将 LLM 的推理过程显式化为工具调用，每次思考的结果被结构化存储，而非堆积在自由文本中。</p>
+</div>
+
+<div class="warning-box">
+  当前短板：Trae Agent 尚未实现类似 OpenClaw 的 <code>Compaction</code>（自动压缩历史对话）或 <code>Context Pruning</code>（智能裁剪无关上下文）。在超长任务中（200+ 步骤），上下文可能接近模型窗口上限。这是二次开发的重要改进方向。
+</div>
+    </section>
+
+    <section class="chapter" id="lakeview">
+      <div class="ch-head"><div class="num">06</div><div class="t"><h2>Lakeview 步骤摘要机制</h2><div class="sub">使用独立的 LLM（可配置不同模型）对当前步骤进行语义理解：</div></div></div>
+      <div class="highlight">Lakeview 是 Trae Agent 的独有创新（官方将其列为核心 Feature）。它为 Agent 的每一步自动生成精炼摘要，解决长任务中上下文膨胀的核心问题。</div>
+
+<h3>6.1 设计思想</h3>
+
+<h3>6.2 两阶段分析</h3>
+
+<div class="module-card">
+<h4>阶段 1：任务提取 (Extract Task)</h4>
+<p>使用独立的 LLM（可配置不同模型）对当前步骤进行语义理解：</p>
+<ul>
+  <li><code>&lt;task&gt;</code> 标签：通用任务描述（不含 Bug 细节，10 词以内）</li>
+  <li><code>&lt;details&gt;</code> 标签：具体细节补充（30 词以内）</li>
+</ul>
+<p>示例：</p>
+<div class="flow">
+  <div class="flow-node accent"><div class="nlabel">Step 1: Read auth.py</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">task: &quot;Analyzed authentication implementation&quot;</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">details: &quot;Examined login flow and token validation in auth.py&quot;</div><div class="nsub">Step 2: Run pytest</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">task: &quot;Executed test suite&quot;</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">details: &quot;Three tests failed: test_login, test_token, test_session&quot;</div></div>
+</div>
+</div>
+
+<div class="module-card">
+<h4>阶段 2：标签分类 (Tag Step)</h4>
+<p>将步骤分类到预定义标签，每个标签对应一个 emoji：</p>
+<table>
+<tr><th>标签</th><th>Emoji</th><th>含义</th></tr>
+<tr><td>WRITE_TEST</td><td>🧪</td><td>编写复现测试</td></tr>
+<tr><td>VERIFY_TEST</td><td>🔍</td><td>运行/验证测试</td></tr>
+<tr><td>EXAMINE_CODE</td><td>📖</td><td>检查代码</td></tr>
+<tr><td>WRITE_FIX</td><td>🔧</td><td>编写修复</td></tr>
+<tr><td>VERIFY_FIX</td><td>✅</td><td>验证修复</td></tr>
+<tr><td>REPORT</td><td>📝</td><td>生成报告</td></tr>
+<tr><td>THINK</td><td>💭</td><td>思考分析</td></tr>
+<tr><td>OUTLIER</td><td>⚠️</td><td>异常/偏离计划</td></tr>
+</table>
+</div>
+
+<h3>6.3 容错机制</h3>
+<p>两个分析阶段都有最多 <strong>10 次重试</strong>逻辑，应对 LLM 输出格式不符合预期的情况。这保证了 Lakeview 在长时间运行中的鲁棒性。</p>
+
+<h3>6.4 Lakeview 的架构价值</h3>
+<div class="key-point">
+  Lakeview 本质上是一种 <strong>Context Compression</strong> 机制——将冗长的工具输出压缩为结构化摘要。这使得：
+  <ul style="margin-top:.5rem">
+    <li>长任务（100+ 步骤）的上下文不会无限膨胀</li>
+    <li>人类开发者可以快速浏览 Agent 执行过程</li>
+    <li>后续步骤可以引用摘要而非原始输出</li>
+  </ul>
+</div>
+    </section>
+
+    <section class="chapter" id="agent-loop">
+      <div class="ch-head"><div class="num">07</div><div class="t"><h2>Agent Loop 工程</h2><div class="sub">Trae Agent 不是简单的 &quot;Prompt → LLM → Tool&quot;，而是：</div></div></div>
+      <div class="highlight">Agent Loop 是所有 Agent 系统的核心。Trae Agent 采用的是经典的 ReAct (Reason-Act-Observe) 循环，但加入了 Planning 和 Sequential Thinking 的增强。</div>
+
+<h3>7.1 ReAct 循环</h3>
+<div class="flow">
+  <div class="flow-title">Agent Loop（ReAct 循环）</div>
+  <div class="flow-node accent"><div class="nlabel">THINK</div><div class="nsub">LLM 推理下一步</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">ACT</div><div class="nsub">调用工具 Tool</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">OBSERVE</div><div class="nsub">获取执行结果</div></div>
+  <div class="flow-arrow" data-label="循环回到 THINK"></div>
+  <div class="flow-node good"><div class="nlabel">终止条件</div><div class="nsub">task_done 被调用 或 step_number &gt; max_steps</div></div>
+</div>
+
+<h3>7.2 增强的 Planning Loop</h3>
+<p>Trae Agent 不是简单的 "Prompt → LLM → Tool"，而是：</p>
+
+<div class="flow">
+  <div class="flow-title">Task (Issue 描述)</div>
+  <div class="flow-node accent"><div class="nlabel">System Prompt 中的 7 步工作流指导</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">1. 理解问题</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">2. 探索定位</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">3. 复现 Bug (关键步骤)</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">4. 调试诊断</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">5. 开发修复</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">6. 验证测试</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">7. 总结工作</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Sequential Thinking Tool (显式规划)</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Thought 1: 分析 Issue</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Thought 2: 制定搜索策略</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Thought 3: 修改计划</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Thought 4: 修订 (is_revision=true)</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Thought 5: 分支探索 (branch_from_thought=2)</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Tool Execution (Bash / Edit / CKG)</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">Observe + Reflect → 下一轮 Planning</div></div>
+</div>
+
+<h3>7.3 任务完成判定机制</h3>
+<p>Trae Agent 的任务完成判定不依赖文本关键词分析，而是采用<strong>工具信号</strong>：</p>
+
+<table>
+<tr><th>判定层级</th><th>机制</th><th>说明</th></tr>
+<tr><td>第一层</td><td><code>task_done</code> 工具调用</td><td>LLM 主动调用 task_done 表示自认为完成</td></tr>
+<tr><td>第二层</td><td><code>must_patch</code> 验证</td><td>若配置了 must_patch，检查 git diff 是否产生有效 patch</td></tr>
+<tr><td>第三层</td><td><code>max_steps</code> 兜底</td><td>超过最大步数自动终止，防止无限循环</td></tr>
+</table>
+
+<h3>7.4 并行 vs 串行工具执行</h3>
+<table>
+<tr><th>模式</th><th>实现</th><th>适用场景</th><th>限制</th></tr>
+<tr><td>并行</td><td><code>asyncio.gather()</code></td><td>独立工具调用（如同时读多个文件）</td><td>Docker 模式下退化为串行</td></tr>
+<tr><td>串行</td><td>逐一 await</td><td>有依赖关系的工具调用</td><td>执行时间更长</td></tr>
+</table>
+    </section>
+
+    <section class="chapter" id="memory">
+      <div class="ch-head"><div class="num">08</div><div class="t"><h2>Memory 机制</h2><div class="sub">整个 Agent Loop 过程中的上下文是连续的：</div></div></div>
+      <div class="highlight">理解 Trae Agent 的记忆机制需要区分两个层面：会话内记忆（强）和跨会话长期记忆（弱）。</div>
+
+<h3>8.1 会话内记忆（Conversation Memory）</h3>
+<p>整个 Agent Loop 过程中的上下文是连续的：</p>
+
+<div class="flow">
+  <div class="flow-node accent"><div class="nlabel">User Message (Issue)</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Agent Thought 1 → Tool Call (bash: grep &quot;auth&quot;) → Observation</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Agent Thought 2 → Tool Call (view: auth.py) → Observation</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Agent Thought 3 → Tool Call (str_replace: auth.py) → Observation</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Agent Thought 4 → Tool Call (bash: pytest) → Observation</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">... 所有历史保留在同一 Session 中</div></div>
+</div>
+
+<p>这意味着：</p>
+<ul>
+  <li>修完 Bug → 运行 pytest → 失败 → 根据 pytest 结果修改 → 这些上下文都是连续的</li>
+  <li>Agent 可以引用之前的 Observation、Tool Output</li>
+  <li>Sequential Thinking 的历史（thought_history + branches）跨调用保持</li>
+</ul>
+
+<h3>8.2 跨会话长期记忆（Long-term Memory）</h3>
+
+<div class="warning-box">
+  <strong>当前短板：</strong>Trae Agent 目前<strong>没有</strong>完整的长期记忆体系。没有 Memory DB、Vector DB、Knowledge Base 或 Project Memory。今天修 auth，明天继续 auth，Agent 不一定记得昨天发生了什么。
+</div>
+
+<p>官方博客提到的 "More Memory" 实际上指的是：<strong>扩大 Context 管理和更好的代码检索</strong>，而不是用户级永久记忆。</p>
+
+<h3>8.3 替代方案：外部 Project Memory 层</h3>
+<p>对于二次开发，推荐在 Trae Agent 之上增加一层独立的 Project Memory：</p>
+
+<div class="flow">
+  <div class="flow-title">Review Agent / RCA Agent / 其他上层应用</div>
+  <div class="flow-node accent"><div class="nlabel">Project Memory (自行维护)</div><div class="nsub">存储：项目编码规范、历史 Review 结论、 · RCA 分析结果、常见修复模式、 · 模块架构知识、Issue 与 PR 关联</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Trae Agent Runtime</div><div class="nsub">每次调用时，将相关记忆通过 · Prompt 或检索注入上下文</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">Tool Runtime</div></div>
+</div>
+
+<div class="key-point">
+  将记忆层独立于 Agent 之外的好处：切换底层 Agent（如从 Trae 切换到 Claude Code、Codex CLI）时，记忆层可复用，不被某个 Agent 的私有实现绑定。
+</div>
+
+<h3>8.4 Trajectory 作为"离线记忆"</h3>
+<p>Trajectory 文件（JSON 格式）完整记录了每次执行的全部过程，可以视为一种"离线记忆"：</p>
+<ul>
+  <li>可用于 Debug Agent 行为</li>
+  <li>可用于 Replay（重放执行过程）</li>
+  <li>可用于 Ablation Study（消融实验）</li>
+  <li>可用于构建训练数据</li>
+</ul>
+    </section>
+
+    <section class="chapter" id="agent-test-time-scaling">
+      <div class="ch-head"><div class="num">09</div><div class="t"><h2>多 Agent 搜索推理（Test-time Scaling）</h2><div class="sub">传统 Agent 的推理路径是单线的：</div></div></div>
+      <div class="highlight">这是论文最核心的贡献——将软件工程问题的解决从"单次生成"升级为"搜索最优解"。这是 Trae Agent 在 SWE-bench 上大幅领先竞品的关键。</div>
+
+<h3>9.1 核心思想</h3>
+<p>传统 Agent 的推理路径是单线的：</p>
+<div class="arch-diagram">
+传统 Agent:  Task → Prompt → LLM → 一次生成 → 结束</div>
+
+<p>Trae Agent 的推理路径是搜索树：</p>
+<div class="arch-diagram">
+Trae Agent:  Task → 生成多个 Candidate → 剪枝 → 继续扩展 → 继续搜索 → 选择最优 Solution</div>
+
+<h3>9.2 三 Agent 协作架构</h3>
+
+<div class="agent-relation">
+<h4>Generator（生成器 Agent）</h4>
+<p>负责探索多个候选解决方案。对于同一个 Issue，生成多个不同思路的 Patch 候选。</p>
+
+<h4>Pruner（剪枝器）</h4>
+<p>通过回归测试和去重过滤掉低质量候选：</p>
+<ul>
+  <li><strong>回归测试过滤：</strong>排除引入新 Bug 的 Patch</li>
+  <li><strong>补丁去重：</strong>基于清理后的 Patch 文本去重</li>
+  <li><strong>分组处理：</strong>将候选按 group_size 分组，跳过全成功/全失败的组</li>
+</ul>
+
+<h4>Selector（选择器 Agent）</h4>
+<p>使用 LLM 驱动的 Agent 分析候选 Patch 并选择最优：</p>
+<ul>
+  <li>在 Docker 沙箱中运行，拥有 bash 和 edit_tool</li>
+  <li>可以编写单元测试来验证候选 Patch</li>
+  <li>支持 <strong>Majority Voting</strong>：多次运行取多数票</li>
+  <li>输出格式：<code>### Status: succeed / ### Result: Patch-x</code></li>
+</ul>
+</div>
+
+<h3>9.3 完整流水线</h3>
+<div class="flow">
+  <div class="flow-title">Issue Description</div>
+  <div class="flow-node accent"><div class="nlabel">Generator Agent (多次运行，生成多个候选 Patch)</div><div class="nsub">Patch-1, Patch-2, ..., Patch-N</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Pruner</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">回归测试：排除引入回归的 Patch</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">去重：基于 Patch 文本去重</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">分组：按 group_size 分组</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Selector Agent (在 Docker 沙箱中运行)</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">分析每个候选 Patch 的代码变更</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">可选：编写单元测试验证</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">可选：Majority Voting (多次运行)</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">输出最优 Patch</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">Best Patch</div></div>
+</div>
+
+<h3>9.4 效果</h3>
+<p>实验结果显示，相比四种 SOTA 的 Ensemble Reasoning 技术，Trae Agent 在 Pass@1 指标上平均提升 <strong>10.22%</strong>。在 SWE-bench Verified 上达到 <strong>75.20%</strong> 的 Pass@1<sup class="ref"><a href="#ref-1">[1]</a></sup>。</p>
+    </section>
+
+    <section class="chapter" id="prompt-engineering">
+      <div class="ch-head"><div class="num">10</div><div class="t"><h2>Prompt Engineering 提示词工程</h2><div class="sub">Trae Agent 的 System Prompt（ TRAE_AGENT_SYSTEM_…</div></div></div>
+      <h3>10.1 System Prompt 结构</h3>
+<p>Trae Agent 的 System Prompt（<code>TRAE_AGENT_SYSTEM_PROMPT</code>）经过精心设计，包含以下层次：</p>
+
+<div class="flow">
+  <div class="flow-title">System Prompt =</div>
+  <div class="flow-node accent"><div class="nlabel">1. 角色定义</div><div class="nsub">&quot;You are a senior software engineer...&quot;</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">2. 文件路径规则</div><div class="nsub">所有路径必须为绝对路径，需结合项目根路径构建</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">3. 七步工作流指导</div><div class="nsub">理解问题 → 探索定位 → 复现 Bug → 调试诊断 · 开发修复 → 验证测试 → 总结工作</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">4. Sequential Thinking 使用指南</div><div class="nsub">total_thoughts 设为 5-25 · 可在思考之间穿插 bash 命令</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">5. 工具使用说明</div><div class="nsub">各工具的参数和最佳实践</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">6. 完成信号</div><div class="nsub">明确指示使用 task_done 工具标记完成</div></div>
+</div>
+
+<h3>10.2 提示词设计原则</h3>
+<table>
+<tr><th>原则</th><th>具体实践</th></tr>
+<tr><td><strong>角色沉浸</strong></td><td>扮演"资深软件工程师"，强调正确性、安全性和测试驱动开发</td></tr>
+<tr><td><strong>工作流驱动</strong></td><td>七步工作流提供明确的任务分解框架，防止 Agent 迷失方向</td></tr>
+<tr><td><strong>工具优先</strong></td><td>鼓励通过工具行动而非空想，"先复现 Bug 再修复"</td></tr>
+<tr><td><strong>路径安全</strong></td><td>强制绝对路径，防止相对路径导致文件操作错误</td></tr>
+<tr><td><strong>显式终止</strong></td><td>通过 task_done 工具而非文本关键词判断完成</td></tr>
+</table>
+
+<h3>10.3 User Message 构建</h3>
+<p><code>TraeAgent.new_task()</code> 构建的初始 User Message 包含：</p>
+<ul>
+  <li><strong>项目根路径：</strong>让 Agent 知道在哪里工作</li>
+  <li><strong>Issue 描述：</strong>完整的 Bug 报告或任务说明</li>
+  <li>System Prompt 和 User Message 通过 <code>LLMMessage</code> 统一封装</li>
+</ul>
+    </section>
+
+    <section class="chapter" id="sandbox-docker">
+      <div class="ch-head"><div class="num">11</div><div class="t"><h2>Sandbox 与 Docker 沙箱</h2><div class="sub">DockerToolExecutor 是一个 透明代理 ：</div></div></div>
+      <div class="highlight">Docker 沙箱让 Agent 在隔离环境中执行，既保护宿主机安全，又保证环境一致性。这是生产级 Agent 的必备能力。</div>
+
+<h3>11.1 DockerManager 容器生命周期</h3>
+
+<div class="module-card">
+<h4>四种镜像来源</h4>
+<table>
+<tr><th>方式</th><th>命令参数</th><th>说明</th></tr>
+<tr><td>Docker 镜像名</td><td><code>--docker-image python:3.11</code></td><td>直接拉取镜像创建新容器</td></tr>
+<tr><td>已有容器 ID</td><td><code>--docker-container-id xxx</code></td><td>接入已运行的容器</td></tr>
+<tr><td>Dockerfile 构建</td><td><code>--dockerfile-path ./Dockerfile</code></td><td>从 Dockerfile 构建自定义镜像</td></tr>
+<tr><td>镜像文件加载</td><td><code>--docker-image-file ./image.tar</code></td><td>加载本地 tar 归档镜像</td></tr>
+</table>
+</div>
+
+<h3>11.2 容器内工具执行</h3>
+<div class="arch-diagram">宿主机                              Docker 容器
+┌────────────────┐                 ┌──────────────────┐
+│                │                 │                  │
+│ Agent Runtime  │                 │ /workspace/      │
+│     │          │   volume mount  │  (项目代码)       │
+│ DockerTool     │────────────────►│                  │
+│ Executor       │                 │ /agent_tools/    │
+│     │          │   二进制复制     │  edit_tool       │
+│ PyInstaller    │────────────────►│  json_edit_tool  │
+│ 打包的二进制    │                 │  bash            │
+│                │                 │                  │
+└────────────────┘                 └──────────────────┘</div>
+
+<h3>11.3 DockerToolExecutor 代理模式</h3>
+<p><code>DockerToolExecutor</code> 是一个<strong>透明代理</strong>：</p>
+<ul>
+  <li>对于 bash、str_replace_based_edit_tool、json_edit_tool → 路由到容器内执行</li>
+  <li>对于其他工具（如 sequentialthinking、task_done）→ 仍由本地 ToolExecutor 执行</li>
+  <li><strong>路径翻译：</strong><code>_translate_path()</code> 将宿主机路径映射为容器内 <code>/workspace</code> 路径</li>
+  <li>并行调用在 Docker 模式下退化为串行（避免容器内并发冲突）</li>
+</ul>
+
+<h3>11.4 命令执行机制</h3>
+<ul>
+  <li>使用 <code>pexpect</code> 创建持久化交互式 Shell</li>
+  <li>通过 marker 字符串（<code>---CMD_DONE---</code>）检测命令完成和退出码</li>
+  <li>过滤命令回显，只返回有效输出</li>
+  <li>支持超时（默认 300 秒）</li>
+</ul>
+    </section>
+
+    <section class="chapter" id="trajectory">
+      <div class="ch-head"><div class="num">12</div><div class="t"><h2>Trajectory 全链路记录</h2><div class="sub">start_recording() / finalize_recording() —— 任务…</div></div></div>
+      <div class="highlight">Trajectory 是 Trae Agent 的重要差异化特性——完整记录 Agent 执行过程中的每一个决策，使其成为研究和调试的理想平台。</div>
+
+<h3>12.1 三层记录粒度</h3>
+
+<div class="module-card">
+<h4>层级 1：任务级别</h4>
+<p><code>start_recording()</code> / <code>finalize_recording()</code> —— 任务元数据、时间戳、成功状态</p>
+</div>
+
+<div class="module-card">
+<h4>层级 2：LLM 交互级别</h4>
+<p><code>record_llm_interaction()</code> —— 输入消息、响应内容、Token 用量、工具调用请求</p>
+</div>
+
+<div class="module-card">
+<h4>层级 3：Agent 步骤级别</h4>
+<p><code>record_agent_step()</code> —— 步骤号、状态、LLM 消息、工具调用/结果、反思、错误</p>
+</div>
+
+<h3>12.2 持久化机制</h3>
+<ul>
+  <li>每次记录后<strong>立即</strong> <code>save_trajectory()</code> 写入 JSON 文件（增量保存，防中断丢数据）</li>
+  <li>默认路径 <code>trajectories/trajectory_{timestamp}.json</code></li>
+  <li>支持自定义路径：<code>--trajectory-file xxx.json</code></li>
+  <li><code>update_lakeview()</code> 允许后续为步骤追加 Lakeview 摘要</li>
+</ul>
+
+<h3>12.3 Trajectory 文件结构</h3>
+<div class="flow">
+  <div class="flow-title">trajectory.json</div>
+  <div class="flow-node accent"><div class="nlabel">task: &quot;Fix auth bug&quot;</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">start_time / end_time</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">success: true</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">total_tokens: 45230</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">steps[]</div><div class="nsub">step_number: 1 · state: &quot;COMPLETED&quot; · llm_interaction · input_messages[] · response (thought + tool_calls) · usage (input_tokens, output_tokens) · tool_calls[] · tool_name: &quot;bash&quot; · arguments: {&quot;command&quot;: &quot;grep -r &#x27;auth&#x27; src/&quot;} · result: &quot;src/auth.py:42: ...&quot; · lakeview · desc_task: &quot;Searched for auth references&quot; · desc_details: &quot;Found 3 references in auth.py&quot; · tags_emoji: &quot;🔍&quot; · reflection: null</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">...</div></div>
+</div>
+
+<h3>12.4 应用场景</h3>
+<table>
+<tr><th>场景</th><th>说明</th></tr>
+<tr><td><strong>Debug Agent</strong></td><td>回放执行过程，定位 Agent 决策失误点</td></tr>
+<tr><td><strong>Replay</strong></td><td>重放完整执行，复现特定行为</td></tr>
+<tr><td><strong>Benchmark</strong></td><td>统计 Token 消耗、步骤数、成功率</td></tr>
+<tr><td><strong>Ablation Study</strong></td><td>对比不同配置/Prompt 的效果差异</td></tr>
+<tr><td><strong>训练数据</strong></td><td>将成功轨迹用作 SFT 训练数据</td></tr>
+</table>
+    </section>
+
+    <section class="chapter" id="llm-provider">
+      <div class="ch-head"><div class="num">13</div><div class="t"><h2>LLM Provider 抽象层</h2><div class="sub">BaseLLMClient 定义两个核心抽象方法：</div></div></div>
+      <div class="highlight">Trae Agent 支持 7 种 LLM 提供商，通过策略模式（Strategy Pattern）实现完全解耦。Agent Runtime 不关心底层是 Claude 还是 GPT。</div>
+
+<h3>13.1 架构分层</h3>
+<div class="flow">
+  <div class="flow-title">Agent Runtime</div>
+  <div class="flow-node accent"><div class="nlabel">LLMClient (统一门面)</div><div class="nsub">根据 LLMProvider 枚举延迟导入对应客户端</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">BaseLLMClient (抽象基类)</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">OpenAI_Client</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Anthropic_Client</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Azure_Client</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Google_Client</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Doubao_Client</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">OpenRouter_Client</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Ollama_Client</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">LLM API (HTTP)</div></div>
+</div>
+
+<h3>13.2 统一接口</h3>
+<p><code>BaseLLMClient</code> 定义两个核心抽象方法：</p>
+<table>
+<tr><th>方法</th><th>职责</th></tr>
+<tr><td><code>chat(messages, tools)</code></td><td>发送对话请求，返回 <code>LLMResponse</code></td></tr>
+<tr><td><code>set_chat_history(history)</code></td><td>设置对话历史</td></tr>
+</table>
+
+<h3>13.3 配置体系</h3>
+<div class="flow">
+  <div class="flow-title">Config (YAML)</div>
+  <div class="flow-node accent"><div class="nlabel">model_providers: # 多个提供商</div><div class="nsub">anthropic: · api_key: &quot;sk-...&quot; · provider: &quot;anthropic&quot; · base_url: (可选) · openai: · api_key: &quot;sk-...&quot; · provider: &quot;openai&quot;</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">models: # 多个模型配置</div><div class="nsub">trae_agent_model: · model_provider: &quot;anthropic&quot; · model: &quot;claude-sonnet-4-20250514&quot; · max_tokens: 4096 · temperature: 0.5</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">agents:</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">trae_agent:</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">model: &quot;trae_agent_model&quot; # 引用模型配置</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">tools: [bash, str_replace_based_edit_tool, ...]</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">max_steps: 200</div></div>
+</div>
+
+<h3>13.4 配置优先级</h3>
+<div class="formula">
+  CLI 参数 &gt; 环境变量 &gt; 配置文件 &gt; 默认值
+</div>
+
+<h3>13.5 扩展新 Provider</h3>
+<p>添加新 LLM 提供商只需三步：</p>
+<ol>
+  <li>继承 <code>BaseLLMClient</code>，实现 <code>chat()</code> 和 <code>set_chat_history()</code></li>
+  <li>在 <code>LLMProvider</code> 枚举中添加新项</li>
+  <li>在 <code>LLMClient</code> 的延迟导入分支中添加对应映射</li>
+</ol>
+    </section>
+
+    <section class="chapter" id="mcp">
+      <div class="ch-head"><div class="num">14</div><div class="t"><h2>MCP 协议集成</h2><div class="sub">MCPTool 是适配器模式的典型应用：</div></div></div>
+      <div class="highlight">MCP (Model Context Protocol) 是 Agent 工具生态的重要扩展协议。Trae Agent 已原生支持，允许通过 MCP 动态接入外部工具。</div>
+
+<h3>14.1 架构</h3>
+<div class="flow">
+  <div class="flow-title">Agent Runtime</div>
+  <div class="flow-node accent"><div class="nlabel">MCPClient (MCP 客户端)</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">传输协议选择 (stdio / SSE / HTTP / WebSocket)</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">ClientSession (MCP 会话)</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">list_tools() → 发现远程工具</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">MCPTool (适配器) ← 实现本地 Tool 接口</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">get_name() → 从 MCP inputSchema 动态生成</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">get_parameters() → 动态转换为 ToolParameter</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">execute() → 委托给 MCPClient.call_tool()</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">MCP Server (外部服务)</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">GitHub MCP Server</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Jira MCP Server</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Playwright MCP Server</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">自定义 MCP Server</div></div>
+</div>
+
+<h3>14.2 MCPTool 适配器模式</h3>
+<p><code>MCPTool</code> 是适配器模式的典型应用：</p>
+<ul>
+  <li>持有 <code>MCPClient</code> 引用和 <code>mcp.types.Tool</code> 描述</li>
+  <li><code>get_parameters()</code> 从 MCP 的 <code>inputSchema</code> 动态生成 <code>ToolParameter</code></li>
+  <li><code>execute()</code> 委托给 <code>MCPClient.call_tool()</code> 进行实际调用</li>
+  <li>Agent 对 MCPTool 和本地工具一视同仁——不感知底层协议差异</li>
+</ul>
+
+<h3>14.3 连接与发现流程</h3>
+<div class="flow">
+  <div class="flow-title">MCPClient.connect_and_discover()</div>
+  <div class="flow-node accent"><div class="nlabel">1. 根据 MCPServerConfig 选择传输协议</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">2. 使用 AsyncExitStack 管理异步上下文</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">3. 建立 ClientSession 并初始化</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">4. 调用 list_tools() 发现远程工具</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">5. 为每个远程工具创建 MCPTool 适配器</div></div>
+</div>
+
+<h3>14.4 MCP 配置示例</h3>
+<pre><code># trae_config.yaml
+mcp_servers:
+  playwright:
+    command: npx
+    args:
+      - "@playwright/mcp@0.0.27"
+  github:
+    url: "https://github-mcp.example.com/sse"
+    # 或 stdio / streamable_http / websocket</code></pre>
+
+<h3>14.5 MCP 工具白名单</h3>
+<p><code>TraeAgentConfig</code> 支持 <code>allow_mcp_servers</code> 字段，按白名单过滤可用的 MCP 服务器，防止 Agent 使用未授权的外部工具。</p>
+
+<h3>14.6 支持的传输协议</h3>
+<table>
+<tr><th>协议</th><th>配置方式</th><th>状态</th></tr>
+<tr><td>stdio</td><td><code>command</code> + <code>args</code></td><td>已实现</td></tr>
+<tr><td>SSE (URL)</td><td><code>url</code></td><td>已配置，部分实现</td></tr>
+<tr><td>Streamable HTTP</td><td><code>url</code></td><td>已配置，部分实现</td></tr>
+<tr><td>WebSocket (TCP)</td><td><code>url</code></td><td>已配置，部分实现</td></tr>
+</table>
+    </section>
+
+    <section class="chapter" id="ckg">
+      <div class="ch-head"><div class="num">15</div><div class="t"><h2>CKG 代码知识图谱</h2><div class="sub">CKGDatabase</div></div></div>
+      <div class="highlight">CKG (Code Knowledge Graph) 是 Trae Agent 在仓库理解方面的重要能力——通过 AST 解析构建代码结构索引，让 Agent 能快速查询函数、类和依赖关系。</div>
+
+<h3>15.1 架构</h3>
+<div class="flow">
+  <div class="flow-title">CKGTool (Agent 工具接口)</div>
+  <div class="flow-node accent"><div class="nlabel">search_function(name) → 搜索独立函数</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">search_class(name) → 搜索类定义 (含字段和方法签名)</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">search_class_method(name) → 搜索类方法</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">CKGDatabase (SQLite 存储)</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">FunctionEntry (函数名, 源码, 行号, 父函数)</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">ClassEntry (类名, 字段, 方法, 行号, 父类)</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">tree-sitter AST 解析</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Python / Java / C++ / C / TypeScript / JavaScript</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">每种语言独立的 _recursive_visit_* 遍历方法</div></div>
+</div>
+
+<h3>15.2 构建机制</h3>
+<p><code>CKGDatabase._construct_ckg()</code> 使用 <strong>tree-sitter</strong> 进行 AST 解析：</p>
+<ul>
+  <li>支持 6 种编程语言：Python、Java、C++、C、TypeScript、JavaScript</li>
+  <li>提取函数/类名、源代码体、行号范围、父函数/父类关系</li>
+  <li>数据存入 SQLite 数据库，支持高效查询</li>
+</ul>
+
+<h3>15.3 缓存与过期</h3>
+<table>
+<tr><th>机制</th><th>说明</th></tr>
+<tr><td><strong>Git 仓库</strong></td><td>用 commit hash + dirty 标记作为数据库名称</td></tr>
+<tr><td><strong>非 Git 仓库</strong></td><td>用文件元数据哈希作为数据库名称</td></tr>
+<tr><td><strong>缓存复用</strong></td><td>通过 <code>storage_info.json</code> 映射代码路径到哈希，相同哈希复用已有数据库</td></tr>
+<tr><td><strong>过期清理</strong></td><td><code>clear_older_ckg()</code> 自动清理超过 7 天的旧数据库</td></tr>
+</table>
+
+<h3>15.4 Repository-first 理念</h3>
+
+<div class="key-point">
+  CKG 体现了 Trae Agent 的 <strong>Repository-first</strong> 设计理念——不是"读一个文件"，而是围绕整个代码仓库进行理解和决策。这使得 Agent 能够：
+  <ul style="margin-top:.5rem">
+    <li>修改 A 文件时，知道 B 文件会受影响</li>
+    <li>搜索函数定义而不需要 <code>grep</code> 全仓库</li>
+    <li>理解类继承关系和模块依赖</li>
+  </ul>
+</div>
+    </section>
+
+    <section class="chapter" id="agent">
+      <div class="ch-head"><div class="num">16</div><div class="t"><h2>市场 Agent 架构对比</h2></div></div>
+      <div class="highlight">将 Trae Agent 与市场上主流 Agent 系统进行全方位对比，帮助理解各系统的设计取舍和适用场景。</div>
+
+<h3>16.1 与 Claude Code / Codex CLI / OpenHands 对比</h3>
+<table>
+<tr><th>能力</th><th>Trae Agent</th><th>Claude Code</th><th>Codex CLI</th><th>OpenHands</th></tr>
+<tr><td>CLI 接口</td><td>✅</td><td>✅</td><td>✅</td><td>✅ (Web UI)</td></tr>
+<tr><td>多 LLM 支持</td><td>✅ 7 种</td><td>Claude 为主</td><td>OpenAI 为主</td><td>✅ 多种</td></tr>
+<tr><td>Tool System</td><td>⭐⭐⭐⭐⭐</td><td>⭐⭐⭐⭐⭐</td><td>⭐⭐⭐⭐</td><td>⭐⭐⭐⭐</td></tr>
+<tr><td>Planning</td><td>明确内置 + SequentialThinking</td><td>有但隐式</td><td>有但较轻</td><td>有</td></tr>
+<tr><td>Trajectory 记录</td><td>⭐⭐⭐⭐⭐ 非常完整</td><td>⭐⭐ 较少暴露</td><td>⭐⭐ 较少暴露</td><td>⭐⭐⭐</td></tr>
+<tr><td>Lakeview 摘要</td><td>⭐⭐⭐⭐⭐ 独有</td><td>❌</td><td>❌</td><td>❌</td></tr>
+<tr><td>Ensemble Search</td><td>⭐⭐⭐⭐⭐ Generator/Pruner/Selector</td><td>❌</td><td>❌</td><td>❌</td></tr>
+<tr><td>研究友好度</td><td>⭐⭐⭐⭐⭐</td><td>⭐⭐</td><td>⭐⭐</td><td>⭐⭐⭐⭐</td></tr>
+<tr><td>长期记忆</td><td>⭐⭐ 较弱</td><td>⭐⭐⭐</td><td>⭐⭐</td><td>⭐⭐⭐</td></tr>
+<tr><td>Docker 沙箱</td><td>⭐⭐⭐⭐⭐ 四种模式</td><td>✅</td><td>✅</td><td>⭐⭐⭐⭐</td></tr>
+<tr><td>MCP 支持</td><td>✅ 原生</td><td>✅</td><td>✅</td><td>部分</td></tr>
+</table>
+
+<h3>16.2 与 OpenClaw (通用 Agent Runtime) 对比</h3>
+
+<table>
+<tr><th>架构模块</th><th>Trae Agent</th><th>OpenClaw</th></tr>
+<tr><td>Agent Loop</td><td>✅ ReAct + Planning</td><td>✅ ReAct + Session</td></tr>
+<tr><td>Runtime Core</td><td>✅ BaseAgent</td><td>✅ agent-core</td></tr>
+<tr><td>Tool Registry</td><td>✅ tools_registry</td><td>✅ agent-tools</td></tr>
+<tr><td>Provider 抽象</td><td>✅ 策略模式，7 种</td><td>✅ Provider Registry</td></tr>
+<tr><td>Context 压缩</td><td>Lakeview (步骤摘要)</td><td>Compaction (对话压缩)</td></tr>
+<tr><td>Session 管理</td><td>⭐⭐ 较弱（Job 模式）</td><td>⭐⭐⭐⭐⭐ 持久化 Session</td></tr>
+<tr><td>Workspace</td><td>Repo (Git 仓库)</td><td>Persistent Workspace</td></tr>
+<tr><td>Plugin 系统</td><td>⭐⭐ 内置为主</td><td>⭐⭐⭐⭐⭐ Plugin SDK</td></tr>
+<tr><td>Repository 理解</td><td>⭐⭐⭐⭐⭐ CKG + tree-sitter</td><td>⭐⭐ 一般</td></tr>
+<tr><td>Search-based Reasoning</td><td>⭐⭐⭐⭐⭐ GPS 三 Agent</td><td>❌ 基本没有</td></tr>
+<tr><td>长期运行 (Always-on)</td><td>❌ Job 模式</td><td>⭐⭐⭐⭐⭐</td></tr>
+<tr><td>多渠道接入</td><td>❌</td><td>✅ Telegram/Discord/Slack/Email</td></tr>
+</table>
+
+<h3>16.3 与 Cursor / Windsurf 对比</h3>
+<table>
+<tr><th>维度</th><th>Trae Agent</th><th>Cursor</th><th>Windsurf</th></tr>
+<tr><td>定位</td><td>Agent Runtime + CLI</td><td>IDE + Agent + Codebase Index</td><td>IDE + Agent</td></tr>
+<tr><td>交互方式</td><td>CLI / API</td><td>IDE 内嵌</td><td>IDE 内嵌</td></tr>
+<tr><td>代码索引</td><td>CKG (tree-sitter)</td><td>全量 Codebase Index</td><td>全量 Index</td></tr>
+<tr><td>长期记忆</td><td>⭐⭐ 弱</td><td>⭐⭐⭐⭐ Project Memory</td><td>⭐⭐⭐</td></tr>
+<tr><td>用户体验</td><td>开发者 / 研究者</td><td>普通开发者</td><td>普通开发者</td></tr>
+<tr><td>开源</td><td>✅ MIT</td><td>❌</td><td>❌</td></tr>
+<tr><td>可扩展性</td><td>⭐⭐⭐⭐⭐</td><td>⭐⭐</td><td>⭐⭐</td></tr>
+</table>
+
+<h3>16.4 与 SWE-Agent / Devin 对比</h3>
+<table>
+<tr><th>维度</th><th>Trae Agent</th><th>SWE-Agent</th><th>Devin</th></tr>
+<tr><td>定位</td><td>通用 SE Agent + 研究平台</td><td>学术基准 Agent</td><td>商业化 AI 工程师</td></tr>
+<tr><td>推理方式</td><td>GPS 搜索推理</td><td>单路径 ReAct</td><td>多 Agent + 工具链</td></tr>
+<tr><td>Test-time Scaling</td><td>⭐⭐⭐⭐⭐</td><td>❌</td><td>部分（不透明）</td></tr>
+<tr><td>开源透明</td><td>✅ 完全开源</td><td>✅ 开源</td><td>❌ 闭源商业产品</td></tr>
+<tr><td>SWE-bench 表现</td><td>75.20% (第一)</td><td>~40%</td><td>未公开完整数据</td></tr>
+</table>
+
+<h3>16.5 各 Agent 架构模式总结</h3>
+<table>
+<tr><th>系统</th><th>核心架构</th><th>最大优势</th><th>最大短板</th></tr>
+<tr><td><strong>Trae Agent</strong></td><td>Agent Runtime + GPS 搜索</td><td>研究透明 + 搜索推理</td><td>长期记忆弱</td></tr>
+<tr><td><strong>Claude Code</strong></td><td>单 Agent + 强工具链</td><td>LLM 原生能力强</td><td>封闭、单一模型</td></tr>
+<tr><td><strong>Cursor</strong></td><td>IDE + Agent + Index</td><td>用户体验 + 记忆</td><td>封闭、不可扩展</td></tr>
+<tr><td><strong>OpenClaw</strong></td><td>General Agent Runtime</td><td>长期运行 + 插件生态</td><td>缺乏代码智能</td></tr>
+<tr><td><strong>SWE-Agent</strong></td><td>单 Agent ReAct</td><td>学术基准、简洁</td><td>推理能力有限</td></tr>
+<tr><td><strong>Devin</strong></td><td>多 Agent 商业系统</td><td>端到端商业化</td><td>闭源不透明</td></tr>
+</table>
+    </section>
+
+    <section class="chapter" id="ch17">
+      <div class="ch-head"><div class="num">17</div><div class="t"><h2>设计模式总览</h2></div></div>
+      <div class="highlight">Trae Agent 的代码架构体现了多种经典设计模式，理解这些模式对于二次开发至关重要。</div>
+
+<table>
+<tr><th>模式</th><th>应用位置</th><th>说明</th></tr>
+<tr>
+  <td><strong>门面 (Facade)</strong></td>
+  <td><code>Agent</code> 类</td>
+  <td>统一入口，屏蔽内部 Agent + Tool + LLM 的复杂性</td>
+</tr>
+<tr>
+  <td><strong>策略 (Strategy)</strong></td>
+  <td><code>LLMClient</code> / <code>BaseLLMClient</code></td>
+  <td>7 种 LLM 提供商可运行时互换</td>
+</tr>
+<tr>
+  <td><strong>模板方法 (Template Method)</strong></td>
+  <td><code>BaseAgent.execute_task()</code></td>
+  <td>定义算法骨架（循环），子类覆写特定步骤（完成判定、反思等）</td>
+</tr>
+<tr>
+  <td><strong>工厂 (Factory)</strong></td>
+  <td><code>Agent.__init__</code></td>
+  <td>根据 AgentType 枚举创建具体 Agent 实例</td>
+</tr>
+<tr>
+  <td><strong>适配器 (Adapter)</strong></td>
+  <td><code>MCPTool</code></td>
+  <td>将 MCP 协议的工具适配到本地 Tool 接口</td>
+</tr>
+<tr>
+  <td><strong>代理 (Proxy)</strong></td>
+  <td><code>DockerToolExecutor</code></td>
+  <td>透明地将工具调用路由到 Docker 容器内执行</td>
+</tr>
+<tr>
+  <td><strong>注册表 (Registry)</strong></td>
+  <td><code>tools_registry</code></td>
+  <td>全局工具名称到类的映射，支持动态注册</td>
+</tr>
+<tr>
+  <td><strong>观察者 (Observer)</strong></td>
+  <td><code>CLIConsole.update_status()</code></td>
+  <td>Agent 状态变化驱动 UI 更新</td>
+</tr>
+<tr>
+  <td><strong>数据类 (Dataclass)</strong></td>
+  <td><code>AgentStep</code>, <code>LLMMessage</code></td>
+  <td>纯数据交换对象，无业务逻辑</td>
+</tr>
+</table>
+    </section>
+
+    <section class="chapter" id="ch18">
+      <div class="ch-head"><div class="num">18</div><div class="t"><h2>二次开发指南</h2><div class="sub">如果要构建一个更强的 Coding Agent 平台，建议融合 Trae Agent 和 O…</div></div></div>
+      <div class="highlight">基于对架构的深度分析，本节为组内开发代码 Agent 提供实践参考。</div>
+
+<h3>18.1 可扩展性设计</h3>
+
+<div class="module-card">
+<h4>添加新工具</h4>
+<ol>
+  <li>继承 <code>Tool</code> 抽象基类</li>
+  <li>实现 <code>get_name()</code> / <code>get_description()</code> / <code>get_parameters()</code> / <code>execute()</code></li>
+  <li>在 <code>tools_registry</code> 中注册</li>
+  <li>在 YAML 配置的 <code>tools</code> 列表中启用</li>
+</ol>
+</div>
+
+<div class="module-card">
+<h4>添加新 LLM Provider</h4>
+<ol>
+  <li>继承 <code>BaseLLMClient</code>，实现 <code>chat()</code> 和 <code>set_chat_history()</code></li>
+  <li>在 <code>LLMProvider</code> 枚举中添加新项</li>
+  <li>在 <code>LLMClient</code> 的延迟导入分支中添加映射</li>
+</ol>
+</div>
+
+<div class="module-card">
+<h4>添加新 Agent 类型</h4>
+<ol>
+  <li>继承 <code>BaseAgent</code>，覆写需要的模板方法</li>
+  <li>在 <code>AgentType</code> 枚举中添加新项</li>
+  <li>在 <code>Agent.__init__</code> 的工厂分支中添加创建逻辑</li>
+</ol>
+</div>
+
+<h3>18.2 二次开发改进方向</h3>
+
+<table>
+<tr><th>改进方向</th><th>当前现状</th><th>建议方案</th><th>优先级</th></tr>
+<tr>
+  <td><strong>长期记忆</strong></td>
+  <td>无 Memory DB / Vector DB</td>
+  <td>外部增加 Project Memory 层，通过 Prompt 注入</td>
+  <td>🔴 高</td>
+</tr>
+<tr>
+  <td><strong>Context Compaction</strong></td>
+  <td>仅 Lakeview 摘要</td>
+  <td>借鉴 OpenClaw 的 Compaction，自动压缩历史对话</td>
+  <td>🔴 高</td>
+</tr>
+<tr>
+  <td><strong>Session 持久化</strong></td>
+  <td>Job 模式，任务结束即终止</td>
+  <td>增加 Session Store，支持跨任务上下文延续</td>
+  <td>🟡 中</td>
+</tr>
+<tr>
+  <td><strong>Plugin 生态</strong></td>
+  <td>内置工具 + MCP</td>
+  <td>设计 Plugin SDK，支持第三方工具热加载</td>
+  <td>🟡 中</td>
+</tr>
+<tr>
+  <td><strong>多 Agent 协作</strong></td>
+  <td>单 Agent + GPS 评估</td>
+  <td>支持 Review Agent / RCA Agent 等多 Agent 编排</td>
+  <td>🟡 中</td>
+</tr>
+<tr>
+  <td><strong>Context Pruning</strong></td>
+  <td>无智能裁剪</td>
+  <td>基于相关性评分裁剪无关上下文</td>
+  <td>🟢 低</td>
+</tr>
+<tr>
+  <td><strong>可视化 Dashboard</strong></td>
+  <td>仅 CLI</td>
+  <td>基于 Trajectory 数据构建 Web Dashboard</td>
+  <td>🟢 低</td>
+</tr>
+</table>
+
+<h3>18.3 融合二者的理想架构</h3>
+<p>如果要构建一个更强的 Coding Agent 平台，建议融合 Trae Agent 和 OpenClaw 的优点：</p>
+
+<div class="flow">
+  <div class="flow-title">Trae × OpenClaw 融合多智能体架构</div>
+  <div class="flow-node accent"><div class="nlabel">API / Gateway Layer</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Multi-Agent Orchestrator</div><div class="nsub">Review Agent / RCA Agent / Code Agent / Test Agent</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">核心三支柱</div>
+    <ul class="pairs">
+      <li><b>Planning（来自 Trae）</b><span>Sequential Thinking + GPS Search</span></li>
+      <li><b>Memory（来自 OpenClaw）</b><span>Project Memory + Session Store + Context Compaction</span></li>
+      <li><b>Tool Manager（融合）</b><span>Local + MCP + Plugin + Docker Sandbox</span></li>
+    </ul>
+  </div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Agent Runtime Core</div><div class="nsub">共有 Agent Loop / Template Method / Strategy</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">LLM Provider Layer</div><div class="nsub">OpenAI / Anthropic / Gemini / Doubao / Ollama / Custom</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Execution Layer</div><div class="nsub">Bash / FileEdit / CKG / MCP / Docker / Custom Plugin</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">Observability</div><div class="nsub">Trajectory + Metrics + Dashboard</div></div>
+</div>
+
+<div class="key-point">
+  借鉴 Trae 的 Repository Intelligence、Planning、Search、Trajectory，提升复杂代码任务能力。借鉴 OpenClaw 的 Agent Core、Session、Plugin SDK、Workspace、Context Compaction，提升可扩展性、长期运行能力和工程化程度。这样得到的会更接近一个既能持续运行、又能完成复杂软件工程任务的通用 Agent 平台。
+</div>
+
+<h3>18.4 架构设计核心原则</h3>
+<p>从 Trae Agent 中提炼出的、适用于自研 Code Agent 的核心原则：</p>
+
+<div class="flow-step">
+  <div class="flow-num">1</div>
+  <div class="flow-content">
+    <strong>Agent Runtime 与 Tool 完全解耦</strong> —— Planner、Executor、Tool、LLM 之间边界清晰，方便替换模型或新增工具。不要把业务逻辑耦合到 Agent 循环中。
+  </div>
+</div>
+
+<div class="flow-step">
+  <div class="flow-num">2</div>
+  <div class="flow-content">
+    <strong>Repository-first</strong> —— 不是"读一个文件"，而是围绕整个代码仓库进行理解和决策。投资代码索引（CKG / tree-sitter / 依赖分析）比投资更好的 Prompt 更有回报。
+  </div>
+</div>
+
+<div class="flow-step">
+  <div class="flow-num">3</div>
+  <div class="flow-content">
+    <strong>Replace-based Editing</strong> —— 基于查找/替换生成 Patch，而不是重写整文件。减少 Token 消耗并提升 Patch 稳定性。
+  </div>
+</div>
+
+<div class="flow-step">
+  <div class="flow-num">4</div>
+  <div class="flow-content">
+    <strong>Context Compression 是长任务的生命线</strong> —— Lakeview 摘要机制将每步压缩为结构化摘要，是长任务 Agent 的关键能力。未来需要更激进的 Compaction。
+  </div>
+</div>
+
+<div class="flow-step">
+  <div class="flow-num">5</div>
+  <div class="flow-content">
+    <strong>Trajectory 全链路记录</strong> —— Prompt、工具调用、观察结果、决策全部可回放。没有 Trajectory，就没有 Debug Agent 的能力，也没有改进的依据。
+  </div>
+</div>
+
+<div class="flow-step">
+  <div class="flow-num">6</div>
+  <div class="flow-content">
+    <strong>Test-time Scaling / Search</strong> —— 复杂任务不应依赖单次推理。Generator-Pruner-Selector 的搜索范式是提升质量的有效方法，值得在关键任务中使用。
+  </div>
+</div>
+
+<div class="flow-step">
+  <div class="flow-num">7</div>
+  <div class="flow-content">
+    <strong>记忆层独立于 Agent</strong> —— 不要把记忆耦合到 Agent 内部。外部维护 Project Memory，每次调用时注入上下文，这样切换底层 Agent 时记忆层可复用。
+  </div>
+</div>
+    </section>
+
+    <section class="chapter" id="ch19">
+      <div class="ch-head"><div class="num">19</div><div class="t"><h2>参考资料</h2></div></div>
+      <ol class="ref-list">
+  <li id="ref-1"><span class="ref-num">1</span> Trae Research Team. "Trae Agent: An LLM-based Agent for Software Engineering with Test-time Scaling." arXiv:2507.23370, July 2025. <a href="https://arxiv.org/abs/2507.23370">arxiv.org/abs/2507.23370</a></li>
+  <li id="ref-2"><span class="ref-num">2</span> ByteDance. "Trae Agent - GitHub Repository." <a href="https://github.com/bytedance/trae-agent">github.com/bytedance/trae-agent</a></li>
+  <li id="ref-3"><span class="ref-num">3</span> Anthropic. "Building effective agents." Anthropic Research Blog, December 2024.</li>
+  <li id="ref-4"><span class="ref-num">4</span> Anthropic. "Anthropic Quickstarts - Computer Use Demo." <a href="https://github.com/anthropics/anthropic-quickstarts">github.com/anthropics/anthropic-quickstarts</a></li>
+  <li id="ref-5"><span class="ref-num">5</span> Princeton NLP. "SWE-agent: Agent-Computer Interfaces Enable Automated Software Engineering." 2024.</li>
+  <li id="ref-6"><span class="ref-num">6</span> OpenAI. "Codex CLI - Open Source Coding Agent." <a href="https://github.com/openai/codex">github.com/openai/codex</a></li>
+  <li id="ref-7"><span class="ref-num">7</span> All Hands AI. "OpenHands - An Open Platform for AI Software Developers." <a href="https://github.com/All-Hands-AI/OpenHands">github.com/All-Hands-AI/OpenHands</a></li>
+  <li id="ref-8"><span class="ref-num">8</span> Yao et al. "ReAct: Synergizing Reasoning and Acting in Language Models." ICLR 2023.</li>
+  <li id="ref-9"><span class="ref-num">9</span> Model Context Protocol Specification. <a href="https://modelcontextprotocol.io">modelcontextprotocol.io</a></li>
+  <li id="ref-10"><span class="ref-num">10</span> SWE-bench. "SWE-bench: Can Language Models Resolve Real-World GitHub Issues?" <a href="https://www.swebench.com">swebench.com</a></li>
+</ol>
+    </section>
+
+    <section class="chapter" id="q-a">
+      <div class="ch-head"><div class="num">20</div><div class="t"><h2>Q&amp;A</h2></div></div>
+      <details class="qa">
+  <summary>Trae Agent 和 Claude Code 哪个更适合做二次开发底座？</summary>
+  <div class="a">Trae Agent 更适合。它完全开源（MIT），架构透明，模块化程度高，且专为研究场景设计。Claude Code 虽然工程能力强，但闭源且绑定单一模型，不适合深度定制。Trae Agent 的 Tool Framework、Agent Loop、Trajectory 记录等都可以直接复用。</div>
+</details>
+
+<details class="qa">
+  <summary>Lakeview 摘要会不会丢失关键信息？</summary>
+  <div class="a">这是设计取舍。Lakeview 将每步压缩为 task（10 词）+ details（30 词）+ tag，确实会丢失细节。但原始数据完整保留在 Trajectory 文件中，摘要只用于上下文管理。如果需要回溯细节，可以直接查看 Trajectory。对于超长任务，建议结合 Context Compaction 进一步优化。</div>
+</details>
+
+<details class="qa">
+  <summary>如何在不修改源码的情况下扩展工具？</summary>
+  <div class="a">通过 MCP 协议。在 <code>trae_config.yaml</code> 中配置 <code>mcp_servers</code>，即可动态接入 GitHub、Jira、Playwright 等外部工具，无需修改 Agent 代码。MCP 工具会被自动发现并注册到 ToolExecutor 中。</div>
+</details>
+
+<details class="qa">
+  <summary>GPS（Generator-Pruner-Selector）在开源版本中可用吗？</summary>
+  <div class="a">部分可用。开源版本的 <code>evaluation/patch_selection/</code> 目录包含了 Selector Agent 和评估框架的完整实现，但 Generator 需要外部系统生成候选 Patch（输入为 JSONL 格式）。Pruner 的回归测试和去重逻辑已集成在 SelectorEvaluation 中。</div>
+</details>
+
+<details class="qa">
+  <summary>Trae Agent 的最大短板是什么？如何弥补？</summary>
+  <div class="a">最大短板是<strong>长期记忆</strong>。当前无 Memory DB / Vector DB，跨会话无法延续上下文。建议：(1) 外部增加 Project Memory 层，存储编码规范、历史 Review、RCA 结果等；(2) 每次调用 Trae Agent 时通过 Prompt 注入相关记忆；(3) 利用 Trajectory 文件作为"离线记忆"进行分析。这样记忆层与 Agent 解耦，切换底层 Agent 时可复用。</div>
+</details>
+
+<details class="qa">
+  <summary>Sequential Thinking 工具和 LLM 原生 CoT 有什么区别？</summary>
+  <div class="a">Sequential Thinking 是一个<strong>显式工具</strong>，维护结构化的 thought_history 和 branches 数据，支持修订（is_revision）和分支（branch_from_thought）。而 LLM 原生 CoT 是隐式的思维链，无法跨调用保持状态。Sequential Thinking 让推理过程更可控、可追溯，并且可以在思考之间穿插 Bash 命令获取外部信息。</div>
+</details>
+
+<details class="qa">
+  <summary>Agent Loop 中的 max_steps 设置多大合适？</summary>
+  <div class="a">默认 200 步。对于简单任务（写脚本、修小 Bug），50-100 步足够；对于复杂任务（跨模块重构、多文件修复），建议 200-300 步。超过 300 步的任务建议拆分为多个子任务，否则上下文膨胀会影响 Agent 质量。配合 Lakeview 摘要可一定程度缓解这个问题。</div>
+</details>
+
+
+<div class="doc-footer">
+  Trae Agent Architecture Deep Dive &mdash; Generated for Team Sharing
+  <div class="sub">Based on GitHub source code (commit e839e55) + arXiv:2507.23370 technical report</div>
+</div>
+    </section>
+
+    <footer>
+      <div class="made">TECH NOTES · AI 工程 · 整理自 AI Knowledge Hub</div>
+    </footer>
+  </main>
+</div>
+
+<script>
+(function(){var bar=document.getElementById('progress');function u(){var h=document.documentElement;bar.style.width=h.scrollTop/(h.scrollHeight-h.clientHeight)*100+'%';}window.addEventListener('scroll',u,{passive:true});u();})();
+(function(){var links=document.querySelectorAll('aside.toc nav a');var secs=Array.from(document.querySelectorAll('section.chapter'));if(!secs.length)return;function u(){var y=window.scrollY+100,cur=secs[0];for(var i=0;i<secs.length;i++){if(secs[i].offsetTop<=y)cur=secs[i];}var id=cur.id;links.forEach(function(a){a.classList.toggle('active',a.getAttribute('href')==='#'+id);});}window.addEventListener('scroll',u,{passive:true});u();})();
+</script>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LangGraph 三要素：节点、边、状态 · AI 工程 — Tech Notes</title>
+<meta name="description" content="Nodes 拆任务 / Edges 建状态机 / State 保现场 / Reducer 归约 / Pregel 超步模型 / 生产级 Agent 编排">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<link rel="stylesheet" href="../assets/kh-guide.css">
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav">
+
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="ai_engineering_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 13 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>A19 · AI 工程</h2>
+    <nav>
+      <ol>
+        <li><a href="#overview" class="active">概览</a></li>
+        <li><a href="#chain-graph">从 Chain 到 Graph：为什么线性管道不够用</a></li>
+        <li><a href="#nodes">节点（Nodes）：独立可替换的执行单元</a></li>
+        <li><a href="#edges">边（Edges）：动态状态机与条件路由</a></li>
+        <li><a href="#state">状态（State）：上下文持久化与字段隔离</a></li>
+        <li><a href="#pregel">Pregel 超步执行模型：三要素如何协同运转</a></li>
+        <li><a href="#ch6">生产级架构设计与选型指南</a></li>
+        <li><a href="#q-a-8">Q&amp;A（8 题）</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+    <header class="hero">
+      <div class="badge">A19 · AI 工程</div>
+      <h1>LangGraph 三要素：节点、边、状态</h1>
+      <p class="sub">Nodes 拆任务 / Edges 建状态机 / State 保现场 / Reducer 归约 / Pregel 超步模型 / 生产级 Agent 编排</p>
+      <div class="meta-row">
+        <span class="pill cyan">AI 工程</span>
+        <span class="pill green">阅读 ~13 min</span>
+        <span class="pill amber">8 章</span>
+      </div>
+    </header>
+
+    <section class="chapter" id="overview">
+      <div class="ch-head"><div class="num">00</div><div class="t"><h2>概览</h2><div class="sub">LangGraph 的核心洞察是：Agent 工作流不是&quot;线性管道&quot;而是&quot;有状态图&quot;</div></div></div>
+      <div class="intuition-box">
+<p>LangGraph 的核心洞察是：Agent 工作流不是"线性管道"而是"有状态图"。线性管道（A→B→C）无法处理循环、分支、崩溃恢复；而图结构 + 状态机天然支持条件路由、回环重试、并行执行和 Checkpoint 持久化。三要素——<span class="term">节点</span>、<span class="term">边</span>、<span class="term">状态</span>——共同构成了生产级 Agent 编排的基础。</p>
+</div>
+    </section>
+
+    <section class="chapter" id="chain-graph">
+      <div class="ch-head"><div class="num">01</div><div class="t"><h2>从 Chain 到 Graph：为什么线性管道不够用</h2><div class="sub">LangChain 的 Chain（LCEL）解决的是&quot;连通性&quot;——把 LLM、工具、解析器…</div></div></div>
+      <div class="intuition-box">
+<p>LangChain 的 Chain（LCEL）解决的是"连通性"——把 LLM、工具、解析器用管道串联起来。但当 Agent 需要循环、分支、持久化、人机协作时，线性管道的抽象就迅速崩解。LangGraph 解决的是"编排性"——让 Agent 工作流具备状态机的灵活性。</p>
+</div>
+
+<table>
+<tr><th>需求</th><th>Chain（线性管道）的困境</th><th>LangGraph（状态图）的解法</th></tr>
+<tr><td><strong>循环迭代</strong></td><td>DAG 不支持回环——Agent 调用工具后无法回到 LLM 节点</td><td>StateGraph 原生支持循环边</td></tr>
+<tr><td><strong>条件分支</strong></td><td>需要大量 if/else 嵌套 hack</td><td>条件边（Conditional Edges）显式声明路由</td></tr>
+<tr><td><strong>状态持久化</strong></td><td>进程崩溃后丢失全部上下文</td><td>Checkpoint 机制，状态落盘到 PostgreSQL/SQLite/Redis</td></tr>
+<tr><td><strong>人机协作</strong></td><td>无法在中途暂停等待人工审批</td><td><code>interrupt()</code> 原语冻结状态，恢复时继续</td></tr>
+<tr><td><strong>多 Agent 协作</strong></td><td>多 Agent 之间状态共享困难</td><td>共享 TypedDict 状态 + Supervisor 模式</td></tr>
+<tr><td><strong>故障定位</strong></td><td>全链路排查，小时级定位</td><td>精确到节点+分支，分钟级定位</td></tr>
+</table>
+
+<p>正如 LangChain 团队在 2025 年 v1.0 发布时明确界定的：<strong>"LangChain 是 Agent 框架（集成与抽象），LangGraph 是编排运行时（durable execution、流式传输、人机协作、持久化）"</strong>。截至 2026 年 6 月，LangGraph TypeScript 版的 npm 周下载量超过 42,000 次，Replit、Uber、LinkedIn、GitLab 等公司都在使用它构建生产级 Agent。</p>
+
+<div class="highlight">
+<strong>生产数据：</strong>某客服 Agent 从 Chain 迁移到 LangGraph 后：(1) 节点化使单节点热替换时间从 <strong>30 分钟</strong>（全量部署）降至 <strong>2 分钟</strong>（单节点更新），月度发版频率从 1 次提升至 <strong>8 次</strong>；(2) 条件路由使工单分类准确率从固定 Chain 的 <strong>72%</strong> 提升至 <strong>91%</strong>（根据意图动态路由到 5 个处理分支）。
+</div>
+    </section>
+
+    <section class="chapter" id="nodes">
+      <div class="ch-head"><div class="num">02</div><div class="t"><h2>节点（Nodes）：独立可替换的执行单元</h2><div class="sub">节点的本质是将复杂 Agent 任务拆分为 独立、可替换的执行单元</div></div></div>
+      <div class="intuition-box">
+<p>节点的本质是将复杂 Agent 任务拆分为<span class="term">独立、可替换的执行单元</span>。每个节点是一个普通函数，接收当前状态作为输入，返回状态的局部更新（只返回变化的字段）。修改一个节点不影响其他节点。</p>
+</div>
+
+<h3>节点的三大工程价值</h3>
+
+<table>
+<tr><th>价值</th><th>说明</th><th>生产示例</th></tr>
+<tr><td><span class="term">独立升级</span></td><td>修改单一节点不影响其他组件</td><td>向量检索节点替换为混合检索节点仅需一下午</td></tr>
+<tr><td><span class="term">快速排障</span></td><td>通过节点日志秒级定位问题模块</td><td>答案不准时直接锁定重排节点，无需全链路排查</td></tr>
+<tr><td><span class="term">可测试性</span></td><td>每个节点可独立单元测试</td><td>Mock 上游节点输出，验证当前节点逻辑</td></tr>
+</table>
+
+<h3>节点函数签名</h3>
+
+<pre><code>def planner_node(state: AgentState) -> dict:
+    """规划节点：根据用户输入生成执行计划"""
+    plan = planner_llm.invoke(state["messages"])
+    return {"plan": plan.steps}  # 只返回变化的字段
+
+def executor_node(state: AgentState) -> dict:
+    """执行节点：取出计划中的下一步，调用工具执行"""
+    current_step = state["plan"][len(state["past_steps"])]
+    result = tool_agent.invoke(current_step)
+    return {"past_steps": [(current_step, result)]}  # 追加模式</code></pre>
+
+<p>关键设计原则：每个节点函数<strong>只返回变化的字段</strong>（partial update），而非完整状态。LangGraph 框架自动将 partial update 合并到全局状态中。这确保了节点之间的松耦合——检索节点不需要知道生成节点需要什么字段，它只负责自己的输出。</p>
+
+<div class="arch-diagram">┌─────────────── 典型 RAG Agent 节点编排 ──────────────────┐
+│                                                          │
+│  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐  │
+│  │  意图识别    │    │  混合检索    │    │  结果重排    │  │
+│  │ Intent Node │ →  │ Retrieve    │ →  │ Rerank      │  │
+│  │             │    │ BM25+Embed  │    │ CrossEnc    │  │
+│  │ 读:messages │    │ 读:messages │    │ 读:chunks   │  │
+│  │ 写:intent   │    │ 写:chunks   │    │ 写:scores   │  │
+│  └─────────────┘    └─────────────┘    └──────┬──────┘  │
+│                                               │         │
+│                                        ┌──────▼──────┐  │
+│                                        │  最终生成    │  │
+│                                        │ Generate    │  │
+│                                        │ 读:所有字段  │  │
+│                                        │ 写:messages  │  │
+│                                        └─────────────┘  │
+│                                                          │
+│  每个节点独立可替换：升级 Rerank 模型只需替换重排节点       │
+└──────────────────────────────────────────────────────────┘</div>
+    </section>
+
+    <section class="chapter" id="edges">
+      <div class="ch-head"><div class="num">03</div><div class="t"><h2>边（Edges）：动态状态机与条件路由</h2><div class="sub">边的本质是构建 动态执行的状态机 ，解决线性流程的僵化问题</div></div></div>
+      <div class="intuition-box">
+<p>边的本质是构建<span class="term">动态执行的状态机</span>，解决线性流程的僵化问题。边不是编译时写死的执行顺序，而是运行时根据当前状态动态决定下一步走向哪个节点。这让同一个 Agent 图可以根据用户输入走完全不同的执行路径。</p>
+</div>
+
+<h3>三种边类型</h3>
+
+<table>
+<tr><th>类型</th><th>作用</th><th>实现方式</th><th>适用场景</th></tr>
+<tr><td><span class="term">普通边</span></td><td>固定路由（A 总是到 B）</td><td><code>add_edge("A", "B")</code></td><td>线性子流程</td></tr>
+<tr><td><span class="term">条件边</span></td><td>动态分支（根据状态决定走向）</td><td><code>add_conditional_edges(source, path_fn)</code></td><td>意图路由、错误处理</td></tr>
+<tr><td><span class="term">入口边</span></td><td>指定图的起始节点</td><td><code>add_edge("__start__", first_node)</code></td><td>图的入口定义</td></tr>
+</table>
+
+<h3>条件路由：Agent 的核心灵活性</h3>
+
+<div class="arch-diagram">┌─────────────────── 条件路由决策树 ───────────────────────┐
+│                                                          │
+│              ┌→ 闲聊 ──── 生成节点（直接回复）             │
+│              │                                           │
+│  意图识别 ────┼→ 专业问题 → 检索节点 → 重排 → 生成        │
+│              │                                           │
+│              └→ 订单查询 → 工具调用节点                   │
+│                                │                         │
+│                          ┌─────┴─────┐                   │
+│                          ↓           ↓                   │
+│                     成功→返回    失败→错误分类             │
+│                                      │                   │
+│                          ┌───────────┼───────────┐       │
+│                          ↓           ↓           ↓       │
+│                     参数修正     备用工具      转人工      │
+│                          │           │                   │
+│                          └──→ 回环重试 ←─┘               │
+│                               (最多 3 次)                 │
+│                                                          │
+└──────────────────────────────────────────────────────────┘</div>
+
+<h3>容灾机制：回环重试与降级兜底</h3>
+
+<div class="intuition-box">
+<p>条件边 + 回环 = 自愈能力。当工具调用失败时，条件边检测到错误类型，路由到"参数修正"节点，修正后回到工具调用节点重试。超过重试次数后降级到备用工具或转人工。这种"检测-修正-重试-降级"的循环在 Chain 中无法实现（DAG 不支持回环），但在 LangGraph 中是原生能力。</p>
+</div>
+
+<table>
+<tr><th>故障类型</th><th>处理策略</th><th>实现方式</th><th>LangGraph 特性</th></tr>
+<tr><td><strong>参数错误</strong></td><td>自动修正重试</td><td>错误分类节点 → 参数修正 → 回环重试</td><td>循环边（Chain 不支持）</td></tr>
+<tr><td><strong>网络超时</strong></td><td>切换备用工具</td><td>条件边检测 timeout → 路由到备用节点</td><td>条件路由</td></tr>
+<tr><td><strong>多次失败</strong></td><td>转人工兜底</td><td>重试计数器 → 超限后降级到人工处理</td><td>状态 + 条件边</td></tr>
+<tr><td><strong>需要审批</strong></td><td>暂停等待人工</td><td><code>interrupt()</code> 冻结状态 → 恢复时继续</td><td>Human-in-the-Loop</td></tr>
+</table>
+
+<div class="highlight">
+<strong>关键设计：</strong>边的条件路由是运行时动态决定的，不是编译时写死的。这意味着同一个 Agent 图可以根据用户输入走完全不同的执行路径——闲聊走短路、专业问题走检索增强、订单查询走工具调用。在客服系统中，条件路由使工单分类准确率从固定 Chain 的 <strong>72%</strong> 提升至 <strong>91%</strong>，因为每个意图都有专属的处理路径。
+</div>
+    </section>
+
+    <section class="chapter" id="state">
+      <div class="ch-head"><div class="num">04</div><div class="t"><h2>状态（State）：上下文持久化与字段隔离</h2><div class="sub">状态的本质是 上下文持久化 和 执行现场保存</div></div></div>
+      <div class="intuition-box">
+<p>状态的本质是<span class="term">上下文持久化</span>和<span class="term">执行现场保存</span>。状态是一个 TypedDict（或 dataclass），由所有节点共享。每个节点读写状态中的特定字段，形成全链路可追溯的执行记录。状态通过 <span class="term">Reducer</span>（归约器）控制字段的合并策略——累加还是覆盖。</p>
+</div>
+
+<h3>状态数据结构</h3>
+
+<pre><code>from typing_extensions import TypedDict, Annotated
+from operator import add
+
+class AgentState(TypedDict):
+    messages: Annotated[list, add]      # 对话历史（累加归约器）
+    plan: list[str]                     # 执行计划（覆盖模式）
+    past_steps: Annotated[list, add]    # 已执行步骤（累加）
+    intent: str                         # 意图分类结果（覆盖）
+    retrieved_chunks: list[str]         # 检索到的文档块（覆盖）
+    rerank_scores: list[float]          # 重排分数（覆盖）
+    error_count: int                    # 错误计数（覆盖）</code></pre>
+
+<h3>Reducer 归约器：累加 vs 覆盖</h3>
+
+<table>
+<tr><th>字段类型</th><th>Reducer</th><th>行为</th><th>适用字段</th></tr>
+<tr><td><code>Annotated[list, add]</code></td><td>累加</td><td>新值追加到列表末尾</td><td>messages、past_steps（历史记录不能丢失）</td></tr>
+<tr><td>普通字段</td><td>覆盖（默认）</td><td>新值替换旧值</td><td>intent、plan、error_count（只需最新值）</td></tr>
+<tr><td>自定义 Reducer</td><td>自定义函数</td><td>按业务逻辑合并</td><td>去重、TopK、加权合并等特殊需求</td></tr>
+</table>
+
+<h3>字段隔离原则</h3>
+
+<p>每个节点只读写必要字段，避免状态污染：</p>
+
+<ul>
+<li><strong>意图识别节点</strong>：只读 <code>messages</code>，只写 <code>intent</code></li>
+<li><strong>检索节点</strong>：只读 <code>messages</code>，只写 <code>retrieved_chunks</code></li>
+<li><strong>重排节点</strong>：只读 <code>retrieved_chunks</code>，只写 <code>rerank_scores</code></li>
+<li><strong>生成节点</strong>：读所有字段，只写 <code>messages</code></li>
+</ul>
+
+<div class="intuition-box">
+<p>字段隔离的工程价值：(1) 节点间互不干扰——检索节点不会意外覆盖生成节点的输出；(2) 问题定位更精准——如果检索结果异常，只需要检查检索节点的输入和输出字段；(3) 状态瘦身——不需要每个节点都保存完整数据，只存储必要的 chunk ID 和摘要。</p>
+</div>
+    </section>
+
+    <section class="chapter" id="pregel">
+      <div class="ch-head"><div class="num">05</div><div class="t"><h2>Pregel 超步执行模型：三要素如何协同运转</h2><div class="sub">LangGraph 的底层执行引擎借鉴了 Google 的 Pregel 图计算框架，采用…</div></div></div>
+      <div class="intuition-box">
+<p>LangGraph 的底层执行引擎借鉴了 Google 的 <span class="term">Pregel</span> 图计算框架，采用<strong>超步（Superstep）</strong>模型。每个超步包含三个阶段：PULL（节点触发检测）→ PUSH（动态任务分发）→ apply_writes（状态归约与屏障同步）。理解超步模型是深入理解 LangGraph 行为的关键。</p>
+</div>
+
+<div class="flow">
+  <div class="flow-title">Pregel 超步（Superstep）执行流程</div>
+  <div class="flow-node accent"><div class="nlabel">Superstep 0 · 状态初始化</div><div class="nsub">从 Checkpoint 或用户输入加载；thread_id + checkpoint_id → 恢复历史状态</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Superstep 1 · PULL（节点触发检测）</div><div class="nsub">对比 versions_seen vs channel_versions，触发通道版本更新 → 节点执行（O(1) 检查）</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Superstep 2 · PUSH（动态任务分发）</div><div class="nsub">节点产生 Send()/Call() → 分发下游（可并行）；UUID5/XXH3 确定性任务 ID</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Superstep N · apply_writes（状态归约 + 屏障同步）</div><div class="nsub">partial update 合并到全局状态；Reducer 决定累加/覆盖；写入完成才进下一超步</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">Checkpoint 持久化</div><div class="nsub">序列化到 Postgres/SQLite/Redis（ACID + JSONB），每个超步完成后自动触发</div></div>
+</div>
+
+<h3>版本化状态通道</h3>
+
+<p>LangGraph 不直接比较值的变化，而是维护每个通道的<strong>版本计数器</strong>（<code>channel_versions</code>）和每个节点<strong>已见的版本</strong>（<code>versions_seen</code>）。当任一触发通道的版本比节点最后见的版本新时，节点触发——这是一个 O(1) 的高效检查。这避免了"比较两个大型状态对象是否相同"的高开销操作。</p>
+
+<div class="formula">
+节点触发条件：∃ channel c, channel_versions[c] > versions_seen[node][c]
+</div>
+
+<h3>三要素协同效果</h3>
+
+<table>
+<tr><th>能力</th><th>传统 Chain 方案</th><th>LangGraph 三要素协同</th></tr>
+<tr><td><strong>故障定位</strong></td><td>小时级（全链路排查）</td><td>5 分钟（精确到节点+分支+状态快照）</td></tr>
+<tr><td><strong>版本升级</strong></td><td>全量重启，影响范围大</td><td>单节点热替换，影响缩小 90%</td></tr>
+<tr><td><strong>服务重启</strong></td><td>业务中断，用户重新操作</td><td>Checkpoint 恢复，业务连续性 100%</td></tr>
+<tr><td><strong>调试排查</strong></td><td>只能加日志，无法复现</td><td>Checkpoint 回放，逐步调试（Time Travel）</td></tr>
+<tr><td><strong>并行执行</strong></td><td>不支持</td><td>Send() 动态扇出到多个节点并行处理</td></tr>
+</table>
+    </section>
+
+    <section class="chapter" id="ch6">
+      <div class="ch-head"><div class="num">06</div><div class="t"><h2>生产级架构设计与选型指南</h2></div></div>
+      <div class="arch-diagram">┌─────────────────── 生产级 LangGraph Agent 系统架构 ──────────────────┐
+│                                                                       │
+│  ┌─────────┐     ┌────────────────────────────────────────────────┐   │
+│  │  用户    │────▶│  StateGraph (图定义)                            │   │
+│  │  请求    │     │  ┌─────────┐  ┌─────────┐  ┌─────────┐       │   │
+│  └─────────┘     │  │ 节点 A   │  │ 节点 B   │  │ 节点 C   │       │   │
+│                   │  │ 意图识别 │→ │ 检索增强 │→ │ 最终生成 │       │   │
+│                   │  └─────────┘  └─────────┘  └─────────┘       │   │
+│                   │       ↑ 条件边(动态路由) ↓                      │   │
+│                   │  ┌─────────┐  ┌─────────┐                     │   │
+│                   │  │ 节点 D   │  │ 节点 E   │                     │   │
+│                   │  │ 工具调用 │  │ 错误处理 │  ← 回环重试         │   │
+│                   │  └─────────┘  └─────────┘                     │   │
+│                   └──────────────────┬─────────────────────────────┘   │
+│                                      │                                 │
+│         ┌────────────────────────────┼────────────────────────────┐    │
+│         ▼                            ▼                            ▼    │
+│  ┌──────────────┐     ┌────────────────────┐     ┌────────────────┐   │
+│  │  Checkpointer│     │  流式传输           │     │  可观测性      │   │
+│  │  Postgres /  │     │  stream_mode:      │     │  LangSmith     │   │
+│  │  SQLite /    │     │  "values" |        │     │  节点级追踪    │   │
+│  │  Redis /     │     │  "updates" |       │     │  延迟热力图    │   │
+│  │  DynamoDB    │     │  "messages" |      │     │  错误率监控    │   │
+│  │              │     │  "checkpoints"     │     │               │   │
+│  └──────────────┘     └────────────────────┘     └────────────────┘   │
+│                                                                       │
+│  ┌────────────────────────────────────────────────────────────────┐   │
+│  │  Human-in-the-Loop                                             │   │
+│  │  interrupt() → 冻结状态 → 通知审批人 → Command(resume=结果)     │   │
+│  │  支持：审批流程 / 确认操作 / 数据校验                           │   │
+│  └────────────────────────────────────────────────────────────────┘   │
+│                                                                       │
+└───────────────────────────────────────────────────────────────────────┘</div>
+
+<h3>存储选型</h3>
+
+<table>
+<tr><th>Checkpointer</th><th>适用场景</th><th>优势</th><th>风险点</th></tr>
+<tr><td><strong>InMemorySaver</strong></td><td>开发/测试</td><td>零配置，零延迟</td><td>服务重启数据丢失</td></tr>
+<tr><td><strong>SqliteSaver</strong></td><td>单机生产</td><td>零运维，ACID 保障</td><td>并发能力有限</td></tr>
+<tr><td><strong>PostgresSaver</strong></td><td>大规模集群</td><td>强 ACID，高并发，跨机器</td><td>需 DBA 维护</td></tr>
+<tr><td><strong>DynamoDBSaver</strong></td><td>AWS 云原生</td><td>Serverless，自动扩缩</td><td>AWS 锁定</td></tr>
+</table>
+
+<h3>何时用 LangGraph vs Chain</h3>
+
+<div class="practice-grid">
+<div class="do">
+<ul>
+<li>流程有分支/回环 → LangGraph</li>
+<li>需要持久化中间状态 → LangGraph</li>
+<li>需要单节点热替换 → LangGraph</li>
+<li>需要 Human-in-the-Loop → LangGraph</li>
+<li>需要 Time Travel 调试 → LangGraph</li>
+<li>多 Agent 协作（Supervisor 模式）→ LangGraph</li>
+</ul>
+</div>
+<div class="dont">
+<ul>
+<li>线性流程无分支 → Chain 更简单</li>
+<li>单次 LLM 调用 → 不需要框架</li>
+<li>纯 RAG 管道 → Chain/LCEL 够用</li>
+<li>原型验证阶段 → 先用 Chain 验证再迁移</li>
+<li>不需要状态持久化 → Chain 更轻量</li>
+<li>团队不熟悉图编程 → 先学 Chain 再学 LangGraph</li>
+</ul>
+</div>
+</div>
+
+<div class="highlight">
+<strong>生产案例：</strong>某金融审批 Agent 使用 LangGraph 构建，包含 8 个节点和 12 条条件边。Checkpoint 机制在 Redis 宕机事件中成功恢复了 <strong>2,800 条</strong>进行中的对话（数据零丢失）。系统可用性从 99.2% 提升至 <strong>99.95%</strong>，故障平均恢复时间（MTTR）从 45 分钟降至 <strong>3 分钟</strong>。关键指标：条件路由使审批分类准确率从 72% 提升至 <strong>91%</strong>，节点热替换使月度发版频率从 1 次提升至 <strong>8 次</strong>。
+</div>
+    </section>
+
+    <section class="chapter" id="q-a-8">
+      <div class="ch-head"><div class="num">07</div><div class="t"><h2>Q&amp;A（8 题）</h2></div></div>
+      <details class="qa">
+<summary>LangGraph 的节点、边、状态分别解决什么问题？</summary>
+<div class="a">节点解决"任务拆分"——将复杂 Agent 任务拆为独立可替换的执行单元，支持单节点热替换和精准排障。边解决"流程僵化"——构建动态状态机，根据运行时条件路由到不同分支，支持容灾重试和降级兜底。状态解决"现场保存"——持久化每个节点的中间结果，支持全链路追踪和 Checkpoint 恢复。三者协同实现了生产级 Agent 的可观测、可恢复、可热替换。</div>
+</details>
+
+<details class="qa">
+<summary>为什么不直接用 LangChain 的 Chain，而要用 LangGraph？</summary>
+<div class="a">Chain 是线性管道（A→B→C），无法处理循环（Agent 调用工具后需要回到 LLM 继续推理）、条件分支（不同意图走不同路径）、状态持久化（进程崩溃后恢复）。LangGraph 是图结构 + 状态机，原生支持：(1) 循环边——ReAct Agent 的核心需求；(2) 条件路由——动态决策；(3) Checkpoint——崩溃恢复；(4) Human-in-the-Loop——审批流程。判断标准：流程是否有分支/回环？需要持久化？需要热替换？三条任一是 → LangGraph。</div>
+</details>
+
+<details class="qa">
+<summary>状态中的 Reducer 归约器是什么？为什么重要？</summary>
+<div class="a">Reducer 控制状态字段的合并策略。用 Annotated[list, add] 标记的字段采用累加模式（新值追加到列表末尾），适合对话历史、已执行步骤等不能丢弃的数据。普通字段采用覆盖模式（新值替换旧值），适合意图分类、当前计划等只需最新值的数据。Reducer 的重要性在于：(1) 避免对话历史被覆盖（没有 add Reducer 的话，每条新消息会替换整个历史）；(2) 避免状态膨胀（计划字段不需要保留历史版本）；(3) 支持自定义合并逻辑（如去重、TopK）。</div>
+</details>
+
+<details class="qa">
+<summary>LangGraph 的 Checkpoint 机制和普通数据库存储有什么区别？</summary>
+<div class="a">Checkpoint 是"时间点快照"，而普通数据库是"当前状态"。区别：(1) Checkpoint 保留完整历史——每个节点的中间状态都可回溯，普通数据库只存最新值；(2) Checkpoint 支持"时间旅行"——回到任意历史节点重新执行，普通数据库不支持；(3) Checkpoint 天然适配 Agent 的容错需求——服务重启后从最近 Checkpoint 恢复，普通数据库需要额外实现恢复逻辑。LangGraph 在每个超步完成后自动触发 checkpointer.put()，保存当前状态快照。生产数据：Checkpoint 机制在某次 Redis 宕机事件中恢复了 2,800 条进行中的对话。</div>
+</details>
+
+<details class="qa">
+<summary>Pregel 超步模型是什么？它如何影响 LangGraph 的执行行为？</summary>
+<div class="a">Pregel 是 Google 的图计算框架，LangGraph 借鉴了其超步（Superstep）模型。每个超步包含三个阶段：(1) PULL——检测哪些节点需要触发（通过版本化通道比较，O(1) 效率）；(2) PUSH——执行被触发的节点，分发任务到下游；(3) apply_writes——将所有 partial update 合并到全局状态（屏障同步：所有写入完成后才进入下一步）。理解超步模型有助于：(1) 理解节点并行行为——同一超步中的节点可以并行执行；(2) 理解状态一致性——屏障同步确保所有节点看到一致的状态；(3) 理解 Checkpoint 时机——每个超步完成后自动持久化。</div>
+</details>
+
+<details class="qa">
+<summary>条件边和普通边有什么区别？何时用哪种？</summary>
+<div class="a">普通边（add_edge）是固定路由——A 节点执行完后总是去 B 节点，适合线性子流程（如检索后总是重排）。条件边（add_conditional_edges）是动态路由——A 节点执行完后根据当前状态决定去哪个节点，适合需要决策的场景（如意图识别后根据意图类型路由到不同处理分支）。实际使用中，约 70% 的边是条件边（Agent 的核心价值就在于动态决策），30% 是普通边（简单的线性子步骤）。条件路由函数接收当前状态作为输入，返回下一个节点的名称。</div>
+</details>
+
+<details class="qa">
+<summary>字段隔离原则是什么？为什么每个节点不应该读写所有字段？</summary>
+<div class="a">字段隔离指每个节点只读写自己负责的字段：检索节点只写 retrieved_chunks 不碰 messages；重排节点只读 retrieved_chunks 只写 rerank_scores；生成节点读所有字段但只写 messages。好处：(1) 节点间互不干扰——避免意外覆盖；(2) 问题定位精准——检索异常只需检查检索节点的输入输出；(3) 状态瘦身——不需要每个节点保存完整数据。违反字段隔离的典型反模式：所有节点都读写 messages 字段，导致对话历史被意外修改或重复追加。</div>
+</details>
+
+<details class="qa">
+<summary>LangGraph 适合什么规模的 Agent？小项目用会不会过度工程化？</summary>
+<div class="a">适合有容错/可观测/热替换需求的生产级 Agent（通常 3+ 个节点、需要条件路由）。小项目（单节点、线性流程）用 Chain 就够了，不需要 LangGraph 的状态机和 Checkpoint 开销。判断标准：(1) 流程是否有分支/回环？有 → LangGraph；(2) 是否需要持久化中间状态？需要 → LangGraph；(3) 是否需要单节点热替换？需要 → LangGraph。三条都不满足 → Chain 更简单。迁移路径：先用 Chain 验证业务逻辑 → 确认需要灵活性后迁移到 LangGraph → 逐步添加 Checkpoint 和 Human-in-the-Loop。</div>
+</details>
+    </section>
+
+    <footer>
+      <div class="made">TECH NOTES · AI 工程 · 整理自 AI Knowledge Hub</div>
+    </footer>
+  </main>
+</div>
+
+<script>
+(function(){var bar=document.getElementById('progress');function u(){var h=document.documentElement;bar.style.width=h.scrollTop/(h.scrollHeight-h.clientHeight)*100+'%';}window.addEventListener('scroll',u,{passive:true});u();})();
+(function(){var links=document.querySelectorAll('aside.toc nav a');var secs=Array.from(document.querySelectorAll('section.chapter'));if(!secs.length)return;function u(){var y=window.scrollY+100,cur=secs[0];for(var i=0;i<secs.length;i++){if(secs[i].offsetTop<=y)cur=secs[i];}var id=cur.id;links.forEach(function(a){a.classList.toggle('active',a.getAttribute('href')==='#'+id);});}window.addEventListener('scroll',u,{passive:true});u();})();
+</script>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

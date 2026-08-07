@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>向量数据库内核 · AI 工程 — Tech Notes</title>
+<meta name="description" content="Vector DB Internals — HNSW / IVF / PQ 算法与主流引擎架构">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<link rel="stylesheet" href="../assets/kh-guide.css">
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav">
+
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="ai_engineering_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 7 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>B04 · AI 工程</h2>
+    <nav>
+      <ol>
+        <li><a href="#hnsw" class="active">HNSW 算法详解</a></li>
+        <li><a href="#ivf-pq">IVF 与 PQ 算法</a></li>
+        <li><a href="#ch3">距离度量与选择</a></li>
+        <li><a href="#milvus">Milvus 架构</a></li>
+        <li><a href="#qdrant-weaviate">Qdrant 与 Weaviate 架构</a></li>
+        <li><a href="#ch6">性能调优与十亿级挑战</a></li>
+        <li><a href="#q-a">🎯 Q&amp;A</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+    <header class="hero">
+      <div class="badge">B04 · AI 工程</div>
+      <h1>向量数据库内核</h1>
+      <p class="sub">Vector DB Internals — HNSW / IVF / PQ 算法与主流引擎架构</p>
+      <div class="meta-row">
+        <span class="pill cyan">AI 工程</span>
+        <span class="pill green">阅读 ~7 min</span>
+        <span class="pill amber">7 章</span>
+      </div>
+    </header>
+
+    <section class="chapter" id="hnsw">
+      <div class="ch-head"><div class="num">01</div><div class="t"><h2>HNSW 算法详解</h2><div class="sub">HNSW（Hierarchical Navigable Small World）是当前最主流…</div></div></div>
+      <h3>算法原理</h3>
+<div class="card">
+<p>HNSW（Hierarchical Navigable Small World）是当前最主流的 ANN 索引算法，融合了跳表和可导航小世界图的思想。</p>
+<h4>构建过程</h4>
+<ol>
+<li>为新节点随机生成层级 <code>l = floor(-ln(rand()) × mL)</code>，其中 mL = 1/ln(M)</li>
+<li>从最高层的入口点开始贪心搜索到第 l+1 层（仅定位）</li>
+<li>从第 l 层到第 0 层：以 efConstruction 宽度搜索候选邻居，选择 M 个最优建立双向连接</li>
+<li>若邻居连接数超过 M_max（底层 2M，高层 M），按距离排序裁剪</li>
+</ol>
+<h4>搜索过程</h4>
+<ol>
+<li>从最高层入口点开始</li>
+<li>每层执行贪心搜索：跳到离 query 最近的邻居</li>
+<li>在最底层（Layer 0）使用 efSearch 宽度的 beam search</li>
+<li>返回 Top-K 结果</li>
+</ol>
+</div>
+
+<h3>关键参数调优</h3>
+<table>
+<tr><th>参数</th><th>范围</th><th>影响</th><th>调优建议</th></tr>
+<tr><td><strong>M</strong></td><td>8~64</td><td>邻居数 → 召回率↑ 内存↑ 构建时间↑</td><td>中等数据集 32，大数据集 16~24</td></tr>
+<tr><td><strong>efConstruction</strong></td><td>64~512</td><td>构建搜索宽度 → 图质量↑ 构建时间↑</td><td>通常 4×M ~ 8×M</td></tr>
+<tr><td><strong>efSearch</strong></td><td>16~512</td><td>查询搜索宽度 → 召回率↑ 延迟↑</td><td>根据 recall@K 需求动态调整</td></tr>
+</table>
+
+<h3>复杂度分析</h3>
+<div class="card">
+<ul>
+<li><strong>查询</strong>：O(log N) — 层数 ≈ log(N)/log(M)，每层贪心 O(M×efSearch)</li>
+<li><strong>构建</strong>：O(N × log N × efConstruction)</li>
+<li><strong>空间</strong>：原始向量 + O(N × M × 4B × avg_layers)，通常 HNSW 图结构占原始数据 10~30%</li>
+</ul>
+<div class="formula">内存 ≈ N × (dim × 4B) + N × M × 4B × (1 + 1/ln(M))</div>
+</div>
+
+<div class="interview-box">
+<ul>
+<li>HNSW 的核心创新是"分层 + 长短连接"：高层长跳定位区域、底层短跳精确搜索</li>
+<li>efSearch 是查询时唯一的"精度-延迟"调节旋钮</li>
+<li>HNSW 支持增量插入（无需重建），这是对比 IVF 的关键优势</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="ivf-pq">
+      <div class="ch-head"><div class="num">02</div><div class="t"><h2>IVF 与 PQ 算法</h2><div class="sub">优点：内存友好（不需要图结构）、构建较快</div></div></div>
+      <h3>IVF（Inverted File Index）</h3>
+<div class="card">
+<h4>原理</h4>
+<ol>
+<li>训练阶段：用 K-Means 将向量空间聚类为 <code>nlist</code> 个 Voronoi 区域</li>
+<li>索引阶段：每个向量归入最近的聚类中心，建立倒排链表</li>
+<li>查询阶段：计算 query 与所有聚类中心的距离，选最近的 <code>nprobe</code> 个簇，只搜索这些簇内的向量</li>
+</ol>
+<h4>参数</h4>
+<table>
+<tr><th>参数</th><th>典型值</th><th>说明</th></tr>
+<tr><td>nlist</td><td>√N ~ 4√N</td><td>聚类中心数，越大训练越慢但粒度越细</td></tr>
+<tr><td>nprobe</td><td>1 ~ nlist</td><td>搜索的簇数，nprobe/nlist = 搜索比例</td></tr>
+</table>
+<p>优点：内存友好（不需要图结构）、构建较快</p>
+<p>缺点：边界向量召回差、需要训练、不方便增量更新</p>
+</div>
+
+<h3>PQ（Product Quantization，乘积量化）</h3>
+<div class="card">
+<h4>核心思想</h4>
+<ol>
+<li>将 D 维向量切分为 M 个 D/M 维子向量</li>
+<li>对每个子空间独立训练 K 个聚类中心（码本 codebook）</li>
+<li>每个子向量用最近聚类中心的 ID（通常 8-bit）表示</li>
+<li>原始向量压缩为 M 个字节</li>
+</ol>
+<div class="formula">1536维 float32 (6144B) → PQ96×8bit → 96 字节（压缩 64 倍）</div>
+<h4>距离计算</h4>
+<ul>
+<li><strong>SDC</strong>（Symmetric Distance Computation）：两端都用量化码</li>
+<li><strong>ADC</strong>（Asymmetric Distance Computation）：query 用原始向量，数据用量化码，精度更高</li>
+<li>查找表预计算加速：O(K×M) 预计算 → 每个向量的距离只需 M 次查表求和</li>
+</ul>
+</div>
+
+<h3>组合索引：IVF + PQ</h3>
+<div class="card">
+<div class="flow-box">
+<strong>训练</strong>：K-Means(nlist) + PQ 码本训练
+<br><br>
+<strong>查询</strong>：粗量化(选 nprobe 个簇) <span class="arrow">→</span> PQ 距离计算 <span class="arrow">→</span> Top-K 精排
+</div>
+<p>IVFPQ 是十亿级向量搜索的经典方案，在 recall 和内存之间取得最佳平衡。</p>
+</div>
+
+<div class="interview-box">
+<ul>
+<li>IVF 的本质是"分治"：先粗定位再精搜索</li>
+<li>PQ 的本质是"有损压缩"：用子空间聚类 ID 替代原始浮点值</li>
+<li>ADC vs SDC：ADC 精度更高（query 端不量化），是实践中的首选</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="ch3">
+      <div class="ch-head"><div class="num">03</div><div class="t"><h2>距离度量与选择</h2><div class="sub">当向量 L2 归一化后（‖v‖ = 1）：</div></div></div>
+      <h3>常用距离度量</h3>
+<table>
+<tr><th>度量</th><th>公式</th><th>范围</th><th>特点</th><th>典型场景</th></tr>
+<tr><td><strong>余弦相似度</strong></td><td>cos(A,B) = A·B / (‖A‖‖B‖)</td><td>[-1, 1]</td><td>方向相关，长度无关</td><td>文本语义、Embedding 对比</td></tr>
+<tr><td><strong>L2 (欧氏)</strong></td><td>√Σ(a_i - b_i)²</td><td>[0, +∞)</td><td>方向 + 大小</td><td>图像特征、聚类</td></tr>
+<tr><td><strong>内积 (IP)</strong></td><td>Σ(a_i × b_i)</td><td>(-∞, +∞)</td><td>方向 + 大小</td><td>推荐系统、MIPS</td></tr>
+<tr><td><strong>汉明距离</strong></td><td>不同位的数量</td><td>[0, n]</td><td>仅二值向量</td><td>LSH、哈希检索</td></tr>
+</table>
+
+<h3>归一化后的等价关系</h3>
+<div class="card">
+<p>当向量 L2 归一化后（‖v‖ = 1）：</p>
+<div class="formula">Cosine(A,B) = IP(A,B) = 1 - L2²(A,B)/2</div>
+<p>三种度量完全等价，计算 IP 最快（省除法）。OpenAI / Cohere 的 Embedding API 输出已归一化向量，直接用 IP 即可。</p>
+</div>
+
+<h3>选择指南</h3>
+<div class="card">
+<ul>
+<li>Embedding 模型输出已归一化 → <strong>IP</strong>（最快）或 Cosine</li>
+<li>未归一化且关注方向 → <strong>Cosine</strong></li>
+<li>关注绝对距离（图像/聚类）→ <strong>L2</strong></li>
+<li>训练时用什么度量，检索时就用什么度量</li>
+</ul>
+</div>
+
+<div class="interview-box">
+<ul>
+<li>归一化后 Cosine = IP = f(L2) 是Q&A</li>
+<li>选择度量必须与 Embedding 模型训练时一致</li>
+<li>L2 和 Cosine 的转换关系：L2² = 2(1 - cos) （归一化后）</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="milvus">
+      <div class="ch-head"><div class="num">04</div><div class="t"><h2>Milvus 架构</h2><div class="sub">Milvus 2</div></div></div>
+      <h3>整体架构</h3>
+<div class="card">
+<p>Milvus 2.x 采用存算分离的云原生微服务架构：</p>
+<div class="flow-box">
+<strong>Proxy</strong>（接入层）<span class="arrow">→</span> <strong>Coord 层</strong>（Root/Query/Data/Index Coord）
+<br><br>
+<strong>Worker 层</strong>：QueryNode（查询）/ DataNode（写入）/ IndexNode（构建索引）
+<br><br>
+<strong>存储层</strong>：etcd（元数据）+ MinIO/S3（对象存储）+ Pulsar/Kafka（日志流）
+</div>
+<h4>核心组件</h4>
+<table>
+<tr><th>组件</th><th>职责</th></tr>
+<tr><td>Proxy</td><td>请求路由、鉴权、负载均衡</td></tr>
+<tr><td>RootCoord</td><td>DDL 管理（创建/删除 Collection）</td></tr>
+<tr><td>QueryCoord</td><td>查询任务调度与负载均衡</td></tr>
+<tr><td>DataCoord</td><td>数据写入管理、Segment 分配</td></tr>
+<tr><td>IndexCoord</td><td>索引构建任务调度</td></tr>
+<tr><td>QueryNode</td><td>加载 Segment 到内存，执行向量搜索</td></tr>
+</table>
+</div>
+
+<h3>数据模型</h3>
+<div class="card">
+<ul>
+<li><strong>Collection</strong> → 类似表，定义 Schema（向量字段 + 标量字段）</li>
+<li><strong>Partition</strong> → Collection 的逻辑分区，加速过滤</li>
+<li><strong>Segment</strong> → 数据的物理存储单元（Sealed / Growing）</li>
+<li>支持多种索引：HNSW、IVF_FLAT、IVF_PQ、IVF_SQ8、DiskANN、GPU_IVF_FLAT</li>
+</ul>
+</div>
+
+<div class="interview-box">
+<ul>
+<li>Milvus 的存算分离架构是面试重点 — 理解各 Coord 和 Node 的职责</li>
+<li>Milvus 依赖 etcd + MinIO + Pulsar/Kafka，运维复杂度较高</li>
+<li>Segment（Sealed vs Growing）是理解 Milvus 写入和查询链路的关键</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="qdrant-weaviate">
+      <div class="ch-head"><div class="num">05</div><div class="t"><h2>Qdrant 与 Weaviate 架构</h2></div></div>
+      <h3>Qdrant</h3>
+<div class="card">
+<ul>
+<li><strong>Rust 实现</strong>，高性能低内存占用</li>
+<li>HNSW + 标量量化（SQ）/ 乘积量化（PQ）</li>
+<li><strong>Payload 索引</strong>：对元数据建索引，高效过滤</li>
+<li>单节点部署简单，集群通过 Raft 共识实现一致性</li>
+<li>支持 mmap 将向量数据映射到磁盘（降低内存需求）</li>
+</ul>
+<h4>Qdrant 独特功能</h4>
+<ul>
+<li><strong>多向量支持</strong>：同一 Point 存储多个 Named Vector（不同 Embedding 模型）</li>
+<li><strong>稀疏向量</strong>：原生支持 Sparse Vector（BM25/SPLADE）</li>
+<li><strong>Quantization</strong>：Scalar（int8）/ Binary / Product Quantization</li>
+</ul>
+</div>
+
+<h3>Weaviate</h3>
+<div class="card">
+<ul>
+<li><strong>Go 实现</strong>，模块化架构</li>
+<li>内置 Vectorizer 模块：直接传入文本/图片，自动调用 Embedding 模型</li>
+<li>GraphQL API + RESTful API</li>
+<li>原生 BM25 + 向量混合搜索</li>
+<li>Generative Search 模块：检索后直接调用 LLM 生成</li>
+</ul>
+<h4>模块系统</h4>
+<table>
+<tr><th>模块类型</th><th>示例</th></tr>
+<tr><td>Vectorizer</td><td>text2vec-openai、text2vec-cohere、multi2vec-clip</td></tr>
+<tr><td>Generative</td><td>generative-openai、generative-cohere</td></tr>
+<tr><td>Reranker</td><td>reranker-cohere、reranker-transformers</td></tr>
+</table>
+</div>
+
+<h3>三大引擎对比</h3>
+<table>
+<tr><th>维度</th><th>Milvus</th><th>Qdrant</th><th>Weaviate</th></tr>
+<tr><td>语言</td><td>Go + C++</td><td>Rust</td><td>Go</td></tr>
+<tr><td>索引类型</td><td>HNSW/IVF/PQ/DiskANN</td><td>HNSW + 量化</td><td>HNSW</td></tr>
+<tr><td>分布式</td><td>原生分布式</td><td>Raft 集群</td><td>Raft 集群</td></tr>
+<tr><td>过滤性能</td><td>强（位图索引）</td><td>强（Payload 索引）</td><td>中</td></tr>
+<tr><td>特色</td><td>功能最全面</td><td>高性能、低内存</td><td>模块化、开发者友好</td></tr>
+<tr><td>运维复杂度</td><td>高（依赖多）</td><td>低~中</td><td>中</td></tr>
+</table>
+
+<div class="interview-box">
+<ul>
+<li>Qdrant 的 Rust 实现和多向量支持是其核心竞争力</li>
+<li>Weaviate 的模块化设计（自动向量化 + 生成式搜索）适合快速原型</li>
+<li>Milvus vs Qdrant 是面试最常见的对比题：功能全面性 vs 部署简单性</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="ch6">
+      <div class="ch-head"><div class="num">06</div><div class="t"><h2>性能调优与十亿级挑战</h2></div></div>
+      <h3>性能调优核心维度</h3>
+<div class="card">
+<table>
+<tr><th>维度</th><th>优化方向</th><th>具体手段</th></tr>
+<tr><td>召回率</td><td>提升搜索质量</td><td>增大 efSearch/nprobe、使用 HNSW、调大 M</td></tr>
+<tr><td>延迟</td><td>降低查询时间</td><td>减小 efSearch/nprobe、向量量化、内存预加载</td></tr>
+<tr><td>吞吐</td><td>提升 QPS</td><td>增加 QueryNode 副本、批量查询、GPU 加速</td></tr>
+<tr><td>内存</td><td>降低资源占用</td><td>PQ/SQ 量化、mmap 映射磁盘、降维</td></tr>
+</table>
+</div>
+
+<h3>十亿级向量的挑战</h3>
+<div class="card">
+<h4>核心问题：内存</h4>
+<div class="formula">10 亿 × 1536 维 × 4B = 5.7TB 原始向量数据</div>
+<h4>解决方案</h4>
+<ul>
+<li><strong>量化压缩</strong>：SQ8 压缩 4x（1.4TB），PQ96 压缩 64x（89GB）</li>
+<li><strong>DiskANN</strong>：向量存磁盘，内存只保留压缩导航图（Vamana 图 + PQ 码）</li>
+<li><strong>分布式分片</strong>：数据切片到多节点，并行搜索后合并</li>
+<li><strong>分层索引</strong>：粗排用低精度全量索引，精排用高精度子集</li>
+<li><strong>降维</strong>：Matryoshka Embedding（768 → 256 维，recall 损失 &lt;2%）</li>
+</ul>
+</div>
+
+<h3>DiskANN 原理</h3>
+<div class="card">
+<ul>
+<li>Microsoft 开源的磁盘友好 ANN 算法</li>
+<li>构建 Vamana 图索引 → 存储在 SSD 上</li>
+<li>查询时：PQ 码在内存中做粗排 → SSD 随机读精排</li>
+<li>内存占用可降低到原始数据的 5~10%</li>
+<li>Milvus 2.x 已集成 DiskANN 索引类型</li>
+</ul>
+</div>
+
+<div class="interview-box">
+<ul>
+<li>十亿级向量的核心瓶颈是内存，解题思路：量化 + 磁盘索引 + 分布式</li>
+<li>DiskANN 是解决大规模场景内存问题的关键技术</li>
+<li>recall vs latency vs memory 是向量数据库的"不可能三角"</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="q-a">
+      <div class="ch-head"><div class="num">07</div><div class="t"><h2>🎯 Q&amp;A</h2><div class="sub">HNSW 基于多层图搜索（贪心遍历 + beam search），IVF 基于聚类分治（K-…</div></div></div>
+      <details class="qa">
+<summary>Q1：HNSW 和 IVF 的核心区别是什么？各自适合什么场景？</summary>
+<p>HNSW 基于多层图搜索（贪心遍历 + beam search），IVF 基于聚类分治（K-Means 划分 + 倒排搜索）。核心区别：① HNSW 查询更快 O(log N)，但内存占用大（需存图结构）；IVF 内存更友好（尤其配合 PQ），但需要训练聚类中心。② HNSW 支持增量插入（图动态更新），IVF 增量更新困难（需重训练聚类中心）。③ HNSW 适合中等规模（百万~千万级）、低延迟需求；IVF+PQ 适合超大规模（十亿级）、内存受限场景。实际生产中 HNSW 用得最多。</p>
+</details>
+
+<details class="qa">
+<summary>Q2：Product Quantization (PQ) 是如何压缩向量的？精度损失如何？</summary>
+<p>PQ 将 D 维向量切分为 M 个子空间，每个子空间独立用 K-Means 训练 K=256 个聚类中心（码本）。每个子向量用 8-bit 码本 ID 替代原始浮点值。例如 1536 维 float32 向量（6144 字节），PQ96×8bit 后只需 96 字节（64 倍压缩）。精度损失：通常 recall@10 从 99% 降到 90~95%，可通过增加 M（更细的子空间划分）和 re-ranking（用原始向量精排 Top-K×10 候选）来补偿。OPQ（Optimized PQ）通过正交旋转预处理进一步减少量化误差。</p>
+</details>
+
+<details class="qa">
+<summary>Q3：Milvus 的存算分离架构有什么优势和劣势？</summary>
+<p>优势：① 弹性伸缩 — QueryNode/DataNode/IndexNode 独立扩缩，查询峰值只需扩 QueryNode；② 存储无限 — 数据存 S3/MinIO，不受单机磁盘限制；③ 故障隔离 — 某组件挂掉不影响其他组件。劣势：① 运维复杂 — 需维护 etcd（元数据）、MinIO（存储）、Pulsar/Kafka（日志流）；② 延迟增加 — 组件间通过网络通信，比单机部署延迟高；③ 调试困难 — 分布式微服务链路长。适合大规模生产环境（百万~十亿级），小规模场景 Qdrant/pgvector 更合适。</p>
+</details>
+
+<details class="qa">
+<summary>Q4：如何处理十亿级向量的存储和检索？</summary>
+<p>核心策略组合：① 量化压缩 — SQ8（4x 压缩）或 PQ（16~64x 压缩）减少内存占用；② 磁盘索引 — DiskANN 将向量存 SSD，内存仅保留压缩导航图（5~10% 内存）；③ 分布式分片 — 数据按 hash 分布到多个节点，并行搜索后合并（如 Milvus 分片）；④ 分层搜索 — 粗排用低精度全量索引（PQ），精排用高精度原始向量（只对 Top-K×N 候选）；⑤ 降维 — Matryoshka Embedding 支持 1536 → 256 维，存储减少 6 倍。实际案例：10 亿 768 维向量，DiskANN + SQ8 方案内存约 200GB（8 节点 × 25GB），延迟 &lt;10ms。</p>
+</details>
+
+<details class="qa">
+<summary>Q5：向量数据库中的过滤搜索（Filtered Search）为什么是难题？</summary>
+<p>难点在于 ANN 索引和标量过滤的冲突：ANN 索引（HNSW/IVF）按向量距离组织数据，与标量条件无关。Pre-filter 先过滤再搜索 — 过滤后候选集可能太小导致 ANN 索引退化为暴力搜索（高选择性时 O(N) → 很慢）。Post-filter 先搜索再过滤 — 搜出的 Top-K 可能过滤后不足 K 个（结果不够）。解决方案：① 自适应策略 — 估算选择性后动态选择 pre/post；② 位图索引 — Milvus/Qdrant 对标量字段建位图索引，在 HNSW 遍历过程中同时评估过滤条件（single-stage）；③ Partition 裁剪 — 按常用过滤字段预分区。</p>
+</details>
+
+
+<div style="text-align:center;margin:3rem 0 1rem;color:#8b949e;font-size:.85rem">
+<p>— B04 · 向量数据库内核 · 完 —</p>
+</div>
+    </section>
+
+    <footer>
+      <div class="made">TECH NOTES · AI 工程 · 整理自 AI Knowledge Hub</div>
+    </footer>
+  </main>
+</div>
+
+<script>
+(function(){var bar=document.getElementById('progress');function u(){var h=document.documentElement;bar.style.width=h.scrollTop/(h.scrollHeight-h.clientHeight)*100+'%';}window.addEventListener('scroll',u,{passive:true});u();})();
+(function(){var links=document.querySelectorAll('aside.toc nav a');var secs=Array.from(document.querySelectorAll('section.chapter'));if(!secs.length)return;function u(){var y=window.scrollY+100,cur=secs[0];for(var i=0;i<secs.length;i++){if(secs[i].offsetTop<=y)cur=secs[i];}var id=cur.id;links.forEach(function(a){a.classList.toggle('active',a.getAttribute('href')==='#'+id);});}window.addEventListener('scroll',u,{passive:true});u();})();
+</script>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,622 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tokenization 分词 · AI 工程 — Tech Notes</title>
+<meta name="description" content="从文本到 Token：大语言模型的第一步 | 理解 BPE / WordPiece / Unigram 及工程实践">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<link rel="stylesheet" href="../assets/kh-guide.css">
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav">
+
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="ai_engineering_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 14 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>L04 · AI 工程</h2>
+    <nav>
+      <ol>
+        <li><a href="#why" class="active">为什么需要 Tokenization</a></li>
+        <li><a href="#bpe">BPE (Byte Pair Encoding)</a></li>
+        <li><a href="#wordpiece">WordPiece</a></li>
+        <li><a href="#unigram">Unigram (SentencePiece)</a></li>
+        <li><a href="#sentencepiece">SentencePiece 工具</a></li>
+        <li><a href="#chinese">中文分词的挑战</a></li>
+        <li><a href="#vocab">Vocabulary 设计</a></li>
+        <li><a href="#special-tokens">特殊 Token</a></li>
+        <li><a href="#practice">Tokenizer 实践</a></li>
+        <li><a href="#qa">🎯 Q&amp;A（Top 10）</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+    <header class="hero">
+      <div class="badge">L04 · AI 工程</div>
+      <h1>Tokenization 分词</h1>
+      <p class="sub">从文本到 Token：大语言模型的第一步 | 理解 BPE / WordPiece / Unigram 及工程实践</p>
+      <div class="meta-row">
+        <span class="pill cyan">AI 工程</span>
+        <span class="pill green">阅读 ~14 min</span>
+        <span class="pill amber">10 章</span>
+      </div>
+    </header>
+
+    <section class="chapter" id="why">
+      <div class="ch-head"><div class="num">01</div><div class="t"><h2>为什么需要 Tokenization</h2><div class="sub">神经网络只能处理数值张量，无法直接理解自然语言文本</div></div></div>
+      <div class="card">
+<h3>文本 → 数字</h3>
+<p>神经网络只能处理数值张量，无法直接理解自然语言文本。<strong>Tokenization</strong> 的核心任务就是将原始文本拆分成离散的 <strong>token</strong>，再通过词表（vocabulary）映射为整数 ID，最终送入 Embedding 层转化为稠密向量。</p>
+<pre><code>"今天天气真好" → ["今天", "天气", "真", "好"] → [2456, 1893, 517, 382] → Embedding</code></pre>
+
+<h3>词表大小与模型效率的权衡</h3>
+<table>
+<tr><th>词表大小</th><th>优势</th><th>劣势</th></tr>
+<tr><td>过小（如 8K）</td><td>Embedding 参数量小、训练快</td><td>长文本需要更多 token，增加序列长度；罕见词被拆得碎</td></tr>
+<tr><td>过大（如 256K）</td><td>每个 token 承载更多语义，序列更短</td><td>Embedding 层参数暴涨；低频 token 训练不充分</td></tr>
+<tr><td>适中（32K–128K）</td><td colspan="2">在压缩率与参数效率间取得平衡，主流 LLM 选择此区间</td></tr>
+</table>
+
+<h3>OOV（Out-of-Vocabulary）问题</h3>
+<p>传统基于空格 / 词典的分词在遇到未登录词（如专业术语、新造词、拼写错误）时只能映射为 <code>[UNK]</code>，丢失信息。<strong>子词（Subword）方法</strong>通过将单词拆分成更小的有意义片段，从根本上解决了 OOV 问题——任何单词都能由子词组合而成。</p>
+</div>
+
+<div class="interview-box">
+<ul>
+<li><strong>核心理解</strong>：Tokenization 是文本与模型之间的桥梁，决定了模型"看到"什么</li>
+<li><strong>权衡意识</strong>：词表大小直接影响 Embedding 参数量（vocab_size × hidden_dim）和序列长度</li>
+<li><strong>OOV 方案</strong>：子词分词（BPE / WordPiece / Unigram）是当前主流解决方案</li>
+<li><strong>压缩率</strong>：好的 Tokenizer 能用更少 token 表示相同文本，提高推理效率</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="bpe">
+      <div class="ch-head"><div class="num">02</div><div class="t"><h2>BPE (Byte Pair Encoding)</h2><div class="sub"># BPE 合并示例 初始: l o w &lt;/w&gt; (出现 5 次) l o w e r &lt;…</div></div></div>
+      <div class="card">
+<h3>算法流程</h3>
+<ol>
+<li><strong>初始化</strong>：将训练语料中的每个单词拆分为字符序列，加入词尾标记（如 <code>&lt;/w&gt;</code>）</li>
+<li><strong>统计</strong>：统计所有相邻字符对（bigram）的出现频率</li>
+<li><strong>合并</strong>：将频率最高的字符对合并为新符号，加入词表</li>
+<li><strong>重复</strong>：重复步骤 2-3，直到达到预设词表大小</li>
+</ol>
+<pre><code># BPE 合并示例
+初始:  l o w &lt;/w&gt;   (出现 5 次)
+       l o w e r &lt;/w&gt; (出现 2 次)
+       n e w e s t &lt;/w&gt; (出现 6 次)
+
+第1轮: 最高频对 (e, s) → 合并为 "es"
+第2轮: 最高频对 (es, t) → 合并为 "est"
+第3轮: 最高频对 (l, o) → 合并为 "lo"
+...逐步构建子词词表</code></pre>
+
+<h3>GPT 系列使用的 BPE</h3>
+<p>GPT-2 / GPT-3 / GPT-4 均使用 BPE。GPT-2 引入了 <strong>Byte-level BPE</strong>：以字节（256 个基础 token）而非 Unicode 字符为初始单元，好处是无需预处理、不会出现 <code>[UNK]</code>，任何文本都能被编码。</p>
+
+<h3>Byte-level BPE 的优势</h3>
+<ul>
+<li><strong>完全无 OOV</strong>：任何字节序列都可表示，包括非文本数据</li>
+<li><strong>语言无关</strong>：不依赖特定语言的字符集定义</li>
+<li><strong>简洁</strong>：基础词表仅 256 个字节 token + 合并产生的子词</li>
+</ul>
+
+<p>GPT-2 使用 ~50K 词表，GPT-4（cl100k_base）使用 ~100K 词表，大幅提升了多语言和代码的压缩效率。</p>
+</div>
+
+<div class="interview-box">
+<ul>
+<li><strong>BPE 核心</strong>：贪心地合并频率最高的相邻对，自底向上构建词表</li>
+<li><strong>Byte-level BPE</strong>：以字节为基本单元，256 个初始 token 即可覆盖一切输入</li>
+<li><strong>GPT 系列</strong>：GPT-2 起使用 Byte-level BPE，是当前最流行的分词方案之一</li>
+<li><strong>合并规则文件</strong>：<code>merges.txt</code> 记录合并顺序，推理时按此顺序执行</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="wordpiece">
+      <div class="ch-head"><div class="num">03</div><div class="t"><h2>WordPiece</h2><div class="sub">WordPiece 由 Google 提出，算法结构与 BPE 类似， 关键区别在于合并策略…</div></div></div>
+      <div class="card">
+<h3>WordPiece vs BPE</h3>
+<p>WordPiece 由 Google 提出，算法结构与 BPE 类似，<strong>关键区别在于合并策略</strong>：</p>
+<table>
+<tr><th>特性</th><th>BPE</th><th>WordPiece</th></tr>
+<tr><td>合并依据</td><td>频率最高的相邻对</td><td>使语言模型似然（likelihood）增加最大的相邻对</td></tr>
+<tr><td>合并公式</td><td>count(AB)</td><td>count(AB) / (count(A) × count(B))</td></tr>
+<tr><td>直觉</td><td>哪对出现最多就合并</td><td>合并后对语言建模收益最大</td></tr>
+<tr><td>代表模型</td><td>GPT 系列</td><td>BERT / DistilBERT / ELECTRA</td></tr>
+</table>
+
+<div class="formula">WordPiece Score = log P(AB) − log P(A) − log P(B) ≈ PMI(A, B)</div>
+
+<h3>## 前缀标记</h3>
+<p>WordPiece 使用 <code>##</code> 前缀来标记<strong>非首位子词</strong>（即续接片段），帮助区分一个 token 是词的开头还是中间部分：</p>
+<pre><code>"unbelievable" → ["un", "##believ", "##able"]
+"playing"      → ["play", "##ing"]
+
+## 前缀含义：这个子词不是一个新词的开始，而是前一个 token 的延续</code></pre>
+
+<h3>BERT 的 WordPiece 实现</h3>
+<ul>
+<li>词表大小：30,522（BERT-base）</li>
+<li>包含特殊 token：<code>[PAD]</code>, <code>[UNK]</code>, <code>[CLS]</code>, <code>[SEP]</code>, <code>[MASK]</code></li>
+<li>先做 BasicTokenizer（分词、大小写处理、标点分离），再用 WordPiece 细分</li>
+</ul>
+</div>
+
+<div class="interview-box">
+<ul>
+<li><strong>核心区别</strong>：BPE 按频率合并，WordPiece 按语言模型似然（近似互信息 PMI）合并</li>
+<li><strong>## 前缀</strong>：标记续接子词，区分词首和词中位置</li>
+<li><strong>BERT 绑定</strong>：WordPiece 几乎与 BERT 系列绑定使用，其他框架较少采用</li>
+<li><strong>编码方向</strong>：WordPiece 推理时使用最长匹配（longest-match-first），与 BPE 的合并顺序不同</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="unigram">
+      <div class="ch-head"><div class="num">04</div><div class="t"><h2>Unigram (SentencePiece)</h2><div class="sub">与 BPE / WordPiece 自底向上 合并不同，Unigram 采用 自顶向下 的策…</div></div></div>
+      <div class="card">
+<h3>基于概率的分词</h3>
+<p>与 BPE / WordPiece <strong>自底向上</strong>合并不同，Unigram 采用<strong>自顶向下</strong>的策略：从一个大词表开始，逐步移除对整体似然损失最小的 token。</p>
+
+<h3>算法流程</h3>
+<ol>
+<li><strong>初始化</strong>：构建一个足够大的候选词表（如所有常见子串，通常为目标大小的 10-20 倍）</li>
+<li><strong>期望最大化（EM）</strong>：对每个句子，用 Viterbi 算法找到当前词表下的最优分词方案</li>
+<li><strong>计算损失</strong>：对每个 token，计算若将其从词表中移除后整体似然的下降幅度</li>
+<li><strong>裁剪</strong>：移除损失最小的一批 token（通常移除 10-20%）</li>
+<li><strong>重复</strong>：重复步骤 2-4，直到词表缩小到目标大小</li>
+</ol>
+
+<div class="formula">P(x) = Π P(xᵢ)  →  最优分词 x* = arg max Σ log P(xᵢ)</div>
+
+<h3>Unigram 的独特优势</h3>
+<ul>
+<li><strong>概率建模</strong>：每个 token 有明确的概率值，可以给出多种分词方案及其概率</li>
+<li><strong>正则化效果</strong>：训练时可随机采样次优分词方案（Subword Regularization），增强鲁棒性</li>
+<li><strong>确定性解码</strong>：推理时用 Viterbi 找到最优唯一解</li>
+</ul>
+
+<h3>使用 Unigram 的主流模型</h3>
+<table>
+<tr><th>模型</th><th>词表大小</th><th>工具</th></tr>
+<tr><td>T5 / mT5</td><td>32,000</td><td>SentencePiece</td></tr>
+<tr><td>LLaMA / LLaMA-2</td><td>32,000</td><td>SentencePiece</td></tr>
+<tr><td>Qwen / Qwen-2</td><td>151,936 / 152,064</td><td>自研 tiktoken 兼容</td></tr>
+<tr><td>ALBERT</td><td>30,000</td><td>SentencePiece</td></tr>
+</table>
+</div>
+
+<div class="interview-box">
+<ul>
+<li><strong>方向差异</strong>：BPE/WordPiece 自底向上合并，Unigram 自顶向下裁剪</li>
+<li><strong>概率模型</strong>：Unigram 为每个 token 赋予概率，支持多种分词方案采样</li>
+<li><strong>Subword Regularization</strong>：训练时随机采样分词方案，类似 Dropout 的正则化效果</li>
+<li><strong>LLaMA 使用</strong>：LLaMA 使用 SentencePiece 的 Unigram 模式，词表 32K</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="sentencepiece">
+      <div class="ch-head"><div class="num">05</div><div class="t"><h2>SentencePiece 工具</h2><div class="sub">SentencePiece 是 Google 开源的 语言无关 分词工具，它不是一种新的分词…</div></div></div>
+      <div class="card">
+<h3>SentencePiece 是什么</h3>
+<p>SentencePiece 是 Google 开源的<strong>语言无关</strong>分词工具，它不是一种新的分词算法，而是一个同时支持 BPE 和 Unigram 的<strong>实现框架</strong>。</p>
+
+<h3>核心设计理念</h3>
+<ul>
+<li><strong>直接处理原始文本</strong>：不依赖预分词（pre-tokenization），将输入视为 Unicode 字符的原始流</li>
+<li><strong>空格视为普通字符</strong>：使用 <code>▁</code>（U+2581）替换空格，使空格成为词表的一部分</li>
+<li><strong>语言无关</strong>：不需要针对特定语言的分词规则，对中文、日文、韩文等天然友好</li>
+<li><strong>可逆解码</strong>：编码后可完全还原原始文本，包括空格位置</li>
+</ul>
+<pre><code># SentencePiece 处理空格
+"Hello World" → ["▁Hello", "▁World"]
+"你好世界"    → ["▁", "你好", "世界"]
+
+# ▁ 标记表示"这个 token 前面有空格"</code></pre>
+
+<h3>SentencePiece vs HuggingFace Tokenizers</h3>
+<table>
+<tr><th>特性</th><th>SentencePiece</th><th>HuggingFace Tokenizers</th></tr>
+<tr><td>实现语言</td><td>C++</td><td>Rust</td></tr>
+<tr><td>预分词</td><td>不需要</td><td>通常需要（可配置）</td></tr>
+<tr><td>支持算法</td><td>BPE、Unigram</td><td>BPE、WordPiece、Unigram</td></tr>
+<tr><td>空格处理</td><td>▁ 替换</td><td>取决于具体实现</td></tr>
+<tr><td>模型文件</td><td>.model + .vocab</td><td>tokenizer.json</td></tr>
+<tr><td>训练数据格式</td><td>原始文本文件</td><td>灵活（文件/迭代器）</td></tr>
+<tr><td>代表模型</td><td>LLaMA、T5、ALBERT</td><td>GPT-2、BERT、RoBERTa</td></tr>
+</table>
+
+<h3>两者的关系</h3>
+<p>HuggingFace Transformers 库可以<strong>同时加载</strong>两种格式的 tokenizer。许多模型（如 LLaMA）底层使用 SentencePiece 训练，但通过 HuggingFace 的转换工具可以导出为 <code>tokenizer.json</code> 格式，享受 Rust 的速度优势。</p>
+</div>
+
+<div class="interview-box">
+<ul>
+<li><strong>框架 vs 算法</strong>：SentencePiece 是工具框架，支持 BPE 和 Unigram 两种算法</li>
+<li><strong>语言无关</strong>：直接处理原始字节流，不需要预分词，对中日韩等语言友好</li>
+<li><strong>▁ 符号</strong>：用 ▁ 替换空格，保证编码-解码可逆</li>
+<li><strong>互操作</strong>：SentencePiece 模型可转换为 HuggingFace tokenizer.json 格式</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="chinese">
+      <div class="ch-head"><div class="num">06</div><div class="t"><h2>中文分词的挑战</h2><div class="sub">中文没有天然的空格分隔符，这对 Tokenizer 带来独特挑战：</div></div></div>
+      <div class="card">
+<h3>字级 vs 词级 vs 子词级</h3>
+<table>
+<tr><th>粒度</th><th>示例</th><th>优势</th><th>劣势</th></tr>
+<tr><td>字级（Char）</td><td>["今", "天", "天", "气", "真", "好"]</td><td>词表小、无 OOV</td><td>序列长、缺少语义单元</td></tr>
+<tr><td>词级（Word）</td><td>["今天", "天气", "真好"]</td><td>语义完整</td><td>依赖分词工具、OOV 严重</td></tr>
+<tr><td>子词级（Subword）</td><td>["今天", "天气", "真", "好"]</td><td>兼顾压缩率与覆盖率</td><td>需要大规模语料训练</td></tr>
+</table>
+
+<h3>中文 BPE 的特殊处理</h3>
+<p>中文没有天然的空格分隔符，这对 Tokenizer 带来独特挑战：</p>
+<ul>
+<li><strong>预分词策略</strong>：GPT 系列对中文使用正则表达式将每个汉字字符单独分开，再进行 BPE 合并</li>
+<li><strong>Byte-level 处理</strong>：一个中文字符 UTF-8 编码为 3 个字节，未合并时需要 3 个 token（效率低）</li>
+<li><strong>字符级初始化</strong>：许多中文 LLM 在 BPE 训练前，先将常见汉字加入基础词表</li>
+</ul>
+<pre><code># GPT-2 对中文的低效编码
+"你好" → [20046, 254, 25001, 121]  # 4 个 token！
+
+# 中文优化后的模型（如 ChatGLM）
+"你好" → [36474]  # 1 个 token</code></pre>
+
+<h3>多语言词表设计</h3>
+<ul>
+<li><strong>语料配比</strong>：中文/英文/代码/其他语言的训练数据比例直接影响各语言的压缩率</li>
+<li><strong>词表分配</strong>：需要在不同语言间合理分配词表容量</li>
+<li><strong>效率指标</strong>：用 <strong>fertility</strong>（平均每个词产生的 token 数）衡量不同语言的编码效率</li>
+<li><strong>实践案例</strong>：LLaMA 词表对中文 fertility 约 2-3，ChatGLM / Qwen 优化后接近 1.5</li>
+</ul>
+</div>
+
+<div class="interview-box">
+<ul>
+<li><strong>中文无空格</strong>：中文没有天然分词边界，子词方法需要特殊的预分词策略</li>
+<li><strong>编码效率</strong>：未优化的英文词表对中文编码效率极低（1 汉字 → 2-3 tokens）</li>
+<li><strong>fertility 指标</strong>：衡量 Tokenizer 对特定语言的编码效率，越低越好</li>
+<li><strong>词表扩展</strong>：在英文预训练模型上做中文微调前，常需扩展中文词表以提升效率</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="vocab">
+      <div class="ch-head"><div class="num">07</div><div class="t"><h2>Vocabulary 设计</h2><div class="sub">对于 LLM，Embedding 参数通常占总参数的 2-8%</div></div></div>
+      <div class="card">
+<h3>词表大小选择</h3>
+<table>
+<tr><th>模型</th><th>词表大小</th><th>设计考量</th></tr>
+<tr><td>BERT</td><td>30,522</td><td>主要覆盖英文，WordPiece</td></tr>
+<tr><td>GPT-2</td><td>50,257</td><td>英文 Byte-level BPE</td></tr>
+<tr><td>LLaMA</td><td>32,000</td><td>SentencePiece Unigram，英文为主</td></tr>
+<tr><td>LLaMA-3</td><td>128,256</td><td>大幅扩展多语言和代码支持</td></tr>
+<tr><td>GPT-4 (cl100k)</td><td>100,277</td><td>Byte-level BPE，多语言优化</td></tr>
+<tr><td>Qwen-2</td><td>152,064</td><td>中英双语优化，代码增强</td></tr>
+<tr><td>ChatGLM</td><td>64,794</td><td>中英双语 SentencePiece</td></tr>
+</table>
+
+<h3>词表对模型性能的影响</h3>
+<ul>
+<li><strong>序列压缩</strong>：更大的词表 → 更短的序列 → Attention 计算量减少（O(n²) 中 n 更小）</li>
+<li><strong>上下文容量</strong>：同样的 context window，更短的序列意味着能"装下"更多文本</li>
+<li><strong>推理速度</strong>：每个 token 需要一次前向传播（自回归），更少的 token = 更快的生成</li>
+<li><strong>但</strong>：词表过大会导致低频 token 欠训练，softmax 计算变慢</li>
+</ul>
+
+<h3>Embedding 层参数量</h3>
+<div class="formula">Embedding 参数 = vocab_size × hidden_dim</div>
+<table>
+<tr><th>配置</th><th>vocab_size</th><th>hidden_dim</th><th>Embedding 参数量</th></tr>
+<tr><td>BERT-base</td><td>30,522</td><td>768</td><td>~23M</td></tr>
+<tr><td>LLaMA-7B</td><td>32,000</td><td>4,096</td><td>~131M</td></tr>
+<tr><td>LLaMA-3-8B</td><td>128,256</td><td>4,096</td><td>~525M</td></tr>
+<tr><td>Qwen-2-72B</td><td>152,064</td><td>8,192</td><td>~1.25B</td></tr>
+</table>
+<p>对于 LLM，Embedding 参数通常占总参数的 2-8%。注意 LM Head（输出层）通常与 Embedding 共享权重（<strong>tied embeddings</strong>），不增加额外参数。</p>
+</div>
+
+<div class="interview-box">
+<ul>
+<li><strong>词表趋势</strong>：主流 LLM 词表从 32K 逐步增长到 128K-152K，以提升多语言效率</li>
+<li><strong>参数公式</strong>：Embedding 参数 = vocab_size × hidden_dim，词表翻倍则参数翻倍</li>
+<li><strong>权重共享</strong>：大多数模型的 Embedding 和 LM Head 共享权重（tied embeddings）</li>
+<li><strong>序列长度</strong>：更大词表→更短序列→节省 Attention 计算和 KV Cache 空间</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="special-tokens">
+      <div class="ch-head"><div class="num">08</div><div class="t"><h2>特殊 Token</h2><div class="sub">Chat 模型使用特殊 token 来标记对话结构，区分系统指令、用户消息和助手回复：</div></div></div>
+      <div class="card">
+<h3>经典特殊 Token</h3>
+<table>
+<tr><th>Token</th><th>全称</th><th>用途</th><th>典型模型</th></tr>
+<tr><td><code>[CLS]</code></td><td>Classification</td><td>句子级表示，用于分类任务</td><td>BERT</td></tr>
+<tr><td><code>[SEP]</code></td><td>Separator</td><td>分隔两个句子</td><td>BERT</td></tr>
+<tr><td><code>[PAD]</code></td><td>Padding</td><td>填充短序列到统一长度</td><td>通用</td></tr>
+<tr><td><code>[MASK]</code></td><td>Mask</td><td>掩码语言模型训练中遮盖 token</td><td>BERT</td></tr>
+<tr><td><code>[UNK]</code></td><td>Unknown</td><td>词表外的未知 token</td><td>通用</td></tr>
+<tr><td><code>&lt;s&gt;</code> / <code>&lt;BOS&gt;</code></td><td>Begin of Sequence</td><td>标记序列开始</td><td>GPT / LLaMA</td></tr>
+<tr><td><code>&lt;/s&gt;</code> / <code>&lt;EOS&gt;</code></td><td>End of Sequence</td><td>标记序列结束，触发生成停止</td><td>GPT / LLaMA</td></tr>
+</table>
+
+<h3>Chat 模板与特殊 Token</h3>
+<p>Chat 模型使用特殊 token 来标记对话结构，区分系统指令、用户消息和助手回复：</p>
+<pre><code># ChatML 格式（Qwen / 许多 Chat 模型使用）
+&lt;|im_start|&gt;system
+你是一个有用的助手。&lt;|im_end|&gt;
+&lt;|im_start|&gt;user
+你好！&lt;|im_end|&gt;
+&lt;|im_start|&gt;assistant
+你好！有什么我能帮你的？&lt;|im_end|&gt;
+
+# LLaMA-2 Chat 格式
+&lt;s&gt;[INST] &lt;&lt;SYS&gt;&gt;
+You are a helpful assistant.
+&lt;&lt;/SYS&gt;&gt;
+
+Hello! [/INST] Hi! How can I help? &lt;/s&gt;
+
+# LLaMA-3 使用的新格式
+&lt;|begin_of_text|&gt;&lt;|start_header_id|&gt;system&lt;|end_header_id|&gt;
+...</code></pre>
+
+<h3>为什么 Chat 模板很重要</h3>
+<ul>
+<li><strong>训练一致性</strong>：推理时的模板必须与训练时完全一致，否则性能严重下降</li>
+<li><strong>角色区分</strong>：模型通过特殊 token 理解"谁在说话"</li>
+<li><strong>安全边界</strong>：系统消息的特殊标记帮助模型区分指令和用户输入（防注入）</li>
+<li><strong>HuggingFace 支持</strong>：<code>tokenizer.apply_chat_template()</code> 自动处理模板格式</li>
+</ul>
+</div>
+
+<div class="interview-box">
+<ul>
+<li><strong>[CLS] 作用</strong>：BERT 中 [CLS] 的最终隐藏状态作为整个句子的表示，用于分类</li>
+<li><strong>EOS 触发停止</strong>：自回归生成中，模型输出 EOS token 时停止解码</li>
+<li><strong>Chat 模板一致性</strong>：推理时必须使用与训练完全相同的模板格式</li>
+<li><strong>ChatML</strong>：<code>&lt;|im_start|&gt;</code>/<code>&lt;|im_end|&gt;</code> 是被广泛采用的 Chat 标记格式</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="practice">
+      <div class="ch-head"><div class="num">09</div><div class="t"><h2>Tokenizer 实践</h2><div class="sub">HuggingFace 提供了两种 Tokenizer 实现：</div></div></div>
+      <div class="card">
+<h3>HuggingFace tokenizers 库</h3>
+<p>HuggingFace 提供了两种 Tokenizer 实现：</p>
+<ul>
+<li><strong>Python Tokenizer</strong>：纯 Python 实现，方便调试但速度慢</li>
+<li><strong>Fast Tokenizer</strong>：基于 Rust 的 <code>tokenizers</code> 库，速度快 10-100 倍，推荐使用</li>
+</ul>
+<pre><code># 判断是否为 Fast Tokenizer
+from transformers import AutoTokenizer
+tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+print(tokenizer.is_fast)  # True → 使用的是 Fast Tokenizer</code></pre>
+
+<h3>tokenize → encode → decode 流程</h3>
+<pre><code>from transformers import AutoTokenizer
+
+tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+text = "Tokenization is important for NLP!"
+
+# Step 1: tokenize — 文本 → token 列表（字符串形式）
+tokens = tokenizer.tokenize(text)
+# ['token', '##ization', 'is', 'important', 'for', 'nl', '##p', '!']
+
+# Step 2: encode — 文本 → token ID 列表（整数形式，含特殊 token）
+ids = tokenizer.encode(text)
+# [101, 19204, 3989, 2003, 2590, 2005, 17953, 2361, 999, 102]
+#  ↑CLS                                                    ↑SEP
+
+# Step 3: decode — token IDs → 文本
+decoded = tokenizer.decode(ids)
+# '[CLS] tokenization is important for nlp! [SEP]'
+
+# 更常用的 __call__ 方法（一步到位）
+encoding = tokenizer(text, return_tensors="pt")
+# encoding.input_ids      → tensor([[101, 19204, ...]])
+# encoding.attention_mask → tensor([[1, 1, 1, ...]])
+# encoding.token_type_ids → tensor([[0, 0, 0, ...]])</code></pre>
+
+<h3>Fast Tokenizer 特有功能</h3>
+<pre><code># offset_mapping: 每个 token 对应原文的字符位置
+encoding = tokenizer(text, return_offsets_mapping=True)
+for token, (start, end) in zip(tokens, encoding.offset_mapping[1:-1]):
+    print(f"{token:15s} → '{text[start:end]}'")
+
+# word_ids: 每个 token 对应的原始词索引（NER 任务常用）
+word_ids = encoding.word_ids()
+# [None, 0, 0, 1, 2, 3, 4, 4, 5, None]
+# None 对应特殊 token，相同数字表示属于同一个词</code></pre>
+
+<h3>训练自定义 Tokenizer</h3>
+<pre><code>from tokenizers import Tokenizer, models, trainers, pre_tokenizers
+
+# 创建 BPE tokenizer
+tokenizer = Tokenizer(models.BPE())
+tokenizer.pre_tokenizer = pre_tokenizers.ByteLevel()
+
+trainer = trainers.BpeTrainer(
+    vocab_size=32000,
+    special_tokens=["&lt;pad&gt;", "&lt;unk&gt;", "&lt;bos&gt;", "&lt;eos&gt;"]
+)
+
+tokenizer.train(files=["corpus.txt"], trainer=trainer)
+tokenizer.save("my_tokenizer.json")</code></pre>
+</div>
+
+<div class="interview-box">
+<ul>
+<li><strong>三步流程</strong>：tokenize（文本→token 字符串）→ encode（加特殊 token，转 ID）→ decode（ID→文本）</li>
+<li><strong>Fast Tokenizer</strong>：基于 Rust，支持 offset_mapping / word_ids 等高级功能</li>
+<li><strong>__call__</strong>：实际使用中最常调用 <code>tokenizer(text)</code>，一步返回 input_ids + attention_mask</li>
+<li><strong>自定义训练</strong>：用 <code>tokenizers</code> 库可快速训练 BPE / WordPiece / Unigram Tokenizer</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="qa">
+      <div class="ch-head"><div class="num">10</div><div class="t"><h2>🎯 Q&amp;A（Top 10）</h2><div class="sub">合并策略不同 ：BPE 每次合并 频率最高 的相邻 token 对</div></div></div>
+      <details class="qa">
+<summary>Q1: BPE 和 WordPiece 的核心区别是什么？</summary>
+<div class="a">
+<p><strong>合并策略不同</strong>：BPE 每次合并<strong>频率最高</strong>的相邻 token 对；WordPiece 每次合并使<strong>语言模型似然增加最大</strong>的相邻对（近似于互信息 PMI）。</p>
+<p>直觉上，BPE 关注"哪对出现最多"，WordPiece 关注"哪对合并后对语言建模帮助最大"。实践中，BPE 被 GPT 系列采用，WordPiece 被 BERT 系列采用。两者效果差异不大，但 BPE 更流行。</p>
+</div>
+</details>
+
+<details class="qa">
+<summary>Q2: 为什么 GPT-2 选择 Byte-level BPE？</summary>
+<div class="a">
+<p>Byte-level BPE 以 256 个字节为基础词表，好处有三：</p>
+<ul>
+<li><strong>完全消除 OOV</strong>：任何文本甚至二进制数据都能编码，不需要 [UNK]</li>
+<li><strong>语言无关</strong>：不需要针对特定语言设计字符集</li>
+<li><strong>简洁统一</strong>：基础词表仅 256 个 token，合并规则决定最终词表</li>
+</ul>
+<p>代价是对非 ASCII 语言（如中文），初始编码效率较低（1 汉字 = 3 字节 = 可能 3 个初始 token），但通过足够的合并步骤可以缓解。</p>
+</div>
+</details>
+
+<details class="qa">
+<summary>Q3: Unigram 与 BPE 的方向为什么相反？各有什么优劣？</summary>
+<div class="a">
+<p><strong>BPE 自底向上</strong>：从字符开始逐步合并，简单高效，但合并顺序是贪心的，可能不是全局最优。</p>
+<p><strong>Unigram 自顶向下</strong>：从大词表开始逐步裁剪，通过 EM 算法优化全局似然，理论上更优。Unigram 的独特优势是可以做 <strong>Subword Regularization</strong>——训练时随机采样次优分词方案，增强模型鲁棒性。缺点是训练速度稍慢。</p>
+</div>
+</details>
+
+<details class="qa">
+<summary>Q4: SentencePiece 和 HuggingFace Tokenizers 的区别？</summary>
+<div class="a">
+<p><strong>SentencePiece</strong>（C++ 实现）直接处理原始文本，不需要预分词，用 ▁ 替换空格，支持 BPE 和 Unigram 算法。LLaMA、T5 等模型使用。</p>
+<p><strong>HuggingFace Tokenizers</strong>（Rust 实现）是更灵活的框架，支持 BPE、WordPiece、Unigram，可配置预分词、后处理等 pipeline。GPT-2、BERT 等模型使用。</p>
+<p>两者可以互操作：SentencePiece 训练的模型可以转换为 HuggingFace 的 <code>tokenizer.json</code> 格式，反之亦然。</p>
+</div>
+</details>
+
+<details class="qa">
+<summary>Q5: 中文 Tokenization 有哪些特殊挑战？如何解决？</summary>
+<div class="a">
+<p>中文的核心挑战是<strong>没有天然的空格分隔符</strong>，且字符种类远多于英文。具体表现为：</p>
+<ul>
+<li>英文词表对中文编码效率低（高 fertility）</li>
+<li>UTF-8 编码下一个汉字占 3 字节，Byte-level BPE 初始需要 3 个 token</li>
+<li>词级分词依赖外部工具（jieba 等），引入分词错误传播</li>
+</ul>
+<p><strong>解决方案</strong>：(1) 在词表中加入足够多的中文字符和常见词组；(2) 用大量中文语料训练 BPE，让常见汉字组合自然合并；(3) 扩大词表总量（如 Qwen 的 152K）。</p>
+</div>
+</details>
+
+<details class="qa">
+<summary>Q6: 词表大小如何影响模型效率？32K vs 128K 怎么选？</summary>
+<div class="a">
+<p><strong>更大词表的好处</strong>：</p>
+<ul>
+<li>更好的压缩率 → 更短的序列 → Attention 计算量减少（O(n²)）</li>
+<li>同一 context window 装更多文本 → 更强的上下文理解</li>
+<li>每次前向传播生成更多字符 → 推理更快</li>
+</ul>
+<p><strong>更大词表的代价</strong>：</p>
+<ul>
+<li>Embedding 层参数增加（vocab_size × hidden_dim）</li>
+<li>低频 token 训练不充分，质量下降</li>
+<li>Softmax 输出层计算变慢</li>
+</ul>
+<p><strong>趋势</strong>：从 32K（LLaMA）→ 128K（LLaMA-3），更大词表在多语言和代码场景的收益明显。但需要足够大的训练语料来支撑。</p>
+</div>
+</details>
+
+<details class="qa">
+<summary>Q7: 什么是 Subword Regularization？为什么有用？</summary>
+<div class="a">
+<p>Subword Regularization 是 Unigram 分词的一个特性：训练时不总是使用最优分词方案，而是按概率<strong>随机采样</strong>次优分词方案。例如 "unbreakable" 可能被分为 ["un", "break", "able"] 或 ["un", "breakable"] 等不同方案。</p>
+<p><strong>好处</strong>：类似于 Dropout，增强模型对分词方式变化的鲁棒性，减少过拟合。BPE 后来也引入了类似思想（BPE-Dropout），在训练时随机跳过一些合并步骤。</p>
+</div>
+</details>
+
+<details class="qa">
+<summary>Q8: Chat 模板（如 ChatML）为什么重要？格式不对会怎样？</summary>
+<div class="a">
+<p>Chat 模板定义了多轮对话的格式，模型在 SFT/RLHF 训练时学会了理解这种格式中的角色区分和对话边界。</p>
+<p><strong>格式不一致的后果</strong>：</p>
+<ul>
+<li>模型无法正确区分 system/user/assistant 角色</li>
+<li>可能忽略系统指令或混淆对话历史</li>
+<li>生成质量严重下降，出现格式混乱</li>
+<li>安全防护失效（依赖 system prompt 的防护被绕过）</li>
+</ul>
+<p>因此使用 <code>tokenizer.apply_chat_template()</code> 非常重要，它确保格式与训练时一致。</p>
+</div>
+</details>
+
+<details class="qa">
+<summary>Q9: Fast Tokenizer 比 Slow Tokenizer 快多少？有什么额外功能？</summary>
+<div class="a">
+<p>Fast Tokenizer 基于 Rust 实现的 <code>tokenizers</code> 库，通常比纯 Python 的 Slow Tokenizer 快 <strong>10-100 倍</strong>，在批量编码时差距更明显。</p>
+<p><strong>Fast Tokenizer 独有功能</strong>：</p>
+<ul>
+<li><code>offset_mapping</code>：每个 token 对应原文的字符起止位置，NER 等任务必需</li>
+<li><code>word_ids()</code>：每个 token 对应原始词的索引</li>
+<li><code>overflow</code>：长文本自动滑窗切分</li>
+<li>高效批量编码和并行处理</li>
+</ul>
+<p>HuggingFace 默认优先加载 Fast Tokenizer；如果需要调试，可以传入 <code>use_fast=False</code>。</p>
+</div>
+</details>
+
+<details class="qa">
+<summary>Q10: 如果要为新语言/领域训练 Tokenizer，有哪些关键决策？</summary>
+<div class="a">
+<p>训练自定义 Tokenizer 需要做以下关键决策：</p>
+<ol>
+<li><strong>算法选择</strong>：BPE（最流行，确定性强）/ Unigram（支持采样正则化）/ WordPiece（主要 BERT 生态）</li>
+<li><strong>词表大小</strong>：通用场景 32K-64K，多语言 128K+，需要在压缩率和参数量间权衡</li>
+<li><strong>训练语料</strong>：语料的覆盖面决定词表质量，需注意不同语言/领域的配比</li>
+<li><strong>特殊 token</strong>：根据下游任务设计，Chat 模型需要角色标记</li>
+<li><strong>预分词策略</strong>：是否用正则表达式预分词（GPT 风格）还是直接处理原始文本（SentencePiece 风格）</li>
+<li><strong>Byte fallback</strong>：是否用 Byte-level 确保零 OOV</li>
+</ol>
+<p><strong>验证方法</strong>：计算目标语料的 fertility 和压缩率，与主流 Tokenizer 对比。</p>
+</div>
+</details>
+    </section>
+
+    <footer>
+      <div class="made">TECH NOTES · AI 工程 · 整理自 AI Knowledge Hub</div>
+    </footer>
+  </main>
+</div>
+
+<script>
+(function(){var bar=document.getElementById('progress');function u(){var h=document.documentElement;bar.style.width=h.scrollTop/(h.scrollHeight-h.clientHeight)*100+'%';}window.addEventListener('scroll',u,{passive:true});u();})();
+(function(){var links=document.querySelectorAll('aside.toc nav a');var secs=Array.from(document.querySelectorAll('section.chapter'));if(!secs.length)return;function u(){var y=window.scrollY+100,cur=secs[0];for(var i=0;i<secs.length;i++){if(secs[i].offsetTop<=y)cur=secs[i];}var id=cur.id;links.forEach(function(a){a.classList.toggle('active',a.getAttribute('href')==='#'+id);});}window.addEventListener('scroll',u,{passive:true});u();})();
+</script>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

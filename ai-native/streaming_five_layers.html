@@ -1,0 +1,643 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>大模型流式传输五层方案 · AI 工程 — Tech Notes</title>
+<meta name="description" content="Streaming Five Layers — SSE基础 / 断点续传三方案 / WebSocket替代 / 生产级技术栈">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<link rel="stylesheet" href="../assets/kh-guide.css">
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav">
+
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="ai_engineering_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 18 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>E36 · AI 工程</h2>
+    <nav>
+      <ol>
+        <li><a href="#overview" class="active">概览</a></li>
+        <li><a href="#eventsource">第一层：EventSource 基础——三行代码与六大特性</a></li>
+        <li><a href="#30">第二层：断线重连陷阱——已观看 30 秒内容为何丢失</a></li>
+        <li><a href="#ch3">第三层：断点续传三种方案——从&quot;能续&quot;到&quot;可靠续&quot;</a></li>
+        <li><a href="#websocket-json-rpc">第四层：高级协议替代——WebSocket 双向通信与 JSON-RPC</a></li>
+        <li><a href="#ch5">第五层：生产级技术栈——六大组件组合拳</a></li>
+        <li><a href="#ch6">场景选型决策树——从简单到复杂的渐进路径</a></li>
+        <li><a href="#nginx">服务端基础设施——Nginx 配置与超时对抗</a></li>
+        <li><a href="#ch8">常见问答</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+    <header class="hero">
+      <div class="badge">E36 · AI 工程</div>
+      <h1>大模型流式传输五层方案</h1>
+      <p class="sub">Streaming Five Layers — SSE基础 / 断点续传三方案 / WebSocket替代 / 生产级技术栈</p>
+      <div class="meta-row">
+        <span class="pill cyan">AI 工程</span>
+        <span class="pill green">阅读 ~18 min</span>
+        <span class="pill amber">9 章</span>
+      </div>
+    </header>
+
+    <section class="chapter" id="overview">
+      <div class="ch-head"><div class="num">00</div><div class="t"><h2>概览</h2></div></div>
+      <div class="intuition-box">
+大模型流式传输不是一个单独的技术问题，而是一个五层递进的工程体系：从 EventSource 三行代码起步，到断线重连的数据丢失陷阱，到断点续传的三种补救方案，再到 WebSocket 双向协议替代，最终在生产级技术栈中将心跳保活、rAF 批量渲染、Markdown 分段、本地缓存兜底融合为一套完整方案。每一层都是前一层的"缺陷补丁"。
+</div>
+    </section>
+
+    <section class="chapter" id="eventsource">
+      <div class="ch-head"><div class="num">01</div><div class="t"><h2>第一层：EventSource 基础——三行代码与六大特性</h2><div class="sub">EventSource 是浏览器原生提供的 SSE（Server-Sent Events）客…</div></div></div>
+      <p><span class="term">EventSource</span> 是浏览器原生提供的 SSE（Server-Sent Events）客户端 API。它基于 HTTP 长连接，服务端单向推送文本事件流，客户端通过 <code>onmessage</code> 监听数据到达。2026 年 OpenAI、Anthropic、Google 等主流大模型 API 的 <code>stream: true</code> 模式全部基于 SSE 协议。</p>
+
+<h3>最小可用实现</h3>
+<pre><code>// 三行代码跑通流式传输
+const es = new EventSource('/api/chat/stream?prompt=hello');
+es.onmessage = (e) => { output.textContent += e.data; };
+es.addEventListener('done', () => es.close());</code></pre>
+
+<p>这三行代码完成了：建立连接 → 监听消息 → 流结束关闭。但生产环境中，这远远不够。</p>
+
+<h3>EventSource 六大特性与生产限制</h3>
+<table>
+<tr><th>特性</th><th>行为</th><th>生产环境影响</th></tr>
+<tr><td><strong>自动重连</strong></td><td>断线后约 3 秒自动重新连接</td><td>看似可靠，实则丢数据（详见第二层）</td></tr>
+<tr><td><strong>仅支持 GET</strong></td><td>标准 API 不支持 POST 方法</td><td>Prompt 超过 2KB 无法放 URL，需 polyfill</td></tr>
+<tr><td><strong>纯文本传输</strong></td><td>只传输 UTF-8 文本</td><td>LLM 场景足够，不需要二进制</td></tr>
+<tr><td><strong>HTTP/1.1 长连接</strong></td><td>每个 EventSource 占一个 TCP 连接</td><td>同域名最多 6 个并发（HTTP/2 下无此限制）</td></tr>
+<tr><td><strong>跨域 CORS</strong></td><td>支持 withCredentials 属性</td><td>需服务端配置 Access-Control 头</td></tr>
+<tr><td><strong>事件类型</strong></td><td>支持 addEventListener 监听自定义事件</td><td>可区分 token / done / error 等不同事件</td></tr>
+</table>
+
+<div class="intuition-box">
+EventSource 的"自动重连"给了开发者虚假的安全感——断了会自动连上没错，但重连后服务端会从零开始生成。你已经看了 30 秒的内容，全部丢失。这就是为什么"三行代码"在生产中不可用。
+</div>
+
+<h3>SSE 事件流格式</h3>
+<pre><code>SSE 协议数据格式（服务端响应体）:
+
+  event: token              ← 自定义事件类型（可选）
+  id: chunk_001             ← 事件ID（可选，用于断点续传）
+  retry: 3000               ← 重连间隔毫秒（可选）
+  data: {"content":"你"}    ← 数据负载（必须）
+                            ← 空行 = 一条事件结束
+  id: chunk_002
+  data: {"content":"好"}
+
+  id: chunk_003
+  data: {"content":"，"}
+
+  event: done
+  data: [DONE]              ← 流结束标记</code></pre>
+
+<h3>Fetch + ReadableStream 替代方案</h3>
+<p>由于 EventSource 不支持 POST，实际生产中大量项目使用 <span class="term">Fetch ReadableStream</span> 替代原生 EventSource，以获得 POST 能力和更细粒度的控制：</p>
+<pre><code>// Fetch + ReadableStream：支持 POST，可自定义 Header
+const resp = await fetch('/api/chat', {
+  method: 'POST', headers: {'Content-Type':'application/json'},
+  body: JSON.stringify({ prompt, history, stream: true })
+});
+const reader = resp.body.getReader();
+const decoder = new TextDecoder();
+while (true) {
+  const { done, value } = await reader.read();
+  if (done) break;
+  output.textContent += decoder.decode(value, { stream: true });
+}</code></pre>
+
+<table>
+<tr><th>维度</th><th>原生 EventSource</th><th>Fetch + ReadableStream</th></tr>
+<tr><td><strong>HTTP 方法</strong></td><td>仅 GET</td><td>GET / POST / PUT 全支持</td></tr>
+<tr><td><strong>自定义 Header</strong></td><td>不支持</td><td>完全支持（Authorization 等）</td></tr>
+<tr><td><strong>自动重连</strong></td><td>内置</td><td>需手动实现</td></tr>
+<tr><td><strong>断点续传</strong></td><td>Last-Event-ID（非强制）</td><td>完全自定义</td></tr>
+<tr><td><strong>中止控制</strong></td><td>只能 close()</td><td>AbortController 精确控制</td></tr>
+<tr><td><strong>适用场景</strong></td><td>简单通知流</td><td>LLM 对话流（主流选择）</td></tr>
+</table>
+
+<div class="highlight">
+<strong>实践结论：</strong>2026 年实际生产中，约 70% 的 AI 对话产品使用 Fetch + ReadableStream 而非原生 EventSource。原因很简单——LLM API 的 prompt 通常远超 2KB，必须用 POST；同时需要 Authorization header 传递 API Key。原生 EventSource 更适合轻量级通知推送场景。
+</div>
+    </section>
+
+    <section class="chapter" id="30">
+      <div class="ch-head"><div class="num">02</div><div class="t"><h2>第二层：断线重连陷阱——已观看 30 秒内容为何丢失</h2><div class="sub">EventSource 的自动重连是 LLM 流式传输中最常被忽视的&quot;地雷&quot;</div></div></div>
+      <p>EventSource 的自动重连是 LLM 流式传输中最常被忽视的"地雷"。断线后浏览器确实会自动重连，但重连的行为与开发者的期望完全不同。</p>
+
+<h3>重连数据丢失的完整时序</h3>
+<div class="flow">
+  <div class="flow-title">断线重连数据丢失时序图</div>
+  <div class="flow-node accent"><div class="nlabel">时间 Client Server</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">t=0 | GET /stream →| 开始生成</div><div class="nsub">t=1s |← data:&quot;你&quot; (chunk_001) | · t=2s |← data:&quot;好&quot; (chunk_002) | · t=3s |← data:&quot;，我&quot; (chunk_003) | 已生成 500 token · t=4s | ✕✕✕ 网络断开 ✕✕✕ | · t=5s | | 继续生成（客户端看不到） · t=7s | GET /stream (自动重连) →| ← 新请求！从头开始！ · t=8s |← data:&quot;你&quot; (chunk_001&#x27;) | 重新生成 · t=9s |← data:&quot;好&quot; (chunk_002&#x27;) | 完全不同的内容 · | | · 用户看到：内容突然跳回开头，已读 30 秒的内容全部消失</div></div>
+</div>
+
+<h3>Last-Event-ID 的局限性</h3>
+<p>SSE 规范设计了 <span class="term">Last-Event-ID</span> 机制：客户端断线重连时，自动在请求头中附带最后接收到的事件 ID。但这个机制存在严重的实际限制：</p>
+
+<table>
+<tr><th>限制</th><th>说明</th><th>影响</th></tr>
+<tr><td><strong>非强制支持</strong></td><td>规范标注 Last-Event-ID 为"建议"而非"必须"</td><td>大多数 LLM API 不实现此机制</td></tr>
+<tr><td><strong>服务端需缓存</strong></td><td>服务端必须缓存已发送的事件才能重放</td><td>LLM 生成是流式的，通常不缓存</td></tr>
+<tr><td><strong>LLM 不可重现</strong></td><td>大模型每次生成结果不同（temperature &gt; 0）</td><td>即使从断点续传，内容也会不一致</td></tr>
+<tr><td><strong>仅 GET 可携带</strong></td><td>Last-Event-ID 通过 HTTP 头传递</td><td>POST 场景（Fetch 方案）不触发此机制</td></tr>
+</table>
+
+<div class="intuition-box">
+Last-Event-ID 在传统消息队列场景（如日志推送、股票行情）中非常有效，因为服务端可以缓存消息。但在 LLM 流式场景中，服务端通常"边生成边丢弃"——它不记得已经发了哪些 token，也无法精确"从第 N 个 token 继续"。
+</div>
+
+<h3>断线频率的真实数据</h3>
+<table>
+<tr><th>网络环境</th><th>断线频率</th><th>典型断线时长</th><th>用户影响</th></tr>
+<tr><td>桌面 Wi-Fi（稳定）</td><td>每 1000 次请求约 0.5 次</td><td>200ms-2s</td><td>偶尔闪烁</td></tr>
+<tr><td>移动 4G/5G</td><td>每 100 次请求约 3-8 次</td><td>500ms-5s</td><td>频繁中断</td></tr>
+<tr><td>企业代理 / VPN</td><td>每 200 次请求约 2-5 次</td><td>1-10s</td><td>Nginx 超时切断</td></tr>
+<tr><td>电梯 / 地铁 / 高铁</td><td>几乎每次</td><td>5-30s</td><td>必须断点续传</td></tr>
+</table>
+
+<div class="highlight">
+<strong>核心矛盾：</strong>LLM 单次生成耗时 10-60 秒，而移动端断线间隔可能只有 3-5 秒。这意味着一次完整生成过程中，可能断线 3-10 次。没有断点续传机制，用户体验将是灾难级的。
+</div>
+    </section>
+
+    <section class="chapter" id="ch3">
+      <div class="ch-head"><div class="num">03</div><div class="t"><h2>第三层：断点续传三种方案——从&quot;能续&quot;到&quot;可靠续&quot;</h2><div class="sub">断点续传 是让流式传输从&quot;能用&quot;到&quot;可靠&quot;的关键跳跃</div></div></div>
+      <p><span class="term">断点续传</span>是让流式传输从"能用"到"可靠"的关键跳跃。核心思路：客户端记录已接收进度，断线重连时告知服务端从断点继续。</p>
+
+<h3>方案一：接收长度续接</h3>
+<p>客户端记录已接收内容的字符数或 token 数，重连时通过 <code>lastReceivedLength</code> 参数告知服务端跳过前面的内容。</p>
+
+<div class="arch-diagram">方案一：接收长度续接流程
+
+  Client                              Server
+    |                                    |
+    |── POST /stream {prompt:"写一篇文章"} ──→|
+    |←── chunk: "大模型技术"              | 已接收 5 字符
+    |←── chunk: "正在改变"               | 已接收 9 字符
+    |   ✕✕✕ 断线 ✕✕✕                    |
+    |── POST /stream {prompt, lastLen:9} ─→| 跳过前 9 字符
+    |←── chunk: "世界格局"               | 从第 10 字符继续
+    |←── chunk: "..."                    |</div>
+
+<table>
+<tr><th>优点</th><th>缺点</th></tr>
+<tr><td>实现最简单</td><td>大模型输出有随机性（temperature &gt; 0 时每次不同）</td></tr>
+<tr><td>客户端只需计数</td><td>服务端需要"跳过前 N 字符"的能力</td></tr>
+<tr><td>不需要额外存储</td><td>token 和字符的映射关系不稳定</td></tr>
+</table>
+
+<div class="intuition-box">
+接收长度续接在 temperature=0（确定性输出）时效果尚可，但大多数 LLM 对话使用 temperature=0.7-1.0，每次生成内容不同。"跳过前 9 个字符"后接上的内容，可能和前面的逻辑完全不连贯。因此这个方案在生产中很少单独使用。
+</div>
+
+<h3>方案二：消息 ID 续接</h3>
+<p>服务端为每个发出的 chunk 分配唯一递增 ID（如 <code>chunk_001</code>、<code>chunk_002</code>），客户端记录最后收到的 ID。重连时传入 <code>lastEventId</code>，服务端从缓存中回放该 ID 之后的内容。</p>
+
+<div class="arch-diagram">方案二：消息 ID 续接流程
+
+  Client                                Server（带缓存）
+    |                                      |
+    |── POST /stream {prompt} ────────────→| 开始生成 + 分配 ID
+    |←── id:chunk_001 data:"大模型"        | 缓存 chunk_001
+    |←── id:chunk_002 data:"技术"          | 缓存 chunk_002
+    |←── id:chunk_003 data:"正在"          | 缓存 chunk_003
+    |   ✕✕✕ 断线 ✕✕✕                      |
+    |── POST /stream {prompt,lastId:003} ─→| 从缓存回放
+    |←── id:chunk_003 data:"正在" (重放)   | 先重放已缓存的
+    |←── id:chunk_004 data:"改变世界"      | 然后继续新生成
+    |←── id:chunk_005 data:"..."           |</div>
+
+<table>
+<tr><th>优点</th><th>缺点</th></tr>
+<tr><td>精确断点续传，不丢不错</td><td>服务端必须缓存已发出的 chunk（内存开销）</td></tr>
+<tr><td>支持去重（相同 ID 直接跳过）</td><td>需要管理缓存生命周期（生成完成后释放）</td></tr>
+<tr><td>与 SSE Last-Event-ID 规范兼容</td><td>实现复杂度中等</td></tr>
+</table>
+
+<div class="intuition-box">
+消息 ID 续接是目前最成熟的方案。Anthropic 和 OpenAI 的内部实现都基于此思路——每个 chunk 携带序列号，服务端在 Redis 或内存中缓存当前会话的完整输出，直到客户端确认收到或会话超时（通常 120 秒）。
+</div>
+
+<h3>方案三：客户端缓存 + resume_token</h3>
+<p>客户端将已接收的内容存入 <code>localStorage</code> 或 <code>IndexedDB</code>，配合服务端返回的 <span class="term">resume_token</span>（会话恢复令牌），断线后完全由客户端恢复，无需服务端回放。</p>
+
+<div class="arch-diagram">方案三：客户端缓存续传流程
+
+  Client (localStorage)                 Server
+    |                                      |
+    |── POST /stream {prompt} ────────────→|
+    |←── resume_token:"sess_abc123"        | 生成会话令牌
+    |←── chunk:"大模型技术"                 | → 存入 localStorage
+    |←── chunk:"正在改变"                  | → 追加到 localStorage
+    |   ✕✕✕ 断线 ✕✕✕                      |
+    |   (从 localStorage 恢复已显示内容)    |
+    |── POST /stream {resume:"sess_abc123"}→| 识别会话，继续生成
+    |←── chunk:"世界格局"                  | → 追加到 localStorage
+    |←── [DONE]                            | → 清除 localStorage</div>
+
+<table>
+<tr><th>优点</th><th>缺点</th></tr>
+<tr><td>断线瞬间用户体验无损（已读内容不消失）</td><td>需要管理 localStorage 容量和过期</td></tr>
+<tr><td>服务端压力小（无需长期缓存）</td><td>resume_token 需要安全的生成和验证机制</td></tr>
+<tr><td>适合移动端弱网环境</td><td>多标签页需要同步 localStorage 状态</td></tr>
+</table>
+
+<h3>三种方案综合对比</h3>
+<table>
+<tr><th>维度</th><th>接收长度续接</th><th>消息 ID 续接</th><th>客户端缓存</th></tr>
+<tr><td><strong>实现复杂度</strong></td><td>低</td><td>中</td><td>中高</td></tr>
+<tr><td><strong>数据一致性</strong></td><td>差（随机输出时断裂）</td><td>优（精确回放）</td><td>良（客户端保证显示连续）</td></tr>
+<tr><td><strong>服务端开销</strong></td><td>极低</td><td>中（需缓存）</td><td>低（仅 token 验证）</td></tr>
+<tr><td><strong>断线瞬间体验</strong></td><td>内容可能跳变</td><td>短暂空白后恢复</td><td>无缝过渡</td></tr>
+<tr><td><strong>适用场景</strong></td><td>原型/Demo</td><td>通用生产环境</td><td>移动端/弱网环境</td></tr>
+<tr><td><strong>典型使用者</strong></td><td>个人项目</td><td>OpenAI / Anthropic</td><td>移动端 AI 应用</td></tr>
+</table>
+
+<div class="highlight">
+<strong>生产推荐：</strong>通用场景首选消息 ID 续接（方案二），移动端叠加客户端缓存（方案三）实现无缝体验。接收长度续接（方案一）仅适合 temperature=0 的确定性场景或快速原型验证。实际产品中常将方案二和方案三组合使用——服务端保证数据完整，客户端保证视觉连续。
+</div>
+    </section>
+
+    <section class="chapter" id="websocket-json-rpc">
+      <div class="ch-head"><div class="num">04</div><div class="t"><h2>第四层：高级协议替代——WebSocket 双向通信与 JSON-RPC</h2><div class="sub">当 SSE 的单向推送无法满足需求时（中途取消生成、实时语音交互、多人协作编辑），需要升级到…</div></div></div>
+      <p>当 SSE 的单向推送无法满足需求时（中途取消生成、实时语音交互、多人协作编辑），需要升级到 <span class="term">WebSocket</span> 双向通信协议。</p>
+
+<h3>WebSocket 在 LLM 场景的四大优势</h3>
+<table>
+<tr><th>优势</th><th>说明</th><th>对应场景</th></tr>
+<tr><td><strong>双向通信</strong></td><td>客户端可随时发送控制指令</td><td>中途取消生成、暂停/恢复</td></tr>
+<tr><td><strong>Resume Offset</strong></td><td>客户端发送 <code>{"resume": true, "offset": 1523}</code> 精确续传</td><td>断线后从精确字节位置恢复</td></tr>
+<tr><td><strong>低延迟</strong></td><td>无 HTTP 握手开销，帧头仅 2-6 字节</td><td>语音 AI、实时协作</td></tr>
+<tr><td><strong>持久连接</strong></td><td>一次握手，长期保持</td><td>多轮对话复用同一连接</td></tr>
+</table>
+
+<h3>WebSocket 流式传输实现</h3>
+<div class="arch-diagram">WebSocket 双向流式传输流程
+
+  Client                                Server
+    |                                      |
+    |── WS 握手 ──────────────────────────→|
+    |←── 101 Switching Protocols           |
+    |                                      |
+    |── {"action":"chat","prompt":"..."} ─→| 发送请求
+    |←── {"type":"token","seq":1,"data":"你"}|
+    |←── {"type":"token","seq":2,"data":"好"}|
+    |                                      |
+    |── {"action":"cancel"} ──────────────→| 中途取消！
+    |←── {"type":"cancelled","seq":2}      | 立即停止
+    |                                      |
+    |   ✕✕✕ 断线 ✕✕✕                      |
+    |── WS 重连 ──────────────────────────→|
+    |── {"action":"resume","offset":2} ──→| 从 seq=3 继续
+    |←── {"type":"token","seq":3,"data":"，"}|</div>
+
+<h3>WebSocket 的代价与挑战</h3>
+<table>
+<tr><th>挑战</th><th>说明</th><th>解决成本</th></tr>
+<tr><td><strong>无自动重连</strong></td><td>WebSocket 断线后不会自动重连</td><td>需实现指数退避重连逻辑</td></tr>
+<tr><td><strong>无原生消息 ID</strong></td><td>没有 Last-Event-ID 等内置机制</td><td>需在应用层实现序列号</td></tr>
+<tr><td><strong>代理兼容性差</strong></td><td>企业防火墙常阻断 WS 协议升级</td><td>需要 wss:// + 降级策略</td></tr>
+<tr><td><strong>心跳保活</strong></td><td>无活动连接会被中间件超时切断</td><td>需实现 ping/pong 心跳</td></tr>
+<tr><td><strong>连接管理复杂</strong></td><td>需要处理重连、消息队列、状态同步</td><td>代码量是 SSE 方案的 3-5 倍</td></tr>
+</table>
+
+<div class="intuition-box">
+WebSocket 的能力远超 SSE，但代价是"所有 SSE 免费提供的东西（自动重连、HTTP 兼容、Last-Event-ID），在 WebSocket 中都需要自己造轮子"。除非确实需要双向通信，否则 SSE 方案的总工程成本更低。
+</div>
+
+<h3>JSON-RPC over WebSocket：大厂方案</h3>
+<p><span class="term">JSON-RPC</span> 是一种轻量级远程过程调用协议，将其叠加在 WebSocket 上，可以在双向通信的基础上获得结构化的请求-响应语义。这是 Anthropic Claude 实时 API、Google Gemini Live API 等大厂产品的底层通信模式。</p>
+
+<pre><code>JSON-RPC over WebSocket 消息格式:
+
+  // 客户端请求（带 method + params + id）
+  {"jsonrpc":"2.0", "id":1, "method":"chat.generate",
+   "params":{"prompt":"你好","stream":true}}
+
+  // 服务端流式响应（带 id 关联）
+  {"jsonrpc":"2.0", "id":1, "result":{"seq":1,"data":"你"}}
+  {"jsonrpc":"2.0", "id":1, "result":{"seq":2,"data":"好"}}
+
+  // 客户端中途取消
+  {"jsonrpc":"2.0", "id":2, "method":"chat.cancel",
+   "params":{"original_id":1}}
+
+  // 服务端确认取消
+  {"jsonrpc":"2.0", "id":2, "result":{"cancelled":true}}</code></pre>
+
+<h3>2026 年大厂协议选型实况</h3>
+<table>
+<tr><th>厂商 / 产品</th><th>协议</th><th>双向需求</th><th>备注</th></tr>
+<tr><td><strong>OpenAI Chat API</strong></td><td>SSE (Fetch+Stream)</td><td>无（单向流）</td><td>POST + stream:true</td></tr>
+<tr><td><strong>OpenAI Realtime API</strong></td><td>WebSocket / WebRTC</td><td>语音双向流</td><td>音频输入+输出</td></tr>
+<tr><td><strong>Anthropic Claude</strong></td><td>SSE (Fetch+Stream)</td><td>无（单向流）</td><td>POST + stream:true</td></tr>
+<tr><td><strong>Google Gemini Live</strong></td><td>WebSocket (BidiStream)</td><td>音视频双向</td><td>BidiGenerateContent</td></tr>
+<tr><td><strong>ChatGPT Web</strong></td><td>SSE + AbortController</td><td>取消生成（HTTP 中止）</td><td>不需要 WS</td></tr>
+<tr><td><strong>Cursor / Windsurf</strong></td><td>SSE + 自定义控制通道</td><td>取消 + 切换模型</td><td>控制用独立 API</td></tr>
+</table>
+
+<div class="highlight">
+<strong>协议选型铁律：</strong>纯文本对话场景（Chat Completions）= SSE 足矣。涉及音频/视频/实时语音交互 = WebSocket。OpenAI 和 Anthropic 的标准对话 API 全部用 SSE，只有 Realtime/Voice API 才用 WebSocket。这说明 80% 的 AI 产品不需要 WebSocket。
+</div>
+    </section>
+
+    <section class="chapter" id="ch5">
+      <div class="ch-head"><div class="num">05</div><div class="t"><h2>第五层：生产级技术栈——六大组件组合拳</h2><div class="sub">一个生产级的 LLM 流式传输方案，不是选择某一个协议就够了，而是需要六大组件协同工作：</div></div></div>
+      <p>一个生产级的 LLM 流式传输方案，不是选择某一个协议就够了，而是需要六大组件协同工作：</p>
+
+<div class="arch-diagram">生产级流式传输技术栈全景图
+
+  ┌──────────────────────────────────────────────────┐
+  │                   前端技术栈                       │
+  │                                                    │
+  │  ┌─────────┐  ┌──────────┐  ┌──────────────────┐ │
+  │  │  rAF    │  │ Markdown │  │ localStorage     │ │
+  │  │  批量   │  │ 分段渲染  │  │ 本地缓存兜底     │ │
+  │  │  DOM    │  │          │  │                  │ │
+  │  └────┬────┘  └────┬─────┘  └────────┬─────────┘ │
+  │       └────────────┼─────────────────┘            │
+  │                    ↓                               │
+  │         ┌──────────────────┐                       │
+  │         │  流式消费引擎     │ ← 核心调度层         │
+  │         │  (解析+缓冲+调度)│                       │
+  │         └────────┬─────────┘                       │
+  └──────────────────┼───────────────────────────────┘
+                     ↓
+  ════════════════ 网络层 ═══════════════════════════
+                     ↑
+  ┌──────────────────┼───────────────────────────────┐
+  │                  │         服务端技术栈            │
+  │         ┌────────┴─────────┐                       │
+  │         │  SSE / WebSocket │ ← 协议层             │
+  │         │  + 心跳保活       │                       │
+  │         └────────┬─────────┘                       │
+  │                  ↓                                 │
+  │  ┌─────────┐  ┌──────────┐  ┌──────────────────┐ │
+  │  │ Nginx   │  │ 会话缓存  │  │ resume_token     │ │
+  │  │ 反代配置│  │ (Redis)   │  │ 断点续传          │ │
+  │  └─────────┘  └──────────┘  └──────────────────┘ │
+  └──────────────────────────────────────────────────┘</div>
+
+<h3>组件一：心跳保活</h3>
+<p>服务端每 15-30 秒发送心跳事件（SSE 注释 <code>: heartbeat\n\n</code>），防止 Nginx / 负载均衡器因超时（默认 60s）切断空闲连接。</p>
+
+<pre><code>心跳保活时序（防止中间件超时切断）:
+
+  t=0s   Server → Client: data: 第一个 token
+  t=1s   Server → Client: data: 第二个 token
+  ...
+  t=15s  Server → Client: : heartbeat    ← 心跳（SSE注释格式）
+  t=16s  Server → Client: data: 继续生成
+  ...
+  t=30s  Server → Client: : heartbeat    ← 第二次心跳
+  ...
+
+  若 Nginx proxy_read_timeout = 60s:
+  没有心跳 → 第 60s 连接被切断 → 用户看到生成中断
+  有心跳 → 连接持续存活 → 生成完整完成</code></pre>
+
+<h3>组件二：requestAnimationFrame 批量 DOM 更新</h3>
+<p>LLM 每秒产生 20-50 个 token，如果每个 token 都触发一次 DOM 更新和 React 重渲染，浏览器主线程将被淹没。使用 <span class="term">requestAnimationFrame</span>（rAF）将多个 token 合并到一帧内更新，是解决渲染风暴的核心手段。</p>
+
+<div class="flow">
+  <div class="flow-node accent"><div class="nlabel">rAF 批量更新 vs 逐 token 更新:</div><div class="nsub">逐 token 更新（卡顿）: · token到达 → setState → render → DOM → paint (16ms) · token到达 → setState → render → DOM → paint (16ms) · token到达 → setState → render → DOM → paint (16ms)</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">每秒 50 次 render → 主线程阻塞 → 页面冻结</div><div class="nsub">rAF 批量更新（流畅）: · token到达 → 存入 buffer · token到达 → 存入 buffer · token到达 → 存入 buffer · rAF 回调 → flush buffer → 一次 setState → 一次 render</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">每秒最多 60 次 render → 与屏幕刷新同步 → 流畅</div></div>
+</div>
+
+<table>
+<tr><th>渲染策略</th><th>每秒 render 次数</th><th>主线程占用</th><th>用户体验</th></tr>
+<tr><td><strong>逐 token setState</strong></td><td>20-50 次</td><td>高（80%+）</td><td>明显卡顿</td></tr>
+<tr><td><strong>throttle 50ms</strong></td><td>固定 20 次</td><td>中（40-60%）</td><td>轻微延迟</td></tr>
+<tr><td><strong>rAF 批量</strong></td><td>最多 60 次（与帧同步）</td><td>低（20-30%）</td><td>丝滑流畅</td></tr>
+<tr><td><strong>rAF + React.memo</strong></td><td>最多 60 次（局部更新）</td><td>极低（10-15%）</td><td>极致流畅</td></tr>
+</table>
+
+<div class="intuition-box">
+requestAnimationFrame 的精妙之处在于它"不创造新的渲染"，而是"把已有的渲染对齐到屏幕刷新周期"。60Hz 屏幕每秒最多画 60 帧，rAF 确保你的 DOM 更新恰好发生在每一帧绘制之前——既不多（浪费性能）也不少（保证及时）。
+</div>
+
+<h3>组件三：实时 Markdown 分段渲染</h3>
+<p>LLM 输出通常包含 Markdown 格式（代码块、列表、表格等）。流式场景下不能等全部生成完再渲染，也不能每来一个字符就全量解析。分段策略：将文本分为"已完成块"（冻结，不重新解析）和"进行中的块"（增量解析）。</p>
+
+<table>
+<tr><th>渲染策略</th><th>原理</th><th>性能（20KB 输出）</th><th>复杂度</th></tr>
+<tr><td><strong>全量重解析</strong></td><td>每次 chunk 重新解析全部文本</td><td>O(n²) — 3.8s 冻结</td><td>低</td></tr>
+<tr><td><strong>分段冻结</strong></td><td>已完成块缓存 HTML，仅解析新块</td><td>O(n) — 200ms 流畅</td><td>中</td></tr>
+<tr><td><strong>AST 打字机</strong></td><td>构建增量 AST，逐节点渲染</td><td>O(n) — 150ms 流畅</td><td>高</td></tr>
+</table>
+
+<h3>组件四：本地缓存兜底</h3>
+<p>即使网络层和续传层全部失效，客户端通过 <code>localStorage</code> 保底存储已接收内容，确保用户刷新页面后不丢失对话记录。</p>
+
+<div class="arch-diagram">
+本地缓存兜底策略:
+
+  正常运行:
+    token 到达 → 渲染到 DOM → 同时写入 localStorage
+    [DONE] 到达 → 标记完成 → localStorage 可清理
+
+  断线时:
+    localStorage 中已有内容 → 立即恢复显示
+    用户看到"网络中断，正在重连..."
+    重连成功 → 续传补全
+    重连失败 → 用户可选择"查看已接收内容"
+
+  页面刷新时:
+    检查 localStorage → 有未完成的流 → 恢复显示
+    用户可手动点击"重新生成"或"继续"</div>
+
+<h3>组件五：手动重试机制</h3>
+<p>当自动重连 3 次仍失败时，给用户一个显眼的"重试"按钮。这看似简单，但很多产品忘记做——用户在断线后只能无奈刷新整个页面。</p>
+
+<h3>组件六：AbortController 中止控制</h3>
+<p>用户点击"停止生成"时，使用 <span class="term">AbortController</span> 中止 HTTP 请求，立即释放网络连接和服务器计算资源。这是 Fetch API 提供的原生能力，EventSource 不具备。</p>
+
+<div class="practice-grid">
+<div class="do">
+<ul>
+<li>SSE 响应头加 <code>X-Accel-Buffering: no</code></li>
+<li>每 15-30s 发送心跳保活</li>
+<li>rAF 批量合并 DOM 更新</li>
+<li>localStorage 兜底存储已接收内容</li>
+<li>提供手动重试按钮</li>
+<li>AbortController 支持取消生成</li>
+<li>chunk 携带 seq 序列号便于续传</li>
+</ul>
+</div>
+<div class="dont">
+<ul>
+<li>每个 token 直接 setState（渲染风暴）</li>
+<li>依赖 EventSource 自动重连（丢数据）</li>
+<li>忽略 Nginx 缓冲配置（内容攒堆出现）</li>
+<li>不设超时检测（服务端卡死用户无感知）</li>
+<li>用 innerHTML 直接拼接（XSS 风险）</li>
+<li>忽略移动端弱网场景</li>
+<li>生成中断后无任何错误提示</li>
+</ul>
+</div>
+</div>
+    </section>
+
+    <section class="chapter" id="ch6">
+      <div class="ch-head"><div class="num">06</div><div class="t"><h2>场景选型决策树——从简单到复杂的渐进路径</h2><div class="sub">不是所有场景都需要 WebSocket + 断点续传 + rAF 全套</div></div></div>
+      <p>不是所有场景都需要 WebSocket + 断点续传 + rAF 全套。根据业务复杂度选择合适的技术层级：</p>
+
+<div class="flow">
+  <div class="flow-title">场景选型决策树</div>
+  <div class="flow-node accent"><div class="nlabel">你的场景是？</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">简单的 AI 问答 / 文本生成</div><div class="nsub">SSE (Fetch+Stream) + 心跳 + rAF · 复杂度: ★★☆☆☆ · 代码量: ~100 行</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">AI 对话产品（需要取消生成 + 历史恢复）</div><div class="nsub">SSE + AbortController + 消息ID续传 + localStorage · 复杂度: ★★★☆☆ · 代码量: ~300 行</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">移动端 AI 应用（弱网 + 频繁断线）</div><div class="nsub">SSE + 客户端缓存 + resume_token + 指数退避重连 · 复杂度: ★★★★☆ · 代码量: ~500 行</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">实时语音 AI / 多模态交互</div><div class="nsub">WebSocket + JSON-RPC + 心跳 + 序列号续传 · 复杂度: ★★★★★ · 代码量: ~1000 行</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">多人协作 AI（如 AI + 多人实时编辑）</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">WebSocket + CRDT + 状态同步 + 全量重连</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">复杂度: ★★★★★+</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">代码量: ~2000 行</div></div>
+</div>
+
+<h3>各层级技术栈详配</h3>
+<table>
+<tr><th>组件</th><th>简单场景</th><th>对话产品</th><th>移动应用</th><th>语音AI</th></tr>
+<tr><td><strong>协议</strong></td><td>SSE</td><td>SSE</td><td>SSE</td><td>WebSocket</td></tr>
+<tr><td><strong>心跳保活</strong></td><td>✅ 30s</td><td>✅ 15s</td><td>✅ 10s</td><td>✅ ping/pong</td></tr>
+<tr><td><strong>断点续传</strong></td><td>不需要</td><td>消息ID</td><td>ID + 客户端缓存</td><td>Resume Offset</td></tr>
+<tr><td><strong>rAF 渲染</strong></td><td>✅</td><td>✅</td><td>✅</td><td>音频缓冲区</td></tr>
+<tr><td><strong>Markdown 渲染</strong></td><td>简单分段</td><td>分段冻结</td><td>分段冻结</td><td>不适用</td></tr>
+<tr><td><strong>本地缓存</strong></td><td>不需要</td><td>localStorage</td><td>IndexedDB</td><td>内存缓冲</td></tr>
+<tr><td><strong>取消生成</strong></td><td>AbortController</td><td>AbortController</td><td>AbortController</td><td>WS cancel 指令</td></tr>
+<tr><td><strong>重连策略</strong></td><td>无</td><td>固定间隔</td><td>指数退避</td><td>指数退避 + 队列</td></tr>
+</table>
+
+<div class="intuition-box">
+选择技术栈的核心原则是"够用就好"。80% 的 AI 产品只需要 SSE + 心跳 + rAF 三件套，代码量不超过 100 行。过早引入 WebSocket 和复杂续传机制，会带来 3-5 倍的工程复杂度，却解决不了用户真正遇到的问题。
+</div>
+    </section>
+
+    <section class="chapter" id="nginx">
+      <div class="ch-head"><div class="num">07</div><div class="t"><h2>服务端基础设施——Nginx 配置与超时对抗</h2><div class="sub">即使前端代码写得完美无缺，服务端基础设施的一个错误配置就能让所有努力白费</div></div></div>
+      <p>即使前端代码写得完美无缺，服务端基础设施的一个错误配置就能让所有努力白费。以下是最常见的生产级配置问题。</p>
+
+<h3>Nginx 反代 SSE 关键配置</h3>
+<table>
+<tr><th>配置项</th><th>推荐值</th><th>作用</th></tr>
+<tr><td><code>proxy_buffering off</code></td><td>必须</td><td>禁止 Nginx 缓冲上游响应</td></tr>
+<tr><td><code>X-Accel-Buffering: no</code></td><td>应用层响应头</td><td>告知 Nginx 该请求禁止缓冲</td></tr>
+<tr><td><code>proxy_read_timeout</code></td><td>300s</td><td>延长读超时（LLM 生成可能 60s+）</td></tr>
+<tr><td><code>proxy_send_timeout</code></td><td>300s</td><td>延长写超时</td></tr>
+<tr><td><code>proxy_connect_timeout</code></td><td>10s</td><td>连接超时保持短（快速发现失败）</td></tr>
+<tr><td><code>chunked_transfer_encoding on</code></td><td>默认开启</td><td>支持分块传输</td></tr>
+</table>
+
+<h3>超时对抗全景</h3>
+<div class="flow">
+  <div class="flow-title">LLM 流式传输超时对抗地图（链路：浏览器 → CDN → 负载均衡 → Nginx → 应用 → LLM 推理）</div>
+  <div class="flow-node accent"><div class="nlabel">浏览器（无限制） / CDN（60–120s）</div><div class="nsub">心跳保活（前端） · 禁用缓存流式路径</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">负载均衡（60–300s） / Nginx（需配 300s）</div><div class="nsub">延长超时 · proxy_read_timeout + X-Accel-Buffering: no</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">应用服务器（需配 300s）</div><div class="nsub">心跳 + chunked 传输</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node warn"><div class="nlabel">关键约束</div><div class="nsub">任何一层超时 &lt; 生成总时间 → 连接被切断；心跳是唯一通用解：每 15–30s 一次，重置所有中间层计时器</div></div>
+</div>
+
+<table>
+<tr><th>问题</th><th>症状</th><th>根因</th><th>解决方案</th></tr>
+<tr><td><strong>Nginx 缓冲</strong></td><td>内容攒堆出现</td><td>proxy_buffering 默认开启</td><td>加 X-Accel-Buffering: no</td></tr>
+<tr><td><strong>网关超时</strong></td><td>生成 60s 后中断</td><td>proxy_read_timeout 默认 60s</td><td>延长到 300s + 心跳</td></tr>
+<tr><td><strong>CDN 缓存</strong></td><td>不同用户看到相同回答</td><td>CDN 缓存了 SSE 响应</td><td>Cache-Control: no-store</td></tr>
+<tr><td><strong>负载均衡轮询</strong></td><td>续传时到不同机器</td><td>无会话亲和性</td><td>sticky session 或 Redis 共享缓存</td></tr>
+</table>
+
+<div class="intuition-box">
+在生产环境中，50% 的"流式传输 Bug"其实不是代码问题，而是基础设施配置问题。Nginx 缓冲和网关超时是最常见的两个元凶。建议在部署流式传输功能的第一天就检查这些配置。
+</div>
+    </section>
+
+    <section class="chapter" id="ch8">
+      <div class="ch-head"><div class="num">08</div><div class="t"><h2>常见问答</h2></div></div>
+      <details class="qa">
+<summary>EventSource 和 Fetch+ReadableStream 在 LLM 场景中到底该选哪个？</summary>
+<div class="a">生产中推荐 Fetch+ReadableStream。原因有三：(1) LLM 的 prompt 通常超过 2KB，必须用 POST，而原生 EventSource 仅支持 GET；(2) 需要 Authorization header 传 API Key，EventSource 不支持自定义 header；(3) Fetch 提供 AbortController 中止能力，可以随时取消生成。原生 EventSource 更适合简单的通知推送场景，如构建状态更新、日志流等。</div>
+</details>
+
+<details class="qa">
+<summary>为什么大模型的断点续传比普通文件下载复杂得多？</summary>
+<div class="a">文件下载是确定性的——同一文件的第 1000 字节永远是同一个字节。但 LLM 生成是概率性的（temperature &gt; 0），同一 prompt 每次生成结果不同。如果断线后服务端"从头重新生成"，续接的内容与前文逻辑可能不连贯。因此 LLM 断点续传的核心不是"从第 N 个字节继续下载"，而是"服务端必须记住这次生成进行到哪里了，并从那个位置精确继续"——这需要会话状态管理和 chunk 缓存机制。</div>
+</details>
+
+<details class="qa">
+<summary>心跳保活为什么不直接设一个很大的超时时间？</summary>
+<div class="a">设 proxy_read_timeout=3600s 确实能避免超时切断，但会带来两个问题：(1) 真正的死连接（客户端已离开）会占用服务端资源长达一小时，在高并发场景下导致连接池耗尽；(2) 中间链路上的每一层（CDN、负载均衡、防火墙）都有自己的超时设置，你无法控制所有层。心跳是更好的方案——每 15-30 秒发一个小数据包，动态重置所有中间层的计时器，既保持连接活跃，又不会让死连接长期占用资源。</div>
+</details>
+
+<details class="qa">
+<summary>requestAnimationFrame 批量渲染会导致用户看到"跳跃式"输出吗？</summary>
+<div class="a">不会。rAF 的回调频率与屏幕刷新率同步（通常 60Hz = 每 16.7ms 一帧），这意味着最多每 16.7ms 更新一次 DOM。人类视觉暂留约 50-100ms，完全无法感知 16.7ms 级别的更新间隔。实测表明，rAF 批量渲染的视觉体验与逐 token 渲染完全一致，但性能提升 3-10 倍。如果模型输出速度特别快（每秒 100+ token），可以额外叠加 throttle 将更新频率限制在每 30-50ms 一次。</div>
+</details>
+
+<details class="qa">
+<summary>WebSocket 比 SSE 先进，为什么大厂对话 API 不用它？</summary>
+<div class="a">"先进"不等于"合适"。SSE 在对话场景中有三大不可替代优势：(1) 基于 HTTP/1.1，天然穿透企业防火墙、CDN、代理——WebSocket 需要协议升级，约 15% 的企业网络会阻断；(2) 内置自动重连和 Last-Event-ID——WebSocket 需要从零实现重连逻辑、心跳、消息队列；(3) 调试友好——SSE 是纯文本 HTTP 响应，用 curl 就能测试，WebSocket 需要专门工具。OpenAI 和 Anthropic 的选择证明：对话场景 SSE 是最佳方案，只有语音/视频实时交互才需要 WebSocket。</div>
+</details>
+
+<details class="qa">
+<summary>移动端弱网环境下的流式传输有什么特殊考虑？</summary>
+<div class="a">移动端面临三大特殊挑战：(1) 网络切换——WiFi 到 4G 切换时 TCP 连接断开，需要快速重连（指数退避从 500ms 起步）；(2) 系统休眠——Android Doze 模式和 iOS 后台限制会冻结网络连接，恢复后需要 resume_token 续传；(3) 连接不稳定——地铁、电梯场景下可能每 3-5 秒断一次。推荐方案：SSE + 客户端 localStorage 缓存（保证断线瞬间内容不消失）+ resume_token（服务端识别会话继续生成）+ 指数退避重连（避免频繁重试加剧网络拥塞）。</div>
+</details>
+
+<details class="qa">
+<summary>如何监控生产环境中流式传输的健康状况？</summary>
+<div class="a">需要监控五个关键指标：(1) TTFT（Time to First Token）——首 token 延迟，P50 应 &lt; 300ms，P99 应 &lt; 1s；(2) 断线率——每千次请求的断线次数，桌面 &lt; 1 次，移动端 &lt; 50 次；(3) 续传成功率——断线后成功续传的比例，应 &gt; 99%；(4) 渲染帧率——rAF 回调频率，应稳定在 55-60 FPS；(5) 完成率——流式传输正常完成（收到 [DONE]）的比例，应 &gt; 98%。建议在客户端埋点上报这些指标，配合 Grafana 仪表盘实时观察。</div>
+</details>
+
+<details class="qa">
+<summary>多标签页场景下 SSE 连接数耗尽怎么处理？</summary>
+<div class="a">HTTP/1.1 下同域名最多 6 个 TCP 连接，每个 EventSource 占用一个。如果用户打开 7 个标签页，第 7 个的 SSE 请求会被浏览器排队等待。解决方案有四种：(1) 升级到 HTTP/2——多路复用共享单个 TCP 连接，理论连接数上限 100+；(2) 使用 SharedWorker——多个标签页共享同一个 Worker 中的 SSE 连接，通过 postMessage 分发数据；(3) 使用 BroadcastChannel API 在标签页间同步状态，只保持一个活跃连接；(4) 限制同域连接数，非活跃标签页降级为轮询。</div>
+</details>
+    </section>
+
+    <footer>
+      <div class="made">TECH NOTES · AI 工程 · 整理自 AI Knowledge Hub</div>
+    </footer>
+  </main>
+</div>
+
+<script>
+(function(){var bar=document.getElementById('progress');function u(){var h=document.documentElement;bar.style.width=h.scrollTop/(h.scrollHeight-h.clientHeight)*100+'%';}window.addEventListener('scroll',u,{passive:true});u();})();
+(function(){var links=document.querySelectorAll('aside.toc nav a');var secs=Array.from(document.querySelectorAll('section.chapter'));if(!secs.length)return;function u(){var y=window.scrollY+100,cur=secs[0];for(var i=0;i<secs.length;i++){if(secs[i].offsetTop<=y)cur=secs[i];}var id=cur.id;links.forEach(function(a){a.classList.toggle('active',a.getAttribute('href')==='#'+id);});}window.addEventListener('scroll',u,{passive:true});u();})();
+</script>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>混合精度训练 · AI Infra — Tech Notes</title>
+<meta name="description" content="Mixed Precision Training — 用更少的位数做更快的训练">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<link rel="stylesheet" href="../assets/kh-guide.css">
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav">
+
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="ai_infra_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 11 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>W06 · AI Infra</h2>
+    <nav>
+      <ol>
+        <li><a href="#ch1" class="active">浮点数基础</a></li>
+        <li><a href="#ch2">为什么用混合精度</a></li>
+        <li><a href="#fp16">FP16 训练的问题</a></li>
+        <li><a href="#loss-scaling">Loss Scaling</a></li>
+        <li><a href="#amp-automatic-mixed-precision">AMP (Automatic Mixed Precision)</a></li>
+        <li><a href="#bf16-vs-fp16">BF16 vs FP16</a></li>
+        <li><a href="#fp8">FP8 训练</a></li>
+        <li><a href="#master-weights">Master Weights</a></li>
+        <li><a href="#ch9">混合精度最佳实践</a></li>
+        <li><a href="#q-a">Q&amp;A</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+    <header class="hero">
+      <div class="badge">W06 · AI Infra</div>
+      <h1>混合精度训练</h1>
+      <p class="sub">Mixed Precision Training — 用更少的位数做更快的训练</p>
+      <div class="meta-row">
+        <span class="pill cyan">AI Infra</span>
+        <span class="pill green">阅读 ~11 min</span>
+        <span class="pill amber">10 章</span>
+      </div>
+    </header>
+
+    <section class="chapter" id="ch1">
+      <div class="ch-head"><div class="num">01</div><div class="t"><h2>浮点数基础</h2><div class="sub">浮点数由三部分组成： 符号位 (Sign) 、 指数位 (Exponent) 、 尾数位 (…</div></div></div>
+      <h3>IEEE 754 标准</h3>
+<p>浮点数由三部分组成：<span class="highlight">符号位 (Sign)</span>、<span class="highlight">指数位 (Exponent)</span>、<span class="highlight">尾数位 (Mantissa/Fraction)</span>。数值 = (-1)^S × 2^(E-bias) × (1 + M)。</p>
+
+<h3>各精度位分配</h3>
+<table>
+<tr><th>格式</th><th>总位数</th><th>符号</th><th>指数</th><th>尾数</th><th>范围（约）</th><th>精度（有效位）</th></tr>
+<tr><td>FP32</td><td>32</td><td>1</td><td>8</td><td>23</td><td>±3.4×10³⁸</td><td>~7 位十进制</td></tr>
+<tr><td>FP16</td><td>16</td><td>1</td><td>5</td><td>10</td><td>±65504</td><td>~3.3 位十进制</td></tr>
+<tr><td>BF16</td><td>16</td><td>1</td><td>8</td><td>7</td><td>±3.4×10³⁸</td><td>~2.4 位十进制</td></tr>
+<tr><td>FP8 (E4M3)</td><td>8</td><td>1</td><td>4</td><td>3</td><td>±448</td><td>~1.2 位十进制</td></tr>
+<tr><td>FP8 (E5M2)</td><td>8</td><td>1</td><td>5</td><td>2</td><td>±57344</td><td>~0.9 位十进制</td></tr>
+</table>
+
+<div class="note">
+<strong>关键对比：</strong>FP16 指数位只有 5 位，动态范围小（容易溢出）；BF16 保持 FP32 相同的 8 位指数，范围一样大但精度较低；FP8 在 H100 上用于前向/反向加速。
+</div>
+
+<div class="interview-box">
+<strong>💡 知识要点</strong>
+<ul>
+<li>能画出 FP32/FP16/BF16 的位布局</li>
+<li>理解"动态范围"取决于指数位数，"精度"取决于尾数位数</li>
+<li>BF16 = "截断版 FP32"（直接砍掉低 16 位尾数）</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="ch2">
+      <div class="ch-head"><div class="num">02</div><div class="t"><h2>为什么用混合精度</h2></div></div>
+      <h3>核心收益</h3>
+<ul>
+<li><strong>内存减半：</strong>FP16/BF16 参数占 FP32 一半空间 → 同 GPU 可训练更大 batch/模型</li>
+<li><strong>Tensor Core 加速：</strong>NVIDIA Tensor Core 对 FP16/BF16 矩阵乘法有专门硬件路径，吞吐量 2-8× 于 FP32 CUDA Core</li>
+<li><strong>通信带宽减半：</strong>分布式训练中 AllReduce 传输量减少 50%</li>
+<li><strong>训练大模型的必要条件：</strong>LLM (7B+) 若全 FP32 连单卡都放不下</li>
+</ul>
+
+<h3>Tensor Core 吞吐对比 (A100)</h3>
+<table>
+<tr><th>精度</th><th>TFLOPS</th><th>相对 FP32</th></tr>
+<tr><td>FP32 (TF32 mode)</td><td>156</td><td>1×</td></tr>
+<tr><td>FP16 / BF16</td><td>312</td><td>2×</td></tr>
+<tr><td>INT8</td><td>624</td><td>4×</td></tr>
+</table>
+
+<div class="interview-box">
+<strong>💡 知识要点</strong>
+<ul>
+<li>混合精度不只是"省显存"，更是利用 Tensor Core 加速计算</li>
+<li>A100 默认对 FP32 矩阵乘法使用 TF32（19位），已是"隐式混合精度"</li>
+<li>通信减半对多机训练意义重大（带宽往往是瓶颈）</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="fp16">
+      <div class="ch-head"><div class="num">03</div><div class="t"><h2>FP16 训练的问题</h2><div class="sub">FP16 最大值仅 65504</div></div></div>
+      <h3>溢出 (Overflow)</h3>
+<p>FP16 最大值仅 65504。前向/反向中如果某个激活值或梯度 > 65504 就会变为 <code>inf</code>，随后传播导致 NaN。</p>
+
+<h3>下溢 (Underflow)</h3>
+<p>FP16 最小正次正规数约 6×10⁻⁸。许多梯度本身量级在 10⁻⁵ ~ 10⁻⁸ 之间，转为 FP16 后直接变为 0 → <span class="highlight">梯度消失</span>。</p>
+
+<h3>小梯度丢失</h3>
+<p>实验表明：直接用 FP16 训练时，约 5% 的梯度值落在 FP16 可表示的最小值以下，被截断为零。这些小梯度累积起来对参数更新有显著贡献。</p>
+
+<h3>数值不稳定操作</h3>
+<ul>
+<li><code>exp()</code>：指数函数很容易溢出</li>
+<li><code>softmax</code>：需要先减去 max 再求 exp</li>
+<li><code>sum reduction</code>：大量小值相加在低精度下误差累积</li>
+<li><code>LayerNorm</code>：方差计算对精度敏感</li>
+</ul>
+
+<div class="interview-box">
+<strong>💡 知识要点</strong>
+<ul>
+<li>FP16 训练失败的两大原因：溢出（变 inf/NaN）和下溢（梯度归零）</li>
+<li>Loss Scaling 解决下溢，保留 FP32 Master Weights 解决精度丢失</li>
+<li>某些操作（softmax, norm, loss）必须在 FP32 下进行</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="loss-scaling">
+      <div class="ch-head"><div class="num">04</div><div class="t"><h2>Loss Scaling</h2><div class="sub">在反向传播前将 loss 乘以一个较大的 Scale Factor （如 1024 或 65…</div></div></div>
+      <h3>核心思想</h3>
+<p>在反向传播前将 loss 乘以一个较大的 <span class="highlight">Scale Factor</span>（如 1024 或 65536），使梯度整体放大，避免下溢到 FP16 的"盲区"。更新参数前再除以同一 Scale Factor 恢复真实梯度。</p>
+
+<pre><code># 伪代码
+scaled_loss = loss * scale_factor
+scaled_loss.backward()          # FP16 梯度被放大
+optimizer.step(grad / scale_factor)  # 恢复真实梯度后更新 FP32 参数</code></pre>
+
+<h3>动态 Loss Scaling</h3>
+<p>固定 Scale Factor 可能太大（导致溢出）或太小（保护不足）。动态策略：</p>
+<ol>
+<li>初始 Scale Factor = 2¹⁵ 或 2¹⁶</li>
+<li>每 N 步（如 2000 步）若无 inf/NaN → Scale Factor × 2（放大）</li>
+<li>若检测到 inf/NaN → Scale Factor / 2（缩小），<strong>并跳过本次参数更新</strong></li>
+</ol>
+
+<h3>溢出检测与回退</h3>
+<pre><code>if any(grad == inf or grad == NaN):
+    scale_factor /= 2
+    skip this optimizer step   # 不更新参数
+else:
+    optimizer.step(grad / scale_factor)
+    if consecutive_ok_steps >= growth_interval:
+        scale_factor *= 2</code></pre>
+
+<div class="interview-box">
+<strong>💡 知识要点</strong>
+<ul>
+<li>Loss Scaling 本质：在 FP16 可表示范围内"挪动"梯度分布</li>
+<li>动态 Scaling 通过"试探+回退"自动找到合适的缩放因子</li>
+<li>检测到 overflow 时必须跳过当前 step（否则污染参数）</li>
+<li>BF16 由于范围够大，通常不需要 Loss Scaling</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="amp-automatic-mixed-precision">
+      <div class="ch-head"><div class="num">05</div><div class="t"><h2>AMP (Automatic Mixed Precision)</h2><div class="sub">import torch from torch</div></div></div>
+      <h3>PyTorch AMP API</h3>
+<pre><code>import torch
+from torch.cuda.amp import autocast, GradScaler
+
+scaler = GradScaler()
+
+for data, target in dataloader:
+    optimizer.zero_grad()
+
+    with autocast(dtype=torch.float16):   # 自动选择精度
+        output = model(data)
+        loss = criterion(output, target)
+
+    scaler.scale(loss).backward()         # 缩放 loss → FP16 梯度
+    scaler.step(optimizer)                # unscale → 检测 inf → 更新
+    scaler.update()                       # 调整 scale factor</code></pre>
+
+<h3>autocast 上下文管理器</h3>
+<p><code>autocast</code> 自动将支持的操作转为 FP16（或 BF16），不支持的保持 FP32。程序员无需手动管理每个 op 的精度。</p>
+
+<h3>白名单 / 黑名单</h3>
+<table>
+<tr><th>类别</th><th>操作</th><th>精度</th></tr>
+<tr><td>白名单 (FP16)</td><td>matmul, conv, linear, BMM</td><td>FP16 ✓</td></tr>
+<tr><td>黑名单 (FP32)</td><td>softmax, layer_norm, batch_norm, loss functions, exp, log, pow</td><td>FP32 保持</td></tr>
+<tr><td>灰名单</td><td>element-wise ops (ReLU, dropout, add)</td><td>跟随输入精度</td></tr>
+</table>
+
+<h3>GradScaler 内部流程</h3>
+<ol>
+<li><code>scaler.scale(loss)</code>：loss × current_scale</li>
+<li><code>.backward()</code>：梯度全部 × current_scale（FP16 下不会下溢）</li>
+<li><code>scaler.step(optimizer)</code>：先 <code>unscale_</code>（梯度 / scale），检查 inf/NaN，无异常则 <code>optimizer.step()</code></li>
+<li><code>scaler.update()</code>：根据是否检测到 inf 调整 scale_factor</li>
+</ol>
+
+<div class="interview-box">
+<strong>💡 知识要点</strong>
+<ul>
+<li>AMP = autocast（精度选择）+ GradScaler（Loss Scaling）</li>
+<li>白名单是计算密集型 ops（受益于 Tensor Core），黑名单是精度敏感 ops</li>
+<li>autocast 只影响前向；反向自动匹配前向的精度</li>
+<li>PyTorch 2.0+ 推荐 <code>torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16)</code></li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="bf16-vs-fp16">
+      <div class="ch-head"><div class="num">06</div><div class="t"><h2>BF16 vs FP16</h2><div class="sub">GPT-3、LLaMA、PaLM 等大模型均使用 BF16 训练</div></div></div>
+      <h3>BF16 的核心优势</h3>
+<table>
+<tr><th>对比维度</th><th>FP16</th><th>BF16</th></tr>
+<tr><td>指数位</td><td>5 位</td><td>8 位</td></tr>
+<tr><td>尾数位</td><td>10 位</td><td>7 位</td></tr>
+<tr><td>动态范围</td><td>±65504</td><td>±3.4×10³⁸（同 FP32）</td></tr>
+<tr><td>是否需要 Loss Scaling</td><td>必须</td><td>通常不需要</td></tr>
+<tr><td>精度</td><td>较高</td><td>较低（但够用）</td></tr>
+</table>
+
+<h3>硬件支持</h3>
+<ul>
+<li><strong>A100 / H100：</strong>原生 BF16 Tensor Core，吞吐与 FP16 相同</li>
+<li><strong>V100：</strong>不支持 BF16（只能用 FP16）</li>
+<li><strong>TPU：</strong>Google 从 TPUv2 起就使用 BF16</li>
+</ul>
+
+<h3>LLM 训练标配 BF16</h3>
+<p>GPT-3、LLaMA、PaLM 等大模型均使用 BF16 训练。原因：</p>
+<ul>
+<li>不需要 Loss Scaling → 代码更简单、训练更稳定</li>
+<li>范围与 FP32 相同 → 几乎不会 overflow</li>
+<li>精度损失在统计意义上可忽略（大模型的梯度噪声远大于 BF16 量化噪声）</li>
+</ul>
+
+<pre><code># BF16 训练（PyTorch）— 不需要 GradScaler
+with torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
+    output = model(data)
+    loss = criterion(output, target)
+loss.backward()
+optimizer.step()</code></pre>
+
+<div class="interview-box">
+<strong>💡 知识要点</strong>
+<ul>
+<li>BF16 = FP32 的范围 + 较低的精度 → 不需要 Loss Scaling</li>
+<li>LLM 训练首选 BF16（前提是硬件支持）</li>
+<li>如果用 V100 只能选 FP16 + GradScaler</li>
+<li>BF16 转 FP32 只需补零（低位尾数），转换极快</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="fp8">
+      <div class="ch-head"><div class="num">07</div><div class="t"><h2>FP8 训练</h2><div class="sub">E4M3 精度更高（3 位尾数），适合表示权重和激活</div></div></div>
+      <h3>两种 FP8 格式</h3>
+<table>
+<tr><th>格式</th><th>指数</th><th>尾数</th><th>范围</th><th>用途</th></tr>
+<tr><td>E4M3</td><td>4</td><td>3</td><td>±448</td><td>前向（权重 & 激活）</td></tr>
+<tr><td>E5M2</td><td>5</td><td>2</td><td>±57344</td><td>反向（梯度）</td></tr>
+</table>
+<p>E4M3 精度更高（3 位尾数），适合表示权重和激活；E5M2 范围更大（5 位指数），适合梯度（梯度分布方差大）。</p>
+
+<h3>Transformer Engine</h3>
+<p>NVIDIA Transformer Engine 是 FP8 训练的软件框架，集成在 Megatron-LM / NeMo 中：</p>
+<ul>
+<li>自动对 Linear 层使用 FP8 GEMM</li>
+<li>管理 per-tensor scaling factor</li>
+<li>提供 FP8 与 BF16/FP16 之间的自动转换</li>
+</ul>
+
+<h3>延迟缩放 (Delayed Scaling)</h3>
+<p>FP8 范围极小，必须为每个 tensor 维护一个 scaling factor。<strong>延迟缩放</strong>策略：</p>
+<ol>
+<li>使用前几次迭代中的 <code>amax</code>（绝对值最大值）历史来计算当前 scale</li>
+<li><code>scale = FP8_MAX / amax_history.max()</code></li>
+<li>延迟一步应用（当前 step 的 amax 用于下一步的 scale 计算）</li>
+</ol>
+<p>这避免了需要两次 pass（先算 amax 再做计算）的开销。</p>
+
+<h3>H100 FP8 Tensor Core</h3>
+<p>H100 FP8 算力高达 <strong>~2000 TFLOPS</strong>（是 BF16 的约 2×），使训练速度可再翻倍。目前 FP8 训练还在早期阶段，主要用于大规模 LLM pre-training。</p>
+
+<div class="interview-box">
+<strong>💡 知识要点</strong>
+<ul>
+<li>E4M3 用于前向（精度优先），E5M2 用于反向（范围优先）</li>
+<li>FP8 必须做 per-tensor scaling（不像 BF16 可以不 scale）</li>
+<li>延迟缩放 = 用历史 amax 估算当前 scale，避免额外 pass</li>
+<li>Transformer Engine 自动管理 FP8 ↔ higher precision 转换</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="master-weights">
+      <div class="ch-head"><div class="num">08</div><div class="t"><h2>Master Weights</h2><div class="sub">参数更新公式： w = w - lr × grad</div></div></div>
+      <h3>为什么优化器状态保持 FP32</h3>
+<p>参数更新公式：<code>w = w - lr × grad</code>。当 <code>lr × grad</code> 的量级 &lt; FP16 精度（约 2⁻¹⁰ ≈ 0.001 的相对误差）时，<code>w - lr×grad</code> 在 FP16 下等于 <code>w</code>（更新被吞掉）。</p>
+
+<h3>混合精度训练的完整流程</h3>
+<pre><code># 训练循环
+# 1. FP32 master weights → 拷贝为 FP16 weights
+w_fp16 = w_fp32.half()
+
+# 2. FP16 前向传播
+with autocast():
+    loss = model_fp16(x)
+
+# 3. FP16 反向传播（带 loss scaling）
+scaled_loss = loss * scale_factor
+scaled_loss.backward()  # grad 是 FP16
+
+# 4. FP32 参数更新
+grad_fp32 = grad_fp16.float() / scale_factor
+w_fp32 = w_fp32 - lr * grad_fp32   # 在 FP32 下更新
+
+# Adam 的 m, v 也是 FP32</code></pre>
+
+<h3>内存分析</h3>
+<table>
+<tr><th>组件</th><th>精度</th><th>内存（per param）</th></tr>
+<tr><td>FP16 参数（前向/反向）</td><td>FP16</td><td>2 bytes</td></tr>
+<tr><td>FP16 梯度</td><td>FP16</td><td>2 bytes</td></tr>
+<tr><td>FP32 Master Weights</td><td>FP32</td><td>4 bytes</td></tr>
+<tr><td>Adam m (一阶动量)</td><td>FP32</td><td>4 bytes</td></tr>
+<tr><td>Adam v (二阶动量)</td><td>FP32</td><td>4 bytes</td></tr>
+<tr><td><strong>总计</strong></td><td></td><td><strong>16 bytes/param</strong></td></tr>
+</table>
+<p>对比纯 FP32 训练（4 + 4 + 4 + 4 = 16 bytes）似乎没省，但<strong>激活值内存减半</strong>是最大收益（激活 >> 参数），且计算速度提升 2×+。</p>
+
+<div class="interview-box">
+<strong>💡 知识要点</strong>
+<ul>
+<li>Master Weights 必须 FP32：否则小学习率更新会被精度吞掉</li>
+<li>Adam 的 m/v 也必须 FP32（它们量级比参数小很多）</li>
+<li>混合精度的真正显存收益来自激活值减半（activation checkpointing 配合效果更好）</li>
+<li>能画出 FP16 forward → FP16 backward → FP32 update 的完整数据流</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="ch9">
+      <div class="ch-head"><div class="num">09</div><div class="t"><h2>混合精度最佳实践</h2><div class="sub"># 不安全 softmax(x) = exp(x) / sum(exp(x)) # exp(…</div></div></div>
+      <h3>数值稳定的 Softmax</h3>
+<pre><code># 不安全
+softmax(x) = exp(x) / sum(exp(x))   # exp(x) 可能溢出
+
+# 安全版本（PyTorch 默认实现）
+x_stable = x - x.max(dim=-1, keepdim=True)
+softmax(x) = exp(x_stable) / sum(exp(x_stable))</code></pre>
+<p>在 AMP 中，softmax 被放在黑名单中自动用 FP32 计算。</p>
+
+<h3>数值稳定的 LayerNorm</h3>
+<p>LayerNorm 涉及方差计算 <code>var = mean((x - mean)²)</code>。在 FP16 下如果 x 值较大，<code>(x-mean)²</code> 容易溢出。PyTorch 的 <code>nn.LayerNorm</code> 在 AMP 下自动提升为 FP32。</p>
+
+<h3>Gradient Accumulation 注意事项</h3>
+<ul>
+<li>梯度累加发生在 FP16/BF16 空间时，多步累加误差会放大</li>
+<li><strong>推荐：</strong>在 FP32 空间做累加（unscale 后累加到 FP32 buffer）</li>
+<li>PyTorch GradScaler 的 <code>unscale_</code> 在 <code>step()</code> 内调用，多步累加时只在最后一步调用 <code>scaler.step()</code></li>
+</ul>
+<pre><code>for i, (data, target) in enumerate(dataloader):
+    with autocast():
+        loss = model(data, target) / accumulation_steps
+    scaler.scale(loss).backward()
+
+    if (i + 1) % accumulation_steps == 0:
+        scaler.step(optimizer)
+        scaler.update()
+        optimizer.zero_grad()</code></pre>
+
+<h3>常见 NaN 排查</h3>
+<table>
+<tr><th>症状</th><th>可能原因</th><th>解决方案</th></tr>
+<tr><td>训练初期 NaN</td><td>初始 scale factor 太大</td><td>降低初始 scale（如 2¹²）</td></tr>
+<tr><td>Loss 突然 NaN</td><td>梯度爆炸 → FP16 溢出</td><td>Gradient Clipping + 降低 LR</td></tr>
+<tr><td>某层持续 NaN</td><td>该层对 FP16 精度敏感</td><td>用 <code>autocast(enabled=False)</code> 强制 FP32</td></tr>
+<tr><td>Scale factor 持续下降</td><td>模型不稳定 / LR 过大</td><td>检查模型架构和超参数</td></tr>
+<tr><td>Loss 不收敛但无 NaN</td><td>小梯度被下溢吞掉</td><td>增大 scale factor 初始值</td></tr>
+</table>
+
+<h3>其他实践建议</h3>
+<ul>
+<li>使用 <code>torch.autograd.detect_anomaly()</code> 定位 NaN 源头</li>
+<li>对于自定义 CUDA kernel，确保输入输出精度匹配</li>
+<li>Embedding 层通常保持 FP32（离散查表不受益于 Tensor Core）</li>
+<li>分布式训练中 AllReduce 在 FP16 下做，但 ring buffer 可用 FP32 避免累加误差</li>
+</ul>
+
+<div class="interview-box">
+<strong>💡 知识要点</strong>
+<ul>
+<li>Softmax/LayerNorm/Loss 必须 FP32 — 这是 AMP 黑名单的设计原因</li>
+<li>Gradient Accumulation 与 Loss Scaling 的交互：只在最终 step 做 unscale + update</li>
+<li>NaN 排查第一步：检查 scale factor 是否在持续下降</li>
+<li>遇到不明 NaN：逐层关闭 autocast 二分定位</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="q-a">
+      <div class="ch-head"><div class="num">10</div><div class="t"><h2>Q&amp;A</h2><div class="sub">混合的是 FP16（或 BF16）和 FP32 两种精度</div></div></div>
+      <details class="qa">
+<summary>Q1: 混合精度训练为什么叫"混合"？具体混合了什么？</summary>
+<p>混合的是 FP16（或 BF16）和 FP32 两种精度。前向传播和反向传播使用 FP16 以加速计算和减少显存，参数更新和优化器状态使用 FP32 以保证数值精度。"混合"意味着同一训练过程中不同阶段、不同操作使用不同精度。</p>
+</details>
+
+<details class="qa">
+<summary>Q2: Loss Scaling 为什么能解决梯度下溢问题？</summary>
+<p>FP16 的最小正次正规数约为 6×10⁻⁸，许多梯度值低于此阈值会被截为 0。Loss Scaling 在反向传播前将 loss 放大（如 ×1024），使所有梯度整体放大相同倍数，将原本会下溢的小梯度"抬升"到 FP16 可表示的范围内。更新参数时再除以相同的 scale factor 恢复真实值。本质上是在 FP16 的有限动态范围内"挪动窗口"覆盖梯度分布。</p>
+</details>
+
+<details class="qa">
+<summary>Q3: BF16 为什么不需要 Loss Scaling？</summary>
+<p>BF16 有 8 位指数（与 FP32 相同），动态范围达 ±3.4×10³⁸，梯度不论多小都不会下溢到 0（因为范围足够覆盖任何正常梯度值）。FP16 只有 5 位指数，范围仅 ±65504，这才是需要 Loss Scaling 的根本原因。BF16 牺牲的是尾数精度（7 位 vs FP16 的 10 位），但对深度学习训练来说精度影响可忽略。</p>
+</details>
+
+<details class="qa">
+<summary>Q4: 为什么优化器状态（Adam 的 m 和 v）必须用 FP32？</summary>
+<p>Adam 的动量 m 和 v 通过指数移动平均积累梯度信息，量级可能远小于参数本身。如果用 FP16 存储：(1) m/v 的更新量可能小于 FP16 精度而被吞掉；(2) v 作为分母，精度不够会导致学习率不稳定。此外参数更新 w = w - lr*m/√v 中的增量通常很小，在 FP16 下可能 w - delta == w（精度不够表示差异）。</p>
+</details>
+
+<details class="qa">
+<summary>Q5: autocast 是如何决定哪些操作用 FP16 哪些保持 FP32 的？</summary>
+<p>PyTorch 维护了三个列表：(1) 白名单 — 计算密集型操作（matmul, conv, linear）自动用 FP16，这些操作受益于 Tensor Core 加速；(2) 黑名单 — 精度敏感操作（softmax, layernorm, loss）保持 FP32；(3) 灰名单 — element-wise 操作跟随输入精度。autocast 上下文内 PyTorch dispatcher 会拦截算子调用，根据列表自动 cast 输入 tensor 的精度。</p>
+</details>
+
+<details class="qa">
+<summary>Q6: 动态 Loss Scaling 检测到 overflow 时为什么要跳过整个 step？</summary>
+<p>因为一旦梯度中出现 inf/NaN，任何基于该梯度的参数更新都会"污染"模型权重。即使只有一个参数的梯度溢出，经过 optimizer（如 Adam）的动量累积，NaN 会传播到 m/v 中，进而影响后续所有 step。所以必须整个 step 作废，将 scale factor 减半后重新尝试。这次的梯度信息虽然丢失了，但模型参数保持了正确状态。</p>
+</details>
+
+<details class="qa">
+<summary>Q7: FP8 训练为什么需要 per-tensor scaling 而不是像 BF16 那样全局处理？</summary>
+<p>FP8 的动态范围极小（E4M3 仅 ±448），不同 tensor（权重、激活、梯度）的数值分布差异巨大。如果用统一 scale，要么大值溢出要么小值下溢。Per-tensor scaling 为每个 tensor 维护独立的 scale factor（= FP8_MAX / tensor_amax），将每个 tensor 的值域都映射到 FP8 能精确表示的范围内。延迟缩放则用历史 amax 估算，避免当前 step 需要两次 pass。</p>
+</details>
+
+<details class="qa">
+<summary>Q8: 混合精度训练的内存到底省在哪里？</summary>
+<p>参数相关内存（master weights + optimizer states）仍是 FP32 共 12 bytes/param，加上 FP16 参数和梯度共 16 bytes/param。看似没省。真正的节省来自：(1) <strong>激活值内存减半</strong> — 这在大 batch 或长序列时是主要显存消耗（远大于参数本身）；(2) FP16 梯度通信量减半（分布式训练）；(3) 更快的计算意味着可以用 activation checkpointing 换回更多显存。</p>
+</details>
+
+<details class="qa">
+<summary>Q9: 使用混合精度训练时如何排查持续出现的 NaN？</summary>
+<p>排查步骤：(1) 检查 GradScaler 的 scale factor 是否持续下降（说明频繁 overflow）；(2) 用 <code>torch.autograd.detect_anomaly()</code> 定位产生 NaN 的第一个操作；(3) 逐层用 <code>with autocast(enabled=False)</code> 强制 FP32，二分法定位问题层；(4) 检查是否有自定义操作未正确处理精度转换；(5) 考虑降低学习率或加 gradient clipping；(6) 检查数据中是否有异常值（极大/极小）进入模型。</p>
+</details>
+
+<details class="qa">
+<summary>Q10: TF32 是什么？它和混合精度训练的关系是什么？</summary>
+<p>TF32 (TensorFloat-32) 是 NVIDIA Ampere 架构引入的 19 位格式（1 位符号 + 8 位指数 + 10 位尾数）。A100 默认将 FP32 的矩阵乘法用 TF32 Tensor Core 执行——输入截断为 TF32 精度做乘法，累加器仍用 FP32。这是一种"隐式混合精度"：用户代码仍写 FP32，但硬件自动以较低精度计算。与显式 AMP 的区别是：TF32 不需要任何代码修改，但加速幅度（~2×）小于 FP16/BF16 AMP（~3-4×）。可通过 <code>torch.backends.cuda.matmul.allow_tf32 = False</code> 关闭。</p>
+</details>
+    </section>
+
+    <footer>
+      <div class="made">TECH NOTES · AI Infra · 整理自 AI Knowledge Hub</div>
+    </footer>
+  </main>
+</div>
+
+<script>
+(function(){var bar=document.getElementById('progress');function u(){var h=document.documentElement;bar.style.width=h.scrollTop/(h.scrollHeight-h.clientHeight)*100+'%';}window.addEventListener('scroll',u,{passive:true});u();})();
+(function(){var links=document.querySelectorAll('aside.toc nav a');var secs=Array.from(document.querySelectorAll('section.chapter'));if(!secs.length)return;function u(){var y=window.scrollY+100,cur=secs[0];for(var i=0;i<secs.length;i++){if(secs[i].offsetTop<=y)cur=secs[i];}var id=cur.id;links.forEach(function(a){a.classList.toggle('active',a.getAttribute('href')==='#'+id);});}window.addEventListener('scroll',u,{passive:true});u();})();
+</script>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

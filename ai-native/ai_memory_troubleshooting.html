@@ -1,0 +1,603 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI 服务内存排查指南 · AI 工程 — Tech Notes</title>
+<meta name="description" content="四步排查法 五大高风险场景 tracemalloc 背压机制 OOM 诊断 对象泄漏">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<link rel="stylesheet" href="../assets/kh-guide.css">
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav">
+
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="ai_engineering_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 19 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>E26 · AI 工程</h2>
+    <nav>
+      <ol>
+        <li><a href="#ai" class="active">开篇：AI 服务内存问题的严峻性</a></li>
+        <li><a href="#ch2">四步排查法：从现象到根因的系统性路径</a></li>
+        <li><a href="#ai-3">五大高风险场景：AI 服务内存泄漏的重灾区</a></li>
+        <li><a href="#ch4">诊断工具深度对比与实战技巧</a></li>
+        <li><a href="#ch5">修复模式：从定位到根治的工程实践</a></li>
+        <li><a href="#ai-6">生产案例：真实 AI 服务的内存排查与修复</a></li>
+        <li><a href="#ch7">预防性工程：在问题发生前建立防线</a></li>
+        <li><a href="#q-a-8">Q&amp;A（8 题）</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+    <header class="hero">
+      <div class="badge">E26 · AI 工程</div>
+      <h1>AI 服务内存排查指南</h1>
+      <p class="sub">四步排查法 五大高风险场景 tracemalloc 背压机制 OOM 诊断 对象泄漏</p>
+      <div class="meta-row">
+        <span class="pill cyan">AI 工程</span>
+        <span class="pill green">阅读 ~19 min</span>
+        <span class="pill amber">8 章</span>
+      </div>
+    </header>
+
+    <section class="chapter" id="ai">
+      <div class="ch-head"><div class="num">01</div><div class="t"><h2>开篇：AI 服务内存问题的严峻性</h2><div class="sub">AI 服务（LLM 推理、RAG 系统、Agent 平台、向量检索）的内存问题正在成为生产环…</div></div></div>
+      <p>AI 服务（LLM 推理、RAG 系统、Agent 平台、向量检索）的内存问题正在成为生产环境中最常见、最难诊断的故障类型之一。与传统的 Web 服务不同，AI 服务的内存使用模式具有三个独特特征：单次请求的数据载荷大（一次 RAG 检索可能加载数 MB 的文档片段）、模型权重常驻内存（一个 7B 参数的模型占用约 14GB）、以及长生命周期的会话状态（Agent 的多轮对话记忆）。这些特征叠加在一起，使得 AI 服务的内存问题比传统服务更加隐蔽、更加危险。</p>
+
+<p>本文提供一套经过生产环境验证的排查方法论——四步排查法（确认层级→判断类型→定位持有者→修复验证），五大高风险场景的识别与预防，以及三层防御体系的工程实践。无论你是正在排查 OOM 故障的值班工程师，还是希望在设计阶段就避免内存问题的架构师，本文都能提供可操作的指导。</p>
+
+<p>根据 Kubernetes 社区 2025 年的故障统计，AI/ML 工作负载的 OOM 事件中，超过 60% 可以在设计阶段通过简单的防御性编码规范（TTL、容量上限、任务取消）来避免。剩下 40% 需要通过系统性的排查方法论来定位和修复。本文的目标是让读者具备处理这两类问题的能力。</p>
+
+<div class="intuition-box">
+<p>AI 服务内存问题的本质：不是"内存不够大"，而是"内存里的东西不该在"。扩大内存、手动 GC、定时重启都只是症状缓解——真正的根因是对象泄漏、会话数据无上限、任务积压或内存分配器未释放。治标不治本的手段只会让问题在未来某个深夜以 OOM Kill 的形式再次爆发。</p>
+</div>
+
+<h3>AI 服务内存问题的三大独特特征</h3>
+
+<table>
+<tr><th>特征</th><th>传统 Web 服务</th><th>AI 服务</th><th>影响</th></tr>
+<tr><td><strong>单次数据载荷</strong></td><td>KB 级（API 请求/响应）</td><td>MB 级（文档片段、Embedding 向量）</td><td>一次请求就可能消耗大量内存</td></tr>
+<tr><td><strong>常驻内存</strong></td><td>无或很少（无状态服务）</td><td>模型权重 7-140GB（有状态服务）</td><td>基础内存占用就很高</td></tr>
+<tr><td><strong>生命周期</strong></td><td>请求级（毫秒-秒）</td><td>会话级（分钟-小时）甚至永久</td><td>数据长期驻留，泄漏空间更大</td></tr>
+</table>
+
+<h3>核心误区：三种"假解法"</h3>
+
+<table>
+<tr><th>假解法</th><th>表面效果</th><th>为什么不管用</th><th>真实案例</th></tr>
+<tr><td><strong>仅扩大内存</strong></td><td>OOM 间隔延长</td><td>泄漏持续存在，内存终将耗尽；成本线性增长</td><td>某团队将 Pod 内存从 4GB 扩到 16GB，3 天后再次 OOM</td></tr>
+<tr><td><strong>手动触发 GC</strong></td><td>内存短暂下降</td><td>无法回收被引用的对象；GC 停顿影响延迟</td><td>Python 服务定时 <code>gc.collect()</code>，RSS 仅降 5%</td></tr>
+<tr><td><strong>定时重启服务</strong></td><td>内存重置</td><td>请求中断、状态丢失；重启期间服务不可用</td><td>每 6 小时重启 Agent 服务，导致 12% 的长对话丢失上下文</td></tr>
+</table>
+
+<div class="highlight">
+<strong>生产环境数据：</strong>根据 2025 年 Kubernetes 社区故障报告分析，AI/ML 相关 Pod 的 OOMKilled 事件占比已达 34%（2023 年为 12%），成为 K8s 集群中最常见的非预期重启原因。其中 67% 的 OOM 事件并非由流量峰值触发，而是由缓慢的内存泄漏在数天或数周后达到阈值。
+</div>
+    </section>
+
+    <section class="chapter" id="ch2">
+      <div class="ch-head"><div class="num">02</div><div class="t"><h2>四步排查法：从现象到根因的系统性路径</h2><div class="sub">AI 服务内存排查不应是&quot;东摸西试&quot;的随机过程，而应遵循一套系统性的 四步排查法 ：确认问题…</div></div></div>
+      <p>AI 服务内存排查不应是"东摸西试"的随机过程，而应遵循一套系统性的<span class="term">四步排查法</span>：确认问题层级 → 判断增长类型 → 定位持有者 → 修复验证。每一步都有明确的目标、工具和判断标准。</p>
+
+<div class="intuition-box">
+<p>四步排查法的核心逻辑：先缩小问题范围（哪一层出了问题），再分类问题性质（容量/泄漏/积压），然后精确定位（谁在持有内存），最后验证修复（确保问题真的解决了）。每一步的产出是下一步的输入——跳过步骤是排查失败的最常见原因。</p>
+</div>
+
+<div class="arch-diagram">┌──────────────────────────────────────────────────────────────────┐
+│                   AI 服务内存排查：四步法流程                      │
+├──────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  Step 1: 确认问题层级                                             │
+│  ┌───────────────────────────────────────────────────────┐      │
+│  │  K8s OOMKilled? → Java 堆溢出? → Python 进程?        │      │
+│  │  CUDA 显存? → 容器 RSS vs Limit?                      │      │
+│  │  工具: kubectl describe / jmap / nvidia-smi           │      │
+│  └───────────────────────────────────────────────────────┘      │
+│                          ↓                                       │
+│  Step 2: 判断增长类型                                             │
+│  ┌───────────────────────────────────────────────────────┐      │
+│  │  容量问题: 突增→稳态（单次请求过大）                   │      │
+│  │  泄漏问题: 持续线性增长（对象未释放）                   │      │
+│  │  任务积压: 锯齿形增长（消费速度 < 生产速度）            │      │
+│  │  工具: Prometheus / Grafana 内存曲线分析               │      │
+│  └───────────────────────────────────────────────────────┘      │
+│                          ↓                                       │
+│  Step 3: 定位持有者                                               │
+│  ┌───────────────────────────────────────────────────────┐      │
+│  │  实验法: 逐轮关闭模块，观察内存变化                     │      │
+│  │  工具法: tracemalloc / JFR / heapdump / objgraph       │      │
+│  │  对比法: 快照 diff（t1 vs t2 内存差异）                │      │
+│  └───────────────────────────────────────────────────────┘      │
+│                          ↓                                       │
+│  Step 4: 修复验证                                                 │
+│  ┌───────────────────────────────────────────────────────┐      │
+│  │  单次残留趋零: 请求处理完 → 内存回到基线               │      │
+│  │  队列恢复: 积压消费完 → 内存下降到正常水平             │      │
+│  │  长压测平台期: 72h 压测 → 内存趋于稳定不持续增长       │      │
+│  └───────────────────────────────────────────────────────┘      │
+└──────────────────────────────────────────────────────────────────┘</div>
+
+<h3>Step 1：确认问题层级——内存问题发生在哪一层？</h3>
+
+<p>AI 服务的内存问题可能发生在多个层级，每个层级的排查工具和修复手段完全不同。第一步必须精确定位问题发生在哪个层级，否则后续排查方向全部错误。</p>
+
+<table>
+<tr><th>层级</th><th>典型症状</th><th>诊断工具</th><th>关键指标</th></tr>
+<tr><td><strong>K8s 容器层</strong></td><td>Pod 被 OOMKilled 重启</td><td><code>kubectl describe pod</code></td><td>RSS vs memory.limit</td></tr>
+<tr><td><strong>Java 堆</strong></td><td>OutOfMemoryError: Java heap space</td><td><code>jmap -histo</code> / JFR</td><td>Heap used vs -Xmx</td></tr>
+<tr><td><strong>Python 进程</strong></td><td>MemoryError / 进程被 SIGKILL</td><td><code>tracemalloc</code> / <code>objgraph</code></td><td>RSS / tracemalloc 快照</td></tr>
+<tr><td><strong>CUDA 显存</strong></td><td>CUDA out of memory</td><td><code>nvidia-smi</code> / <code>torch.cuda.memory_summary()</code></td><td>Allocated vs Total GPU mem</td></tr>
+<tr><td><strong>OS 层</strong></td><td>系统 swap 激增、OOM Killer</td><td><code>free -h</code> / <code>dmesg</code></td><td>Available / Swap used</td></tr>
+</table>
+
+<h3>Step 2：判断增长类型——容量、泄漏还是积压？</h3>
+
+<p>确定问题层级后，下一步是通过内存使用的时间序列曲线判断问题的性质。三种增长类型对应完全不同的根因和修复策略。</p>
+
+<table>
+<tr><th>增长类型</th><th>曲线特征</th><th>根因</th><th>修复方向</th></tr>
+<tr><td><strong>容量问题</strong></td><td>突增后稳定（台阶形）</td><td>单次请求加载数据过大</td><td>限制单次数据量 / 流式处理</td></tr>
+<tr><td><strong>泄漏问题</strong></td><td>持续线性增长（斜坡形）</td><td>对象创建后未释放</td><td>定位泄漏对象 + 修复引用</td></tr>
+<tr><td><strong>任务积压</strong></td><td>锯齿形增长（上升→部分回落→再上升）</td><td>生产速度 > 消费速度</td><td>增加消费者 / 背压限流</td></tr>
+</table>
+
+<div class="arch-diagram">┌──────────────────────────────────────────────────────────────────┐
+│           三种内存增长类型的曲线特征                                │
+├──────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  容量问题（台阶形）:                                              │
+│  Mem ┤     ┌────────────────────                                 │
+│      │     │  稳定在新水平                                        │
+│      │     │                                                     │
+│      │─────┘  ← 大请求触发                                       │
+│      └───────────────────────────▶ Time                          │
+│                                                                  │
+│  泄漏问题（斜坡形）:                                              │
+│  Mem ┤                    ╱  ← OOM!                             │
+│      │                  ╱                                        │
+│      │                ╱  持续线性增长                             │
+│      │              ╱                                            │
+│      │────────────╱                                              │
+│      └───────────────────────────▶ Time                          │
+│                                                                  │
+│  任务积压（锯齿形）:                                              │
+│  Mem ┤      ╱╲    ╱╲    ╱╲    ╱                                 │
+│      │     ╱  ╲  ╱  ╲  ╱  ╲  ╱  ← 峰值越来越高                  │
+│      │    ╱    ╲╱    ╲╱    ╲╱                                   │
+│      │───╱                                                       │
+│      └───────────────────────────▶ Time                          │
+└──────────────────────────────────────────────────────────────────┘</div>
+
+<div class="intuition-box">
+<p>曲线形态是诊断的第一线索：台阶形 = 容量问题（单次太大），斜坡形 = 泄漏问题（对象没释放），锯齿形 = 积压问题（消费跟不上）。如果曲线不属于这三种，可能是混合问题——先分解为独立成分再逐个击破。</p>
+</div>
+
+<h3>Step 3：定位持有者——谁在占用内存？</h3>
+
+<p>确认增长类型后，需要精确定位是哪些对象在占用内存。这是排查过程中技术难度最高的一步，需要根据不同的技术栈选择不同的工具。</p>
+
+<table>
+<tr><th>技术栈</th><th>首选工具</th><th>核心操作</th><th>输出</th></tr>
+<tr><td><strong>Python</strong></td><td><span class="term">tracemalloc</span></td><td>快照对比：<code>snapshot2.compare_to(snapshot1, 'lineno')</code></td><td>按行号的内存增量 Top-N</td></tr>
+<tr><td><strong>Python（对象图）</strong></td><td><code>objgraph</code></td><td><code>objgraph.show_most_common_types()</code></td><td>各类型对象数量排名</td></tr>
+<tr><td><strong>Java</strong></td><td>JFR / <code>jmap</code></td><td>Heap Dump + MAT 分析</td><td>Dominator Tree（支配树）</td></tr>
+<tr><td><strong>Go</strong></td><td><code>pprof</code></td><td><code>go tool pprof -http=:8080 heap.prof</code></td><td>火焰图 + 分配热点</td></tr>
+<tr><td><strong>CUDA</strong></td><td><code>torch.cuda.memory_summary()</code></td><td>对比推理前后的显存分配</td><td>各 Tensor 的显存占用</td></tr>
+</table>
+
+<p>tracemalloc 的生产环境使用方式（Python AI 服务最常见场景）：</p>
+
+<pre><code>import tracemalloc
+tracemalloc.start(25)  # 保存 25 帧调用栈
+
+# 定期导出快照（每 5 分钟）
+def take_snapshot(label):
+    snap = tracemalloc.take_snapshot()
+    top = snap.statistics('lineno')
+    with open(f"/tmp/mem_{label}.txt", "w") as f:
+        for s in top[:20]:
+            f.write(str(s) + "\n")</code></pre>
+
+<h3>Step 4：修复验证——如何确认问题真的解决了？</h3>
+
+<p>修复后必须用量化指标验证，否则只是"看起来好了"但问题仍在。验证标准因问题类型而异：</p>
+
+<table>
+<tr><th>问题类型</th><th>验证指标</th><th>通过标准</th><th>验证方法</th></tr>
+<tr><td><strong>泄漏</strong></td><td>单次请求后内存残留</td><td>残留量趋近于零（< 1%）</td><td>发送 1000 次请求后对比基线</td></tr>
+<tr><td><strong>积压</strong></td><td>队列深度恢复时间</td><td>积压消费完 → 内存回到正常水平</td><td>模拟峰值后观察回落</td></tr>
+<tr><td><strong>容量</strong></td><td>单次请求峰值内存</td><td>峰值 < 内存上限的 70%</td><td>最大请求场景压测</td></tr>
+<tr><td><strong>长期稳定性</strong></td><td>72h 压测内存曲线</td><td>趋于平台期，不持续增长</td><td>持续压力测试 + 监控</td></tr>
+</table>
+
+<div class="highlight">
+<strong>验证反模式：</strong>"修完后运行 10 分钟没 OOM 就算好了"——这是最常见的验证失败。泄漏可能在 10 分钟内不可见（泄漏速率低时可能需要数小时才触发 OOM）。最低标准是 72 小时压测观察内存曲线是否趋于平台期。一个真实案例：某团队修复后观察 30 分钟"没问题"就上线了，3 天后 OOM 再次爆发——因为泄漏速率是每小时 50MB，30 分钟内根本看不出来。
+</div>
+    </section>
+
+    <section class="chapter" id="ai-3">
+      <div class="ch-head"><div class="num">03</div><div class="t"><h2>五大高风险场景：AI 服务内存泄漏的重灾区</h2><div class="sub">基于大量生产事故复盘，AI 服务中有五个场景是内存泄漏的高发区</div></div></div>
+      <p>基于大量生产事故复盘，AI 服务中有五个场景是内存泄漏的高发区。每个场景都有特定的泄漏机制和修复模式——理解这些模式可以在问题发生前就进行预防。</p>
+
+<h3>场景一：会话记忆——全局 Map 无 TTL</h3>
+
+<p>AI Agent 的多轮对话需要维护会话状态，最常见的实现是将对话历史存储在全局 <code>dict</code> 或 <code>Map</code> 中。如果缺少 <span class="term">TTL</span>（Time To Live）过期机制，对话数据将无限累积。一个活跃用户一天的对话可能产生数百 KB 的文本数据，1000 个活跃用户就是数百 MB——且永远不会被释放。</p>
+
+<div class="intuition-box">
+<p>会话记忆泄漏是 AI 服务最常见的内存问题，因为它"看起来完全正确"——保存对话历史是必要的业务需求。问题不在于"保存"，而在于"没有过期"。就像一个档案馆只进不出——每个对话都是珍贵的记录，但如果不设销毁规则，档案馆终将被填满。</p>
+</div>
+
+<h3>场景二：工具调用结果——大对象多副本</h3>
+
+<p>AI Agent 调用外部工具（搜索引擎、数据库查询、文件解析）时，返回结果往往是大型数据结构（数 MB 的文档片段、数千行的 JSON）。这些结果被传入 LLM 上下文时，可能在不同层（消息历史、日志、缓存）产生多个副本，且每个副本都持有对原始大对象的引用。</p>
+
+<h3>场景三：无界缓存/队列</h3>
+
+<p>为加速重复查询，AI 服务常使用本地缓存存储 Embedding 向量或 LLM 响应。如果缓存没有容量上限（<span class="term">LRU</span> 淘汰策略），缓存将无限增长。类似地，异步任务队列如果消费速度跟不上生产速度，队列中的任务对象将持续累积。</p>
+
+<p>无界缓存的隐蔽性在于它的"正确性"——缓存命中率持续提高，响应时间持续降低，看起来一切都在变好。但内存使用量也在持续增加，直到某天突然 OOM。这是一种"温水煮青蛙"式的泄漏——增长速率可能只有 5-50 MB/小时，在监控面板上几乎不可见，但 3-14 天后就会触发 OOM。</p>
+
+<div class="intuition-box">
+<p>无界缓存/队列的防御性检查：如果你的代码中有 <code>dict</code>、<code>list</code>、<code>deque</code> 或任何自定义缓存结构，立刻问自己三个问题：①它有容量上限吗？②它有 TTL 吗？③它有监控吗？三个问题任何一个答案是"没有"，它就是一个潜在的内存泄漏点。</p>
+</div>
+
+<h3>场景四：本地模型 GPU 显存——多 Worker 重复加载</h3>
+
+<p>在使用 Gunicorn/uWSGI 等多 Worker 部署本地模型时，每个 Worker 进程会独立加载一份完整的模型权重。4 个 Worker + 7B 模型 = 56GB 显存占用。如果 Worker 管理不当（如动态扩缩容），可能出现同一模型的多个副本同时驻留在显存中。</p>
+
+<h3>场景五：异步任务生命周期——断连后未取消</h3>
+
+<p>用户发起一个长时间运行的 AI 任务（如大文档分析），中途断开连接。如果服务没有实现<span class="term">背压机制</span>（Backpressure）和任务取消逻辑，后台任务将继续运行，其持有的中间数据和上下文对象永远不会被释放。</p>
+
+<p>这个场景特别危险因为它结合了"不可见性"和"累积性"：①不可见——用户已经断开，前端无法感知后台任务仍在运行；②累积性——每次断连都会产生一个"僵尸任务"，它们各自持有数 MB 的中间数据。在一个日活 1000 的文档分析服务中，假设 5% 的用户中途断连，每天就会产生 50 个僵尸任务，每个占用 10-50 MB 内存——一天增加 500 MB 到 2.5 GB。</p>
+
+<p>更隐蔽的是，这些僵尸任务可能还持有 GPU 资源（中间 Tensor、KV Cache），导致可用显存逐渐减少。当可用显存不足以处理新的推理请求时，表现为"CUDA OOM"——但实际上问题不在 GPU 端，而在应用层的任务生命周期管理。</p>
+
+<div class="intuition-box">
+<p>异步任务泄漏的检测线索：内存增长与"请求量"不成正比，但与"断连次数"成正比。如果你发现某些天内存增长特别快（而这些天恰好有很多超时断连），很可能就是僵尸任务在作祟。修复方法是在任务开始时注册连接监听器，连接断开时通过 <code>asyncio.Task.cancel()</code> 或 <code>threading.Event</code> 通知后台任务停止。</p>
+</div>
+
+<div class="flow">
+  <div class="flow-node accent"><div class="nlabel">五大高风险场景：泄漏机制与修复方案</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">场景 泄漏机制 修复方案</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">① 会话记忆 全局 Map 无过期 TTL + 定时清理</div><div class="nsub">对话只增不减 LRU 限制最大会话数</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">② 工具调用 大结果多副本引用 结果摘要化（只保留关键信息）</div><div class="nsub">日志保留原始数据 日志只记录摘要 + ID</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">③ 无界缓存 缓存无容量上限 LRU / LFU + 最大容量限制</div><div class="nsub">队列消费慢 背压限流 + 队列深度告警</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">④ GPU 显存 多 Worker 重复加载 模型单例 + 共享内存</div><div class="nsub">动态扩缩容残留 显式 unload + 引用计数</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">⑤ 异步任务 断连后任务继续 连接感知 + 任务取消</div><div class="nsub">中间数据不释放 finally 块清理上下文</div></div>
+</div>
+
+<table>
+<tr><th>场景</th><th>泄漏速率（典型）</th><th>触发 OOM 时间</th><th>诊断难度</th><th>修复复杂度</th></tr>
+<tr><td>① 会话记忆</td><td>10-100 MB/小时</td><td>1-7 天</td><td>⭐⭐</td><td>⭐⭐</td></tr>
+<tr><td>② 工具调用</td><td>50-500 MB/小时</td><td>数小时 - 1 天</td><td>⭐⭐⭐</td><td>⭐⭐⭐</td></tr>
+<tr><td>③ 无界缓存</td><td>5-50 MB/小时</td><td>3-14 天</td><td>⭐⭐</td><td>⭐⭐</td></tr>
+<tr><td>④ GPU 显存</td><td>一次性（启动时）</td><td>立即</td><td>⭐</td><td>⭐⭐⭐⭐</td></tr>
+<tr><td>⑤ 异步任务</td><td>10-200 MB/事件</td><td>取决于断连频率</td><td>⭐⭐⭐⭐</td><td>⭐⭐⭐</td></tr>
+</table>
+    </section>
+
+    <section class="chapter" id="ch4">
+      <div class="ch-head"><div class="num">04</div><div class="t"><h2>诊断工具深度对比与实战技巧</h2><div class="sub">选择正确的诊断工具是排查效率的关键</div></div></div>
+      <p>选择正确的诊断工具是排查效率的关键。不同工具适用于不同的问题类型和技术栈，误用工具不仅浪费时间，还可能引入额外的性能开销导致问题更难复现。</p>
+
+<h3>Python 内存诊断工具矩阵</h3>
+
+<table>
+<tr><th>工具</th><th>原理</th><th>适用场景</th><th>性能开销</th><th>生产可用</th></tr>
+<tr><td><strong>tracemalloc</strong></td><td>跟踪 Python 内存分配/释放</td><td>定位按行号的内存增量</td><td>低（~5%）</td><td>✅ 推荐</td></tr>
+<tr><td><strong>objgraph</strong></td><td>遍历 GC 对象图</td><td>查找对象类型分布和引用链</td><td>中（暂停 GC）</td><td>⚠️ 慎用</td></tr>
+<tr><td><strong>memory_profiler</strong></td><td>逐行测量函数内存</td><td>定位内存密集的函数</td><td>高（逐行采样）</td><td>❌ 仅开发</td></tr>
+<tr><td><strong>pympler</strong></td><td>深度对象大小计算</td><td>精确测量复杂对象大小</td><td>中</td><td>⚠️ 按需</td></tr>
+<tr><td><strong>eBPF</strong></td><td>内核态追踪 malloc 调用</td><td>系统级内存分配热点</td><td>极低</td><td>✅ 高级场景</td></tr>
+</table>
+
+<div class="intuition-box">
+<p>工具选择的黄金法则：先用 tracemalloc 做快照对比（定位哪一行代码在增长），再用 objgraph 做对象图分析（定位什么类型的对象在增长），最后用 eBPF 确认是否有 C 扩展层的泄漏（Python 层面看不到的分配）。三步递进，逐步深入。</p>
+</div>
+
+<h3>tracemalloc 快照对比实战</h3>
+
+<p>tracemalloc 的核心价值在于<strong>快照对比</strong>——在两个时间点各拍一次快照，对比增量就能精确定位哪一行代码在持续分配内存：</p>
+
+<pre><code>import tracemalloc
+tracemalloc.start(25)
+
+snap1 = tracemalloc.take_snapshot()  # 基线
+# ... 运行 100 次请求处理 ...
+snap2 = tracemalloc.take_snapshot()  # 压力后
+
+diff = snap2.compare_to(snap1, 'lineno')
+for stat in diff[:10]:
+    print(f"{stat.size_diff/1024:.1f} KB | {stat.traceback}")</code></pre>
+
+<h3>逐模块关闭实验（实验法）</h3>
+
+<p>当工具法无法直接定位时，可以使用<strong>实验法</strong>：逐个关闭功能模块，观察关闭哪个模块后内存增长停止。这是最原始但最可靠的方法——适用于工具开销过大或问题难以复现的场景。</p>
+
+<div class="highlight">
+<strong>实验法的关键原则：</strong>每次只关闭一个变量。同时关闭多个模块会导致无法判断哪个是根因。推荐的关闭顺序：①关闭日志记录（排除日志缓冲泄漏）→ ②关闭缓存层（排除缓存无限增长）→ ③关闭会话记忆（排除对话历史泄漏）→ ④关闭工具调用（排除大结果泄漏）→ ⑤关闭异步任务（排除任务积压）。每关闭一个模块后运行 30 分钟观察内存曲线。
+</div>
+    </section>
+
+    <section class="chapter" id="ch5">
+      <div class="ch-head"><div class="num">05</div><div class="t"><h2>修复模式：从定位到根治的工程实践</h2><div class="sub">定位泄漏持有者只是成功了一半</div></div></div>
+      <p>定位泄漏持有者只是成功了一半。修复阶段需要确保：①泄漏被真正消除（不是"延迟爆发"）；②修复不引入新的问题；③系统具备防御能力，防止同类问题再次发生。</p>
+
+<h3>通用修复模式</h3>
+
+<table>
+<tr><th>修复模式</th><th>适用场景</th><th>实现方式</th><th>注意事项</th></tr>
+<tr><td><strong>TTL + 定时清理</strong></td><td>会话记忆、临时缓存</td><td>为每个 entry 设置过期时间，后台线程定期清理</td><td>清理间隔不能太长；并发安全</td></tr>
+<tr><td><strong>LRU 容量上限</strong></td><td>缓存、历史记录</td><td>限制最大 entry 数量，超出时淘汰最久未使用的</td><td>合理设定容量上限；监控淘汰率</td></tr>
+<tr><td><strong>结果摘要化</strong></td><td>工具调用结果</td><td>只保留关键信息摘要，丢弃原始大对象</td><td>摘要粒度需平衡精度和大小</td></tr>
+<tr><td><strong>弱引用</strong></td><td>观察者/回调注册</td><td>使用 <code>weakref</code> 避免强引用链</td><td>注意弱引用失效时的处理</td></tr>
+<tr><td><strong>背压限流</strong></td><td>异步任务队列</td><td>队列满时拒绝新任务或降低消费速率</td><td>背压策略需要业务方认可</td></tr>
+<tr><td><strong>显式释放</strong></td><td>GPU 模型、大 Tensor</td><td><code>del obj; torch.cuda.empty_cache()</code></td><td>确保无其他引用；注意 GC 时机</td></tr>
+</table>
+
+<div class="intuition-box">
+<p>修复的核心原则："谁创建，谁释放" + "创建时就知道何时释放"。每个对象在创建时就应该有明确的生命周期终点——如果一个对象"永远不需要释放"，它就是一个泄漏候选。设计阶段就应该回答："这个数据什么时候可以丢弃？"</p>
+</div>
+
+<h3>背压机制详解</h3>
+
+<p><span class="term">背压机制</span>（Backpressure）是防止任务积压的核心手段。当消费者的处理速度跟不上生产者的提交速度时，背压通过"向上游反馈压力"来限制新任务的流入，避免队列无限增长。</p>
+
+<div class="arch-diagram">┌──────────────────────────────────────────────────────────────────┐
+│                   背压机制工作原理                                 │
+├──────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  无背压（OOM 风险）:                                              │
+│  ┌──────┐  快速提交   ┌──────┐  慢速消费   ┌──────┐             │
+│  │生产者 │ ─────────▶ │ 队列 │ ─────────▶ │消费者 │             │
+│  └──────┘            └──────┘            └──────┘             │
+│                       ↑ 持续增长 ↑                              │
+│                       │ 直到 OOM  │                              │
+│                                                                  │
+│  有背压（安全）:                                                  │
+│  ┌──────┐  限流提交   ┌──────┐  稳定消费   ┌──────┐             │
+│  │生产者 │ ──┐       │ 队列 │ ─────────▶ │消费者 │             │
+│  └──────┘   │       └──────┘            └──────┘             │
+│              │         ↑                                        │
+│              └─────────┘                                        │
+│              队列满时反馈:                                        │
+│              "满了，等一下再提交"                                  │
+│                                                                  │
+│  背压策略:                                                       │
+│  ① 拒绝策略: 队列满 → 返回 429 Too Many Requests                │
+│  ② 阻塞策略: 队列满 → 生产者阻塞等待                              │
+│  ③ 丢弃策略: 队列满 → 丢弃最旧的任务                              │
+│  ④ 降级策略: 队列满 → 切换到轻量处理模式                          │
+└──────────────────────────────────────────────────────────────────┘</div>
+
+<div class="practice-grid">
+<div class="do">
+<ul>
+<li>为所有缓存和 Map 设置 TTL 和最大容量</li>
+<li>工具调用结果只保留摘要，丢弃原始大对象</li>
+<li>异步任务实现连接感知和取消逻辑</li>
+<li>GPU 模型使用单例模式，避免多 Worker 重复加载</li>
+<li>修复后用 72 小时压测验证内存趋于平台期</li>
+<li>建立内存监控告警：RSS 增长率超过阈值时触发</li>
+</ul>
+</div>
+<div class="dont">
+<ul>
+<li>"扩大内存就行了"——泄漏会填满任何大小的内存</li>
+<li>"定时重启服务"——重启期间服务不可用，状态丢失</li>
+<li>"手动 gc.collect() 就够了"——无法回收有引用的对象</li>
+<li>"修完后运行 10 分钟没 OOM 就算好了"——泄漏可能需要数小时才显现</li>
+<li>"日志里记录完整的大对象"——日志缓冲也是内存</li>
+<li>"等 OOM 了再排查"——应该建立预防性监控</li>
+</ul>
+</div>
+</div>
+    </section>
+
+    <section class="chapter" id="ai-6">
+      <div class="ch-head"><div class="num">06</div><div class="t"><h2>生产案例：真实 AI 服务的内存排查与修复</h2><div class="sub">生产环境中的内存问题往往不是单一原因，而是多个场景的叠加</div></div></div>
+      <div class="intuition-box">
+<p>生产环境中的内存问题往往不是单一原因，而是多个场景的叠加。以下三个案例分别展示了不同复杂度的排查过程——从简单的 TTL 遗漏到复杂的多因素叠加。</p>
+</div>
+
+<h3>案例一：RAG 系统的 Embedding 缓存泄漏</h3>
+
+<p><strong>背景：</strong>某企业 RAG 系统使用本地缓存存储文档 Embedding 向量以加速重复查询。系统上线 5 天后开始频繁 OOM，每次重启后约 8 小时再次崩溃。</p>
+
+<p><strong>排查过程：</strong>①确认层级：Python 进程 RSS 持续增长直到被 K8s OOMKilled；②判断类型：内存曲线呈标准斜坡形——确认是泄漏；③tracemalloc 快照对比发现 <code>embedding_cache.py:47</code> 行（<code>cache[doc_id] = vector</code>）在每次请求后增加约 2KB 且从不减少；④根因：缓存使用普通 <code>dict</code>，无 LRU 淘汰策略，每个新文档的 768 维 float32 向量（3KB）永久驻留。</p>
+
+<p><strong>修复：</strong>将 <code>dict</code> 替换为 <code>functools.lru_cache(maxsize=100000)</code>，并添加监控指标记录缓存命中率和淘汰率。</p>
+
+<p><strong>效果：</strong>修复后 RSS 稳定在 1.2GB（修复前持续增长至 4GB OOM），72h 压测内存曲线趋于平台期。</p>
+
+<h3>案例二：Agent 平台的会话记忆 + 工具调用双重泄漏</h3>
+
+<p><strong>背景：</strong>某 AI Agent 平台上线 2 周后，高峰期 Pod 内存从 2GB 逐渐增长到 8GB（Limit），触发 OOMKilled。重启后 3-4 小时再次触发。</p>
+
+<p><strong>排查过程：</strong>①确认层级：Python 进程 RSS 增长；②判断类型：斜坡形，但增长速率在高峰期明显加速；③实验法关闭会话记忆模块后增长率降低 60%，关闭工具调用模块后增长率降低 35%——双重泄漏；④tracemalloc 定位：会话 <code>dict</code> 无 TTL（贡献 60%），工具调用结果（搜索结果全文）在消息历史中保留多份副本（贡献 35%）。</p>
+
+<p><strong>修复：</strong>①会话 <code>dict</code> 添加 24h TTL + 最大 10000 条会话限制；②工具调用结果只保留 Top-3 摘要（每个 < 500 字），全文存入对象存储并记录 ID。</p>
+
+<p><strong>效果：</strong>内存稳定在 1.8GB，高峰期峰值 2.3GB（远低于 8GB Limit）。</p>
+
+<h3>案例三：本地模型 GPU 显存 + 异步任务叠加</h3>
+
+<p><strong>背景：</strong>某文档分析服务使用 Gunicorn 4 Workers 部署 7B 模型，启动时 CUDA OOM。偶发性地在用户断开连接后，后台分析任务继续运行导致显存缓慢增长。</p>
+
+<p><strong>排查过程：</strong>①确认层级：CUDA 显存不足（<code>nvidia-smi</code> 显示 Allocated > Total）；②根因一：4 Workers 各加载一份 14GB 模型 = 56GB，但 GPU 只有 40GB；③根因二：用户断连后异步分析任务未取消，中间 Tensor 持续占用显存。</p>
+
+<p><strong>修复：</strong>①改用模型单例 + 多进程共享（<code>torch.multiprocessing</code>），4 Workers 共享一份模型权重（14GB）；②实现连接感知：HTTP 连接断开时取消对应的异步任务并释放中间 Tensor。</p>
+
+<p><strong>关键教训：</strong>GPU 显存问题与系统内存问题的排查思路完全不同。<code>nvidia-smi</code> 显示的 "Used" 包含 CUDA 缓存分配器的预留空间（reserved），不等于实际使用（allocated）。必须用 <code>torch.cuda.memory_allocated()</code> 查看实际使用量，用 <code>torch.cuda.memory_reserved()</code> 查看预留量——两者的差值就是"可以释放但还没释放"的显存。</p>
+
+<h3>排查耗时对比与效率建议</h3>
+
+<div class="intuition-box">
+<p>案例一（缓存泄漏）仅用 2 小时就定位并修复，因为泄漏模式简单、tracemalloc 直接定位。案例三（GPU + 异步叠加）花了 2 天，因为涉及跨层问题（CUDA + 应用层）和异步生命周期管理。经验法则：单一根因的问题通常 2-4 小时可解决；多因素叠加的问题可能需要 1-3 天。关键是不要在第一个"看起来对"的根因上停下来——验证修复效果后再下结论。</p>
+</div>
+
+<table>
+<tr><th>案例</th><th>泄漏根因</th><th>修复前指标</th><th>修复后指标</th><th>修复时间</th></tr>
+<tr><td>① RAG 缓存</td><td>dict 无 LRU</td><td>RSS 持续增长至 4GB OOM（5天）</td><td>RSS 稳定 1.2GB</td><td>2 小时</td></tr>
+<tr><td>② Agent 双重泄漏</td><td>会话无 TTL + 工具结果多副本</td><td>RSS 增长至 8GB OOM（3-4h）</td><td>RSS 稳定 1.8-2.3GB</td><td>1 天</td></tr>
+<tr><td>③ GPU + 异步</td><td>多 Worker 重复加载 + 任务未取消</td><td>CUDA OOM 启动即失败</td><td>GPU 占用稳定 18GB</td><td>2 天</td></tr>
+</table>
+    </section>
+
+    <section class="chapter" id="ch7">
+      <div class="ch-head"><div class="num">07</div><div class="t"><h2>预防性工程：在问题发生前建立防线</h2><div class="sub">内存排查是&quot;亡羊补牢&quot;，更优策略是&quot;未雨绸缪&quot;——在系统设计阶段就建立多层防线，使内存问题在…</div></div></div>
+      <p>内存排查是"亡羊补牢"，更优策略是"未雨绸缪"——在系统设计阶段就建立多层防线，使内存问题在早期就被发现和阻止。</p>
+
+<div class="arch-diagram">┌──────────────────────────────────────────────────────────────────┐
+│             AI 服务内存防线：三层防御体系                           │
+├──────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  第一层：设计防线（开发阶段）                                      │
+│  ┌───────────────────────────────────────────────────────┐      │
+│  │  ✅ 所有缓存/Map 必须有 TTL 和容量上限                  │      │
+│  │  ✅ 所有异步任务必须有取消机制                          │      │
+│  │  ✅ 工具调用结果必须有大小限制                          │      │
+│  │  ✅ Code Review 包含内存生命周期检查                    │      │
+│  └───────────────────────────────────────────────────────┘      │
+│                                                                  │
+│  第二层：监控防线（运行阶段）                                      │
+│  ┌───────────────────────────────────────────────────────┐      │
+│  │  ✅ RSS 增长率监控 + 告警（> 50MB/h 触发 P2）          │      │
+│  │  ✅ 队列深度监控 + 告警                                │      │
+│  │  ✅ GPU 显存利用率监控                                 │      │
+│  │  ✅ 定时 tracemalloc 快照（每周一次）                   │      │
+│  └───────────────────────────────────────────────────────┘      │
+│                                                                  │
+│  第三层：应急防线（故障阶段）                                      │
+│  ┌───────────────────────────────────────────────────────┐      │
+│  │  ✅ Pod memory.limit 设置合理（不超过节点 80%）         │      │
+│  │  ✅ 优雅关闭：收到 SIGTERM → 完成当前请求 → 释放资源    │      │
+│  │  ✅ 自动扩容策略：基于内存使用率的 HPA                  │      │
+│  │  ✅ 故障复盘：每次 OOM 后必须完成根因分析               │      │
+│  └───────────────────────────────────────────────────────┘      │
+└──────────────────────────────────────────────────────────────────┘</div>
+
+<table>
+<tr><th>防线</th><th>措施</th><th>实施成本</th><th>防御效果</th><th>优先级</th></tr>
+<tr><td><strong>设计</strong></td><td>TTL/容量上限/取消机制</td><td>低（开发习惯）</td><td>⭐⭐⭐⭐⭐ 消除根因</td><td>P0</td></tr>
+<tr><td><strong>监控</strong></td><td>RSS 增长率告警</td><td>中（基础设施）</td><td>⭐⭐⭐⭐ 早期发现</td><td>P0</td></tr>
+<tr><td><strong>监控</strong></td><td>定时 tracemalloc</td><td>低（代码注入）</td><td>⭐⭐⭐ 趋势分析</td><td>P1</td></tr>
+<tr><td><strong>应急</strong></td><td>HPA + memory.limit</td><td>中（K8s 配置）</td><td>⭐⭐ 延缓冲击</td><td>P1</td></tr>
+<tr><td><strong>应急</strong></td><td>优雅关闭 + 故障复盘</td><td>低（流程规范）</td><td>⭐⭐⭐ 防止复发</td><td>P1</td></tr>
+</table>
+
+<div class="intuition-box">
+<p>预防性工程的核心理念：把"内存问题"从"线上救火"变为"设计约束"。当"所有缓存必须有 TTL"成为团队的编码规范（就像"所有输入必须校验"一样），90% 的内存泄漏问题在设计阶段就被消除了。</p>
+</div>
+
+<h3>内存监控 Dashboard 设计</h3>
+
+<p>一个有效的内存监控 Dashboard 应包含以下核心指标，按紧急程度排列：</p>
+
+<table>
+<tr><th>指标</th><th>数据源</th><th>告警阈值</th><th>告警级别</th></tr>
+<tr><td><strong>RSS 增长率</strong></td><td>Prometheus <code>rate(process_resident_memory_bytes[1h])</code></td><td>> 50MB/h</td><td>P2（24h 内处理）</td></tr>
+<tr><td><strong>RSS / Limit 比</strong></td><td>K8s metrics</td><td>> 80%</td><td>P1（4h 内处理）</td></tr>
+<tr><td><strong>OOMKilled 事件</strong></td><td>K8s Events</td><td>任何一次</td><td>P0（立即处理）</td></tr>
+<tr><td><strong>队列深度</strong></td><td>应用指标</td><td>> 1000 任务</td><td>P2</td></tr>
+<tr><td><strong>GPU 显存利用率</strong></td><td>nvidia-smi DCGM exporter</td><td>> 90%</td><td>P1</td></tr>
+<tr><td><strong>GC 频率/耗时</strong></td><td>JFR / Python gc callback</td><td>GC 耗时占比 > 10%</td><td>P2</td></tr>
+</table>
+
+<h3>Code Review 内存检查清单</h3>
+
+<p>在 Code Review 中增加以下检查项，可以在代码合入前就发现潜在的内存问题：</p>
+
+<div class="highlight">
+<strong>AI 服务 Code Review 内存检查清单：</strong><br>
+□ 所有 <code>dict</code>/<code>Map</code> 是否有 TTL 或容量上限？<br>
+□ 工具调用结果是否有大小限制？是否只保留摘要？<br>
+□ 异步任务是否实现了取消逻辑？断连后是否会释放资源？<br>
+□ GPU 模型是否使用单例？多 Worker 是否共享权重？<br>
+□ 日志中是否记录了大对象的完整内容？（应只记录 ID + 摘要）<br>
+□ 是否有循环引用可能导致 GC 无法回收？<br>
+□ 第三方库调用是否有已知的内存泄漏问题？（查 changelog）
+</div>
+    </section>
+
+    <section class="chapter" id="q-a-8">
+      <div class="ch-head"><div class="num">08</div><div class="t"><h2>Q&amp;A（8 题）</h2></div></div>
+      <details class="qa">
+<summary>AI 服务频繁 OOM 重启，最快的临时止血方案是什么？</summary>
+<div class="a">最快的临时止血方案是"扩大 Pod memory.limit + 设置 HPA 自动扩容"。具体操作：①将 memory.limit 临时扩大 2 倍（如 4GB → 8GB），延长 OOM 间隔；②配置 HPA 基于内存使用率 70% 触发扩容，让新 Pod 分担请求压力；③同时开启 tracemalloc 快照采集，为后续根因分析积累数据。但这只是止血——泄漏仍然存在，扩大的内存终将被填满。必须在 1-2 天内完成根因分析和修复。注意：不要使用定时重启作为止血方案，它会导致请求中断和状态丢失。</div>
+</details>
+
+<details class="qa">
+<summary>tracemalloc 在生产环境开启会不会影响性能？怎么安全使用？</summary>
+<div class="a">tracemalloc 的性能开销约 5%（CPU）和额外的 5-10% 内存（用于存储分配追踪数据）。生产环境安全使用方式：①不在所有实例上开启——只在 1 个金丝雀实例上开启 tracemalloc；②使用环境变量控制（<code>PYTHONTRACEMALLOC=25</code>），需要时通过 ConfigMap 动态开启；③快照对比不需要实时——每 5-10 分钟采集一次即可；④采集完成后立即关闭（<code>tracemalloc.stop()</code>），不要长期开启。对于高流量服务，建议在灰度环境的镜像流量上开启 tracemalloc，避免对生产请求造成任何影响。</div>
+</details>
+
+<details class="qa">
+<summary>Python 的 gc.collect() 为什么解决不了内存泄漏？什么时候有用？</summary>
+<div class="a">gc.collect() 只能回收"不可达的循环引用对象"——即没有被任何变量引用但彼此互相引用的对象组。如果对象仍然被某个变量（全局 dict、类属性、闭包捕获等）引用，gc.collect() 完全无效。gc.collect() 有用的场景：①大量临时对象创建后的碎片整理；②打破显式创建的循环引用（如双向链表节点）；③配合 <code>gc.set_debug(gc.DEBUG_STATS)</code> 观察 GC 行为。对于 AI 服务常见的泄漏场景（全局 Map、缓存无限增长、闭包捕获），gc.collect() 完全无效——因为这些对象仍然有活跃的引用链。</div>
+</details>
+
+<details class="qa">
+<summary>怎么区分"正常的内存增长"和"内存泄漏"？</summary>
+<div class="a">关键区别在于"增长后是否回落"。正常增长：①启动时的初始化加载（模型权重、配置数据）——一次性增长后稳定；②请求高峰期的缓存预热——增长到缓存容量上限后稳定；③JIT 编译/代码缓存——增长到一定大小后不再增加。泄漏特征：①线性增长且从不回落——即使流量下降，内存也不下降；②每次请求处理后内存基线比处理前高——说明有残留；③增长速率与请求量正相关——请求越多，增长越快。实用判断方法：发送 1000 次相同请求，对比处理前后的 RSS 差异。如果差异 > 0 且随请求次数线性增长，就是泄漏。</div>
+</details>
+
+<details class="qa">
+<summary>GPU 显存 OOM 和系统内存 OOM 有什么区别？排查方法一样吗？</summary>
+<div class="a">完全不同。系统内存 OOM 由 K8s 的 OOMKilled 或 Linux OOM Killer 触发，影响整个进程；GPU 显存 OOM 由 CUDA 运行时触发，只影响 GPU 计算操作（报 <code>torch.cuda.OutOfMemoryError</code>），进程本身可能仍然存活。排查方法差异：①系统内存用 tracemalloc/RSS 监控；GPU 显存用 <code>nvidia-smi</code> + <code>torch.cuda.memory_summary()</code>；②系统内存泄漏通常是 Python 对象；GPU 显存泄漏通常是 Tensor/模型权重未释放；③修复手段不同：系统内存用 TTL/LRU；GPU 显存用 <code>del tensor; torch.cuda.empty_cache()</code> + 模型单例。注意：某些框架（如 PyTorch）的 CUDA 缓存分配器会预分配显存但不立即释放，这不一定是泄漏——需要用 <code>torch.cuda.memory_allocated()</code>（实际使用）而非 <code>torch.cuda.memory_reserved()</code>（预分配）来判断。</div>
+</details>
+
+<details class="qa">
+<summary>背压机制会不会影响用户体验？怎么平衡"拒绝请求"和"服务质量"？</summary>
+<div class="a">背压确实会影响用户体验（请求被拒绝或延迟），但远好于"不背压导致 OOM → 所有请求失败"。平衡策略：①分级背压——对低优先级任务（日志处理、异步通知）先背压，对高优先级任务（用户交互请求）最后背压；②优雅降级——队列满时切换到轻量处理模式（如跳过 RAG 检索直接用 LLM 回答），而不是直接拒绝；③用户感知——返回明确的"系统繁忙"提示 + 预估等待时间，而不是 500 错误；④弹性扩容——背压触发的同时自动扩容消费者，缩短等待时间。核心原则：背压是最后的手段，在此之前应该先尝试限流、降级和扩容。</div>
+</details>
+
+<details class="qa">
+<summary>Java 服务（如 Spring AI / LangChain4j）的内存排查有什么特别之处？</summary>
+<div class="a">Java 服务的内存排查比 Python 更复杂，因为 JVM 的内存管理有多层：①堆内存（-Xmx 控制）——用 <code>jmap -histo</code> 或 JFR + MAT 分析；②堆外内存（DirectByteBuffer、Netty 缓冲区）——需要用 <code>-XX:NativeMemoryTracking=summary</code> 追踪；③Metaspace（类元数据）——动态生成大量代理类时可能泄漏。AI 服务特有场景：①Spring AI 的对话记忆存储在 Spring Bean 中，如果 Bean 是 Singleton 且没有清理逻辑，会话数据永不释放；②LangChain4j 的工具调用结果如果序列化为大 JSON 对象，可能在 GC Root 链中被多个对象引用。推荐使用 JFR（Java Flight Recorder）持续采集内存事件，用 Eclipse MAT 做 Heap Dump 分析，重点关注 Dominator Tree 中占比 > 10% 的对象。</div>
+</details>
+
+<details class="qa">
+<summary>如何建立团队级的内存问题防御体系？</summary>
+<div class="a">建议建立"编码规范 + CI 检查 + 运行时监控 + 复盘机制"四位一体的防御体系：①编码规范——在团队的 Code Review Checklist 中加入"内存生命周期"检查项：所有 Map/Cache 是否有 TTL？所有异步任务是否有取消逻辑？所有大对象是否有释放策略？②CI 检查——在 CI 流水线中加入内存压测：发送 10000 次请求后检查内存增量是否 < 阈值；③运行时监控——Grafana Dashboard 展示每个服务的 RSS 增长率、队列深度、GPU 显存利用率，设置告警；④复盘机制——每次 OOM 事件后必须完成根因分析文档（包括：时间线、根因、修复方案、验证结果、预防措施），并在团队内分享。长期来看，建立"内存意识"比任何工具都重要——让每个开发者在设计阶段就思考"这个数据的生命周期是什么"。</div>
+</details>
+    </section>
+
+    <footer>
+      <div class="made">TECH NOTES · AI 工程 · 整理自 AI Knowledge Hub</div>
+    </footer>
+  </main>
+</div>
+
+<script>
+(function(){var bar=document.getElementById('progress');function u(){var h=document.documentElement;bar.style.width=h.scrollTop/(h.scrollHeight-h.clientHeight)*100+'%';}window.addEventListener('scroll',u,{passive:true});u();})();
+(function(){var links=document.querySelectorAll('aside.toc nav a');var secs=Array.from(document.querySelectorAll('section.chapter'));if(!secs.length)return;function u(){var y=window.scrollY+100,cur=secs[0];for(var i=0;i<secs.length;i++){if(secs[i].offsetTop<=y)cur=secs[i];}var id=cur.id;links.forEach(function(a){a.classList.toggle('active',a.getAttribute('href')==='#'+id);});}window.addEventListener('scroll',u,{passive:true});u();})();
+</script>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

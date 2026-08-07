@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>多 Agent 系统共享记忆 · AI 工程 — Tech Notes</title>
+<meta name="description" content="持久化公共上下文总线 / 黑板模式+状态路由 / 并发控制与一致性保障 / 向量数据库选型">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<link rel="stylesheet" href="../assets/kh-guide.css">
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav">
+
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="ai_engineering_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 8 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>A26 · AI 工程</h2>
+    <nav>
+      <ol>
+        <li><a href="#ch1" class="active">为什么需要共享记忆</a></li>
+        <li><a href="#ch2">共享记忆的本质与架构</a></li>
+        <li><a href="#ch3">两种正确实践方案</a></li>
+        <li><a href="#vs">共享记忆 vs 私有记忆</a></li>
+        <li><a href="#ch5">并发控制与一致性保障</a></li>
+        <li><a href="#ch6">实现方式与向量数据库选型</a></li>
+        <li><a href="#ch7">应用场景</a></li>
+        <li><a href="#q-a">Q&amp;A</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+    <header class="hero">
+      <div class="badge">A26 · AI 工程</div>
+      <h1>多 Agent 系统共享记忆</h1>
+      <p class="sub">持久化公共上下文总线 / 黑板模式+状态路由 / 并发控制与一致性保障 / 向量数据库选型</p>
+      <div class="meta-row">
+        <span class="pill cyan">AI 工程</span>
+        <span class="pill green">阅读 ~8 min</span>
+        <span class="pill amber">8 章</span>
+      </div>
+    </header>
+
+    <section class="chapter" id="ch1">
+      <div class="ch-head"><div class="num">01</div><div class="t"><h2>为什么需要共享记忆</h2><div class="sub">多 Agent 协作的核心痛点：没有共享记忆，每个 Agent 只能各自获取上下文 — 成本…</div></div></div>
+      <div class="intuition-box">
+<p>多 Agent 协作的核心痛点：没有共享记忆，每个 Agent 只能各自获取上下文 — 成本翻倍、信息不一致、协作沦为空谈。</p>
+</div>
+
+<h3>三大核心问题</h3>
+<ul>
+<li><strong>上下文工程</strong>：如何精准管理 Agent 间的状态传递，而不是全量广播</li>
+<li><strong>成本控制</strong>：避免 Token 爆炸和延迟激增 — 共享 ≠ 全量复制</li>
+<li><strong>一致性保障</strong>：多个 Agent 同时读写时，如何避免冲突和数据污染</li>
+</ul>
+    </section>
+
+    <section class="chapter" id="ch2">
+      <div class="ch-head"><div class="num">02</div><div class="t"><h2>共享记忆的本质与架构</h2><div class="sub">共享记忆的本质是一条 持久化的公共上下文总线 — 任何 Agent 可以按需读写，但只读取自…</div></div></div>
+      <div class="intuition-box">
+<p>共享记忆的本质是一条<span class="term">持久化的公共上下文总线</span> — 任何 Agent 可以按需读写，但只读取自己需要的结论片段，而非全量上下文。</p>
+</div>
+
+<h3>架构总览</h3>
+<div class="arch-diagram">┌─────────────────────────────────────────────────────┐
+│                 Shared Memory Layer                  │
+│                                                      │
+│   ┌──────────┐   ┌──────────┐   ┌───────────────┐  │
+│   │  Redis   │   │Database  │   │Vector Store   │  │
+│   │  Hash    │   │(SQL/NoSQL)│  │(Chroma/Pinecone)│ │
+│   └────┬─────┘   └────┬─────┘   └──────┬────────┘  │
+│        │               │                │            │
+│        └───────────┬───┴────────────────┘            │
+│                    │                                  │
+│           ┌────────┴────────┐                        │
+│           │ Memory Manager  │                        │
+│           │ (Read/Write API)│                        │
+│           └──┬───┬───┬──┬──┘                        │
+│              │   │   │  │                            │
+└──────────────┼───┼───┼──┼────────────────────────────┘
+               │   │   │  │
+          ┌────┘   │   │  └────┐
+          ▼        ▼   ▼       ▼
+       Agent A  Agent B  Agent C  Agent D
+       (研究)   (分析)   (写作)   (审核)</div>
+
+<h3>数据流转时序</h3>
+<div class="arch-diagram">Agent A (研究)          Memory Manager          Agent B (分析)
+    │                        │                        │
+    │── 1.写入精炼结论 ─────▶│                        │
+    │                        │── 2.版本校验+存储 ──▶  │
+    │                        │                        │
+    │                        │◀── 3.按需查询 key ─────│
+    │                        │── 4.返回结论片段 ──────▶│
+    │                        │                        │
+    │◀─ 5.订阅变更通知 ──────│                        │
+    │                        │── 6.Agent B 完成 ──────▶│
+    │                        │                        │── 7.写入分析结果
+    │                        │◀─────────────────────── │</div>
+
+<h3>核心原则</h3>
+<ul>
+<li><strong>按需路由</strong>：上下文按任务需求精准分发，不做全量广播</li>
+<li><strong>结论优先</strong>：Agent 只写入极短结论（约 100 字 JSON），不分享思考过程</li>
+<li><strong>工具化视角</strong>：把其他 Agent 的产出当作工具返回结果来处理</li>
+</ul>
+    </section>
+
+    <section class="chapter" id="ch3">
+      <div class="ch-head"><div class="num">03</div><div class="t"><h2>两种正确实践方案</h2></div></div>
+      <h3>方案一：黑板模式 + 状态路由</h3>
+<ul>
+<li>使用 <code>Redis Hash</code> 作为轻量级中间存储</li>
+<li>Agent 仅写入极短 JSON 格式的结论状态（约 100 字）</li>
+<li>后续 Agent 按需读取，不分享思考过程</li>
+<li>典型技术栈：Redis Hash + 极短 JSON</li>
+</ul>
+
+<pre><code># 黑板模式：Agent 写入结论
+memory.set("agent_a_result", {
+    "conclusion": "市场规模约 500 亿，年增 12%",
+    "confidence": 0.87,
+    "timestamp": "2024-01-15T10:30:00"
+})
+# Agent B 按需读取
+result = memory.get("agent_a_result")</code></pre>
+
+<h3>方案二：长期记忆的克制使用</h3>
+<ul>
+<li><strong>错误做法</strong>：原始记忆直接存入向量数据库，召回时拼接数十个文本块到提示词</li>
+<li><strong>正确实践</strong>：添加压缩代理层，将原始记忆提炼成 100 字内纯结论后再存储</li>
+<li>检索时通过元数据过滤仅召回 1 条最相关记忆，避免 Token 爆炸和幻觉问题</li>
+</ul>
+
+<div class="highlight">
+<strong>黄金法则：</strong>共享记忆的核心不是"共享所有信息"，而是"只共享经过压缩的结论"。原始数据留在各自 Agent 的私有记忆中，共享层只存放精炼后的结果。
+</div>
+    </section>
+
+    <section class="chapter" id="vs">
+      <div class="ch-head"><div class="num">04</div><div class="t"><h2>共享记忆 vs 私有记忆</h2><div class="sub">共享记忆 = 团队公共白板，私有记忆 = 个人笔记本</div></div></div>
+      <div class="intuition-box">
+<p>共享记忆 = 团队公共白板，私有记忆 = 个人笔记本。白板写结论供协作，笔记本记草稿供自己用。</p>
+</div>
+
+<table>
+<tr><th>维度</th><th>共享记忆</th><th>私有记忆</th></tr>
+<tr><td><strong>本质</strong></td><td>持久化的公共上下文总线</td><td>Agent 内部的工作记忆</td></tr>
+<tr><td><strong>存储内容</strong></td><td>精炼结论（~100 字 JSON）</td><td>完整思考过程、中间状态</td></tr>
+<tr><td><strong>访问权限</strong></td><td>所有 Agent 可读写</td><td>仅所属 Agent 可访问</td></tr>
+<tr><td><strong>存储介质</strong></td><td>Redis / 数据库 / 向量数据库</td><td>Agent 上下文窗口 / 本地缓存</td></tr>
+<tr><td><strong>容量策略</strong></td><td>严格限制，定期清理</td><td>随上下文窗口自然淘汰</td></tr>
+<tr><td><strong>一致性要求</strong></td><td>需要并发控制和冲突消解</td><td>无需考虑并发</td></tr>
+<tr><td><strong>生命周期</strong></td><td>跨会话持久化</td><td>单次会话内有效</td></tr>
+</table>
+    </section>
+
+    <section class="chapter" id="ch5">
+      <div class="ch-head"><div class="num">05</div><div class="t"><h2>并发控制与一致性保障</h2><div class="sub">当多个 Agent 同时读写共享记忆时，没有并发控制就像多个人同时在同一张纸上写字 — 结果…</div></div></div>
+      <div class="intuition-box">
+<p>当多个 Agent 同时读写共享记忆时，没有并发控制就像多个人同时在同一张纸上写字 — 结果必然是混乱的。</p>
+</div>
+
+<h3>三种并发控制策略</h3>
+<table>
+<tr><th>策略</th><th>原理</th><th>优点</th><th>缺点</th><th>适用场景</th></tr>
+<tr><td><span class="term">悲观锁</span></td><td>写操作前先获取排他锁，阻塞其他写入者</td><td>强一致性，实现简单</td><td>吞吐量低，易死锁</td><td>写入频繁、一致性要求极高</td></tr>
+<tr><td><span class="term">乐观锁</span></td><td>写入时检查版本号，版本不匹配则重试</td><td>高吞吐，无阻塞</td><td>冲突多时重试成本高</td><td>读多写少、冲突概率低</td></tr>
+<tr><td><span class="term">CAS 操作</span></td><td>Compare-And-Swap：原子性比较并交换</td><td>无锁设计，性能优异</td><td>仅适用于简单值更新</td><td>状态标记、计数器等原子操作</td></tr>
+</table>
+
+<h3>悲观锁 vs 乐观锁实现对比</h3>
+<pre><code># 悲观锁：写入前先锁
+with memory.lock("key"):
+    data = memory.get("key")
+    data["status"] = "completed"
+    memory.set("key", data)
+
+# 乐观锁：写入时检查版本
+data = memory.get("key")  # 含 version 字段
+data["status"] = "completed"
+success = memory.set("key", data, expected_version=3)</code></pre>
+
+<h3>矛盾记忆处理</h3>
+<div class="intuition-box">
+<p>当不同 Agent 对同一事件产生矛盾记忆时，工程上追求<span class="term">最终一致性</span>而非完美共识 — 用轻量级裁判 Agent + 时间戳和准确率规则做简单裁决。</p>
+</div>
+<ul>
+<li><strong>避免方案</strong>：分布式投票算法、区块链共识机制 — 过度设计，延迟不可接受</li>
+<li><strong>工程方案</strong>：轻量级裁判 Agent，基于时间戳（最新优先）和准确率（历史表现）做简单规则裁决</li>
+</ul>
+    </section>
+
+    <section class="chapter" id="ch6">
+      <div class="ch-head"><div class="num">06</div><div class="t"><h2>实现方式与向量数据库选型</h2><div class="sub">向量数据库上线前必须解决三个工程问题： 索引预热 避免冷启动延迟、 分区策略 控制单节点负载…</div></div></div>
+      <h3>三种存储方案选型</h3>
+<table>
+<tr><th>存储类型</th><th>代表技术</th><th>适用场景</th><th>特点</th></tr>
+<tr><td><span class="term">Redis Hash</span></td><td>Redis, Memcached</td><td>实时黑板、状态路由</td><td>毫秒级读写，容量有限，适合短结论</td></tr>
+<tr><td><span class="term">关系/文档数据库</span></td><td>PostgreSQL, MongoDB</td><td>结构化状态持久化</td><td>事务支持好，查询灵活，适合结构化数据</td></tr>
+<tr><td><span class="term">向量数据库</span></td><td>Chroma, Pinecone, Milvus</td><td>语义检索长期记忆</td><td>支持相似度搜索，适合非结构化知识检索</td></tr>
+</table>
+
+<h3>向量数据库选型指南</h3>
+<table>
+<tr><th>数据库</th><th>规模</th><th>部署方式</th><th>核心优势</th><th>适用场景</th></tr>
+<tr><td><span class="term">Chroma</span></td><td>百万级以下</td><td>嵌入式 / 单机</td><td>Python 原生，零配置，开发快</td><td>原型开发、小型 Agent 系统</td></tr>
+<tr><td><span class="term">Pinecone</span></td><td>千万级</td><td>全托管云服务</td><td>免运维，自动扩缩容</td><td>中型生产环境，快速上线</td></tr>
+<tr><td><span class="term">Milvus</span></td><td>十亿级</td><td>分布式集群</td><td>高性能，支持混合检索</td><td>大规模生产，高吞吐需求</td></tr>
+<tr><td><span class="term">pgvector</span></td><td>百万级</td><td>PostgreSQL 插件</td><td>复用现有 PG 基础设施</td><td>已有 PG 的团队，结构化+向量混合查询</td></tr>
+</table>
+
+<h3>生产环境部署要点</h3>
+<div class="intuition-box">
+<p>向量数据库上线前必须解决三个工程问题：<span class="term">索引预热</span>避免冷启动延迟、<span class="term">分区策略</span>控制单节点负载、<span class="term">TTL 淘汰</span>防止记忆无限膨胀。</p>
+</div>
+<ul>
+<li><strong>索引预热</strong>：生产环境启动时主动加载高频访问的向量索引到内存，避免首次查询出现秒级延迟</li>
+<li><strong>分区策略</strong>：按业务域或 Agent 类型划分 Collection，避免单个 Collection 过大导致查询退化</li>
+<li><strong>TTL 淘汰机制</strong>：为每条记忆设置过期时间（如 7 天 / 30 天），过期后自动清理，控制存储成本和召回噪声</li>
+<li><strong>监控指标</strong>：重点跟踪查询 P99 延迟、召回准确率、存储增长率三项核心 SLI</li>
+</ul>
+
+<h3>权限控制模型</h3>
+<ul>
+<li><strong>命名空间隔离</strong>：每个 Agent 有独立的 key 前缀，如 <code>agent_a:*</code>、<code>agent_b:*</code></li>
+<li><strong>读写权限矩阵</strong>：配置每个 Agent 对共享区域的读/写/管理权限</li>
+<li><strong>容量配额</strong>：限制每个 Agent 的写入量，防止单个 Agent 占满共享空间</li>
+</ul>
+    </section>
+
+    <section class="chapter" id="ch7">
+      <div class="ch-head"><div class="num">07</div><div class="t"><h2>应用场景</h2><div class="sub">共享记忆在三大场景中发挥关键作用：多轮客服（跨轮次状态传递）、多 Agent 研究（协作知识…</div></div></div>
+      <div class="intuition-box">
+<p>共享记忆在三大场景中发挥关键作用：多轮客服（跨轮次状态传递）、多 Agent 研究（协作知识汇聚）、工作流协同（流水线状态接力）。</p>
+</div>
+
+<h3>典型应用</h3>
+<ul>
+<li><strong>多轮客服系统</strong>：用户意图识别 Agent 将结论写入共享记忆，后续 Agent（订单查询、退款处理、技术支持）按需读取，避免用户重复描述问题</li>
+<li><strong>多 Agent 研究</strong>：信息收集、数据分析、报告撰写三个 Agent 各自将结论存入共享记忆，报告 Agent 按需拉取前两者的精炼结论</li>
+<li><strong>工作流协同</strong>：流水线中每个阶段的 Agent 将处理结果写入共享记忆，下一阶段 Agent 读取并继续处理，实现无缝接力</li>
+</ul>
+
+<div class="highlight">
+<strong>架构师价值：</strong>专注业务编排能力，不要在模型底层重复造轮子。超长上下文窗口扩展、KV Cache 提示词缓存普及、系统层自动解决前缀共享 — 底层在演进，架构层保留扩展接口应对技术迭代。
+</div>
+
+<div class="practice-grid">
+<div class="do">
+<ul>
+<li>使用黑板模式：Agent 只写入极短结论（~100 字 JSON）</li>
+<li>添加压缩代理层，将原始记忆提炼后再存入共享层</li>
+<li>使用乐观锁处理并发写入，版本号校验防冲突</li>
+<li>配置命名空间隔离和读写权限矩阵</li>
+<li>向量数据库检索时通过元数据过滤仅召回 1 条最相关记忆</li>
+<li>用轻量级裁判 Agent 处理矛盾记忆，追求最终一致性</li>
+</ul>
+</div>
+<div class="dont">
+<ul>
+<li>不要全量共享上下文（导致 Token 爆炸）</li>
+<li>不要向量数据库无限存储（引发幻觉问题）</li>
+<li>不要追求完美一致性（分布式投票/区块链 = 过度设计）</li>
+<li>不要让 Agent 共享完整思考过程（只共享结论）</li>
+<li>不要使用悲观锁处理低冲突场景（吞吐量损失大）</li>
+<li>不要忽略容量限制（单个 Agent 可能占满共享空间）</li>
+</ul>
+</div>
+</div>
+    </section>
+
+    <section class="chapter" id="q-a">
+      <div class="ch-head"><div class="num">08</div><div class="t"><h2>Q&amp;A</h2></div></div>
+      <details class="qa"><summary>Q1：多 Agent 系统中共享记忆的本质是什么？</summary><div class="a">共享记忆 = 持久化的公共上下文总线。它不是把所有 Agent 的信息塞进同一个大上下文，而是一条精准的"结论共享管道"。每个 Agent 将自己产出的精炼结论（约 100 字 JSON）写入共享层，其他 Agent 按需读取自己需要的部分。核心理念是把其他 Agent 的产出当作工具返回结果来处理 — 上下文按需路由，边界严格控制。</div></details>
+
+<details class="qa"><summary>Q2：黑板模式和全量共享上下文有什么区别？</summary><div class="a">本质区别在于"共享粒度"。全量共享 = 把每个 Agent 的完整思考过程、中间状态全部放入公共上下文，导致 Token 爆炸（10 个 Agent 各产生 5000 Token 上下文 → 共享后每个 Agent 看到 50000 Token）。黑板模式 = 只共享精炼结论（每个 Agent 写入 ~100 字 JSON），其他 Agent 按需读取特定 key，单个 Agent 的上下文增量控制在几百 Token 内。Token 成本差异可达 100 倍以上。</div></details>
+
+<details class="qa"><summary>Q3：多个 Agent 同时写入共享记忆时如何保证一致性？</summary><div class="a">三种并发控制策略：(1) 悲观锁 — 写前获取排他锁，强一致但吞吐低，适合写入频繁且一致性要求极高的场景；(2) 乐观锁 — 写入时检查版本号（version field），版本不匹配则重试，高吞吐无阻塞，适合读多写少场景（Agent 系统通常如此）；(3) CAS (Compare-And-Swap) — 原子性比较并交换，无锁设计，适合简单的状态标记和计数器。实际生产中推荐乐观锁为主 + CAS 辅助，避免悲观锁带来的性能瓶颈。</div></details>
+
+<details class="qa"><summary>Q4：向量数据库在共享记忆中扮演什么角色？怎么选？</summary><div class="a">向量数据库用于共享记忆的"语义检索"层 — 当 Agent 需要历史知识时，通过语义相似度搜索召回相关记忆。选型指南：(1) Chroma — Python 嵌入式，零配置，适合原型和小型系统（百万级以下）；(2) Pinecone — 全托管云服务，免运维，适合中型生产环境（千万级）；(3) Milvus — 分布式集群，高性能，适合大规模生产（十亿级）；(4) pgvector — PostgreSQL 插件，复用现有基础设施，适合已有 PG 的团队。关键约束：必须添加压缩代理层，将原始记忆提炼成 100 字内结论再存储；检索时通过元数据过滤仅召回 1 条最相关记忆。</div></details>
+
+<details class="qa"><summary>Q5：共享记忆和私有记忆的边界怎么划？</summary><div class="a">核心原则：共享记忆存"结论"，私有记忆存"过程"。共享记忆 = 跨 Agent 协作所需的精炼结果（~100 字 JSON），所有 Agent 可读写，持久化存储（Redis/DB/向量库），需要并发控制。私有记忆 = Agent 自身的思考过程、中间推理步骤、临时草稿，仅所属 Agent 可访问，随上下文窗口自然淘汰，无需并发控制。判断标准：如果这个信息只有当前 Agent 在后续步骤中会用到 → 私有；如果其他 Agent 可能需要参考 → 共享（但必须先压缩）。</div></details>
+
+<details class="qa"><summary>Q6：不同 Agent 产生矛盾记忆怎么处理？</summary><div class="a">避免过度设计（分布式投票、区块链共识），采用工程化的轻量方案：(1) 裁判 Agent — 一个专门的小型 Agent 负责裁决矛盾；(2) 简单规则 — 基于时间戳（最新优先）和历史准确率（表现好的 Agent 权重更高）做判断；(3) 最终一致性 — 不追求完美共识，允许暂时不一致，后续通过更多证据自动修正。类比：团队讨论出现分歧时，不需要全体投票，由经验最丰富的组长基于最新信息和过往记录做个快速判断即可。</div></details>
+
+<details class="qa"><summary>Q7：共享记忆系统有哪些常见坑？</summary><div class="a">三大禁忌：(1) 全量共享上下文 — 导致 Token 爆炸，10 个 Agent 的上下文膨胀 100 倍；(2) 向量数据库无限存储 — 召回过多相似但不相关的记忆片段，引发幻觉问题；(3) 追求完美一致性 — 分布式共识算法延迟高、实现复杂，在 Agent 系统中得不偿失。核心方法论：黑板模式实现精准路由 + 极致压缩控制上下文膨胀 + 拥抱底层缓存优化机制（KV Cache、超长上下文窗口）。</div></details>
+
+<details class="qa"><summary>Q8：共享记忆系统的监控应该关注哪些核心指标？</summary><div class="a">生产环境需要关注四类核心 SLI：(1) 查询 P99 延迟 — 衡量共享记忆读取性能的上界，向量检索的 P99 应控制在 200ms 以内；(2) 写入吞吐量 — 单位时间内完成的写入操作数，反映并发控制策略是否成为瓶颈；(3) 召回准确率 — 定期抽样评估向量检索返回结果与 Agent 实际需求的匹配度，低于 80% 需要优化 Embedding 模型或元数据过滤策略；(4) 存储增长率 — 监控共享记忆空间的膨胀速度，确保 TTL 淘汰机制正常运行，避免成本失控。</div></details>
+
+<details class="qa"><summary>Q9：如何从单体 Agent 系统渐进迁移到共享记忆架构？</summary><div class="a">推荐三步渐进法：(1) 第一步 — 引入 Redis Hash 作为轻量级黑板，让现有 Agent 将关键结论写入共享 key，不改架构只加一层读写；(2) 第二步 — 添加压缩代理层，对写入共享层的数据做精炼（原始内容 → 100 字结论），同时配置命名空间隔离和 TTL 淘汰；(3) 第三步 — 按需引入向量数据库作为语义检索层，对接历史记忆的相似度搜索。关键原则：每一步都可以独立上线验证，不需要一次性完成全部改造。先在低风险场景（如内部工具）跑通，再推广到生产核心链路。</div></details>
+    </section>
+
+    <footer>
+      <div class="made">TECH NOTES · AI 工程 · 整理自 AI Knowledge Hub</div>
+    </footer>
+  </main>
+</div>
+
+<script>
+(function(){var bar=document.getElementById('progress');function u(){var h=document.documentElement;bar.style.width=h.scrollTop/(h.scrollHeight-h.clientHeight)*100+'%';}window.addEventListener('scroll',u,{passive:true});u();})();
+(function(){var links=document.querySelectorAll('aside.toc nav a');var secs=Array.from(document.querySelectorAll('section.chapter'));if(!secs.length)return;function u(){var y=window.scrollY+100,cur=secs[0];for(var i=0;i<secs.length;i++){if(secs[i].offsetTop<=y)cur=secs[i];}var id=cur.id;links.forEach(function(a){a.classList.toggle('active',a.getAttribute('href')==='#'+id);});}window.addEventListener('scroll',u,{passive:true});u();})();
+</script>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

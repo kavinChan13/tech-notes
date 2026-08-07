@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Skills 与 MCP 协议的本质差异 · AI 工程 — Tech Notes</title>
+<meta name="description" content="Skill vs MCP — 烟囱式孤岛 vs 标准化总线、O(N×M) vs O(N+M)、Function Calling vs MCP / 四大工程落地难点与解决方案">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<link rel="stylesheet" href="../assets/kh-guide.css">
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav">
+
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="ai_engineering_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 13 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>A15 · AI 工程</h2>
+    <nav>
+      <ol>
+        <li><a href="#overview" class="active">概览</a></li>
+        <li><a href="#skill-function-calling-mcp">核心差异对比：Skill、Function Calling、MCP 三层关系</a></li>
+        <li><a href="#mcp">MCP 协议深度解析——架构、原语与传输层</a></li>
+        <li><a href="#skill-mcp">Skill 的优势场景——什么时候不用 MCP</a></li>
+        <li><a href="#ch4">工程落地四大难点与解决方案</a></li>
+        <li><a href="#mcp-5">MCP 安全性深度分析</a></li>
+        <li><a href="#ch6">技术演进趋势与生态格局</a></li>
+        <li><a href="#ch7">生产案例与选型决策树</a></li>
+        <li><a href="#q-a-8">Q&amp;A（8 题）</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+    <header class="hero">
+      <div class="badge">A15 · AI 工程</div>
+      <h1>Skills 与 MCP 协议的本质差异</h1>
+      <p class="sub">Skill vs MCP — 烟囱式孤岛 vs 标准化总线、O(N×M) vs O(N+M)、Function Calling vs MCP / 四大工程落地难点与解决方案</p>
+      <div class="meta-row">
+        <span class="pill cyan">AI 工程</span>
+        <span class="pill green">阅读 ~13 min</span>
+        <span class="pill amber">9 章</span>
+      </div>
+    </header>
+
+    <section class="chapter" id="overview">
+      <div class="ch-head"><div class="num">00</div><div class="t"><h2>概览</h2><div class="sub">Agent Skill 是「针对特定框架的定制工具」，MCP 是「通用的工具总线协议」</div></div></div>
+      <div class="intuition-box">
+<p>Agent Skill 是「针对特定框架的定制工具」，MCP 是「通用的工具总线协议」。从 Skill 到 MCP 的演进，本质是从「农业时代」迈向「工业时代」——实现生态解耦，将适配复杂度从 O(N×M) 降至 O(N+M)。但两者并非替代关系：MCP 解决连接问题（标准化协议打通数据孤岛），Function Calling 解决执行问题（模型表达调用意图），Skills 解决行为问题（过程性知识注入）。</p>
+</div>
+    </section>
+
+    <section class="chapter" id="skill-function-calling-mcp">
+      <div class="ch-head"><div class="num">01</div><div class="t"><h2>核心差异对比：Skill、Function Calling、MCP 三层关系</h2><div class="sub">三者不是&quot;三选一&quot;，而是解决不同层面的问题：Function Calling 是意图生成层（…</div></div></div>
+      <div class="intuition-box">
+<p>三者不是"三选一"，而是解决不同层面的问题：Function Calling 是意图生成层（模型表达"我想做什么"），MCP 是执行基础设施层（标准化工具发现和调用），Skill 是行为知识层（教模型"怎么做"）。生产系统通常三者组合使用。</p>
+</div>
+
+<table>
+<tr><th>维度</th><th>Agent Skill</th><th>Function Calling</th><th>MCP</th></tr>
+<tr><td><strong>本质</strong></td><td>行为指令注入（Markdown + 代码片段）</td><td>模型意图表达（结构化 JSON 请求）</td><td>标准化执行协议（客户端-服务器架构）</td></tr>
+<tr><td><strong>架构</strong></td><td>高耦合 / 烟囱式架构</td><td>模型 API 内置 / 厂商私有</td><td>标准化 / 总线式架构</td></tr>
+<tr><td><strong>适配复杂度</strong></td><td>O(N×M) — N 个模型 × M 个工具</td><td>O(N×M) — 每个厂商格式不同</td><td>O(N+M) — 每个模型和工具只适配一次</td></tr>
+<tr><td><strong>可复用性</strong></td><td>低 — 绑定特定框架</td><td>低 — 绑定特定模型厂商</td><td>高 — 跨框架通用</td></tr>
+<tr><td><strong>生态扩展</strong></td><td>封闭 — 厂商锁定</td><td>半封闭 — 厂商生态内</td><td>开放 — 第三方可自由接入</td></tr>
+<tr><td><strong>工具发现</strong></td><td>静态配置</td><td>静态注册（每次请求全量注入）</td><td>动态发现（运行时 <code>tools/list</code>）</td></tr>
+<tr><td><strong>传输层</strong></td><td>N/A（内嵌于应用）</td><td>N/A（HTTP API 内）</td><td>stdio / SSE / HTTP</td></tr>
+</table>
+
+<div class="arch-diagram">┌─────────────────────── 三者关系架构图 ───────────────────────┐
+│                                                               │
+│  用户请求："帮我查 GitHub 上的 Issue 并生成周报"                │
+│                                                               │
+│  ┌──────────────────────────────────────────────────────┐     │
+│  │  意图生成层 (Function Calling)                         │     │
+│  │  LLM 输出: {"tool": "get_issues", "args": {...}}     │     │
+│  │  → 模型表达"我想调用什么"                              │     │
+│  └──────────────────┬───────────────────────────────────┘     │
+│                     ▼                                         │
+│  ┌──────────────────────────────────────────────────────┐     │
+│  │  执行基础设施层 (MCP / 传统 Skill)                     │     │
+│  │                                                      │     │
+│  │  路径 A: MCP (推荐)                                   │     │
+│  │  ┌────────┐  JSON-RPC  ┌────────────┐               │     │
+│  │  │MCP Host│──────────▶│MCP Server  │               │     │
+│  │  │(Client)│◀──────────│(GitHub API) │               │     │
+│  │  └────────┘            └────────────┘               │     │
+│  │  特点: 标准化、动态发现、跨框架通用                    │     │
+│  │                                                      │     │
+│  │  路径 B: Agent Skill (传统)                           │     │
+│  │  ┌────────────────────────────────┐                  │     │
+│  │  │ 应用内嵌函数: get_issues()    │                  │     │
+│  │  │ 绑定特定框架、需重新部署       │                  │     │
+│  │  └────────────────────────────────┘                  │     │
+│  └──────────────────────────────────────────────────────┘     │
+│                                                               │
+│  ┌──────────────────────────────────────────────────────┐     │
+│  │  行为知识层 (Skills / Prompt Injection)               │     │
+│  │  SKILL.md: "生成周报时遵循以下模板..."                │     │
+│  │  → 教模型"怎么做"（过程性知识）                       │     │
+│  └──────────────────────────────────────────────────────┘     │
+│                                                               │
+└───────────────────────────────────────────────────────────────┘</div>
+
+<div class="highlight">
+<strong>复杂度从 O(N×M) 降到 O(N+M) 的意义：</strong>当有 10 个模型和 100 个工具时，Skill/Function Calling 模式需要 1000 次适配，MCP 只需要 110 次。当工具数量增长到 10,000 时，Skill 需要 100,000 次适配，MCP 仅需 10,010 次——这是生态能否规模化扩展的分水岭。截至 2025 年底，MCP 生态已有 <strong>2,000+</strong> 社区 Server，月均 SDK 下载量达 <strong>9700 万+</strong>。
+</div>
+    </section>
+
+    <section class="chapter" id="mcp">
+      <div class="ch-head"><div class="num">02</div><div class="t"><h2>MCP 协议深度解析——架构、原语与传输层</h2><div class="sub">MCP 的核心设计哲学是&quot;关注点分离&quot;——将工具定义从应用中完全解耦</div></div></div>
+      <div class="intuition-box">
+<p>MCP 的核心设计哲学是"关注点分离"——将工具定义从应用中完全解耦。工具运行在独立的 MCP Server 进程中，通过标准化协议暴露能力。Host 通过 Client 动态发现可用工具，无需在代码中硬编码任何工具逻辑。</p>
+</div>
+
+<h3>三大角色</h3>
+<table>
+<tr><th>角色</th><th>职责</th><th>示例</th></tr>
+<tr><td><span class="term">Host</span></td><td>AI 应用（用户直接交互的界面）</td><td>Claude Desktop、VS Code、Cursor</td></tr>
+<tr><td><span class="term">Client</span></td><td>维护与 MCP Server 的连接，代理工具调用</td><td>每个 Host 内嵌一个或多个 Client</td></tr>
+<tr><td><span class="term">Server</span></td><td>独立进程，暴露 Tools、Resources、Prompts</td><td>GitHub Server、Database Server、Stripe Server</td></tr>
+</table>
+
+<h3>三大原语（Primitives）</h3>
+<p>MCP 定义了三种核心原语，覆盖工具交互的全部场景：</p>
+<ul>
+<li><strong>Tools</strong>（工具）：可执行的操作，如 <code>query_database</code>、<code>create_issue</code>。对应 Function Calling 中的"函数"</li>
+<li><strong>Resources</strong>（资源）：可读取的上下文数据，如数据库 Schema、文件内容。这是 Function Calling 没有的能力</li>
+<li><strong>Prompts</strong>（提示模板）：可复用的交互模板，如"代码审查模板"、"SQL 生成模板"。标准化了 LLM 与工具的交互模式</li>
+</ul>
+
+<h3>传输层选择</h3>
+
+<div class="arch-diagram">┌──────────────────── MCP 传输层架构 ────────────────────┐
+│                                                        │
+│  传输方式 A: stdio（本地进程通信）                       │
+│  ┌────────┐  stdin/stdout  ┌────────────┐             │
+│  │MCP Host│◄─────────────▶│MCP Server  │             │
+│  │        │  JSON-RPC 2.0  │(本地进程)   │             │
+│  └────────┘                └────────────┘             │
+│  特点: 零网络开销、天然隔离、适合本地工具                │
+│  延迟: ~5ms（进程间通信）                               │
+│                                                        │
+│  传输方式 B: SSE / Streamable HTTP（远程服务）           │
+│  ┌────────┐  HTTPS + SSE   ┌────────────┐             │
+│  │MCP Host│◄─────────────▶│MCP Server  │             │
+│  │        │  JSON-RPC 2.0  │(远程服务)   │             │
+│  └────────┘                └────────────┘             │
+│  特点: 支持远程访问、需要 TLS 加密、支持多用户           │
+│  延迟: ~50-120ms（网络往返）                           │
+│                                                        │
+│  动态工具发现流程:                                      │
+│  Client ──tools/list──▶ Server                         │
+│  Client ◀──[tool1, tool2, ...]── Server                │
+│  Server ──notifications/tools/list_changed──▶ Client   │
+│  (工具变更时自动通知 Client 更新)                       │
+│                                                        │
+└────────────────────────────────────────────────────────┘</div>
+
+<div class="highlight">
+<strong>生产数据：</strong>DZone 的研究显示，MCP 在 Schema 灵活性、工具模块化、传输抽象、会话状态管理四个维度中的三个维度优于 A2A（Agent-to-Agent）和 ANP（Agent Network Protocol）。GitHub 的 CI 管线使用 MCP Agent 后，代码审查延迟降低了 <strong>35%</strong>。Manus AI 使用 MCP 自动化监管报告，集成时间相比自定义 API 包装器减少约 <strong>48%</strong>。
+</div>
+    </section>
+
+    <section class="chapter" id="skill-mcp">
+      <div class="ch-head"><div class="num">03</div><div class="t"><h2>Skill 的优势场景——什么时候不用 MCP</h2><div class="sub">Skill 并非过时技术——在特定场景下它仍然是最优选择</div></div></div>
+      <div class="intuition-box">
+<p>Skill 并非过时技术——在特定场景下它仍然是最优选择。核心判断标准是：如果操作是纯本地的、无副作用的、不需要权限控制的，Skill 比 MCP 更轻量高效。</p>
+</div>
+
+<h3>Skill 更优的三种场景</h3>
+
+<table>
+<tr><th>场景</th><th>为什么用 Skill</th><th>延迟对比</th></tr>
+<tr><td><strong>纯本地操作</strong></td><td>无网络调用、无副作用（如代码格式化、文本处理）</td><td>Skill ~50ms vs MCP ~120ms</td></tr>
+<tr><td><strong>深度模型集成</strong></td><td>需要访问模型的中间状态、对话历史（Skill 可直接读取上下文）</td><td>MCP 只能通过标准化接口，无法访问内部状态</td></tr>
+<tr><td><strong>快速原型验证</strong></td><td>开发周期 1-2 小时（写个函数即可），MCP 需要设计 Server 结构</td><td>原型阶段优先考虑速度</td></tr>
+</table>
+
+<h3>Skills 的独特价值：过程性知识注入</h3>
+
+<p>Skills 有一个 MCP 无法替代的能力：<strong>过程性知识注入</strong>（Procedural Knowledge Injection）。Skills 本质是 Markdown 格式的行为指令，通过 Progressive Disclosure（渐进式披露）注入模型的上下文窗口——先加载元数据（极少 Token），仅在匹配时才加载完整内容。这让 Skills 在 Token 效率上远优于全量加载工具定义。</p>
+
+<p>例如，一个"财务报告生成"Skill 可以包含：SEC 合规要求、标准模板、常见错误清单。这些知识不是"工具"，而是"做事的方法"——MCP 提供工具（查数据库），Skill 提供方法（怎么用数据写报告）。</p>
+
+<div class="highlight">
+<strong>生产数据：</strong>某开发工具平台的 Skill vs MCP 选型实践：(1) 代码格式化（本地、无副作用）→ Skill 实现，延迟 <strong>50ms</strong>，零网络开销；(2) GitHub 操作（远程 API、需认证）→ MCP Server 实现，支持 OAuth + Token 刷新，月调用 <strong>120 万次</strong>；(3) 数据库查询（敏感数据、需权限控制）→ MCP Server + RBAC 权限，拦截了 <strong>450 次</strong>未授权查询。
+</div>
+    </section>
+
+    <section class="chapter" id="ch4">
+      <div class="ch-head"><div class="num">04</div><div class="t"><h2>工程落地四大难点与解决方案</h2><div class="sub">从 Skill 迁移到 MCP 或两者混用，都面临四大工程难题：上下文膨胀、安全风险、存量迁…</div></div></div>
+      <div class="intuition-box">
+<p>从 Skill 迁移到 MCP 或两者混用，都面临四大工程难题：上下文膨胀、安全风险、存量迁移、参数幻觉。每个难题都有成熟的解决方案，关键在于不要跳过任何一步。</p>
+</div>
+
+<h3>难点一：上下文膨胀</h3>
+
+<table>
+<tr><th>问题</th><th>方案</th><th>效果</th></tr>
+<tr><td>数百个工具全量注入导致提示词过长</td><td>动态路由 + RAG 技术实现按需加载</td><td>Token 消耗降低 60-80%</td></tr>
+</table>
+
+<p>解决思路：不把所有工具描述塞进 Prompt，而是根据用户意图动态检索相关工具。实现方式类似于 RAG 的召回+精排策略：先用轻量分类器判断意图类别，再从工具库中检索该类别下的 Top-5 工具描述注入 Prompt。</p>
+
+<h3>难点二：安全风险</h3>
+
+<table>
+<tr><th>风险类型</th><th>攻击场景</th><th>方案</th></tr>
+<tr><td><strong>工具注入</strong></td><td>恶意 MCP Server 返回包含 Prompt Injection 的结果</td><td>输出过滤 + 沙箱执行</td></tr>
+<tr><td><strong>权限提升</strong></td><td>Agent 组合多个低权限工具实现高权限操作</td><td>操作链路审计 + 权限叠加检查</td></tr>
+<tr><td><strong>数据泄露</strong></td><td>MCP Server 返回数据中包含其他用户的敏感信息</td><td>数据隔离 + 结果脱敏</td></tr>
+<tr><td><strong>删库风险</strong></td><td>Agent 直接调用破坏性 API</td><td>人机回环 + 细粒度 RBAC</td></tr>
+</table>
+
+<p>关键原则：高危操作（如数据库写入、文件删除、支付操作）必须经过人工确认（<span class="term">Human-in-the-Loop</span>），同时为不同角色配置最小权限。MCP 的 Session 级访问控制和认证协商机制天然支持这一需求。</p>
+
+<h3>难点三：存量代码迁移</h3>
+
+<table>
+<tr><th>问题</th><th>方案</th><th>迁移成本</th></tr>
+<tr><td>已有 Python Skill 如何低成本转换</td><td>适配器模式自动转换函数签名</td><td>降低 80% 迁移工作量</td></tr>
+</table>
+
+<p>迁移策略：不要求重写，而是用适配器（Adapter）包装现有 Skill，自动将函数签名转换为 MCP 协议格式。适配器负责：(1) 将 Python 函数的参数映射为 JSON Schema；(2) 包装返回值为 MCP 的 <code>TextContent</code> 格式；(3) 注册到 MCP Server 的工具列表中。团队无需改动业务逻辑，只需添加一层薄薄的适配代码。</p>
+
+<h3>难点四：参数幻觉</h3>
+
+<table>
+<tr><th>问题</th><th>方案</th><th>效果</th></tr>
+<tr><td>模型常丢失必填参数或生成错误类型</td><td>Pydantic 强校验 + 反馈重试机制</td><td>参数错误率从 12% 降至 &lt; 1%</td></tr>
+</table>
+
+<p>防御机制：用 Pydantic 定义参数 Schema，模型输出不符合规范时自动反馈错误信息，触发重新生成（最多 3 次）。第一次错误反馈会告知模型"缺少必填字段 date_range"，第二次会提供更具体的示例，第三次仍失败则降级到人工确认。</p>
+
+<div class="practice-grid">
+<div class="do">
+<ul>
+<li>用 MCP 替代 Skill 实现需要网络调用和权限控制的工具</li>
+<li>动态路由按需加载工具描述，控制 Prompt 长度</li>
+<li>高危操作必须人机回环确认</li>
+<li>用适配器模式迁移存量 Skill，不要求重写</li>
+<li>Pydantic 强校验 + 重试机制防止参数幻觉</li>
+<li>所有 MCP 调用记录审计日志，定期渗透测试</li>
+</ul>
+</div>
+<div class="dont">
+<ul>
+<li>不要全量注入所有工具描述（上下文爆炸）</li>
+<li>不要让 Agent 直接操作生产数据库</li>
+<li>不要要求团队重写所有存量 Skill</li>
+<li>不要信任模型输出的参数格式（永远做校验）</li>
+<li>不要在 Skill 和 MCP 之间混用同一功能（选一个）</li>
+<li>不要忽略 MCP Server 返回结果中的 Prompt Injection 风险</li>
+</ul>
+</div>
+</div>
+    </section>
+
+    <section class="chapter" id="mcp-5">
+      <div class="ch-head"><div class="num">05</div><div class="t"><h2>MCP 安全性深度分析</h2><div class="sub">MCP 的去中心化架构（Client 和 Server 分离部署）引入了传统 Functio…</div></div></div>
+      <div class="intuition-box">
+<p>MCP 的去中心化架构（Client 和 Server 分离部署）引入了传统 Function Calling 不存在的安全挑战。学术界（HKUST + 华为）提出的 MCIP 框架首次系统性地分析了 MCP 的安全风险，并提出了增强方案。</p>
+</div>
+
+<h3>MCP 安全三层模型</h3>
+
+<div class="arch-diagram">┌───────────────────── MCP 安全三层模型 ─────────────────────┐
+│                                                             │
+│  第一层: 传输安全                                            │
+│  ┌──────────────────────────────────────────────────┐      │
+│  │  stdio → 天然隔离（本地进程通信，无网络暴露）       │      │
+│  │  SSE/HTTP → 必须 TLS 加密 + 证书验证              │      │
+│  │  风险: 中间人攻击、数据窃听                        │      │
+│  └──────────────────────────────────────────────────┘      │
+│                                                             │
+│  第二层: 认证与授权                                          │
+│  ┌──────────────────────────────────────────────────┐      │
+│  │  OAuth 2.0 + API Key → Server 验证 Client 身份    │      │
+│  │  Session 级作用域 → 限制工具访问范围               │      │
+│  │  RBAC (基于角色的访问控制) → 不同用户不同权限       │      │
+│  │  风险: 凭证泄露、权限提升                          │      │
+│  └──────────────────────────────────────────────────┘      │
+│                                                             │
+│  第三层: 运行时安全                                          │
+│  ┌──────────────────────────────────────────────────┐      │
+│  │  工具注入检测 → 过滤 MCP Server 返回的恶意内容     │      │
+│  │  操作链路审计 → 检测多工具组合的权限提升            │      │
+│  │  沙箱执行 → 危险操作在隔离环境中预演               │      │
+│  │  人机回环 → 破坏性操作前必须人工确认               │      │
+│  │  风险: Prompt Injection、数据泄露、误操作          │      │
+│  └──────────────────────────────────────────────────┘      │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘</div>
+
+<h3>MCIP：MCP 的安全增强方案</h3>
+
+<p>HKSUT 和华为联合提出的 <span class="term">MCIP</span>（Model Contextual Integrity Protocol）是 MCP 的安全增强版本。它通过两个核心增强弥补 MCP 的安全缺口：(1) <strong>Tracking Tools</strong>——追踪工具在上下文中的调用链，识别不合理的工具组合；(2) <strong>Guard Model</strong>——训练专用的安全分类器，在每次工具调用前评估风险等级。实验显示，MCIP 将最先进 LLM 的 MCP 安全评分提升了 <strong>20-35%</strong>。</p>
+
+<div class="highlight">
+<strong>生产数据：</strong>Cisco 2023 年企业安全报告显示，<strong>41%</strong> 的 AI 系统缺乏结构化授权层，这在松耦合的 MCP 架构中尤其危险。Forrester 2024 报告指出，<strong>64%</strong> 的 IT 决策者因缺乏标准化模型-应用接口而导致 LLM 部署延迟。MCP 的 Session 级访问控制和认证协商机制正是针对这些痛点的解决方案。
+</div>
+    </section>
+
+    <section class="chapter" id="ch6">
+      <div class="ch-head"><div class="num">06</div><div class="t"><h2>技术演进趋势与生态格局</h2><div class="sub">从 Skill 到 MCP 不是终点，而是起点</div></div></div>
+      <div class="intuition-box">
+<p>从 Skill 到 MCP 不是终点，而是起点。未来的演进方向是 MCP Marketplace（开放工具市场）+ A2A 协议（Agent 间通信标准化）+ AGENTS.md（Agent 能力自描述标准），三者共同构成完整的 Agent 互操作性生态。</p>
+</div>
+
+<table>
+<tr><th>阶段</th><th>特征</th><th>代表技术</th><th>复杂度</th></tr>
+<tr><td><strong>农业时代</strong></td><td>烟囱式孤岛，每个模型配专属工具</td><td>早期 Agent Skill、厂商私有 Function Calling</td><td>O(N×M)</td></tr>
+<tr><td><strong>工业时代</strong></td><td>标准化总线，工具即插即用</td><td>MCP 协议（JSON-RPC 2.0）</td><td>O(N+M)</td></tr>
+<tr><td><strong>网络时代</strong></td><td>Agent 间标准化通信</td><td>A2A 协议（Google 提出）、AGENTS.md</td><td>O(N) 级别</td></tr>
+<tr><td><strong>生态时代（未来）</strong></td><td>开放市场，第三方自由接入</td><td>MCP Marketplace、工具版本管理、自动发现</td><td>近 O(1)</td></tr>
+</table>
+
+<h3>MCP vs A2A：互补而非竞争</h3>
+
+<p>MCP 解决的是"模型与工具的连接"（纵向），A2A 解决的是"Agent 与 Agent 的通信"（横向）。一个完整的多 Agent 系统需要两者配合：MCP 让每个 Agent 能调用外部工具，A2A 让不同 Agent 之间能协商和委派任务。Google 的 A2A 协议和 Anthropic 的 MCP 协议正在走向互操作——2025 年已有多个项目同时支持两者。</p>
+
+<div class="highlight">
+<strong>核心价值：</strong>MCP 实现了生态解耦——模型厂商不需要关心工具有多少，工具开发者不需要关心模型是什么。双方只需要适配 MCP 协议一次，就能互相兼容。截至 2025 年底，MCP 生态已有 <strong>2,000+</strong> 社区 Server，覆盖 GitHub、Stripe、Slack、PostgreSQL 等主流服务。Skill 生态则依赖各 IDE 插件市场（碎片化更严重），两者的生态规模差距正在拉大。
+</div>
+    </section>
+
+    <section class="chapter" id="ch7">
+      <div class="ch-head"><div class="num">07</div><div class="t"><h2>生产案例与选型决策树</h2><div class="sub">某开发工具平台的选型实践：(1) 代码格式化（本地、无副作用）→ Skill 实现，延迟 5…</div></div></div>
+      <h3>案例一：开发工具平台的 Skill/MCP 混合架构</h3>
+
+<div class="intuition-box">
+<p>某开发工具平台的选型实践：(1) 代码格式化（本地、无副作用）→ Skill 实现，延迟 <strong>50ms</strong>，零网络开销；(2) GitHub 操作（远程 API、需认证）→ MCP Server 实现，支持 OAuth + Token 刷新，月调用 <strong>120 万次</strong>；(3) 数据库查询（敏感数据、需权限控制）→ MCP Server + RBAC 权限，拦截了 <strong>450 次</strong>未授权查询。关键决策：同一功能（如"搜索代码"）同时有 Skill 和 MCP 两种实现时，优先 MCP——因为 MCP 天然支持多用户隔离和审计日志。</p>
+</div>
+
+<h3>案例二：金融合规报告系统</h3>
+
+<div class="intuition-box">
+<p>某金融合规报告系统的分层架构：MCP 层负责连接外部数据源（SEC 数据库、Bloomberg API、内部 CRM），<strong>3 个 MCP Server</strong> 统一管理认证和审计；Skills 层注入合规知识（SEC Regulation S-K 要求、报告模板、常见合规陷阱），<strong>12 个 Skills</strong> 覆盖不同报告类型。上线后，报告生成时间从 4 小时降至 <strong>35 分钟</strong>，合规错误率从 8% 降至 <strong>1.2%</strong>。Skills 注入的合规知识避免了 <strong>23 次</strong>潜在的 SEC 违规。</p>
+</div>
+
+<h3>选型决策树</h3>
+
+<table>
+<tr><th>决策因素</th><th>选 Skill</th><th>选 MCP</th><th>选 Skill + MCP</th></tr>
+<tr><td><strong>操作位置</strong></td><td>纯本地</td><td>远程 API</td><td>本地处理 + 远程数据</td></tr>
+<tr><td><strong>副作用</strong></td><td>无（只读/格式化）</td><td>有（写入/删除/支付）</td><td>混合</td></tr>
+<tr><td><strong>权限需求</strong></td><td>不需要</td><td>需要 RBAC/审计</td><td>部分需要</td></tr>
+<tr><td><strong>多用户</strong></td><td>单用户</td><td>多用户隔离</td><td>混合</td></tr>
+<tr><td><strong>知识注入</strong></td><td>需要过程性知识</td><td>不需要</td><td>需要知识 + 工具</td></tr>
+</table>
+    </section>
+
+    <section class="chapter" id="q-a-8">
+      <div class="ch-head"><div class="num">08</div><div class="t"><h2>Q&amp;A（8 题）</h2></div></div>
+      <details class="qa">
+<summary>Agent Skill、Function Calling 和 MCP 的本质区别是什么？</summary>
+<div class="a">三者解决不同层面的问题：Function Calling 是意图生成层（模型表达"我想做什么"，输出结构化 JSON 请求）；MCP 是执行基础设施层（标准化工具发现、调用和管理，基于 JSON-RPC 2.0 的客户端-服务器架构）；Skill 是行为知识层（通过 Markdown 注入过程性知识，教模型"怎么做"）。本质区别在于耦合方式：Skill/Function Calling 是高耦合的烟囱式架构 O(N×M)，MCP 是标准化的总线式架构 O(N+M)。</div>
+</details>
+
+<details class="qa">
+<summary>MCP 落地最大的工程挑战是什么？</summary>
+<div class="a">四大难点：(1) 上下文膨胀 — 工具多时全量注入导致 Prompt 过长，需要动态路由+RAG 按需加载，可降低 Token 消耗 60-80%；(2) 安全风险 — 包括工具注入、权限提升、数据泄露、删库风险，需要三层安全模型（传输/认证/运行时）+ 人机回环 + RBAC；(3) 存量迁移 — 已有 Skill 不能全部重写，需要适配器模式自动转换函数签名，降低 80% 迁移工作量；(4) 参数幻觉 — 模型常丢失必填参数，需要 Pydantic 强校验+重试，将错误率从 12% 降至 &lt;1%。</div>
+</details>
+
+<details class="qa">
+<summary>为什么 O(N×M) 到 O(N+M) 的复杂度降低如此重要？</summary>
+<div class="a">因为这决定了生态能否规模化扩展。假设 10 个模型 × 100 个工具：Skill 模式需要 1000 次适配，MCP 只需 110 次。当工具从 100 增长到 10,000 时，Skill 需要 100,000 次适配，MCP 仅需 10,010 次。O(N×M) 的生态无法规模化——每增加一个工具，所有模型都要适配一次；O(N+M) 可以——每个新工具只需实现一次 MCP Server。截至 2025 年底 MCP 已有 2,000+ 社区 Server，验证了 O(N+M) 的生态扩展能力。</div>
+</details>
+
+<details class="qa">
+<summary>什么场景下 Skill 比 MCP 更合适？</summary>
+<div class="a">三种场景 Skill 更优：(1) 纯本地操作（无网络调用、无副作用）— Skill 延迟更低（50ms vs MCP 的 120ms 网络往返）；(2) 需要深度集成模型上下文 — Skill 可以直接访问模型的中间状态和对话历史，MCP 只能通过标准化的请求/响应接口；(3) 快速原型验证 — Skill 开发周期 1-2 小时（写个函数就行），MCP 需要设计 Server 结构、实现协议握手。但一旦进入生产环境（需要权限控制、审计日志、多用户隔离），MCP 的优势就显现了。</div>
+</details>
+
+<details class="qa">
+<summary>MCP 协议的安全性如何保障？有什么已知风险？</summary>
+<div class="a">MCP 安全三层：(1) 传输层 — stdio 天然隔离，SSE/HTTP 需要 TLS 加密；(2) 认证层 — OAuth 2.0 + API Key，Session 级作用域限制工具访问范围；(3) 运行时层 — 工具注入检测、操作链路审计、沙箱执行、人机回环。已知风险包括：恶意 MCP Server 返回 Prompt Injection、Agent 组合多工具实现权限提升、Server 返回数据包含其他用户敏感信息。HKUST+华为提出的 MCIP 框架通过 Tracking Tools + Guard Model 将安全评分提升 20-35%。</div>
+</details>
+
+<details class="qa">
+<summary>MCP 和 A2A 协议是什么关系？会互相取代吗？</summary>
+<div class="a">不会取代，而是互补。MCP 解决纵向连接（模型 ↔ 工具），A2A 解决横向通信（Agent ↔ Agent）。一个完整的多 Agent 系统需要两者配合：MCP 让每个 Agent 能调用外部工具（如查数据库、发 GitHub Issue），A2A 让不同 Agent 之间能协商和委派任务（如研究 Agent 委派数据分析给分析 Agent）。2025 年已有多个项目同时支持 MCP 和 A2A，趋势是走向互操作而非互相取代。</div>
+</details>
+
+<details class="qa">
+<summary>MCP 的动态工具发现是怎么工作的？</summary>
+<div class="a">MCP Client 在运行时调用 tools/list 获取 Server 暴露的所有工具及其 JSON Schema 描述。如果 Server 新增或删除了工具，它会发送 notifications/tools/list_changed 通知，Client 自动更新可用工具列表——无需重启应用或修改代码。这与传统 Function Calling 的静态注册（每次请求全量注入工具描述）形成鲜明对比。动态发现的优势：(1) 工具变更无需重新部署；(2) 按需加载，不浪费 Token；(3) 支持工具的版本管理和灰度发布。</div>
+</details>
+
+<details class="qa">
+<summary>如何制定 Skill 到 MCP 的迁移策略？</summary>
+<div class="a">四步迁移策略：(1) 盘点 — 列出所有现有 Skill，按"操作位置（本地/远程）"、"副作用（有/无）"、"权限需求"三个维度分类；(2) 优先级 — 远程调用、有副作用、需要权限控制的 Skill 优先迁移到 MCP；纯本地、无副作用的 Skill 保留；(3) 适配器迁移 — 用 Adapter 包装现有 Skill 函数，自动转换为 MCP 协议格式（JSON Schema 参数映射 + TextContent 返回值包装），降低 80% 迁移工作量；(4) 灰度切换 — 新旧并行运行 1-2 周，对比结果一致性后全量切换到 MCP。</div>
+</details>
+    </section>
+
+    <footer>
+      <div class="made">TECH NOTES · AI 工程 · 整理自 AI Knowledge Hub</div>
+    </footer>
+  </main>
+</div>
+
+<script>
+(function(){var bar=document.getElementById('progress');function u(){var h=document.documentElement;bar.style.width=h.scrollTop/(h.scrollHeight-h.clientHeight)*100+'%';}window.addEventListener('scroll',u,{passive:true});u();})();
+(function(){var links=document.querySelectorAll('aside.toc nav a');var secs=Array.from(document.querySelectorAll('section.chapter'));if(!secs.length)return;function u(){var y=window.scrollY+100,cur=secs[0];for(var i=0;i<secs.length;i++){if(secs[i].offsetTop<=y)cur=secs[i];}var id=cur.id;links.forEach(function(a){a.classList.toggle('active',a.getAttribute('href')==='#'+id);});}window.addEventListener('scroll',u,{passive:true});u();})();
+</script>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

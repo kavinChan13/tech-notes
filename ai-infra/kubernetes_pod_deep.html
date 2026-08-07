@@ -1,0 +1,486 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kubernetes Pod 核心解析 · AI Infra — Tech Notes</title>
+<meta name="description" content="K8s Pod Deep Dive — 最小调度单位 / Sidecar模式 / 声明式配置 / 健康探针 / 资源控制">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<link rel="stylesheet" href="../assets/kh-guide.css">
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav">
+
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="ai_infra_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 14 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>S08 · AI Infra</h2>
+    <nav>
+      <ol>
+        <li><a href="#overview" class="active">概览</a></li>
+        <li><a href="#pod-kubernetes">Pod 本质：Kubernetes 的最小调度单位</a></li>
+        <li><a href="#pod-yaml">Pod 创建流程：从 YAML 到运行</a></li>
+        <li><a href="#sidecar-adapter-ambassador">多容器设计模式：Sidecar / Adapter / Ambassador</a></li>
+        <li><a href="#pod">健康探针：Pod 的生命体征监控</a></li>
+        <li><a href="#requests-limits">资源控制：requests 与 limits 的生产博弈</a></li>
+        <li><a href="#pod-6">生产最佳实践与 Pod 管理</a></li>
+        <li><a href="#q-a">Q&amp;A</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+    <header class="hero">
+      <div class="badge">S08 · AI Infra</div>
+      <h1>Kubernetes Pod 核心解析</h1>
+      <p class="sub">K8s Pod Deep Dive — 最小调度单位 / Sidecar模式 / 声明式配置 / 健康探针 / 资源控制</p>
+      <div class="meta-row">
+        <span class="pill cyan">AI Infra</span>
+        <span class="pill green">阅读 ~14 min</span>
+        <span class="pill amber">8 章</span>
+      </div>
+    </header>
+
+    <section class="chapter" id="overview">
+      <div class="ch-head"><div class="num">00</div><div class="t"><h2>概览</h2><div class="sub">Pod 是 Kubernetes 管理的 最小计算单位 ，不是容器——K8s 调度的是整艘&quot;…</div></div></div>
+      <div class="intuition-box">
+<p>Pod 是 Kubernetes 管理的<strong>最小计算单位</strong>，不是容器——K8s 调度的是整艘"船"（Pod），而不是船上的单个"船员"（容器）。理解 Pod 的共享语义（网络、存储）和临时性（随时可被重建），是写出生产级 K8s 配置的前提。</p>
+</div>
+    </section>
+
+    <section class="chapter" id="pod-kubernetes">
+      <div class="ch-head"><div class="num">01</div><div class="t"><h2>Pod 本质：Kubernetes 的最小调度单位</h2><div class="sub">很多人误以为 K8s 管理的是容器，实际上 K8s 调度的最小粒度是 Pod</div></div></div>
+      <p>很多人误以为 K8s 管理的是容器，实际上 K8s 调度的最小粒度是 <span class="term">Pod</span>。Pod 是容器的"运行外壳"，负责将一组容器打包成一个逻辑单元，统一调度、统一生命周期管理。</p>
+
+<h3>1.1 Pod 与容器的关系</h3>
+<table>
+<tr><th>维度</th><th>Pod</th><th>Container</th><th>关系说明</th></tr>
+<tr><td><strong>调度粒度</strong></td><td>K8s 最小调度单位</td><td>不能独立调度</td><td>K8s 只认 Pod，不认容器</td></tr>
+<tr><td><strong>生命周期</strong></td><td>临时对象，可被重建</td><td>随 Pod 生死</td><td>Pod 销毁→所有容器终止</td></tr>
+<tr><td><strong>网络</strong></td><td>拥有独立 IP</td><td>共享 Pod 网络命名空间</td><td>同一 Pod 内容器共享 IP</td></tr>
+<tr><td><strong>存储</strong></td><td>定义 Volume</td><td>挂载 Pod 的 Volume</td><td>容器可选择性挂载共享卷</td></tr>
+<tr><td><strong>资源</strong></td><td>聚合所有容器资源</td><td>各自声明 requests/limits</td><td>调度器按 Pod 总量分配节点</td></tr>
+</table>
+
+<div class="flow">
+  <div class="flow-title">Pod 内部结构全景图</div>
+  <div class="flow-node accent"><div class="nlabel">Node (宿主机)</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Pod A (IP: 10.244.1.7)</div><div class="nsub">pause 容器 (网络命名空间持有者) · App Container (主应用) · 端口: 8080 · 挂载: /data (shared-volume) · Sidecar Container (日志采集) · 端口: 9090 · 挂载: /data (shared-volume, readOnly)</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">共享资源：</div><div class="nsub">Network Namespace (同一 IP, localhost 互通) · IPC Namespace (进程间通信) · Volumes (共享存储卷)</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Pod B (IP: 10.244.1.8)</div><div class="nsub">App Container · 端口: 8080</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Pod C (IP: 10.244.2.3) ← 在不同 Node 上</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">App Container</div></div>
+</div>
+
+<h3>1.2 Pause 容器：Pod 的秘密基石</h3>
+<p>每个 Pod 创建时，K8s 会先启动一个 <span class="term">pause 容器</span>（通常是 <code>registry.k8s.io/pause:3.9</code>）。这个容器不做任何业务逻辑，它的唯一职责是<strong>持有网络命名空间</strong>。后续所有业务容器都加入 pause 容器创建的网络命名空间，从而实现网络共享。</p>
+
+<table>
+<tr><th>Pause 容器职责</th><th>具体行为</th><th>为什么需要</th></tr>
+<tr><td><strong>创建网络命名空间</strong></td><td>调用 CNI 插件配置网络，获取 Pod IP</td><td>确保后续容器共享同一网络</td></tr>
+<tr><td><strong>持有 PID 1</strong></td><td>作为 PID 1 进程，回收孤儿子进程</td><td>防止僵尸进程</td></tr>
+<tr><td><strong>保持命名空间存活</strong></td><td>永不退出（除非 Pod 被销毁）</td><td>网络命名空间随 pause 容器存亡</td></tr>
+</table>
+
+<div class="intuition-box">
+<p>Pause 容器就像一个"占位符房东"——它租下了整间公寓（网络命名空间），然后让真正的住户（业务容器）搬进来共享。如果房东走了（pause 容器退出），整间公寓就被收回（网络命名空间销毁），所有住户都得搬走（Pod 终止）。</p>
+</div>
+
+<h3>1.3 Pod 的临时性</h3>
+<p>Pod 是<strong>临时对象</strong>（Ephemeral），随时可能因为节点故障、资源不足、调度策略变化而被销毁和重建。这意味着：</p>
+
+<table>
+<tr><th>不可依赖的特性</th><th>原因</th><th>替代方案</th></tr>
+<tr><td><strong>Pod IP</strong></td><td>重建后 IP 会变化</td><td>使用 Service 提供稳定入口</td></tr>
+<tr><td><strong>Pod 名称</strong></td><td>Deployment 重建时名称带随机后缀</td><td>使用 Label Selector 定位</td></tr>
+<tr><td><strong>本地存储</strong></td><td>emptyDir 随 Pod 销毁</td><td>使用 PVC 持久化存储</td></tr>
+<tr><td><strong>节点位置</strong></td><td>调度器可能将 Pod 迁移到其他节点</td><td>使用 PodAffinity 控制调度</td></tr>
+</table>
+    </section>
+
+    <section class="chapter" id="pod-yaml">
+      <div class="ch-head"><div class="num">02</div><div class="t"><h2>Pod 创建流程：从 YAML 到运行</h2><div class="sub">K8s 采用 声明式配置 （Declarative Configuration）：你告诉系统…</div></div></div>
+      <p>K8s 采用 <span class="term">声明式配置</span>（Declarative Configuration）：你告诉系统"我要什么"（目标状态），而不是"怎么做"（操作步骤）。系统自动将当前状态收敛到目标状态。</p>
+
+<h3>2.1 声明式 vs 命令式</h3>
+<table>
+<tr><th>维度</th><th>声明式（Declarative）</th><th>命令式（Imperative）</th></tr>
+<tr><td><strong>思维模式</strong></td><td>"我要 3 个 nginx Pod 运行"</td><td>"启动一个 nginx 容器"</td></tr>
+<tr><td><strong>操作方式</strong></td><td><code>kubectl apply -f pod.yaml</code></td><td><code>kubectl run nginx --image=nginx</code></td></tr>
+<tr><td><strong>自愈能力</strong></td><td>✅ 控制器持续监控并修复偏差</td><td>❌ 一次性操作，无自愈</td></tr>
+<tr><td><strong>版本管理</strong></td><td>✅ YAML 文件可入 Git 版本控制</td><td>❌ 命令历史难以管理</td></tr>
+<tr><td><strong>生产推荐</strong></td><td>✅ 标准做法</td><td>⚠️ 仅用于调试</td></tr>
+</table>
+
+<h3>2.2 核心 YAML 结构</h3>
+<pre><code>apiVersion: v1
+kind: Pod
+metadata:
+  name: nginx-pod
+  labels: { app: web }   # 标签用于 Service 选择
+spec:
+  containers:
+    - name: nginx
+      image: nginx:1.25  # 生产环境避免 :latest
+      ports: [ { containerPort: 80 } ]
+      resources: { requests: { cpu: 500m, memory: 512Mi }, limits: { cpu: 1, memory: 1Gi } }</code></pre>
+
+<h3>2.3 创建全链路</h3>
+<div class="flow">
+  <div class="flow-title">Pod 创建全链路流程</div>
+  <div class="flow-node accent"><div class="nlabel">kubectl apply -f pod.yaml</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">1. API Server</div>
+    <ul class="pairs">
+      <li><span>验证 YAML 语法和权限</span></li>
+      <li><span>写入 etcd（持久化存储）</span></li>
+      <li><span>通知控制器 Controller</span></li>
+    </ul>
+  </div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">2. Scheduler</div>
+    <ul class="pairs">
+      <li><b>过滤</b><span>排除不满足约束的节点（资源不足、污点排斥）</span></li>
+      <li><b>评分</b><span>对候选节点打分（负载均衡、亲和性）</span></li>
+      <li><b>绑定</b><span>将 Pod 绑定到最优节点</span></li>
+    </ul>
+  </div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">3. Kubelet（目标节点代理）</div>
+    <ul class="pairs">
+      <li><span>拉取镜像 → 创建 pause 容器</span></li>
+      <li><span>配置网络（CNI 插件）→ 启动业务容器</span></li>
+      <li><span>启动健康探针 → 持续监控 + 状态上报</span></li>
+    </ul>
+  </div>
+</div>
+
+<div class="highlight">
+<strong>生产案例：</strong>在一个 500 节点的集群中，Scheduler 的过滤+评分流程通常在 100ms 内完成。但如果集群有 5000+ 节点且 Pod 设置了复杂的亲和性规则（如 <code>podAntiAffinity</code> + <code>topologySpreadConstraints</code>），调度延迟可能增加到 2-5 秒。此时建议启用 <code>percentageOfNodesToScore</code> 参数（默认 50%），Scheduler 只需评估 50% 的节点就能做出足够好的调度决策。
+</div>
+
+<div class="intuition-box">
+<p>声明式配置的核心思想是"状态收敛"——你定义目标状态（3 个 nginx Pod），K8s 的控制循环（Reconciliation Loop）持续比较"当前状态"和"目标状态"的差异，自动执行操作消除差异。这就是为什么杀掉一个 Pod 后 K8s 会自动补一个新的——控制循环发现当前只有 2 个 Pod，目标要 3 个，于是创建 1 个。</p>
+</div>
+    </section>
+
+    <section class="chapter" id="sidecar-adapter-ambassador">
+      <div class="ch-head"><div class="num">03</div><div class="t"><h2>多容器设计模式：Sidecar / Adapter / Ambassador</h2><div class="sub">大部分 Pod 只需要一个容器</div></div></div>
+      <p>大部分 Pod 只需要一个容器。但在特定场景下，将多个容器放入同一个 Pod 可以利用共享网络和存储的特性，实现优雅的功能增强。K8s 社区总结了三种经典 <span class="term">多容器设计模式</span>。</p>
+
+<h3>3.1 三种模式对比</h3>
+<table>
+<tr><th>模式</th><th>核心思想</th><th>典型场景</th><th>共享资源</th></tr>
+<tr><td><strong>Sidecar（边车）</strong></td><td>辅助容器增强主容器能力</td><td>日志采集、监控代理、服务网格</td><td>Volume + Network</td></tr>
+<tr><td><strong>Adapter（适配器）</strong></td><td>标准化主容器的输出格式</td><td>日志格式转换、指标聚合</td><td>Volume</td></tr>
+<tr><td><strong>Ambassador（大使）</strong></td><td>代理主容器与外部系统的通信</td><td>数据库代理、TLS 终端</td><td>Network</td></tr>
+</table>
+
+<h3>3.2 Sidecar 模式详解</h3>
+<p><span class="term">Sidecar 模式</span>是最常用的多容器模式。主容器专注业务逻辑，Sidecar 容器负责横切关注点（Cross-Cutting Concern），如日志采集、监控指标暴露、配置热加载等。</p>
+
+<div class="arch-diagram">Sidecar 模式典型架构
+
+┌──── Pod (IP: 10.244.1.7) ────────────────────────┐
+│                                                   │
+│  ┌─────────────────┐   ┌─────────────────────┐   │
+│  │  Main Container │   │  Sidecar Container   │   │
+│  │  (Flask App)    │   │  (Filebeat)          │   │
+│  │                 │   │                      │   │
+│  │  写入日志文件 ───┼──→│  读取日志文件         │   │
+│  │  /app/logs/     │   │  /var/log/flask/     │   │
+│  │  (shared-vol)   │   │  (shared-vol,RO)     │   │
+│  │                 │   │                      │   │
+│  │  端口: 5000     │   │  端口: 无（推送到ES）  │   │
+│  └─────────────────┘   └─────────────────────┘   │
+│                                                   │
+│  Shared Volume: shared-logs (emptyDir)            │
+│  Network: localhost:5000 可互相访问                 │
+└───────────────────────────────────────────────────┘</div>
+
+<h3>3.3 Native Sidecar（K8s v1.29+ / v1.33 stable）</h3>
+<p>传统 Sidecar 有两个历史性痛点：(1) 无法保证在主容器之前启动；(2) Job 场景下 Sidecar 不退出导致 Job 永远不结束。<span class="term">Native Sidecar</span> 通过 <code>initContainers</code> + <code>restartPolicy: Always</code> 彻底解决了这两个问题。</p>
+
+<table>
+<tr><th>维度</th><th>传统 Sidecar</th><th>Native Sidecar（v1.29+）</th></tr>
+<tr><td><strong>定义位置</strong></td><td><code>spec.containers</code></td><td><code>spec.initContainers</code> + <code>restartPolicy: Always</code></td></tr>
+<tr><td><strong>启动顺序</strong></td><td>⚠️ 与主容器并行启动（有竞态）</td><td>✅ 保证在主容器之前启动</td></tr>
+<tr><td><strong>关闭顺序</strong></td><td>⚠️ 与主容器并行关闭</td><td>✅ 在主容器退出之后关闭</td></tr>
+<tr><td><strong>Job 兼容</strong></td><td>❌ Sidecar 不退出导致 Job 挂起</td><td>✅ Job 完成后自动终止 Sidecar</td></tr>
+<tr><td><strong>Readiness 探针</strong></td><td>不影响 Pod 就绪</td><td>✅ 探针通过后才启动主容器</td></tr>
+<tr><td><strong>稳定性</strong></td><td>GA（长期可用）</td><td>v1.33 GA（2025 年 4 月起稳定）</td></tr>
+</table>
+
+<div class="highlight">
+<strong>生产数据：</strong>根据 2026 年的生产实践报告，迁移到 Native Sidecar 后，某电商平台将 Sidecar 启动竞态导致的服务异常从每月 12 次降至 0 次；Service Mesh（Istio）的 Envoy Sidecar 迁移到 Native 模式后，启动时的流量丢失问题完全消除——因为 Envoy 保证在主容器启动前就绑定好端口。
+</div>
+
+<div class="intuition-box">
+<p>多容器 Pod 的核心原则：只有当容器必须共享网络命名空间或存储卷，且生命周期高度耦合时，才放入同一 Pod。否则应该拆成独立 Pod + Service 通信。"能拆就拆"是 K8s 的黄金法则——不必要的多容器 Pod 会增加调度约束和故障耦合。</p>
+</div>
+    </section>
+
+    <section class="chapter" id="pod">
+      <div class="ch-head"><div class="num">04</div><div class="t"><h2>健康探针：Pod 的生命体征监控</h2><div class="sub">探针 （Probe）是 K8s 判断容器健康状态的核心机制</div></div></div>
+      <p><span class="term">探针</span>（Probe）是 K8s 判断容器健康状态的核心机制。K8s 不会猜测你的应用是否健康——它通过定期执行探针来主动检测，并根据结果决定重启容器、摘除流量或标记就绪。</p>
+
+<h3>4.1 三种探针对比</h3>
+<table>
+<tr><th>探针类型</th><th>检测目标</th><th>失败动作</th><th>典型场景</th></tr>
+<tr><td><strong>StartupProbe</strong></td><td>应用是否启动完成</td><td>未通过前禁用其他探针</td><td>Java 应用启动慢（30s-120s）</td></tr>
+<tr><td><strong>LivenessProbe</strong></td><td>应用是否存活</td><td>重启容器（kill + restart）</td><td>应用死锁、内存泄漏导致无响应</td></tr>
+<tr><td><strong>ReadinessProbe</strong></td><td>应用是否可接收流量</td><td>从 Service Endpoints 摘除</td><td>缓存预热、依赖服务未就绪</td></tr>
+</table>
+
+<h3>4.2 探针执行流程</h3>
+<div class="flow">
+  <div class="flow-title">探针生命周期与执行流程</div>
+  <div class="flow-node accent"><div class="nlabel">Pod 启动</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">StartupProbe 开始检测</div><div class="nsub">(每 1s 检测一次, 最多失败 30 次 = 等待 30s)</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">30s 内通过 → 启用 Liveness + Readiness</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">30s 未通过 → 杀死容器, 按 restartPolicy 重启</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">LivenessProbe 持续检测 (每 10s)</div><div class="nsub">ReadinessProbe 持续检测 (每 5s)</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Liveness 失败 Readiness 失败</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">重启容器 → 从 Service 摘除</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">不再接收流量</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">继续检测直到恢复</div></div>
+</div>
+
+<h3>4.3 探针检测方式</h3>
+<table>
+<tr><th>检测方式</th><th>原理</th><th>适用场景</th><th>开销</th></tr>
+<tr><td><strong>HTTP GET</strong></td><td>对指定端口和路径发 HTTP 请求，200-399 为成功</td><td>Web 应用（<code>/healthz</code>）</td><td>中</td></tr>
+<tr><td><strong>TCP Socket</strong></td><td>尝试建立 TCP 连接，连上即为成功</td><td>数据库、消息队列</td><td>低</td></tr>
+<tr><td><strong>Exec</strong></td><td>在容器内执行命令，退出码 0 为成功</td><td>自定义检测逻辑</td><td>高</td></tr>
+<tr><td><strong>gRPC</strong></td><td>执行 gRPC Health Check（K8s v1.27+）</td><td>gRPC 微服务</td><td>中</td></tr>
+</table>
+
+<h3>4.4 探针参数调优</h3>
+<table>
+<tr><th>参数</th><th>含义</th><th>推荐值</th><th>调优要点</th></tr>
+<tr><td><code>initialDelaySeconds</code></td><td>容器启动后多久开始首次探测</td><td>StartupProbe: 0 / Liveness: 与 Startup 互补</td><td>有 StartupProbe 时 Liveness 不需要 initialDelay</td></tr>
+<tr><td><code>periodSeconds</code></td><td>探测间隔</td><td>Liveness: 10s / Readiness: 5s</td><td>Readiness 更频繁→更快摘除故障节点</td></tr>
+<tr><td><code>timeoutSeconds</code></td><td>探测超时</td><td>1-3s</td><td>太长会延迟故障检测</td></tr>
+<tr><td><code>failureThreshold</code></td><td>连续失败几次才触发动作</td><td>Liveness: 3 / Readiness: 2</td><td>太低→误重启 / 太高→延迟恢复</td></tr>
+<tr><td><code>successThreshold</code></td><td>连续成功几次才恢复</td><td>Readiness: 1-2</td><td>设为 2 可避免"抖动恢复"立即接入流量</td></tr>
+</table>
+
+<div class="intuition-box">
+<p>三种探针的协作逻辑：StartupProbe 负责"等应用启动"（慢启动保护），LivenessProbe 负责"应用挂了就重启"（存活检测），ReadinessProbe 负责"没准备好就不给流量"（就绪检测）。StartupProbe 是前两者的"守门员"——在它通过之前，Liveness 和 Readiness 不会被触发，避免慢启动应用被误杀。</p>
+</div>
+    </section>
+
+    <section class="chapter" id="requests-limits">
+      <div class="ch-head"><div class="num">05</div><div class="t"><h2>资源控制：requests 与 limits 的生产博弈</h2><div class="sub">资源控制是 Pod 配置中最容易出问题的部分</div></div></div>
+      <p>资源控制是 Pod 配置中最容易出问题的部分。<code>requests</code> 决定调度器把 Pod 放到哪个节点，<code>limits</code> 决定运行时能消耗多少资源。两者设置不当会导致节点过载、Pod 被驱逐或 OOMKill。</p>
+
+<h3>5.1 requests vs limits</h3>
+<table>
+<tr><th>维度</th><th>requests（请求）</th><th>limits（上限）</th></tr>
+<tr><td><strong>作用时机</strong></td><td>调度时（Scheduler 选择节点）</td><td>运行时（kubelet 强制执行）</td></tr>
+<tr><td><strong>CPU 行为</strong></td><td>保证最低分配量</td><td>超过时被 throttle（降速）</td></tr>
+<tr><td><strong>内存行为</strong></td><td>保证最低分配量</td><td>超过时被 OOMKill（杀死）</td></tr>
+<tr><td><strong>未设置时</strong></td><td>默认 0（可被调度到任何节点）</td><td>默认无上限（可消耗全部资源）</td></tr>
+<tr><td><strong>生产建议</strong></td><td>✅ 必须设置</td><td>✅ 必须设置</td></tr>
+</table>
+
+<h3>5.2 资源单位</h3>
+<table>
+<tr><th>资源类型</th><th>单位</th><th>示例</th><th>说明</th></tr>
+<tr><td><strong>CPU</strong></td><td>核（core）或毫核（millicore）</td><td><code>500m</code> = 0.5 核</td><td>1 核 = 1000m，可调度精度 1m</td></tr>
+<tr><td><strong>内存</strong></td><td>字节（Mi / Gi）</td><td><code>512Mi</code> ≈ 536MB</td><td>Mi = 2^20, Gi = 2^30（二进制单位）</td></tr>
+<tr><td><strong>GPU</strong></td><td>个（整数）</td><td><code>nvidia.com/gpu: 1</code></td><td>不可分割，必须整数</td></tr>
+<tr><td><strong>临时存储</strong></td><td>字节（Mi / Gi）</td><td><code>ephemeral-storage: 2Gi</code></td><td>本地磁盘空间</td></tr>
+</table>
+
+<h3>5.3 生产资源设置策略</h3>
+
+<div class="flow">
+  <div class="flow-title">资源分配与调度决策流程</div>
+  <div class="flow-node accent"><div class="nlabel">Pod 声明：requests.cpu=500m, limits.cpu=1000m</div><div class="nsub">requests.memory=512Mi, limits.memory=1Gi</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Scheduler 过滤阶段：</div><div class="nsub">节点 A: 可分配 CPU=2000m, Memory=4Gi → ✅ 满足 · 节点 B: 可分配 CPU=300m, Memory=2Gi → ❌ CPU 不足 · 节点 C: 可分配 CPU=1500m, Memory=300Mi → ❌ 内存不足</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Scheduler 评分阶段：</div><div class="nsub">节点 A: 剩余资源丰富 → 评分高 → 选中</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">运行时监控：</div><div class="nsub">容器实际使用 CPU: 800m → 在 requests(500m) 和 limits(1000m) 之间</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">CPU 被 throttle 到 limits</div><div class="nsub">容器实际使用内存: 1.2Gi → 超过 limits(1Gi)</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">容器被 OOMKill！</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">按 restartPolicy 重启</div></div>
+</div>
+
+<div class="highlight">
+<strong>生产案例：</strong>某 AI 推理服务集群（200 个 GPU Pod），初期将 limits 设为 requests 的 4 倍（requests=4Gi, limits=16Gi），导致单个 Pod 突发内存占用挤占同节点其他 Pod 的资源，引发连锁 OOMKill。调整策略后：requests 设为 P95 实际用量（通过 <code>kubectl top</code> + Prometheus 历史数据计算），limits 设为 requests 的 1.5 倍，连锁 OOMKill 事件从每月 8 次降至 0。
+</div>
+
+<table>
+<tr><th>QoS 等级</th><th>条件</th><th>驱逐优先级</th><th>适用场景</th></tr>
+<tr><td><strong>Guaranteed</strong></td><td>requests == limits（所有容器、所有资源）</td><td>最后驱逐</td><td>核心服务（数据库、API 网关）</td></tr>
+<tr><td><strong>Burstable</strong></td><td>至少一个资源 requests < limits</td><td>中间优先级</td><td>大部分业务应用</td></tr>
+<tr><td><strong>BestEffort</strong></td><td>未设置 requests 和 limits</td><td>最先驱逐</td><td>测试任务、批处理作业</td></tr>
+</table>
+
+<div class="intuition-box">
+<p>requests 是"保底承诺"（K8s 保证给你这么多资源），limits 是"天花板"（不能超过）。设置 requests 的依据是实际用量而非拍脑袋——用 Prometheus 采集 7 天以上的资源使用数据，取 P95 作为 requests，取 P99 的 1.2 倍作为 limits。不要从文档中复制资源限制——每个应用的资源画像都不同。</p>
+</div>
+    </section>
+
+    <section class="chapter" id="pod-6">
+      <div class="ch-head"><div class="num">06</div><div class="t"><h2>生产最佳实践与 Pod 管理</h2><div class="sub">在生产环境中，几乎不应该直接创建 Pod（ kind: Pod ）</div></div></div>
+      <p>在生产环境中，几乎不应该直接创建 Pod（<code>kind: Pod</code>）。应该通过更高层的控制器来管理 Pod 的生命周期。</p>
+
+<h3>6.1 Pod 控制器层级</h3>
+<table>
+<tr><th>控制器</th><th>功能</th><th>典型场景</th><th>自愈能力</th></tr>
+<tr><td><strong>Deployment</strong></td><td>管理 ReplicaSet，支持滚动更新和回滚</td><td>无状态 Web 服务（90%+ 场景）</td><td>✅ 自动补全副本数</td></tr>
+<tr><td><strong>StatefulSet</strong></td><td>有序部署、稳定网络标识、持久化存储</td><td>数据库（MySQL/PostgreSQL）、消息队列</td><td>✅ 按序重建</td></tr>
+<tr><td><strong>DaemonSet</strong></td><td>每个节点运行一个 Pod</td><td>日志采集、监控 Agent、CNI 插件</td><td>✅ 节点加入时自动部署</td></tr>
+<tr><td><strong>Job / CronJob</strong></td><td>一次性或定时任务</td><td>数据迁移、定时报表、ML 训练</td><td>✅ 失败重试</td></tr>
+</table>
+
+<h3>6.2 Deployment 管理 Pod 示例</h3>
+<pre><code>apiVersion: apps/v1
+kind: Deployment
+metadata: { name: web-app }
+spec:
+  replicas: 3                # 始终保持 3 个 Pod
+  strategy: { type: RollingUpdate, rollingUpdate: { maxSurge: 1, maxUnavailable: 0 } }
+  selector: { matchLabels: { app: web } }
+  template:
+    metadata: { labels: { app: web } }
+    spec:
+      containers: [ { name: web, image: web:v2.1.0 } ]  # 固定版本标签</code></pre>
+
+<h3>6.3 生产检查清单</h3>
+
+<div class="practice-grid">
+<div class="do">
+<ul>
+<li><strong>通过 Deployment 管理 Pod：</strong>不要直接创建裸 Pod</li>
+<li><strong>使用 Service 暴露服务：</strong>提供稳定的 DNS 和 IP</li>
+<li><strong>设置三种探针：</strong>Startup + Liveness + Readiness</li>
+<li><strong>声明 requests 和 limits：</strong>基于监控数据设置</li>
+<li><strong>镜像使用固定版本标签：</strong>避免 <code>:latest</code></li>
+<li><strong>设置 PodDisruptionBudget：</strong>保护最小可用副本数</li>
+<li><strong>使用 <code>imagePullPolicy: IfNotPresent</code>：</strong>避免每次拉取</li>
+<li><strong>Native Sidecar：</strong>K8s v1.29+ 优先使用原生边车</li>
+</ul>
+</div>
+<div class="dont">
+<ul>
+<li><strong>不要直接创建裸 Pod：</strong>无法自愈，节点故障即丢失</li>
+<li><strong>不要依赖 Pod IP：</strong>重建后 IP 变化</li>
+<li><strong>不要跳过 Readiness 探针：</strong>未就绪就接流量会 500</li>
+<li><strong>不要不设 limits：</strong>可能导致节点资源耗尽</li>
+<li><strong>不要 limits 设太大：</strong>浪费集群资源，影响调度</li>
+<li><strong>不要在 Pod 里存状态：</strong>Pod 是临时的，用 PVC 或外部存储</li>
+<li><strong>不要用 <code>:latest</code> 标签：</strong>无法确定实际运行的版本</li>
+<li><strong>不要忽略 PDB：</strong>集群维护时可能全部 Pod 同时下线</li>
+</ul>
+</div>
+</div>
+
+<h3>6.4 故障排查速查表</h3>
+<table>
+<tr><th>现象</th><th>可能原因</th><th>排查命令</th><th>解决方案</th></tr>
+<tr><td><strong>Pod 处于 Pending</strong></td><td>资源不足 / PVC 未绑定</td><td><code>kubectl describe pod</code></td><td>扩容节点或调整 requests</td></tr>
+<tr><td><strong>CrashLoopBackOff</strong></td><td>应用启动失败 / Liveness 探针配置错误</td><td><code>kubectl logs --previous</code></td><td>检查启动命令和探针参数</td></tr>
+<tr><td><strong>OOMKilled</strong></td><td>内存使用超过 limits</td><td><code>kubectl describe pod</code> (Last State)</td><td>增大 limits 或优化内存使用</td></tr>
+<tr><td><strong>ImagePullBackOff</strong></td><td>镜像不存在 / 认证失败</td><td><code>kubectl describe pod</code></td><td>检查镜像名称和 imagePullSecrets</td></tr>
+<tr><td><strong>服务间歇性 500</strong></td><td>Readiness 探针未配置 / Pod 重启中</td><td><code>kubectl get endpoints</code></td><td>添加 Readiness 探针</td></tr>
+</table>
+
+<div class="intuition-box">
+<p>生产环境 Pod 管理的黄金三角：Deployment（管理副本和更新）+ Service（稳定访问入口）+ 探针（健康保障）。三者缺一不可——没有 Deployment 则无法自愈，没有 Service 则无法稳定访问，没有探针则无法感知故障。</p>
+</div>
+    </section>
+
+    <section class="chapter" id="q-a">
+      <div class="ch-head"><div class="num">07</div><div class="t"><h2>Q&amp;A</h2><div class="sub">S08 · Kubernetes Pod 核心解析 · AI Knowledge Base</div></div></div>
+      <details class="qa">
+<summary>为什么 K8s 选择 Pod 而不是直接调度容器？</summary>
+<div class="a">Pod 提供了容器之上的"共享语义"抽象。多个容器放入同一个 Pod 意味着它们共享网络命名空间（同一 IP、localhost 通信）和存储卷（共享文件），这种紧密耦合的关系无法在独立容器之间实现。如果 K8s 直接调度容器，就需要在容器级别管理网络/存储共享关系，复杂度会指数级增长。Pod 作为"容器的运行外壳"，将这些共享关系封装为一个统一的调度单元——调度器只需关心"把这组紧密耦合的容器放到哪个节点"，而非"这 N 个容器之间怎么共享网络"。</div>
+</details>
+
+<details class="qa">
+<summary>什么时候应该用多容器 Pod，什么时候应该拆成独立 Pod？</summary>
+<div class="a">判断标准有三个：(1) 是否必须共享网络命名空间？如 Service Mesh 的 Envoy Sidecar 需要拦截主容器的所有流量，必须在同一网络命名空间内；(2) 是否必须共享存储卷？如日志采集 Sidecar 需要读取主容器写入的日志文件；(3) 生命周期是否高度耦合？即两者必须同时启动、同时停止。如果以上三个条件都不满足，就应该拆成独立 Pod 通过 Service 通信。典型反模式：把 Web 应用和数据库放进同一个 Pod——它们的生命周期不同（数据库需要持久化，Web 可以无状态扩缩），拆开后各自管理更灵活。</div>
+</details>
+
+<details class="qa">
+<summary>LivenessProbe 和 ReadinessProbe 能指向同一个端点吗？</summary>
+<div class="a">技术上可以，但生产环境强烈不推荐。因为两者的失败动作不同：Liveness 失败→重启容器，Readiness 失败→从 Service 摘除。如果指向同一端点，当应用暂时过载（响应变慢但未死）时，Readiness 会将其摘除（正确），但 Liveness 也可能触发重启（错误——应用只是慢，不是死）。推荐做法：Liveness 探针指向轻量的 <code>/healthz</code>（只检查进程存活），Readiness 探针指向 <code>/ready</code>（检查依赖服务、缓存预热等完整就绪条件）。这样"慢但不死"的应用只会被摘除流量，不会被误重启。</div>
+</details>
+
+<details class="qa">
+<summary>CPU limits 被 throttle 和内存 limits 被 OOMKill，哪个影响更大？</summary>
+<div class="a">内存 OOMKill 影响远大于 CPU throttle。CPU throttle 只是降速——容器的 CPU 使用被限制在 limits 值以内，响应变慢但不会中断，用户感受到的是延迟增加。内存 OOMKill 是立即杀死容器——进程被内核直接终止，所有内存中的数据丢失，连接断开，kubelet 按 restartPolicy 重启容器。重启期间服务不可用，且重启后的容器需要重新初始化（加载模型、预热缓存），可能需要数分钟。生产建议：CPU limits 可以适当放宽（避免不必要的 throttle），内存 limits 必须基于实际用量精确设置（避免 OOMKill）。</div>
+</details>
+
+<details class="qa">
+<summary>Native Sidecar 与传统 Sidecar 的核心区别是什么？什么时候应该迁移？</summary>
+<div class="a">核心区别在生命周期管理：传统 Sidecar 放在 <code>spec.containers</code> 中，与主容器并行启动/关闭，无法保证顺序；Native Sidecar 放在 <code>spec.initContainers</code> 中并设置 <code>restartPolicy: Always</code>，K8s 保证它在主容器之前启动、之后关闭。迁移时机：(1) 如果你遇到过 Sidecar 启动竞态（主容器在 Sidecar 就绪前就开始发请求导致错误），应立即迁移；(2) 如果在使用 Job 且 Sidecar 导致 Job 无法结束，必须迁移；(3) 如果使用 Istio/Linkerd 的 Envoy Sidecar 且集群版本 >= 1.29，建议迁移以获得更好的启动/关闭顺序。Native Sidecar 在 v1.33（2025 年 4 月）达到 GA 状态。</div>
+</details>
+
+<details class="qa">
+<summary>如何正确设置 Pod 的资源 requests 和 limits？</summary>
+<div class="a">不要拍脑袋，用数据说话。标准流程：(1) 先不设 limits，只设合理的 requests，部署到预发环境运行 7 天以上；(2) 用 Prometheus + Grafana 采集 CPU/内存使用数据；(3) 取 P95 实际用量作为 requests（覆盖 95% 的正常场景）；(4) 取 P99 用量的 1.2 倍作为 limits（为突发留余量但不过度浪费）；(5) 对核心服务（数据库、网关），设置 requests == limits 以获得 Guaranteed QoS，避免被驱逐。持续优化：每季度回顾一次资源使用数据，随业务增长调整。使用 VPA（Vertical Pod Autoscaler）可以自动建议合适的 requests 值。</div>
+</details>
+
+<details class="qa">
+<summary>Pod 一直处于 Pending 状态，如何排查？</summary>
+<div class="a">Pending 表示 Pod 已被 API Server 接受但未被调度到任何节点。排查步骤：(1) <code>kubectl describe pod &lt;name&gt;</code> 查看 Events 部分，通常会明确说明调度失败原因；(2) 常见原因包括：集群资源不足（CPU/内存 requests 总和超过可分配量）、PVC 未绑定（Pod 依赖的存储卷未就绪）、节点选择器不匹配（nodeSelector/nodeAffinity 找不到符合条件的节点）、污点排斥（节点有 taint 但 Pod 没有对应的 toleration）；(3) 如果是资源不足，考虑扩容节点、减小 requests 值或清理低优先级 Pod；(4) 如果是调度约束过严，考虑放宽 affinity 规则或使用 <code>preferredDuringScheduling</code> 替代 <code>requiredDuringScheduling</code>。</div>
+</details>
+
+
+<div class="footer">
+<p>S08 · Kubernetes Pod 核心解析 · AI Knowledge Base</p>
+</div>
+    </section>
+
+    <footer>
+      <div class="made">TECH NOTES · AI Infra · 整理自 AI Knowledge Hub</div>
+    </footer>
+  </main>
+</div>
+
+<script>
+(function(){var bar=document.getElementById('progress');function u(){var h=document.documentElement;bar.style.width=h.scrollTop/(h.scrollHeight-h.clientHeight)*100+'%';}window.addEventListener('scroll',u,{passive:true});u();})();
+(function(){var links=document.querySelectorAll('aside.toc nav a');var secs=Array.from(document.querySelectorAll('section.chapter'));if(!secs.length)return;function u(){var y=window.scrollY+100,cur=secs[0];for(var i=0;i<secs.length;i++){if(secs[i].offsetTop<=y)cur=secs[i];}var id=cur.id;links.forEach(function(a){a.classList.toggle('active',a.getAttribute('href')==='#'+id);});}window.addEventListener('scroll',u,{passive:true});u();})();
+</script>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Claude Code 架构深度解析 · AI 工程 — Tech Notes</title>
+<meta name="description" content="五层架构 · 核心循环 · 八种上下文注入 · 六种编排模式 · 设计哲学">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<link rel="stylesheet" href="../assets/kh-guide.css">
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav">
+
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="ai_engineering_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 10 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>H01 · AI 工程</h2>
+    <nav>
+      <ol>
+        <li><a href="#sec-1" class="active">Claude Code 到底是什么</a></li>
+        <li><a href="#sec-2">五层架构</a></li>
+        <li><a href="#sec-3">核心循环：收集 → 行动 → 验证</a></li>
+        <li><a href="#sec-4">多层状态系统</a></li>
+        <li><a href="#sec-5">八种上下文注入方法</a></li>
+        <li><a href="#sec-6">常见配置误区</a></li>
+        <li><a href="#sec-7">SubAgent 与 Worktree</a></li>
+        <li><a href="#sec-8">Task 工具与 Goal 机制</a></li>
+        <li><a href="#sec-9">上下文窗口与 Compaction</a></li>
+        <li><a href="#sec-10">Dynamic Workflows：编排代码化</a></li>
+        <li><a href="#sec-11">成本控制：提示缓存与按需加载</a></li>
+        <li><a href="#sec-12">设计哲学与演进线</a></li>
+        <li><a href="#sec-13">实践建议</a></li>
+        <li><a href="#sec-14">常见问题</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+    <header class="hero">
+      <div class="badge">H01 · AI 工程</div>
+      <h1>Claude Code 架构深度解析</h1>
+      <p class="sub">五层架构 · 核心循环 · 八种上下文注入 · 六种编排模式 · 设计哲学</p>
+      <div class="meta-row">
+        <span class="pill cyan">AI 工程</span>
+        <span class="pill green">阅读 ~10 min</span>
+        <span class="pill amber">14 章</span>
+      </div>
+    </header>
+
+    <section class="chapter" id="sec-1">
+      <div class="ch-head"><div class="num">01</div><div class="t"><h2>Claude Code 到底是什么</h2><div class="sub">Claude Code 不只是一个聊天框，而是一套围绕大模型构建的 开发执行系统</div></div></div>
+      <p>Claude Code 不只是一个聊天框，而是一套围绕大模型构建的<span class="term">开发执行系统</span>。Claude 模型负责理解需求、分析问题并决定下一步；外层运行框架负责工具调用、状态管理、权限控制与任务编排。</p>
+
+<div class="intuition-box">
+<p>关键不是"会不会生成代码"，而在于能否把"读、想、做、验"组织成一条完整流程。Agent 和 ChatBot 的区别在于：<strong>谁来构建上下文</strong>。ChatBot 靠人喂，Agent 自己搜、读、调，自己构建上下文。</p>
+</div>
+    </section>
+
+    <section class="chapter" id="sec-2">
+      <div class="ch-head"><div class="num">02</div><div class="t"><h2>五层架构</h2></div></div>
+      <table>
+<tr><th>层次</th><th>职责</th><th>核心组件</th></tr>
+<tr><td><strong>模型层</strong></td><td>判断与决策</td><td>Claude 模型、Thinking 模式、模型选择策略</td></tr>
+<tr><td><strong>工具层</strong></td><td>执行操作</td><td>Read/Edit/Write/Bash/Grep/Glob + MCP 工具</td></tr>
+<tr><td><strong>状态层</strong></td><td>保存背景与进度</td><td>CLAUDE.md、Auto memory、Session transcript、Task/Goal</td></tr>
+<tr><td><strong>控制层</strong></td><td>权限与纠偏</td><td>Hooks、Permission 规则、System Reminder</td></tr>
+<tr><td><strong>编排层</strong></td><td>拆分任务与并行协作</td><td>Subagents、Worktrees、Dynamic Workflows</td></tr>
+</table>
+    </section>
+
+    <section class="chapter" id="sec-3">
+      <div class="ch-head"><div class="num">03</div><div class="t"><h2>核心循环：收集 → 行动 → 验证</h2></div></div>
+      <pre><code><div class="node">收集上下文</code></pre>
+<span class="arrow">→</span>
+<div class="node">采取行动</div>
+<span class="arrow">→</span>
+<div class="node">验证结果</div>
+<span class="arrow">→</span>
+<span class="branch">继续迭代</span>
+</div>
+
+<table>
+<tr><th>阶段</th><th>Claude 负责什么</th><th>框架负责什么</th></tr>
+<tr><td>收集上下文</td><td>判断需要看什么信息、先后顺序</td><td>提供 Read/Grep/Glob/LSP/WebFetch 等工具</td></tr>
+<tr><td>采取行动</td><td>判断如何修改、运行什么、是否委派</td><td>提供 Edit/Write/Bash/Agent/Workflow 等执行接口</td></tr>
+<tr><td>验证结果</td><td>理解测试与日志结果，决定是否继续</td><td>提供测试执行、计划审批、goal evaluator、hooks</td></tr>
+</table>
+
+<div class="interview-box">
+Anthropic 反复强调：<strong>给 Claude 一个能运行的验证标准</strong>。如果没有测试、没有 build、没有 screenshot 对照、没有明确 acceptance criteria，Claude 唯一可依赖的就只剩"看起来像是做完了"，错误率自然会上升。高质量输出很大程度依赖一个可被读取的外部反馈闭环。
+</div>
+    </section>
+
+    <section class="chapter" id="sec-4">
+      <div class="ch-head"><div class="num">04</div><div class="t"><h2>多层状态系统</h2><div class="sub">Claude Code 看起来像是&quot;记住了&quot;项目，但这种效果不是来自模型的长期记忆，而是来自…</div></div></div>
+      <p>Claude Code 看起来像是"记住了"项目，但这种效果不是来自模型的长期记忆，而是来自几种显式机制的组合：</p>
+
+<table>
+<tr><th>机制</th><th>谁写</th><th>加载方式</th><th>压缩行为</th></tr>
+<tr><td><strong>CLAUDE.md</strong></td><td>用户/团队</td><td>每个 session 启动时加载</td><td>不丢失，压缩后重新读取</td></tr>
+<tr><td><strong>Auto memory</strong></td><td>Claude 自己</td><td>只加载 MEMORY.md 前 200 行或 25KB</td><td>详细主题文件按需读取</td></tr>
+<tr><td><strong>Session transcript</strong></td><td>系统</td><td>本地 JSONL 记录</td><td>支持 resume/fork/rewind</td></tr>
+<tr><td><strong>Task/Goal/Cron</strong></td><td>运行时</td><td>按需注入</td><td>跟踪未完成的任务状态</td></tr>
+<tr><td><strong>System Reminder</strong></td><td>Hooks 触发</td><td>事件粒度插入</td><td>压缩后可通过 hook 重新注入</td></tr>
+</table>
+
+<div class="interview-box">
+CLAUDE.md 和 auto memory 都是 <strong>context，不是 enforcement</strong>。如果某项要求必须 100% 执行，不应只写在 CLAUDE.md 里，而应使用 hook 或权限规则做强约束。这种"软规则"和"硬约束"分层，是 Claude Code 工程设计非常成熟的一面。
+</div>
+    </section>
+
+    <section class="chapter" id="sec-5">
+      <div class="ch-head"><div class="num">05</div><div class="t"><h2>八种上下文注入方法</h2><div class="sub">AI 的能力、问题和用法，本质都由上下文决定</div></div></div>
+      <p>AI 的能力、问题和用法，本质都由上下文决定。Claude Code 在常规对话外，提供了八种上下文注入方法，各有不同的生命周期和作用域。</p>
+
+<table>
+<tr><th>方法</th><th>核心作用</th><th>加载时机</th><th>上下文成本</th><th>控制力度</th></tr>
+<tr><td><strong>CLAUDE.md</strong></td><td>持久规则与项目背景（事实）</td><td>每 session 启动时</td><td>高，常驻</td><td>低，指导性</td></tr>
+<tr><td><strong>Rules</strong></td><td>特定路径的约束</td><td>碰到匹配路径时才加载</td><td>低到中</td><td>中，path-scoped</td></tr>
+<tr><td><strong>Skills</strong></td><td>按需知识与流程</td><td>描述常驻，正文按需</td><td>低到中</td><td>中</td></tr>
+<tr><td><strong>Subagents</strong></td><td>上下文隔离的专门工人</td><td>按需 spawn</td><td>主会话零成本</td><td>中到高</td></tr>
+<tr><td><strong>Hooks</strong></td><td>生命周期自动化与硬约束</td><td>事件触发时</td><td>默认零</td><td><strong>高，确定性</strong></td></tr>
+<tr><td><strong>Workflows</strong></td><td>大规模多代理编排</td><td>按需运行脚本</td><td>主会话低</td><td><strong>高，代码化</strong></td></tr>
+<tr><td><strong>Output Styles</strong></td><td>修改 Agent "人设"</td><td>注入 system prompt</td><td>高，不压缩</td><td>高，权重最高</td></tr>
+<tr><td><strong>System Prompt Append</strong></td><td>临时追加轻量指令</td><td>CLI 参数，仅当次</td><td>低</td><td>低，临时性</td></tr>
+</table>
+
+<h3>5.1 CLAUDE.md：项目说明书</h3>
+<p>分两种加载模式：</p>
+<ul>
+<li><strong>始终加载</strong>：根目录 CLAUDE.md + 本地个人偏好 CLAUDE.md，启动即加载，压缩后重新读取，全程在场</li>
+<li><strong>按需加载</strong>：子目录 CLAUDE.md（如 <code>app/api/CLAUDE.md</code>），只在 Claude 读取该目录时才加载，压缩后丢失</li>
+</ul>
+<p>官方建议给每个团队目录放自己的 CLAUDE.md，开发者用 <code>claudeMdExcludes</code> 跳过不相关团队的文件。</p>
+
+<h3>5.2 Rules：路径限定的约束</h3>
+<p>Rules 是 <code>.claude/rules/</code> 目录下的 markdown 文件，可以加路径限定（YAML frontmatter 中的 <code>paths:</code>）。加了路径限定的 Rule 只在 Claude 碰到匹配路径时才加载，不浪费 token。</p>
+<p><strong>何时用 Rule：</strong>当一条约束是跨目录的（如所有 migration 文件只能追加），但又不需要全局生效时，path-scoped rule 是最佳选择。</p>
+
+<h3>5.3 Skills：按需流程包</h3>
+<p>Skill 不是提示词，本质是把一堆文件按约定结构打包。启动时只加载名字和描述（几十个 token），完整内容等到被调用时才进上下文。用完之后如果上下文满了，最旧的 skill 会被踢掉。</p>
+<p><strong>Skill vs CLAUDE.md：</strong>CLAUDE.md 放的是 Claude 需要随时知道的<strong>事实</strong>（构建命令、目录结构），Skill 放的是需要按步骤执行的<strong>流程</strong>（部署清单、review checklist）。</p>
+
+<h3>5.4 Hooks：确定性执行</h3>
+<p>Hooks 完全绕过了上下文窗口，是由 harness 在外部执行的代码。八种 hook 事件覆盖从启动到完成的全流程：</p>
+<table>
+<tr><th>事件</th><th>触发时机</th><th>典型用途</th></tr>
+<tr><td>PreToolUse</td><td>工具执行前</td><td>拦截危险命令、验证文件路径，exit code 2 直接阻止</td></tr>
+<tr><td>PostToolUse</td><td>工具执行后</td><td>写文件后自动跑 Prettier，改代码后自动跑 linter</td></tr>
+<tr><td>PermissionRequest</td><td>权限对话框弹出前</td><td>自动批准重复的安全操作</td></tr>
+<tr><td>SessionStart</td><td>会话启动时</td><td>自动注入 git status、TODO 列表</td></tr>
+<tr><td>PreCompact</td><td>上下文压缩前</td><td>把完整对话备份到文件</td></tr>
+<tr><td>Stop</td><td>回复完成时</td><td>检查任务是否做完，返回 continue 让 Claude 继续</td></tr>
+<tr><td>SubagentStop</td><td>Subagent 完成时</td><td>针对子代理的完成检查</td></tr>
+<tr><td>UserPromptSubmit</td><td>提交 prompt 时</td><td>自动追加当前 sprint 信息</td></tr>
+</table>
+
+<h3>5.5 Output Styles：Agent 人设</h3>
+<p>位于 <code>.claude/output-styles/</code>，注入到 system prompt 里，权重最高但影响面也最大。<strong>注意：自定义 output style 会替换掉默认的 system prompt</strong>，除非在 frontmatter 里加 <code>keep-coding-instructions: true</code>。</p>
+
+<h3>5.6 System Prompt Append：轻量追加</h3>
+<p>通过 CLI 参数 <code>--append-system-prompt</code> 临时追加内容，不替换任何东西，只对当次调用生效。适合加编码规范、输出格式、语气偏好等轻量指令。</p>
+
+<div class="warn-box">
+<strong>递减效应：</strong>追加的指令越多，Claude 对每条指令的遵循率越低。特别是指令之间有冲突的时候，遵循率下降得更快。
+</div>
+    </section>
+
+    <section class="chapter" id="sec-6">
+      <div class="ch-head"><div class="num">06</div><div class="t"><h2>常见配置误区</h2></div></div>
+      <table>
+<tr><th>错误做法</th><th>为什么不对</th><th>正确做法</th></tr>
+<tr><td>"每次 X，必须做 Y"写在 CLAUDE.md</td><td>模型选择做 vs 自动执行是两码事</td><td>用 PostToolUse hook</td></tr>
+<tr><td>"绝对不要做 Z"写在 CLAUDE.md</td><td>提示词防护在长会话/压力下可能失效</td><td>用 PreToolUse hook，exit code 2 硬护栏</td></tr>
+<tr><td>30 行流程写在 CLAUDE.md</td><td>流程不需要全程占 token</td><td>放 Skill，CLAUDE.md 只放事实</td></tr>
+<tr><td>Rule 没加路径限定</td><td>跟写在 CLAUDE.md 一样全程加载</td><td>加 paths: 限定作用域</td></tr>
+<tr><td>个人偏好写在项目级文件</td><td>污染团队共享配置</td><td>放用户级本地文件</td></tr>
+</table>
+
+<div class="interview-box">
+<strong>核心原则：</strong>事实放 CLAUDE.md，流程放 Skill，护栏放 Hook，隔离任务给 Subagent。不同的指令，要有不同的生命周期——需要的时候出现，不需要的时候消失。
+</div>
+    </section>
+
+    <section class="chapter" id="sec-7">
+      <div class="ch-head"><div class="num">07</div><div class="t"><h2>SubAgent 与 Worktree</h2><div class="sub">SubAgent 在自己独立的上下文窗口里跑，主会话看不到它的中间过程</div></div></div>
+      <h3>7.1 SubAgent：上下文隔离</h3>
+<p>SubAgent 在自己独立的上下文窗口里跑，主会话看不到它的中间过程。一个 subagent 做了 50 轮搜索、读了 200 个文件，主会话的上下文窗口里只多了一段摘要。</p>
+<p><strong>Skill vs SubAgent 怎么选：</strong>需要看到每一步的中间结果？用 Skill。不需要，让它自己跑完给结论？用 SubAgent。</p>
+<p>SubAgent 可以嵌套，最深五层。这是大规模编排的基础。</p>
+
+<h3>7.2 Worktree：文件隔离</h3>
+<p>当多个会话需要并行修改同一仓库时，最危险的不是"互相抢上下文"，而是"在同一个工作目录里改出冲突或覆盖"。Worktree 让每个隔离会话在独立目录和分支中推进。</p>
+
+<div class="interview-box">
+<strong>组合使用：</strong>subagent 本身也支持 <code>isolation: worktree</code>。子代理既可以在独立上下文里思考，也可以在独立 worktree 里动手。这对大规模迁移、自动 review fix、并发实现不同模块非常有帮助。
+</div>
+    </section>
+
+    <section class="chapter" id="sec-8">
+      <div class="ch-head"><div class="num">08</div><div class="t"><h2>Task 工具与 Goal 机制</h2></div></div>
+      <table>
+<tr><th>维度</th><th>Task 工具</th><th>/goal</th></tr>
+<tr><td>解决什么</td><td>把复杂任务拆成可跟踪的子任务</td><td>给整个任务设定一个明确的结束条件</td></tr>
+<tr><td>关注重点</td><td>还有哪些步骤没做完</td><td>什么时候才算真正完成</td></tr>
+<tr><td>工作方式</td><td>结构化任务状态记录（TaskCreate/Update/Get/List）</td><td>每轮结束后由独立 evaluator 模型检查</td></tr>
+<tr><td>适合场景</td><td>多步骤实现、多人要求合并、长链路修改</td><td>有明确验收条件的任务（tests pass、lint clean）</td></tr>
+</table>
+
+<div class="interview-box">
+<strong>工程亮点：</strong>任务是否完成的判断不完全留给正在执行的同一个模型，而是引入独立 evaluator。它基于 transcript 判断，不会自己跑命令，只检查 Claude 是否已在对话中充分展示了目标达成的证据。这鼓励用户把完成条件写成可验证的形式。
+</div>
+    </section>
+
+    <section class="chapter" id="sec-9">
+      <div class="ch-head"><div class="num">09</div><div class="t"><h2>上下文窗口与 Compaction</h2><div class="sub">Claude Code 面临的首要限制往往不是&quot;模型不够聪明&quot;，而是&quot;上下文窗口会被迅速填满…</div></div></div>
+      <p>Claude Code 面临的首要限制往往不是"模型不够聪明"，而是"上下文窗口会被迅速填满"。上下文中同时存在：system prompt、auto memory、环境信息、MCP 工具名、skills 描述、CLAUDE.md、用户消息、Claude 回复、工具调用结果、hook 附加信息等。</p>
+
+<h3>Compaction 机制</h3>
+<p>Compaction 不是"无损压缩"，而是成本控制与可持续推进机制。重要请求和关键代码片段优先保留，但早期对话里的细粒度要求——尤其是只在聊天里出现过、没有外置到 CLAUDE.md 的规则——很可能被冲淡甚至丢失。</p>
+
+<div class="warn-box">
+<strong>重要工程启示：</strong>如果重要约束只存在于对话里，而没有外置为 CLAUDE.md、hook、task list 或 goal 条件，那么随着会话变长，它们被压缩、弱化甚至遗失，是一件"正常会发生的事"。
+</div>
+
+<h3>System Reminder：中途定点纠偏</h3>
+<p>当 hook 返回 <code>additionalContext</code> 时，Claude Code 会把这段文本包装成 system reminder，插入到触发点附近。它不会在 UI 里显示，但 Claude 会在下一次模型请求时读到它。插入位置与生命周期事件有关：</p>
+<ul>
+<li><strong>SessionStart / Setup / SubagentStart：</strong>插在会话开头</li>
+<li><strong>UserPromptSubmit：</strong>插在用户 prompt 附近</li>
+<li><strong>PreToolUse / PostToolUse：</strong>插在工具结果附近</li>
+<li><strong>Stop / SubagentStop：</strong>插在回合末尾</li>
+</ul>
+    </section>
+
+    <section class="chapter" id="sec-10">
+      <div class="ch-head"><div class="num">10</div><div class="t"><h2>Dynamic Workflows：编排代码化</h2><div class="sub">当任务复杂到需要数十到数百个 agent 时，Anthropic 不再依赖 Claude 在…</div></div></div>
+      <p>当任务复杂到需要数十到数百个 agent 时，Anthropic 不再依赖 Claude 在主对话里一轮一轮地决定"下一步再开哪个 agent"，而是把 orchestration 本身<strong>代码化</strong>为 JavaScript 编排脚本。</p>
+
+<h3>解决三个老问题</h3>
+<table>
+<tr><th>问题</th><th>表现</th><th>Workflow 如何解决</th></tr>
+<tr><td>偷懒（Agentic laziness）</td><td>安全审查要查 50 项，查到第 35 项就宣布完成</td><td>独立上下文窗口隔离，每个子任务完整执行</td></tr>
+<tr><td>自我偏好（Self-preferential bias）</td><td>让 Claude 检查自己写的代码，倾向于觉得没问题</td><td>对抗验证：执行 agent + 验证 agent 分离</td></tr>
+<tr><td>目标漂移（Goal drift）</td><td>长会话中每次压缩都是有损的，边缘需求容易丢失</td><td>编排逻辑代码化，不依赖对话记忆</td></tr>
+</table>
+
+<h3>六种编排模式</h3>
+<table>
+<tr><th>模式</th><th>说明</th><th>适用场景</th></tr>
+<tr><td><strong>Classify-and-act</strong></td><td>先用 classifier 判断任务类型，再分发给专用 agent</td><td>任务类型明确的分类处理</td></tr>
+<tr><td><strong>Fan-out-and-synthesize</strong></td><td>拆成 N 个子任务，每个跑 subagent，最后汇总</td><td>可并行的独立子任务</td></tr>
+<tr><td><strong>Adversarial verification</strong></td><td>每个执行 agent 配一个验证 agent，对抗性检查</td><td>高可靠性要求的输出</td></tr>
+<tr><td><strong>Tournament</strong></td><td>N 个 agent 用不同方法做同一件事，逐对比较选最优</td><td>需要多方案对比</td></tr>
+<tr><td><strong>Generate-and-filter</strong></td><td>先大量生成，再过滤去重</td><td>创意生成、候选方案</td></tr>
+<tr><td><strong>Loop until done</strong></td><td>不设固定轮数，循环直到满足终止条件</td><td>不确定迭代次数的任务</td></tr>
+</table>
+    </section>
+
+    <section class="chapter" id="sec-11">
+      <div class="ch-head"><div class="num">11</div><div class="t"><h2>成本控制：提示缓存与按需加载</h2><div class="sub">Claude Code 很在意&quot;上下文成本&quot;</div></div></div>
+      <p>Claude Code 很在意"上下文成本"。每一轮都在重新发送大量上下文，并依赖 prompt caching 来降低成本。</p>
+
+<table>
+<tr><th>机制</th><th>作用</th><th>效果</th></tr>
+<tr><td><strong>Prompt caching</strong></td><td>缓存 system prompt 等稳定前缀</td><td>避免重复计算，命中率 85-92%</td></tr>
+<tr><td><strong>按需加载</strong></td><td>Skills/Rules/子目录 CLAUDE.md 只在需要时加载</td><td>减少上下文占用</td></tr>
+<tr><td><strong>SubAgent 隔离</strong></td><td>副任务在独立窗口跑，主会话零成本</td><td>避免主会话被中间结果淹没</td></tr>
+<tr><td><strong>Compaction</strong></td><td>对话过长时自动摘要</td><td>可持续推进，但早期细节可能丢失</td></tr>
+<tr><td><strong>Workflow 脚本化</strong></td><td>编排逻辑在脚本变量中，不回主会话</td><td>大规模任务的成本控制</td></tr>
+</table>
+    </section>
+
+    <section class="chapter" id="sec-12">
+      <div class="ch-head"><div class="num">12</div><div class="t"><h2>设计哲学与演进线</h2><div class="sub">单会话 Agentic Loop → SubAgent 上下文隔离 → Worktree 文…</div></div></div>
+      <h3>架构演进线</h3>
+<pre><code><div class="node">单会话 Agentic Loop</code></pre>
+<span class="arrow">→</span>
+<div class="node">SubAgent 上下文隔离</div>
+<span class="arrow">→</span>
+<div class="node">Worktree 文件隔离</div>
+<span class="arrow">→</span>
+<div class="node">Workflow 编排代码化</div>
+</div>
+
+<p>它不是单纯在"加功能"，而是在逐步把代理系统从一段聊天，升级成一个有运行时、有状态层、有编排层的工程系统。</p>
+
+<h3>四条设计心法</h3>
+<ol>
+<li><strong>模块化比文件数量重要</strong>：单文件也能有清晰的架构边界</li>
+<li><strong>安全是设计出来的</strong>：权限分层、沙箱隔离、结果过滤三层缺一不可</li>
+<li><strong>上下文管理是核心竞争力</strong>：精心管理每轮对话的上下文决定了 Agent 的质量上限</li>
+<li><strong>简单优先</strong>：不过度工程化，保持代码可读性和可维护性</li>
+</ol>
+    </section>
+
+    <section class="chapter" id="sec-13">
+      <div class="ch-head"><div class="num">13</div><div class="t"><h2>实践建议</h2></div></div>
+      <div class="practice-grid">
+<div class="do">
+<ul>
+<li>持久规则外置到 CLAUDE.md，不要只靠对话记忆</li>
+<li>软规则用 CLAUDE.md，硬约束用 Hook/Permission</li>
+<li>给 Claude 能运行的验证标准（tests/lint/screenshot）</li>
+<li>调查性副任务交给 SubAgent，避免主会话被淹没</li>
+<li>复杂流程写成 Workflow script，不要硬扛在对话里</li>
+<li>事实放 CLAUDE.md，流程放 Skill，护栏放 Hook</li>
+<li>无关任务之间及时 /clear</li>
+<li>用 path-scoped Rules 避免全局 token 浪费</li>
+</ul>
+</div>
+<div class="dont">
+<ul>
+<li>不要把所有说明都塞进 CLAUDE.md</li>
+<li>不要只在 CLAUDE.md 里写"永远不要做 X"</li>
+<li>不要让 SubAgent 继承主 Agent 的全部权限</li>
+<li>不要忽略中间件顺序和 Hook 事件生命周期</li>
+<li>不要忽视 Compaction 的有损性——重要约束必须外置</li>
+<li>不要一次性加载所有技能，浪费上下文窗口</li>
+<li>不要忽略追加指令的递减效应</li>
+<li>不要让编排逻辑继续留在对话里——该代码化就代码化</li>
+</ul>
+</div>
+</div>
+    </section>
+
+    <section class="chapter" id="sec-14">
+      <div class="ch-head"><div class="num">14</div><div class="t"><h2>常见问题</h2><div class="sub">📖 知识来源（三篇合并）：</div></div></div>
+      <details class="qa">
+<summary>Agent 和 ChatBot 的本质区别是什么？</summary>
+<div class="a">区别在于"谁来构建上下文"。ChatBot 靠人喂，你给它什么材料它就用什么材料。Agent 会自己搜网页、读文档、调工具，把有用的内容写进上下文，发现不够还会自动回头继续找。</div>
+</details>
+
+<details class="qa">
+<summary>为什么在 CLAUDE.md 里写"永远不要做 X"不靠谱？</summary>
+<div class="a">因为 CLAUDE.md 是 context 不是 enforcement。模型选择做一件事跟自动执行一件事完全是两码事。任何提示词防护都可能在长会话、压力大或被 prompt injection 干扰时失效。绝对性约束应该用 PreToolUse hook 做硬护栏，exit code 2 直接阻止执行。</div>
+</details>
+
+<details class="qa">
+<summary>上下文窗口管理为什么是 Agent 质量上限？</summary>
+<div class="a">Agent 的输出质量 = f(模型能力 × 上下文质量)。即使模型再强，如果上下文混乱、信息缺失或被噪声淹没，输出质量也会大打折扣。Prompt Cache 命中率从 70% 优化到 92% 后，输出一致性评分可从 3.2/5 提升到 4.5/5。</div>
+</details>
+
+<details class="qa">
+<summary>SubAgent 和 Skill 怎么选？</summary>
+<div class="a">需要看到每一步的中间结果？用 Skill（在主线程里执行）。不需要，让它自己跑完给你一个结论？用 SubAgent（在独立上下文窗口里跑）。一个 SubAgent 做了 50 轮搜索、读了 200 个文件，主会话只多了一段摘要。</div>
+</details>
+
+<details class="qa">
+<summary>Dynamic Workflows 解决什么问题？</summary>
+<div class="a">解决三个老问题：偷懒（查到第 35 项就宣布完成）、自我偏好（检查自己代码倾向于觉得没问题）、目标漂移（长会话中边缘需求在压缩中丢失）。Workflow 用独立上下文窗口隔离每个子任务，编排逻辑代码化，从结构上消解这三个问题。</div>
+</details>
+
+<details class="qa">
+<summary>六种编排模式分别在什么时候用？</summary>
+<div class="a">Classify-and-act 用于任务类型明确时；Fan-out-and-synthesize 用于可并行的独立子任务；Adversarial verification 用于高可靠性要求；Tournament 用于多方案对比；Generate-and-filter 用于创意生成；Loop until done 用于不确定迭代次数的任务。实际项目中常常组合使用。</div>
+</details>
+
+<details class="qa">
+<summary>System Reminder 为什么是长流程系统的关键能力？</summary>
+<div class="a">它允许系统在会话中途，按事件粒度向模型追加高优先级上下文，而不混进显式聊天流。比如当 Claude 准备改一个生成文件时，hook 可以提醒"请改源文件后重新生成"；在 compaction 之后，hook 可以重新注入关键工作状态，避免摘要弱化。</div>
+</details>
+
+<div class="source-link">
+<p>&#x1f4d6; 知识来源（三篇合并）：</p>
+<p>1. <a href="https://mp.weixin.qq.com/s/Arggf-WhxK04_cBTlC10Dg" target="_blank">Claude Code 核心架构与原理研究 — 朱小厮的博客</a></p>
+<p>2. <a href="https://mp.weixin.qq.com/s/-7C4WqRsuKlmBj6I31Is1w" target="_blank">深入理解 Claude Code：从 CLAUDE.md 到 Hooks、Skills、Subagents — 赛博禅心</a></p>
+<p>3. <a href="https://claude.com/blog/steering-claude-code-skills-hooks-rules-subagents-and-more" target="_blank">Steering Claude Code — Anthropic 官方</a></p>
+<p>4. <a href="https://mer.vin/2026/04/dive-into-claude-code-in-depth-research-analysis-of-agent-harness-architecture/" target="_blank">Dive into Claude Code: Agent Harness Architecture（arXiv 2604.14228 论文解读）</a></p>
+</div>
+    </section>
+
+    <footer>
+      <div class="made">TECH NOTES · AI 工程 · 整理自 AI Knowledge Hub</div>
+    </footer>
+  </main>
+</div>
+
+<script>
+(function(){var bar=document.getElementById('progress');function u(){var h=document.documentElement;bar.style.width=h.scrollTop/(h.scrollHeight-h.clientHeight)*100+'%';}window.addEventListener('scroll',u,{passive:true});u();})();
+(function(){var links=document.querySelectorAll('aside.toc nav a');var secs=Array.from(document.querySelectorAll('section.chapter'));if(!secs.length)return;function u(){var y=window.scrollY+100,cur=secs[0];for(var i=0;i<secs.length;i++){if(secs[i].offsetTop<=y)cur=secs[i];}var id=cur.id;links.forEach(function(a){a.classList.toggle('active',a.getAttribute('href')==='#'+id);});}window.addEventListener('scroll',u,{passive:true});u();})();
+</script>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

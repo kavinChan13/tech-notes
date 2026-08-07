@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Loop 工程与 ReAct 区别 · AI 工程 — Tech Notes</title>
+<meta name="description" content="ReAct 推理链范式 · Agent Loop 执行引擎 · 状态管理机制 · 终止条件设计 · 生产级防死循环策略">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<link rel="stylesheet" href="../assets/kh-guide.css">
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav">
+
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="ai_engineering_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 11 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>A24 · AI 工程</h2>
+    <nav>
+      <ol>
+        <li><a href="#react-vs-agent-loop" class="active">ReAct vs Agent Loop：层次差异</a></li>
+        <li><a href="#react">ReAct 推理链深度解析</a></li>
+        <li><a href="#agent-loop">Agent Loop 五大工程能力</a></li>
+        <li><a href="#ch4">终止条件与防死循环策略</a></li>
+        <li><a href="#checkpoint">状态管理与 Checkpoint 机制</a></li>
+        <li><a href="#react-vs-plan-and-execute-vs">ReAct vs Plan-and-Execute vs 纯工具调用</a></li>
+        <li><a href="#q-a-8">Q&amp;A（8 题）</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+    <header class="hero">
+      <div class="badge">A24 · AI 工程</div>
+      <h1>Loop 工程与 ReAct 区别</h1>
+      <p class="sub">ReAct 推理链范式 · Agent Loop 执行引擎 · 状态管理机制 · 终止条件设计 · 生产级防死循环策略</p>
+      <div class="meta-row">
+        <span class="pill cyan">AI 工程</span>
+        <span class="pill green">阅读 ~11 min</span>
+        <span class="pill amber">7 章</span>
+      </div>
+    </header>
+
+    <section class="chapter" id="react-vs-agent-loop">
+      <div class="ch-head"><div class="num">01</div><div class="t"><h2>ReAct vs Agent Loop：层次差异</h2></div></div>
+      <div class="arch-diagram">┌─────────────────────────────────────────────────────────────────────────┐
+│                    ReAct vs Agent Loop 层次架构                          │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│   ┌─────────────────────────────────────────────────────────────────┐   │
+│   │                    Agent Loop（工程层）                          │   │
+│   │  ┌─────────────────────────────────────────────────────────┐   │   │
+│   │  │  while step < max_steps and not timeout:                │   │   │
+│   │  │    thought, action = llm.react_prompt(user_query)      │   │   │
+│   │  │    if action.is_final: return action.answer            │   │   │
+│   │  │    observation = execute_tool(action, timeout=10s)     │   │   │
+│   │  │    state.append(thought, action, observation)          │   │   │
+│   │  │    save_checkpoint(state)                              │   │   │
+│   │  └─────────────────────────────────────────────────────────┘   │   │
+│   │                           │                                      │   │
+│   │                           ▼                                      │   │
+│   │  ┌─────────────────────────────────────────────────────────┐   │   │
+│   │  │              ReAct（Prompt 层）                          │   │   │
+│   │  │                                                         │   │   │
+│   │  │  Thought: 我需要了解北京明天的天气...                     │   │   │
+│   │  │  Action: get_weather(city="北京", date="tomorrow")       │   │   │
+│   │  │  Observation: 晴，32°C，PM2.5=150                       │   │   │
+│   │  │  Thought: 温度偏高且空气质量一般...                       │   │   │
+│   │  │  Action: final_answer("不建议户外跑步...")               │   │   │
+│   │  └─────────────────────────────────────────────────────────┘   │   │
+│   └─────────────────────────────────────────────────────────────────┘   │
+│                                                                         │
+│   关系：Agent Loop 是"容器"，ReAct 是"内容"                              │
+│   Loop 提供：循环控制、状态管理、超时保护、错误恢复                        │
+│   ReAct 提供：推理格式、可解释性、思考链记录                               │
+└─────────────────────────────────────────────────────────────────────────┘</div>
+
+<div class="highlight">
+<strong>核心设计哲学：</strong><span class="term">ReAct</span>（Reasoning + Acting）由 Yao et al. 2022 提出，是一种 <span class="term">Prompt 工程范式</span>——定义了 LLM 应该如何交替输出推理（Thought）和行动（Action）。<span class="term">Agent Loop</span> 是工程化的执行引擎——将 ReAct 的"思考-行动-观察"封装成可生产运行的循环，加上状态管理、超时控制、错误恢复等工程能力。生产环境中两者必须结合使用：用 ReAct 格式构造 Prompt 保证可解释性，用 Loop 引擎执行循环保证可靠性。
+</div>
+
+<table>
+<tr><th>维度</th><th>ReAct</th><th>Agent Loop</th><th>关系</th></tr>
+<tr><td><strong>层次</strong></td><td>Prompt 层（定义格式）</td><td>工程层（实现执行）</td><td>Loop 包含 ReAct</td></tr>
+<tr><td><strong>核心能力</strong></td><td>推理链生成、可解释性</td><td>循环控制、状态管理、错误恢复</td><td>互补</td></tr>
+<tr><td><strong>实现方式</strong></td><td>Prompt 模板 + Few-shot 示例</td><td>代码级 while 循环 + 状态机</td><td>Prompt vs Code</td></tr>
+<tr><td><strong>循环控制</strong></td><td>❌ 靠 Prompt 暗示</td><td>✅ 代码级强制控制</td><td>Loop 补齐 ReAct 缺陷</td></tr>
+<tr><td><strong>状态持久化</strong></td><td>❌ 无</td><td>✅ 每步保存 checkpoint</td><td>Loop 提供工程能力</td></tr>
+<tr><td><strong>超时保护</strong></td><td>❌ 无</td><td>✅ 全局超时 + 单步超时</td><td>Loop 提供安全机制</td></tr>
+<tr><td><strong>错误恢复</strong></td><td>❌ 无</td><td>✅ 自动重试 + 降级</td><td>Loop 提供容错能力</td></tr>
+</table>
+    </section>
+
+    <section class="chapter" id="react">
+      <div class="ch-head"><div class="num">02</div><div class="t"><h2>ReAct 推理链深度解析</h2><div class="sub">ReAct 的核心价值不是&quot;让 LLM 多步执行&quot;，而是&quot;让 LLM 的每一步思考都可见&quot;—…</div></div></div>
+      <div class="intuition-box">
+<p>ReAct 的核心价值不是"让 LLM 多步执行"，而是"让 LLM 的每一步思考都可见"——Thought 步骤记录了 LLM 的推理过程，出问题时可以直接定位是"推理错误"还是"工具调用错误"。</p>
+</div>
+
+<h3>三步循环机制</h3>
+<p>ReAct 的三步循环（Thought → Action → Observation）不是简单的"想→做→看"，而是一个<strong>显式推理链</strong>——每一步的 Thought 都必须说明"当前状态是什么、为什么要做这个动作、期望得到什么结果"。</p>
+
+<table>
+<tr><th>步骤</th><th>内容</th><th>作用</th><th>示例</th></tr>
+<tr><td><strong>Thought</strong></td><td>LLM 推理：当前状态分析 + 下一步决策</td><td>记录推理过程，提供可解释性</td><td>"用户问北京明天是否适合跑步，需要查天气和空气质量"</td></tr>
+<tr><td><strong>Action</strong></td><td>选择工具并传参</td><td>执行具体操作</td><td><code>get_weather(city="北京", date="tomorrow")</code></td></tr>
+<tr><td><strong>Observation</strong></td><td>工具返回的结果</td><td>提供事实依据，供下一步推理</td><td>"晴，32°C，PM2.5=150"</td></tr>
+</table>
+
+<h3>ReAct 的可解释性价值</h3>
+<p>ReAct 的真正威力在于<strong>故障定位</strong>。当 Agent 给出错误答案时，可以回溯推理链：如果 Thought 步骤的推理逻辑有误（如"用户问的是明天，但我查的是今天"），说明是 LLM 的理解问题；如果 Action 步骤调用了错误的工具或参数，说明是工具选择问题；如果 Observation 返回了异常数据，说明是工具本身的问题。这种精确的故障定位能力是 ReAct 相比"黑盒多步执行"的核心优势。</p>
+
+<div class="highlight">
+<strong>Token 成本分析：</strong>每一步 Thought 通常消耗 50~200 token，10 步循环的 Thought 累计 500~2000 token。加上 Action 和 Observation，10 步循环可能消耗 5000~10000 token。优化策略：① 限制 Thought 长度（最多 100 字）；② 用简短的 Chain-of-Thought 替代详细推理；③ 对历史步骤做摘要压缩（只保留最近 3 步的完整内容，更早的步骤只保留 Action 和 Observation）。
+</div>
+    </section>
+
+    <section class="chapter" id="agent-loop">
+      <div class="ch-head"><div class="num">03</div><div class="t"><h2>Agent Loop 五大工程能力</h2><div class="sub">Agent Loop 是把 ReAct 的&quot;思考-行动-观察&quot;封装成可生产运行的执行引擎，核…</div></div></div>
+      <div class="intuition-box">
+<p>Agent Loop 是把 ReAct 的"思考-行动-观察"封装成可生产运行的执行引擎，核心是补齐 ReAct 缺失的五大工程能力：循环控制、状态持久化、超时保护、终止条件、错误恢复。</p>
+</div>
+
+<h3>能力一：循环控制</h3>
+<p>ReAct 本身没有循环机制——它只定义了"一次思考-行动-观察"的格式，但不告诉系统"什么时候继续循环、什么时候停止"。Agent Loop 通过代码级 while 循环实现强制控制，设最大步数（如 10 步）防止无限循环。</p>
+
+<h3>能力二：状态持久化</h3>
+<p>生产环境中 Agent 可能运行数分钟甚至数十分钟，期间可能因进程崩溃、网络中断等原因中断。<span class="term">Checkpoint 机制</span>在每一步执行完成后将完整 state 序列化保存到数据库（Redis/PostgreSQL），崩溃重启后从最新 checkpoint 恢复，继续执行下一步。</p>
+
+<h3>能力三：超时保护</h3>
+<p>双重超时机制：<span class="term">全局超时</span>（如总耗时不超过 300 秒）防止整个任务卡死，<span class="term">单步超时</span>（如单次工具调用不超过 10 秒）防止某个工具调用阻塞整个流程。超时后自动终止并返回"超时错误"给 LLM，让 LLM 决定下一步（如换工具或降级）。</p>
+
+<h3>能力四：终止条件</h3>
+<p>显式终止信号（<code>final_answer</code>）+ 最大步数兜底。LLM 通过输出 <code>final_answer</code> 明确表示"任务完成"，Loop 检测到该信号后正常退出。如果 LLM 一直不输出 <code>final_answer</code>（陷入死循环），最大步数兜底强制终止。</p>
+
+<h3>能力五：错误恢复</h3>
+<p>工具调用失败时自动重试（指数退避）或降级（换备选工具）。关键细节：工具调用可能是非幂等的（如发送邮件），恢复时需要检查哪些 Action 已经执行过，避免重复执行。通过 state 中的 action_history 记录已执行的 Action，恢复时跳过已完成的步骤。</p>
+
+<div class="arch-diagram">┌────────────────────────────────────────────────────────────────┐
+│                    Agent Loop 执行引擎架构                       │
+├────────────────────────────────────────────────────────────────┤
+│                                                                │
+│  [用户 Query] ──▶ [初始化 State] ──▶ [Loop 开始]                │
+│                       │                  │                     │
+│                       ▼                  ▼                     │
+│               [state.user_query]   ┌─────────────┐           │
+│               [state.history]      │ step < max? │           │
+│               [state.step=0]       │ time < T?   │           │
+│                                    └──────┬──────┘           │
+│                                           │ Yes               │
+│                                           ▼                   │
+│  ┌────────────────────────────────────────────────────┐      │
+│  │  [LLM ReAct Prompt] ──▶ [Thought + Action]         │      │
+│  │         │                      │                    │      │
+│  │         ▼                      ▼                    │      │
+│  │  [检查 is_final?] ──Yes──▶ [返回 answer] ──▶ [结束]  │      │
+│  │         │ No                                       │      │
+│  │         ▼                                          │      │
+│  │  [execute_tool(action)] ──▶ [Observation]           │      │
+│  │         │                      │                    │      │
+│  │         │ 超时/失败             ▼                    │      │
+│  │         ▼              [state.append()]             │      │
+│  │  [重试/降级]           [save_checkpoint()]          │      │
+│  │                            │                        │      │
+│  │                            └──▶ [step++] ──▶ 循环    │      │
+│  └────────────────────────────────────────────────────┘      │
+│                                                                │
+│  监控指标：step_count, token_usage, tool_success_rate          │
+│  告警规则：step > max*0.8, token > budget*0.9, 连续 3 次失败    │
+└────────────────────────────────────────────────────────────────┘</div>
+
+<div class="practice-grid">
+<div class="do">
+  <ul>
+    <li>用 ReAct 格式保证推理可解释性</li>
+    <li>用 Loop 引擎实现循环控制和状态管理</li>
+    <li>设最大步数 + 全局超时双重兜底</li>
+    <li>每步保存 checkpoint，支持崩溃恢复</li>
+    <li>工具调用失败时自动重试或降级</li>
+    <li>记录 action_history，恢复时避免重复执行</li>
+  </ul>
+</div>
+<div class="dont">
+  <ul>
+    <li>只靠 ReAct prompt 不设工程级循环控制</li>
+    <li>不设最大步数（可能死循环烧 token）</li>
+    <li>不保存 checkpoint（崩溃后无法恢复）</li>
+    <li>不设超时保护（工具调用卡死导致整体卡住）</li>
+    <li>忽略非幂等工具的重复执行风险</li>
+    <li>不监控循环状态（问题发现太晚）</li>
+  </ul>
+</div>
+</div>
+
+<div class="highlight">
+<strong>生产案例：</strong>某代码生成 Agent 采用 ReAct + Loop 架构后，任务完成率从 68% 提升至 89%，平均执行步数从 12 步降至 7 步。关键改进：① Loop 引擎增加"重复检测"（连续 3 次调用相同工具+参数则终止），死循环率从 15% 降至 2%；② Checkpoint 机制使崩溃恢复时间从"重新执行全部步骤"（平均 8 分钟）降至"从断点继续"（平均 30 秒）；③ 单步超时保护使工具调用卡死导致的整体超时从 23% 降至 4%。
+</div>
+    </section>
+
+    <section class="chapter" id="ch4">
+      <div class="ch-head"><div class="num">04</div><div class="t"><h2>终止条件与防死循环策略</h2><div class="sub">Agent Loop 最常见的生产事故是&quot;死循环&quot;——LLM 反复调用同一个工具、或不断产生…</div></div></div>
+      <div class="intuition-box">
+<p>Agent Loop 最常见的生产事故是"死循环"——LLM 反复调用同一个工具、或不断产生新的 Thought 但永远不输出 final_answer。防御策略必须是多层级的，单一策略无法覆盖所有死循环场景。</p>
+</div>
+
+<h3>四层防死循环机制</h3>
+
+<table>
+<tr><th>防御层</th><th>策略</th><th>实现方式</th><th>触发场景</th><th>行为</th></tr>
+<tr><td><strong>L1 步数限制</strong></td><td>最大步数</td><td>循环超过 N 步强制终止</td><td>LLM 陷入反复推理不收敛</td><td>返回"达到最大步数，任务未完成"</td></tr>
+<tr><td><strong>L2 时间限制</strong></td><td>全局超时</td><td>总耗时超过 T 秒强制终止</td><td>某一步工具调用卡死</td><td>返回"执行超时，任务未完成"</td></tr>
+<tr><td><strong>L3 重复检测</strong></td><td>动作去重</td><td>连续 3 次调用相同工具+参数则终止</td><td>LLM 死循环调用同一工具</td><td>返回"检测到重复操作，请检查逻辑"</td></tr>
+<tr><td><strong>L4 Token 预算</strong></td><td>Token 上限</td><td>累计 token 超过预算则终止</td><td>上下文窗口即将溢出</td><td>返回"Token 预算耗尽"</td></tr>
+</table>
+
+<h3>最大步数设定指南</h3>
+<p>最大步数的设定需要平衡"任务复杂度"和"资源浪费"。设得太小会导致复杂任务提前终止，设得太大可能浪费 token（LLM 绕圈子）。经验法则：</p>
+
+<div class="formula">
+推荐步数 = 任务类型基准值 × 复杂度系数（简单=1.0，中等=1.5，复杂=2.0）
+</div>
+
+<table>
+<tr><th>任务类型</th><th>基准步数</th><th>示例</th><th>推荐范围</th></tr>
+<tr><td><strong>简单 FAQ</strong></td><td>3~5 步</td><td>单步查询 + 直接回答</td><td>3~5 步</td></tr>
+<tr><td><strong>中等复杂度</strong></td><td>8~10 步</td><td>多步信息查询 + 结果整合</td><td>8~12 步</td></tr>
+<tr><td><strong>复杂任务</strong></td><td>15~20 步</td><td>代码生成 + 测试 + 修复循环</td><td>15~25 步</td></tr>
+<tr><td><strong>探索性任务</strong></td><td>20~30 步</td><td>多轮调研 + 方案对比</td><td>20~35 步</td></tr>
+</table>
+
+<h3>重复检测算法</h3>
+<p>重复检测不是简单的"上次调用了什么"，而是"最近 N 次调用是否形成循环"。推荐算法：维护最近 5 次 Action 的哈希列表，如果最新 Action 的哈希与列表中任意一个相同（相同工具 + 相同参数），则重复计数 +1。当重复计数达到 3 时触发终止。这种方法可以检测"ABA"循环（调用 A → 调用 B → 调用 A）。</p>
+
+<div class="practice-grid">
+<div class="do">
+  <ul>
+    <li>四层防御机制全部启用（步数+时间+重复+Token）</li>
+    <li>根据任务类型动态设置最大步数</li>
+    <li>重复检测用哈希列表（可检测 ABA 循环）</li>
+    <li>终止时返回明确的错误信息（便于调试）</li>
+    <li>记录每次终止的原因（分析死循环模式）</li>
+  </ul>
+</div>
+<div class="dont">
+  <ul>
+    <li>只设步数限制不设时间限制（工具卡死无法检测）</li>
+    <li>所有任务用相同的最大步数（简单任务浪费，复杂任务不够）</li>
+    <li>重复检测只看"上一次"（无法检测 ABA 循环）</li>
+    <li>终止时不返回原因（无法定位问题）</li>
+    <li>不记录终止日志（无法分析死循环模式）</li>
+  </ul>
+</div>
+</div>
+
+<div class="highlight">
+<strong>生产案例：</strong>某客服 Agent 上线初期死循环率达到 18%（每 100 次对话有 18 次陷入死循环），主要原因是：① 用户问题模糊导致 LLM 反复查询同一数据库（占 45%）；② 工具返回空结果导致 LLM 不断重试（占 30%）；③ Prompt 设计不当导致 LLM 不输出 final_answer（占 25%）。引入四层防御后：死循环率从 18% 降至 3%，平均每次死循环的 token 浪费从 8500 降至 2100，用户等待时间从平均 4.2 分钟降至 1.1 分钟。
+</div>
+    </section>
+
+    <section class="chapter" id="checkpoint">
+      <div class="ch-head"><div class="num">05</div><div class="t"><h2>状态管理与 Checkpoint 机制</h2><div class="sub">Agent Loop 的状态不是&quot;当前执行到哪一步&quot;这么简单——它包含用户原始 query…</div></div></div>
+      <div class="intuition-box">
+<p>Agent Loop 的状态不是"当前执行到哪一步"这么简单——它包含用户原始 query、完整推理链、工具调用结果、累计 token 消耗、已执行的 action 历史等多个维度。状态管理的质量直接决定了崩溃恢复的可靠性。</p>
+</div>
+
+<h3>State 数据结构</h3>
+<table>
+<tr><th>字段</th><th>类型</th><th>用途</th><th>持久化策略</th></tr>
+<tr><td><strong>user_query</strong></td><td>string</td><td>用户原始问题</td><td>每步保存</td></tr>
+<tr><td><strong>history</strong></td><td>list[Step]</td><td>所有 Thought/Action/Observation</td><td>每步追加</td></tr>
+<tr><td><strong>step_count</strong></td><td>int</td><td>当前步数</td><td>每步更新</td></tr>
+<tr><td><strong>token_usage</strong></td><td>int</td><td>累计 token 消耗</td><td>每步累加</td></tr>
+<tr><td><strong>action_history</strong></td><td>list[Action]</td><td>已执行的 Action 列表（防重复）</td><td>每步追加</td></tr>
+<tr><td><strong>tool_cache</strong></td><td>dict</td><td>工具调用结果缓存（避免重复调用）</td><td>按需更新</td></tr>
+<tr><td><strong>error_log</strong></td><td>list[Error]</td><td>错误堆栈（用于调试）</td><td>错误时追加</td></tr>
+</table>
+
+<h3>Checkpoint 持久化策略</h3>
+<p>Checkpoint 的保存频率需要平衡"恢复精度"和"存储成本"。推荐策略：<strong>每步保存</strong>（保证恢复精度最高）+ <strong>增量压缩</strong>（只保存变化的字段，减少存储开销）。存储介质选择：开发环境用 SQLite（零配置），生产环境用 Redis（毫秒级读写）或 PostgreSQL（强一致性）。</p>
+
+<h3>崩溃恢复流程</h3>
+<div class="arch-diagram">┌────────────────────────────────────────────────────────────────┐
+│                    Checkpoint 崩溃恢复流程                       │
+├────────────────────────────────────────────────────────────────┤
+│                                                                │
+│  [进程崩溃] ──▶ [重启] ──▶ [加载最新 Checkpoint]                │
+│                              │                                 │
+│                              ▼                                 │
+│                    [恢复 state 对象]                            │
+│                              │                                 │
+│                              ▼                                 │
+│                    [检查 action_history]                        │
+│                              │                                 │
+│                 ┌────────────┴────────────┐                   │
+│                 ▼                         ▼                   │
+│        [有非幂等 Action]          [全是幂等 Action]            │
+│                 │                         │                   │
+│                 ▼                         ▼                   │
+│        [跳过已执行步骤]           [从断点继续执行]              │
+│        [标记为"已跳过"]           [无需特殊处理]                │
+│                 │                         │                   │
+│                 └────────────┬────────────┘                   │
+│                              ▼                                 │
+│                    [继续执行下一步]                             │
+│                                                                │
+│  关键：非幂等 Action（如发送邮件、创建订单）必须跳过             │
+│        幂等 Action（如查询数据库、读文件）可以安全重试            │
+└────────────────────────────────────────────────────────────────┘</div>
+
+<div class="highlight">
+<strong>关键细节：</strong>崩溃恢复的最大风险是<strong>非幂等操作的重复执行</strong>。例如：Agent 在执行"发送邮件"后崩溃，恢复时如果重新执行该 Action 会导致用户收到两封相同邮件。解决方案：① 在 action_history 中记录每个 Action 的执行状态（pending/success/failed）；② 恢复时检查 action_history，已成功的非幂等 Action 标记为"已跳过"；③ 对于关键操作（如金融交易），使用事务机制（先预检、再执行、后确认）。
+</div>
+    </section>
+
+    <section class="chapter" id="react-vs-plan-and-execute-vs">
+      <div class="ch-head"><div class="num">06</div><div class="t"><h2>ReAct vs Plan-and-Execute vs 纯工具调用</h2><div class="sub">ReAct 不是唯一的 Agent 推理范式——Plan-and-Execute（先规划后执…</div></div></div>
+      <div class="intuition-box">
+<p>ReAct 不是唯一的 Agent 推理范式——Plan-and-Execute（先规划后执行）和纯工具调用（无推理链）各有适用场景。选择哪种范式取决于任务的"动态性"和"可解释性需求"。</p>
+</div>
+
+<table>
+<tr><th>维度</th><th>ReAct</th><th>Plan-and-Execute</th><th>纯工具调用</th></tr>
+<tr><td><strong>执行模式</strong></td><td>边想边做（动态决策）</td><td>先规划后执行（预定义计划）</td><td>直接调用（无推理）</td></tr>
+<tr><td><strong>灵活性</strong></td><td>高（每步根据观察调整）</td><td>中（按计划执行，可中途调整）</td><td>低（固定流程）</td></tr>
+<tr><td><strong>效率</strong></td><td>中（可能绕圈子）</td><td>高（计划明确，少浪费）</td><td>最高（无推理开销）</td></tr>
+<tr><td><strong>可解释性</strong></td><td>高（每步有 Thought）</td><td>中（计划可见，执行黑盒）</td><td>低（无推理记录）</td></tr>
+<tr><td><strong>适用场景</strong></td><td>动态变化的探索性任务</td><td>结构化的复杂任务</td><td>简单确定性任务</td></tr>
+<tr><td><strong>示例</strong></td><td>"调研某个话题并写报告"</td><td>"生成代码→测试→修复→提交"</td><td>"查天气并返回结果"</td></tr>
+</table>
+
+<div class="highlight">
+<strong>选择建议：</strong>如果任务需要"边做边看结果再决定下一步"（如调研、调试）→ 用 ReAct；如果任务结构清晰、步骤可预定义（如代码生成流水线）→ 用 Plan-and-Execute；如果任务简单且确定性高（如单步查询）→ 用纯工具调用。实际生产中常混合使用：Plan-and-Execute 做整体规划，ReAct 做每一步的动态执行。
+</div>
+    </section>
+
+    <section class="chapter" id="q-a-8">
+      <div class="ch-head"><div class="num">07</div><div class="t"><h2>Q&amp;A（8 题）</h2></div></div>
+      <details class="qa">
+<summary>ReAct 和 Plan-and-Execute 的核心区别是什么？什么时候该用哪个？</summary>
+<div class="a">核心区别在于"决策时机"。ReAct 是"边想边做"——每一步都根据当前观察决定下一步行动，适合动态变化的任务（如"调研某个话题，根据发现调整方向"）。Plan-and-Execute 是"先规划后执行"——先让 LLM 生成完整的执行计划（步骤 1→2→3），然后按计划逐步执行，适合结构化的复杂任务（如"生成代码→测试→修复→提交"）。Plan-and-Execute 的效率更高但灵活性更低，ReAct 更灵活但可能绕圈子。实际生产中常混合使用：Plan-and-Execute 做整体规划，ReAct 做每一步的动态执行。</div>
+</details>
+
+<details class="qa">
+<summary>Agent Loop 的状态需要保存哪些信息？为什么 action_history 很重要？</summary>
+<div class="a">核心状态包括：用户原始 query、所有历史 Thought/Action/Observation（构成推理链）、当前步数、累计 token 消耗、工具调用结果缓存。生产环境还需要：LLM 的 API 调用日志（用于计费）、错误堆栈（用于调试）、用户中断信号（支持 human-in-the-loop）。action_history 特别重要，因为它是崩溃恢复的关键——通过记录哪些 Action 已经执行过，恢复时可以避免重复执行非幂等操作（如发送邮件、创建订单），防止副作用重复发生。</div>
+</details>
+
+<details class="qa">
+<summary>最大步数设为多少合适？不同任务类型差异大吗？</summary>
+<div class="a">差异非常大。简单 FAQ 类任务设 3~5 步，中等复杂度任务（如多步信息查询）设 8~10 步，复杂任务（如代码生成 + 测试 + 修复循环）设 15~20 步，探索性任务（如多轮调研）设 20~30 步。设得太小会导致复杂任务提前终止，设得太大可能浪费 token（LLM 绕圈子）。建议从 10 步起步，根据实际日志调整：如果 80% 的任务在 7 步内完成，说明 10 步足够；如果 20% 的任务在 10 步时被强制终止，说明需要增加步数或优化 Prompt。</div>
+</details>
+
+<details class="qa">
+<summary>ReAct 的 Thought 步骤会消耗很多 token 吗？如何优化？</summary>
+<div class="a">是的。每一步 Thought 通常 50~200 token，10 步循环的 Thought 累计 500~2000 token，加上 Action 和 Observation，10 步循环可能消耗 5000~10000 token。优化方式：① 限制 Thought 长度（如最多 100 字）；② 用简短的 Chain-of-Thought 替代详细推理（如"需要查天气"而非"用户问的是北京明天是否适合跑步，我需要了解天气和空气质量..."）；③ 对历史步骤做摘要压缩（只保留最近 3 步的完整内容，更早的步骤只保留 Action 和 Observation）；④ 使用更便宜的模型做 Thought（如 GPT-3.5），用贵的模型做最终决策。</div>
+</details>
+
+<details class="qa">
+<summary>Agent Loop 崩溃后如何恢复？非幂等操作怎么处理？</summary>
+<div class="a">通过 checkpoint 机制：每步执行完成后将完整 state 序列化保存到数据库（如 Redis/PostgreSQL）。崩溃重启后，从最新的 checkpoint 恢复 state，继续执行下一步。关键细节：工具调用可能是非幂等的（如发送邮件），恢复时需要检查哪些 Action 已经执行过，避免重复执行。解决方案：① 在 action_history 中记录每个 Action 的执行状态（pending/success/failed）；② 恢复时检查 action_history，已成功的非幂等 Action 标记为"已跳过"；③ 对于关键操作（如金融交易），使用事务机制（先预检、再执行、后确认）。</div>
+</details>
+
+<details class="qa">
+<summary>重复检测算法如何设计？只看"上一次"够吗？</summary>
+<div class="a">只看"上一次"不够，无法检测"ABA 循环"（调用 A → 调用 B → 调用 A）。推荐算法：维护最近 5 次 Action 的哈希列表（Action 名称 + 参数的哈希值），如果最新 Action 的哈希与列表中任意一个相同，则重复计数 +1。当重复计数达到 3 时触发终止。更高级的检测：使用"滑动窗口"分析最近 10 次 Action 的模式，如果检测到周期性重复（如 ABABAB），则提前终止。这种方法可以检测更复杂的死循环模式。</div>
+</details>
+
+<details class="qa">
+<summary>ReAct 推理链出问题时如何定位是"推理错误"还是"工具错误"？</summary>
+<div class="a">ReAct 的可解释性价值正在于此。回溯推理链：① 如果 Thought 步骤的推理逻辑有误（如"用户问的是明天，但我查的是今天"），说明是 LLM 的理解问题，需要优化 Prompt 或换更强的模型；② 如果 Action 步骤调用了错误的工具或参数（如"应该查天气但查了汇率"），说明是工具选择问题，需要优化工具描述或 Few-shot 示例；③ 如果 Observation 返回了异常数据（如"天气 API 返回空结果"），说明是工具本身的问题，需要检查工具实现或增加错误处理。这种精确的故障定位能力是 ReAct 相比"黑盒多步执行"的核心优势。</div>
+</details>
+
+<details class="qa">
+<summary>Agent Loop 和 LangChain 的 AgentExecutor 是什么关系？</summary>
+<div class="a">LangChain 的 AgentExecutor 是 Agent Loop 的一种实现——它封装了 ReAct 的循环执行、工具调用、状态管理等能力。但 AgentExecutor 是通用框架，生产环境中通常需要定制化：① 自定义终止条件（如特定业务规则）；② 自定义错误恢复策略（如特定工具的重试逻辑）；③ 自定义状态持久化（如特定数据库的 checkpoint 机制）。建议：快速原型用 AgentExecutor，生产环境用自定义 Loop 引擎（基于 AgentExecutor 的核心逻辑但增加业务定制）。</div>
+</details>
+    </section>
+
+    <footer>
+      <div class="made">TECH NOTES · AI 工程 · 整理自 AI Knowledge Hub</div>
+    </footer>
+  </main>
+</div>
+
+<script>
+(function(){var bar=document.getElementById('progress');function u(){var h=document.documentElement;bar.style.width=h.scrollTop/(h.scrollHeight-h.clientHeight)*100+'%';}window.addEventListener('scroll',u,{passive:true});u();})();
+(function(){var links=document.querySelectorAll('aside.toc nav a');var secs=Array.from(document.querySelectorAll('section.chapter'));if(!secs.length)return;function u(){var y=window.scrollY+100,cur=secs[0];for(var i=0;i<secs.length;i++){if(secs[i].offsetTop<=y)cur=secs[i];}var id=cur.id;links.forEach(function(a){a.classList.toggle('active',a.getAttribute('href')==='#'+id);});}window.addEventListener('scroll',u,{passive:true});u();})();
+</script>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

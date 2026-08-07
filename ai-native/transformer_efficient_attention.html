@@ -1,0 +1,606 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>高效注意力 (Efficient Attention) · Transformer — Tech Notes</title>
+<meta name="description" content="Efficient Attention — 从 O(n²) 到线性，解锁长上下文推理">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<link rel="stylesheet" href="../assets/kh-guide.css">
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav">
+
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="ai_engineering_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 13 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>T04 · Transformer</h2>
+    <nav>
+      <ol>
+        <li><a href="#ch1" class="active">标准注意力的瓶颈</a></li>
+        <li><a href="#multi-query-attention-mqa">Multi-Query Attention (MQA)</a></li>
+        <li><a href="#grouped-query-attention-gqa">Grouped-Query Attention (GQA)</a></li>
+        <li><a href="#flashattention">FlashAttention</a></li>
+        <li><a href="#flashattention-2-flashattention-3">FlashAttention-2 / FlashAttention-3</a></li>
+        <li><a href="#pagedattention">PagedAttention</a></li>
+        <li><a href="#sliding-window-attention">Sliding Window Attention</a></li>
+        <li><a href="#ring-attention">Ring Attention</a></li>
+        <li><a href="#ch9">稀疏注意力</a></li>
+        <li><a href="#ch10">线性注意力</a></li>
+        <li><a href="#q-a-10">Q&amp;A（10 题）</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+    <header class="hero">
+      <div class="badge">T04 · Transformer</div>
+      <h1>高效注意力 (Efficient Attention)</h1>
+      <p class="sub">Efficient Attention — 从 O(n²) 到线性，解锁长上下文推理</p>
+      <div class="meta-row">
+        <span class="pill cyan">Transformer</span>
+        <span class="pill green">阅读 ~13 min</span>
+        <span class="pill amber">11 章</span>
+      </div>
+    </header>
+
+    <section class="chapter" id="ch1">
+      <div class="ch-head"><div class="num">01</div><div class="t"><h2>标准注意力的瓶颈</h2><div class="sub">标准 Scaled Dot-Product Attention 的计算公式：</div></div></div>
+      <div class="section-card">
+
+<h3>O(n²) 复杂度分析</h3>
+<p>标准 <span class="term">Scaled Dot-Product Attention</span> 的计算公式：</p>
+<div class="formula">Attention(Q, K, V) = softmax(QK<sup>T</sup> / √d<sub>k</sub>) · V</div>
+<p>其中 Q、K、V 的形状为 <code>[n, d]</code>（n = 序列长度，d = 头维度），关键矩阵 <code>QK<sup>T</sup></code> 的形状为 <code>[n, n]</code>。</p>
+
+<table>
+<tr><th>指标</th><th>复杂度</th><th>说明</th></tr>
+<tr><td>时间</td><td class="complexity">O(n² · d)</td><td>QK<sup>T</sup> 矩阵乘法 + softmax + AV 乘法</td></tr>
+<tr><td>内存</td><td class="complexity">O(n²)</td><td>需要存储完整的 n×n 注意力权重矩阵</td></tr>
+</table>
+
+<h3>为什么 n² 是长上下文的核心挑战</h3>
+<ul>
+<li>GPT-4 支持 128K token → 注意力矩阵 128K × 128K = 160 亿个元素（FP16 约 30GB）</li>
+<li>序列长度翻倍 → 计算量和显存都增长 4 倍</li>
+<li>训练和推理都受限：长序列 batch size 必须缩小</li>
+</ul>
+
+<h3>Memory-Bound Problem</h3>
+<p>现代 GPU（如 A100）算力极强（312 TFLOPS FP16），但内存带宽有限（2 TB/s）。标准注意力的算术强度（Arithmetic Intensity）较低：</p>
+<ul>
+<li><b>计算量</b>：O(n²d) FLOPs</li>
+<li><b>数据搬运量</b>：需要反复读写 n×n 的中间矩阵（从 HBM ↔ SRAM）</li>
+<li>实际瓶颈不是「算不过来」，而是「搬不动数据」— 这就是 memory-bound</li>
+</ul>
+
+<div class="interview-box">
+<ul>
+<li>回答"注意力瓶颈"时必须提到 <b>O(n²) 时间 + O(n²) 内存</b>，以及 memory-bound 的本质</li>
+<li>能用数字举例说明（如 128K context 下的显存需求）会加分</li>
+<li>理解 arithmetic intensity 是后续理解 FlashAttention 的前提</li>
+</ul>
+</div>
+</div>
+    </section>
+
+    <section class="chapter" id="multi-query-attention-mqa">
+      <div class="ch-head"><div class="num">02</div><div class="t"><h2>Multi-Query Attention (MQA)</h2><div class="sub">标准 Multi-Head Attention (MHA) 中，每个注意力头拥有独立的 Q…</div></div></div>
+      <div class="section-card">
+
+<h3>核心思想</h3>
+<p>标准 Multi-Head Attention (MHA) 中，每个注意力头拥有独立的 Q、K、V 投影。MQA 的改动：</p>
+<ul>
+<li><b>所有 head 共享同一组 K 和 V</b>（只有 Q 保持 per-head 独立）</li>
+<li>KV 投影从 h 组 → 1 组（h = head 数量）</li>
+</ul>
+<div class="formula">
+MHA: Q<sub>i</sub>, K<sub>i</sub>, V<sub>i</sub> (i=1..h)<br>
+MQA: Q<sub>i</sub> (i=1..h), K<sub>shared</sub>, V<sub>shared</sub>
+</div>
+
+<h3>推理速度提升</h3>
+<ul>
+<li>KV Cache 大小减少为原来的 <code>1/h</code>（例如 h=32 时减少 32 倍）</li>
+<li>自回归推理时的内存带宽需求大幅降低 → 推理速度提升显著</li>
+<li>训练阶段加速不明显（因为训练不是 memory-bound）</li>
+</ul>
+
+<h3>精度代价</h3>
+<ul>
+<li>由于多个 head 共享 KV，模型表达能力下降</li>
+<li>对大模型影响较小，对小模型可能有明显精度损失</li>
+<li>通常需要更多训练步数来弥补</li>
+</ul>
+
+<h3>代表模型</h3>
+<p><span class="tag">PaLM</span> <span class="tag">Falcon-40B</span> <span class="tag">StarCoder</span></p>
+
+<div class="interview-box">
+<ul>
+<li>MQA 的核心一句话：所有 head 共享一组 KV，Q 保持独立</li>
+<li>主要收益在<b>推理阶段</b>（KV Cache 缩小 → 内存带宽需求降低）</li>
+<li>面试常问：MQA 和 MHA 的 KV Cache 大小对比</li>
+</ul>
+</div>
+</div>
+    </section>
+
+    <section class="chapter" id="grouped-query-attention-gqa">
+      <div class="ch-head"><div class="num">03</div><div class="t"><h2>Grouped-Query Attention (GQA)</h2><div class="sub">GQA 将 h 个 head 分为 g 组，每组共享一组 KV：</div></div></div>
+      <div class="section-card">
+
+<h3>MHA 与 MQA 的折中</h3>
+<p>GQA 将 h 个 head 分为 g 组，每组共享一组 KV：</p>
+<div class="formula">
+g = h → MHA（每个 head 独立 KV）<br>
+g = 1 → MQA（所有 head 共享 KV）<br>
+1 &lt; g &lt; h → GQA（分组共享）
+</div>
+
+<h3>分组数量选择</h3>
+<ul>
+<li>LLaMA-2 70B：h=64, g=8（每 8 个 head 共享一组 KV）</li>
+<li>LLaMA-3：同样采用 GQA</li>
+<li>分组数 g 通常选择能整除 h 的值：2, 4, 8 等</li>
+<li>g 越大越接近 MHA（精度高，速度慢）；g 越小越接近 MQA（精度低，速度快）</li>
+</ul>
+
+<h3>MHA vs MQA vs GQA 对比</h3>
+<table>
+<tr><th>方法</th><th>KV Head 数</th><th>KV Cache 大小</th><th>模型精度</th><th>推理速度</th><th>代表模型</th></tr>
+<tr><td>MHA</td><td>h</td><td>2 × n × h × d</td><td>最高</td><td>最慢</td><td>GPT-3, BERT</td></tr>
+<tr><td>GQA</td><td>g (1&lt;g&lt;h)</td><td>2 × n × g × d</td><td>接近 MHA</td><td>较快</td><td>LLaMA-2/3 70B</td></tr>
+<tr><td>MQA</td><td>1</td><td>2 × n × 1 × d</td><td>略有下降</td><td>最快</td><td>PaLM, Falcon</td></tr>
+</table>
+<p><i>注：KV Cache 大小公式中 2 表示 K 和 V 各一份，n = 序列长度，d = 头维度</i></p>
+
+<h3>从 MHA 转换为 GQA</h3>
+<p>论文提出可以通过对已训练好的 MHA 模型的 KV head 做 mean-pooling 来初始化 GQA，再用少量数据微调即可恢复精度。</p>
+
+<div class="interview-box">
+<ul>
+<li>GQA 是 MHA 和 MQA 的<b>连续谱</b>，通过调节 g 控制精度-速度权衡</li>
+<li>LLaMA-2 70B 选择 g=8 是因为在精度和推理效率间取得最佳平衡</li>
+<li>面试必背：MHA / GQA / MQA 的 KV Cache 公式及对比</li>
+<li>能提到 "uptraining" 从 MHA 转 GQA 的方法会加分</li>
+</ul>
+</div>
+</div>
+    </section>
+
+    <section class="chapter" id="flashattention">
+      <div class="ch-head"><div class="num">04</div><div class="t"><h2>FlashAttention</h2><div class="sub">FlashAttention（Dao et al</div></div></div>
+      <div class="section-card">
+
+<h3>核心思想</h3>
+<p>FlashAttention（Dao et al., 2022）不改变注意力的数学计算，而是通过<b>IO-Aware</b>的算法设计避免在 HBM 中存储 n×n 注意力矩阵：</p>
+<ul>
+<li><b>Tiling（分块计算）</b>：将 Q、K、V 分成小块，在 SRAM 中完成注意力计算</li>
+<li><b>避免物化 n×n 矩阵</b>：不将完整的 attention score 矩阵写回 HBM</li>
+<li><b>精确计算</b>：结果与标准注意力完全一致（不是近似方法）</li>
+</ul>
+
+<div class="flow">
+  <div class="flow-title">FlashAttention Tiling · 分块计算，n×n 矩阵永不落 HBM</div>
+  <div class="flow-node"><div class="nlabel">HBM（慢、大）</div><div class="nsub">Q / K / V [n × d] 常驻</div></div>
+  <div class="flow-arrow" data-label="按块 load Q/K/V tile 进片上"></div>
+  <div class="flow-node accent">
+    <div class="nlabel">SRAM（快、小）逐块计算</div>
+    <div class="nsub">S_tile = Q_tile · K_tileᵀ → P_tile = softmax(S_tile) → O_tile += P_tile · V_tile</div>
+  </div>
+  <div class="flow-arrow" data-label="仅 write O_tile 回 HBM"></div>
+  <div class="flow-node good"><div class="nlabel">输出 O</div><div class="nsub">n×n 的 P 矩阵从未物化到 HBM，只在 SRAM 累加</div></div>
+</div>
+
+<h3>GPU 内存层次</h3>
+<table>
+<tr><th>存储</th><th>容量</th><th>带宽</th><th>特点</th></tr>
+<tr><td>SRAM (片上)</td><td>~20 MB (A100)</td><td>~19 TB/s</td><td>快但小</td></tr>
+<tr><td>HBM (显存)</td><td>40/80 GB (A100)</td><td>~2 TB/s</td><td>大但慢</td></tr>
+</table>
+<p>FlashAttention 的核心洞察：将计算尽量放在 SRAM 中，减少 HBM 读写次数。</p>
+
+<h3>Online Softmax 技巧</h3>
+<p>分块计算的难点：softmax 需要整行的全局最大值和求和。解决方案：</p>
+<ul>
+<li>维护 running max 和 running sum</li>
+<li>每处理一个新 tile，用 correction factor 修正之前的部分结果</li>
+<li>最终结果与一次性计算完全一致</li>
+</ul>
+<div class="formula">
+m<sub>new</sub> = max(m<sub>old</sub>, max(current_tile))<br>
+correction = exp(m<sub>old</sub> - m<sub>new</sub>)<br>
+l<sub>new</sub> = correction × l<sub>old</sub> + sum(exp(current_tile - m<sub>new</sub>))
+</div>
+
+<h3>收益</h3>
+<table>
+<tr><th>指标</th><th>标准注意力</th><th>FlashAttention</th></tr>
+<tr><td>HBM 内存</td><td>O(n²)</td><td>O(n)（不存 n×n 矩阵）</td></tr>
+<tr><td>HBM 读写</td><td>O(n² + nd)</td><td>O(n²d / M)（M = SRAM 大小）</td></tr>
+<tr><td>速度（端到端）</td><td>1×</td><td>2-4× 提升</td></tr>
+<tr><td>数学精确性</td><td>精确</td><td>精确（完全一致）</td></tr>
+</table>
+
+<div class="highlight">
+<b>生产数据：</b>FlashAttention 在 A100 上相比 PyTorch 标准实现，序列长度 128~2048 时实测 <b>3× 加速</b>；FA-2 进一步达到 230 TFLOPS/s（理论峰值 312 TFLOPS 的 ~73%），端到端训练 GPT 模型时可达 <b>225 TFLOPS/s（72% MFU）</b>。FA-3 在 H100 上 BF16 达到 ~800 TFLOPS/s，FP8 达到 1.3 PFLOPS/s。（来源：Stanford CRFM Blog / GTC 2025）
+</div>
+
+<div class="interview-box">
+<ul>
+<li>FlashAttention 三个关键词：<b>IO-Aware、Tiling、Online Softmax</b></li>
+<li>它是<b>精确</b>计算（不是近似），只是改变了计算顺序和内存访问模式</li>
+<li>核心贡献：将注意力从 memory-bound 优化为更接近 compute-bound</li>
+<li>面试要能解释为什么节省内存（不物化 n×n 矩阵）以及 online softmax 的原理</li>
+</ul>
+</div>
+</div>
+    </section>
+
+    <section class="chapter" id="flashattention-2-flashattention-3">
+      <div class="ch-head"><div class="num">05</div><div class="t"><h2>FlashAttention-2 / FlashAttention-3</h2></div></div>
+      <div class="section-card">
+
+<h3>FlashAttention-2 (2023) 优化</h3>
+<ul>
+<li><b>更好的并行化</b>：FA-1 在 batch 和 head 维度并行，FA-2 额外在序列长度维度并行</li>
+<li><b>减少非矩阵运算</b>：将 softmax rescaling 等操作合并，减少 warp 间同步</li>
+<li><b>优化 work partitioning</b>：在 thread block 内部更均匀地分配计算</li>
+<li>实测：相比 FA-1 速度提升约 2×，达到理论峰值 FLOPS 的 50-73%</li>
+</ul>
+
+<h3>FlashAttention-3 (2024) 优化</h3>
+<ul>
+<li>针对 <b>Hopper 架构</b>（H100）的硬件特性优化</li>
+<li><b>利用 Tensor Core 异步执行</b>：WGMMA（Warp Group Matrix Multiply-Accumulate）</li>
+<li><b>Ping-pong scheduling</b>：让不同 warp group 交替执行，隐藏延迟</li>
+<li><b>FP8 支持</b>：通过 incoherent processing 降低量化误差</li>
+<li>性能：在 H100 上达到 740 TFLOPS（FP16），接近理论极限的 75%</li>
+</ul>
+
+<h3>性能数据对比</h3>
+<table>
+<tr><th>版本</th><th>GPU</th><th>达到峰值比</th><th>核心优化</th></tr>
+<tr><td>FlashAttention-1</td><td>A100</td><td>~30%</td><td>Tiling + Online Softmax</td></tr>
+<tr><td>FlashAttention-2</td><td>A100</td><td>50-73%</td><td>序列并行 + 减少非矩阵运算</td></tr>
+<tr><td>FlashAttention-3</td><td>H100</td><td>~75%</td><td>异步 Tensor Core + Ping-pong</td></tr>
+</table>
+
+<div class="interview-box">
+<ul>
+<li>FA-2 的核心改进：<b>序列维度并行化</b>和<b>减少 non-matmul FLOPs</b></li>
+<li>FA-3 的核心改进：利用 H100 的<b>异步执行</b>能力（WGMMA + TMA）</li>
+<li>面试时能提到具体的硬件利用率数字（如 73% peak FLOPS）会有加分</li>
+</ul>
+</div>
+</div>
+    </section>
+
+    <section class="chapter" id="pagedattention">
+      <div class="ch-head"><div class="num">06</div><div class="t"><h2>PagedAttention</h2><div class="sub">PagedAttention（Kwon et al</div></div></div>
+      <div class="section-card">
+
+<h3>vLLM 的核心创新</h3>
+<p>PagedAttention（Kwon et al., 2023）解决 LLM 推理服务中的 KV Cache 内存管理问题。</p>
+
+<h3>KV Cache 碎片化问题</h3>
+<ul>
+<li>传统方案：为每个请求预分配<b>最大序列长度</b>的连续 KV Cache 空间</li>
+<li>问题1：<b>内部碎片</b> — 大多数请求实际长度远小于最大长度，预分配空间浪费</li>
+<li>问题2：<b>外部碎片</b> — 不同长度请求的分配/释放导致内存空洞</li>
+<li>实测：传统方案的 KV Cache 内存利用率仅 20-40%</li>
+</ul>
+
+<h3>类似 OS 虚拟内存的分页管理</h3>
+<ul>
+<li>将 KV Cache 分成固定大小的 <b>Block</b>（类似内存页，如 16 token/block）</li>
+<li>使用 <b>Block Table</b>（类似页表）映射逻辑位置 → 物理 block 位置</li>
+<li>Block 无需物理连续，按需分配和释放</li>
+<li>支持 <b>Copy-on-Write</b>：beam search 中多个候选序列共享前缀的 KV block</li>
+</ul>
+
+<div class="intuition-box">
+<p>PagedAttention 的本质：把操作系统的虚拟内存分页机制搬到 GPU 显存上 — KV Cache 从"预分配连续大块"变成"按需分配小页"，彻底消灭碎片浪费。</p>
+</div>
+
+<div class="highlight">
+<b>生产数据：</b>vLLM v0.6.0 在 Llama 3 8B / 1×H100 上吞吐量达到 <b>793 tokens/s</b>，相比 HuggingFace TGI 的 ~41 tokens/s 提升 <b>~19×</b>；在 LLaMA-2-7B 高并发场景下峰值吞吐 <b>15,243 tokens/s vs TGI 的 4,156 tokens/s</b>（3.67×）。Stripe 迁移至 vLLM 后处理同等 5000 万次/日 API 调用，GPU 集群缩减 <b>2/3</b>（成本降 73%）。同一硬件，传统方案约 5 个并发序列即 OOM，PagedAttention 可支撑 <b>30~50</b> 个并发序列。（来源：vLLM Blog / arxiv 2511.17593 / introl.com）
+</div>
+
+<h3>收益</h3>
+<table>
+<tr><th>指标</th><th>传统方案</th><th>PagedAttention (vLLM)</th></tr>
+<tr><td>KV Cache 利用率</td><td>20-40%</td><td>接近 100%（&lt;4% 浪费）</td></tr>
+<tr><td>吞吐量</td><td>1×</td><td>2-4× 提升</td></tr>
+<tr><td>支持并发请求数</td><td>受限于碎片</td><td>大幅增加</td></tr>
+<tr><td>Beam Search 内存</td><td>线性增长</td><td>共享前缀，节省 55%</td></tr>
+</table>
+
+<div class="interview-box">
+<ul>
+<li>PagedAttention 的类比：<b>操作系统虚拟内存 → KV Cache 管理</b></li>
+<li>解决的核心问题：KV Cache 的<b>内部碎片 + 外部碎片</b></li>
+<li>三个关键概念：Block、Block Table、Copy-on-Write</li>
+<li>面试角度：vLLM 为什么比 HuggingFace TGI 吞吐高？答案核心就是 PagedAttention</li>
+</ul>
+</div>
+</div>
+    </section>
+
+    <section class="chapter" id="sliding-window-attention">
+      <div class="ch-head"><div class="num">07</div><div class="t"><h2>Sliding Window Attention</h2><div class="sub">Sliding Window Attention (SWA) 限制每个 token 只关注局…</div></div></div>
+      <div class="section-card">
+
+<h3>Mistral 的做法</h3>
+<p>Sliding Window Attention (SWA) 限制每个 token 只关注局部窗口内的 token：</p>
+<div class="formula">
+Attention(i) = softmax(Q<sub>i</sub> · K<sub>[i-w, i]</sub><sup>T</sup> / √d) · V<sub>[i-w, i]</sub><br>
+其中 w = 窗口大小（如 Mistral-7B 中 w = 4096）
+</div>
+
+<h3>复杂度优势</h3>
+<table>
+<tr><th>方法</th><th>时间复杂度</th><th>KV Cache 大小</th></tr>
+<tr><td>标准注意力</td><td>O(n² · d)</td><td>O(n · d)</td></tr>
+<tr><td>Sliding Window</td><td>O(n · w · d)</td><td>O(w · d)（固定）</td></tr>
+</table>
+<p>当 n >> w 时，计算和内存都显著降低，且 KV Cache 大小恒定（不随序列增长）。</p>
+
+<h3>通过多层实现"全局感知"</h3>
+<p>虽然单层只看 w 个 token，但信息通过多层传递可以覆盖更远距离：</p>
+<ul>
+<li>第 L 层的有效感受野 = L × w</li>
+<li>Mistral-7B：32 层 × 4096 窗口 = 理论感受野 131,072 token</li>
+<li>高层的 token 间接"看到"了低层的全部信息</li>
+</ul>
+
+<h3>与全注意力的结合</h3>
+<p>实践中常与全注意力交替使用（如 Mixtral 部分层用全注意力），或在最后几层使用全注意力汇总全局信息。</p>
+
+<div class="interview-box">
+<ul>
+<li>SWA 的核心优势：KV Cache 大小<b>恒定</b>（不随序列长度增长）</li>
+<li>面试必答：如何实现全局感知？→ 多层堆叠，有效感受野 = 层数 × 窗口大小</li>
+<li>Mistral-7B 的具体参数：w=4096, 32层</li>
+<li>局限性：对于需要跨越很远距离的推理任务，可能信息传递有损</li>
+</ul>
+</div>
+</div>
+    </section>
+
+    <section class="chapter" id="ring-attention">
+      <div class="ch-head"><div class="num">08</div><div class="t"><h2>Ring Attention</h2><div class="sub">Ring Attention（Liu et al</div></div></div>
+      <div class="section-card">
+
+<h3>分布式长序列训练</h3>
+<p>Ring Attention（Liu et al., 2023）解决单设备显存无法容纳超长序列的问题：</p>
+
+<h3>核心思想</h3>
+<ul>
+<li>将序列分割到多个设备上，每个设备持有一段 Q 和对应的 KV</li>
+<li>设备排列成<b>逻辑环</b></li>
+<li>每个设备计算本地 Q 与当前 KV 块的注意力</li>
+<li>然后将 KV 块传递给环中的下一个设备（环形通信）</li>
+<li>重复直到所有设备都见过所有 KV 块</li>
+</ul>
+
+<h3>环形通信重叠计算</h3>
+<div class="formula">
+Step 1: Device i 计算 Attention(Q<sub>i</sub>, K<sub>i</sub>, V<sub>i</sub>)，同时发送 KV<sub>i</sub> → Device (i+1) % N<br>
+Step 2: Device i 计算 Attention(Q<sub>i</sub>, K<sub>i-1</sub>, V<sub>i-1</sub>)，同时发送 KV<sub>i-1</sub> → 下一设备<br>
+... 重复 N-1 次 ...
+</div>
+<ul>
+<li>关键：<b>通信与计算重叠</b>（overlap），通信几乎被完全隐藏</li>
+<li>使用 Online Softmax（同 FlashAttention）逐块累积注意力结果</li>
+</ul>
+
+<h3>可扩展性</h3>
+<table>
+<tr><th>设备数 N</th><th>每设备序列长度</th><th>总序列长度</th></tr>
+<tr><td>8</td><td>128K</td><td>1M</td></tr>
+<tr><td>64</td><td>128K</td><td>8M</td></tr>
+<tr><td>256</td><td>128K</td><td>32M</td></tr>
+</table>
+<p>理论上可以支持<b>无限长</b>序列（受限于设备数量而非单设备内存）。</p>
+
+<div class="interview-box">
+<ul>
+<li>Ring Attention = <b>序列并行</b> + <b>环形通信</b> + <b>计算/通信重叠</b></li>
+<li>核心前提：通信时间 ≤ 计算时间（才能完全隐藏通信开销）</li>
+<li>与 FlashAttention 互补：单设备用 FlashAttention 优化，多设备用 Ring Attention 扩展</li>
+<li>面试加分：能提到与 Sequence Parallelism、Tensor Parallelism 的区别</li>
+</ul>
+</div>
+</div>
+    </section>
+
+    <section class="chapter" id="ch9">
+      <div class="ch-head"><div class="num">09</div><div class="t"><h2>稀疏注意力</h2><div class="sub">实证发现：标准注意力矩阵中大量权重接近 0，真正重要的注意力连接是稀疏的</div></div></div>
+      <div class="section-card">
+
+<h3>核心动机</h3>
+<p>实证发现：标准注意力矩阵中大量权重接近 0，真正重要的注意力连接是稀疏的。因此可以设计固定或可学习的稀疏 pattern，跳过不重要的位置对。</p>
+
+<h3>Sparse Transformer (2019)</h3>
+<ul>
+<li>OpenAI 提出的早期稀疏注意力方案</li>
+<li>使用<b>固定稀疏 pattern</b>：局部（stride）+ 全局（fixed）</li>
+<li>复杂度：O(n√n)</li>
+</ul>
+
+<h3>Longformer (2020)</h3>
+<ul>
+<li><b>局部窗口</b>：每个 token 关注邻近 w 个 token（类似 SWA）</li>
+<li><b>全局 token</b>：少数特殊 token（如 [CLS]）关注所有位置</li>
+<li>结合局部 + 全局，在长文档任务中表现优异</li>
+<li>复杂度：O(n × w + n × g)，其中 g = 全局 token 数（通常很小）</li>
+</ul>
+
+<h3>BigBird (2020)</h3>
+<p>Google 提出，在 Longformer 基础上增加<b>随机注意力</b>：</p>
+<ul>
+<li><b>局部窗口</b> + <b>全局 token</b> + <b>随机连接</b></li>
+<li>理论证明：这种组合可以模拟任意图灵机（universal approximation）</li>
+<li>随机连接帮助信息在远距离间快速传递</li>
+</ul>
+
+<h3>稀疏 Pattern 设计对比</h3>
+<table>
+<tr><th>方法</th><th>Pattern</th><th>复杂度</th><th>特点</th></tr>
+<tr><td>Sparse Transformer</td><td>Stride + Fixed</td><td>O(n√n)</td><td>固定 pattern</td></tr>
+<tr><td>Longformer</td><td>Local + Global</td><td>O(n·w)</td><td>针对文档任务</td></tr>
+<tr><td>BigBird</td><td>Local + Global + Random</td><td>O(n·w)</td><td>理论可证明通用性</td></tr>
+</table>
+
+<div class="interview-box">
+<ul>
+<li>稀疏注意力的共同思想：大多数 attention 权重不重要，可以跳过</li>
+<li>Longformer 的两个关键设计：<b>局部窗口 + 全局 token</b></li>
+<li>BigBird 增加随机连接的意义：保证理论上的 universal approximation</li>
+<li>局限性：固定 pattern 可能错过动态重要的长距离依赖</li>
+</ul>
+</div>
+</div>
+    </section>
+
+    <section class="chapter" id="ch10">
+      <div class="ch-head"><div class="num">10</div><div class="t"><h2>线性注意力</h2><div class="sub">标准注意力中 softmax 导致 O(n²)，线性注意力通过去掉 softmax 来降低复…</div></div></div>
+      <div class="section-card">
+
+<h3>核心思想</h3>
+<p>标准注意力中 softmax 导致 O(n²)，线性注意力通过去掉 softmax 来降低复杂度：</p>
+<div class="formula">
+标准: Attention = softmax(QK<sup>T</sup>) · V  → O(n²d)<br>
+线性: Attention = φ(Q) · (φ(K)<sup>T</sup> · V)  → O(nd²)
+</div>
+<p>关键：先计算 <code>φ(K)<sup>T</sup> · V</code>（形状 d×d），再左乘 <code>φ(Q)</code>。当 d &lt;&lt; n 时，复杂度从 O(n²d) 降到 O(nd²) ≈ O(n)。</p>
+
+<h3>核函数近似</h3>
+<ul>
+<li>用核函数 φ 替代 softmax：<code>softmax(qk<sup>T</sup>) ≈ φ(q)<sup>T</sup> · φ(k)</code></li>
+<li>常见选择：ELU+1、Random Fourier Features、正交随机特征</li>
+</ul>
+
+<h3>Performers (2020)</h3>
+<ul>
+<li>Google 提出 <b>FAVOR+</b> (Fast Attention Via positive Orthogonal Random features)</li>
+<li>使用正交随机特征近似 softmax kernel</li>
+<li>理论上可以无偏近似标准注意力</li>
+<li>实测：在某些任务上精度接近标准注意力，但在语言建模上仍有差距</li>
+</ul>
+
+<h3>Random Feature Attention (RFA)</h3>
+<ul>
+<li>使用随机傅里叶特征近似 softmax</li>
+<li>支持 causal masking（通过 prefix sum 实现）</li>
+</ul>
+
+<h3>为什么没有大规模采用？</h3>
+<ul>
+<li><b>精度差距</b>：核函数近似在长序列语言建模上与 softmax 差距明显</li>
+<li><b>训练不稳定</b>：去掉 softmax 后注意力权重缺乏归一化，易发散</li>
+<li><b>FlashAttention 的出现</b>：精确计算 + IO 优化已足够高效，动力减少</li>
+<li><b>表达能力受限</b>：d×d 的隐式状态无法完整压缩 n×n 的注意力信息</li>
+<li>最新方向：Mamba/State Space Model 从不同角度解决线性复杂度问题</li>
+</ul>
+
+<div class="interview-box">
+<ul>
+<li>线性注意力的核心 trick：改变矩阵乘法顺序 (QK<sup>T</sup>)V → Q(K<sup>T</sup>V)</li>
+<li>为什么不流行的答案：<b>精度差距 + FlashAttention 足够好 + SSM 更有前途</b></li>
+<li>面试中如果提到线性注意力，通常会被追问"为什么没有取代标准注意力"</li>
+<li>了解 Performers 的 FAVOR+ 机制即可，不需要深入推导</li>
+</ul>
+</div>
+</div>
+    </section>
+
+    <section class="chapter" id="q-a-10">
+      <div class="ch-head"><div class="num">11</div><div class="t"><h2>Q&amp;A（10 题）</h2><div class="sub">答： 时间复杂度 O(n²d)，空间复杂度 O(n²)（需要存储 n×n 注意力矩阵）</div></div></div>
+      <div class="section-card">
+
+<details class="qa">
+<summary>Q1: 标准注意力的时间和空间复杂度分别是多少？为什么是长上下文的瓶颈？</summary>
+<p><b>答：</b>时间复杂度 O(n²d)，空间复杂度 O(n²)（需要存储 n×n 注意力矩阵）。序列长度翻倍时，计算和内存都增长 4 倍。对于 128K token 的序列，n×n 矩阵约需 30GB（FP16），远超单块 GPU 显存。此外，标准注意力是 memory-bound 的——算力不是瓶颈，数据搬运（HBM ↔ SRAM）才是真正的性能瓶颈。</p>
+</details>
+
+<details class="qa">
+<summary>Q2: MQA 和 GQA 的区别是什么？LLaMA-2 用的是哪种？</summary>
+<p><b>答：</b>MQA 让所有 attention head 共享同一组 KV（KV head=1），GQA 是 MHA 和 MQA 的折中——将 h 个 head 分为 g 组，每组共享一套 KV。LLaMA-2 70B 采用 GQA（h=64, g=8），在保持接近 MHA 精度的同时将 KV Cache 减少 8 倍，实现推理加速。</p>
+</details>
+
+<details class="qa">
+<summary>Q3: FlashAttention 为什么能加速注意力计算？它是近似计算吗？</summary>
+<p><b>答：</b>FlashAttention 不是近似方法，它与标准注意力的数学结果完全一致。加速原因：(1) 通过 Tiling 将计算分块放在快速的 SRAM 中进行；(2) 避免在慢速 HBM 中物化 n×n 注意力矩阵；(3) 使用 Online Softmax 技巧支持分块计算。本质是将 memory-bound 问题转化为更接近 compute-bound 的问题。</p>
+</details>
+
+<details class="qa">
+<summary>Q4: FlashAttention 中 Online Softmax 是怎么工作的？</summary>
+<p><b>答：</b>分块计算 softmax 的难点在于 softmax 需要整行的全局 max 和 sum。Online Softmax 的解决方案：维护 running max (m) 和 running sum (l)。每处理一个新 tile 时，更新 m_new = max(m_old, tile_max)，然后用 correction factor exp(m_old - m_new) 修正之前的部分和。这样最终结果与一次性计算完全一致。</p>
+</details>
+
+<details class="qa">
+<summary>Q5: FlashAttention-2 相比 FlashAttention-1 有哪些改进？</summary>
+<p><b>答：</b>三个主要改进：(1) 在序列长度维度增加并行化（FA-1 只在 batch×head 维度并行）；(2) 减少非矩阵运算（合并 softmax rescaling，减少 warp 间同步）；(3) 更优的 thread block 内工作分配。结果：在 A100 上达到理论峰值的 50-73%，相比 FA-1 速度提升约 2 倍。</p>
+</details>
+
+<details class="qa">
+<summary>Q6: PagedAttention 解决了什么问题？原理是什么？</summary>
+<p><b>答：</b>解决 LLM 推理时 KV Cache 的内存碎片化问题。传统方案预分配最大长度的连续内存，利用率仅 20-40%。PagedAttention 借鉴 OS 虚拟内存思想：将 KV Cache 分成固定大小的 Block，用 Block Table 映射逻辑地址到物理地址，按需分配，支持 Copy-on-Write。这将 KV Cache 利用率提升到接近 100%，吞吐量提升 2-4 倍。</p>
+</details>
+
+<details class="qa">
+<summary>Q7: Sliding Window Attention 如何在有限窗口内实现全局感知？</summary>
+<p><b>答：</b>单层只关注局部 w 个 token，但通过多层堆叠实现全局感知。第 L 层的有效感受野 = L × w。以 Mistral-7B 为例：32 层 × 4096 窗口 = 131,072 的理论感受野。高层 token 通过低层的逐步传递间接获得了全局信息。额外优势：KV Cache 大小恒定（仅需存储 w 个 token 的 KV），不随序列增长。</p>
+</details>
+
+<details class="qa">
+<summary>Q8: Ring Attention 如何实现分布式超长序列训练？</summary>
+<p><b>答：</b>将序列分割到 N 个设备上，设备排列成逻辑环。每个设备持有一段 Q，KV 块在设备间环形传递。关键优化：计算与通信重叠——设备在计算当前 KV 块的注意力时，同时将 KV 块发送给下一个设备。使用 Online Softmax 逐块累积结果。只要通信时间 ≤ 计算时间，通信开销就能被完全隐藏。</p>
+</details>
+
+<details class="qa">
+<summary>Q9: Longformer 和 BigBird 在稀疏注意力设计上有什么区别？</summary>
+<p><b>答：</b>Longformer = 局部窗口 + 全局 token（[CLS] 等少数 token 关注所有位置）。BigBird 在 Longformer 的基础上增加了随机连接（每个 token 随机关注一些远距离 token）。BigBird 的随机连接有理论意义：Google 证明 Local + Global + Random 的组合具有 Turing completeness。两者复杂度都是 O(nw)，但 BigBird 的随机连接有助于远距离信息传递。</p>
+</details>
+
+<details class="qa">
+<summary>Q10: 线性注意力为什么没有大规模取代标准注意力？</summary>
+<p><b>答：</b>四个原因：(1) 精度差距——核函数近似在长序列语言建模上与 softmax 有明显差距；(2) 训练不稳定——缺乏 softmax 归一化容易发散；(3) FlashAttention 的出现使精确 attention 足够高效，减少了近似方法的需求；(4) 表达能力受限——d×d 隐式状态无法完整压缩 n×n 信息。当前趋势：SSM（如 Mamba）从不同角度解决线性复杂度问题，逐步替代了线性注意力的定位。</p>
+</details>
+
+</div>
+    </section>
+
+    <footer>
+      <div class="made">TECH NOTES · Transformer · 整理自 AI Knowledge Hub</div>
+    </footer>
+  </main>
+</div>
+
+<script>
+(function(){var bar=document.getElementById('progress');function u(){var h=document.documentElement;bar.style.width=h.scrollTop/(h.scrollHeight-h.clientHeight)*100+'%';}window.addEventListener('scroll',u,{passive:true});u();})();
+(function(){var links=document.querySelectorAll('aside.toc nav a');var secs=Array.from(document.querySelectorAll('section.chapter'));if(!secs.length)return;function u(){var y=window.scrollY+100,cur=secs[0];for(var i=0;i<secs.length;i++){if(secs[i].offsetTop<=y)cur=secs[i];}var id=cur.id;links.forEach(function(a){a.classList.toggle('active',a.getAttribute('href')==='#'+id);});}window.addEventListener('scroll',u,{passive:true});u();})();
+</script>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

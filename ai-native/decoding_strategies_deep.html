@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>大模型解码策略详解 · AI 工程 — Tech Notes</title>
+<meta name="description" content="Decoding Strategies — 贪心解码 / Beam Search / Temperature与Top-P / 推测解码 / Self-Consistency">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<link rel="stylesheet" href="../assets/kh-guide.css">
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav">
+
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="ai_engineering_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 11 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>L16 · AI 工程</h2>
+    <nav>
+      <ol>
+        <li><a href="#overview" class="active">概览</a></li>
+        <li><a href="#ch1">解码策略全景：从概率分布到文本生成</a></li>
+        <li><a href="#ch2">贪心解码：速度与确定性的极致</a></li>
+        <li><a href="#beam-search">Beam Search：全局最优的追求与时代局限</a></li>
+        <li><a href="#temperature-top-k-top-p-min-p">采样策略：Temperature、Top-K、Top-P 与 Min-P</a></li>
+        <li><a href="#ch5">推测解码：用&quot;小模型起草+大模型验证&quot;突破速度瓶颈</a></li>
+        <li><a href="#self-consistency">Self-Consistency 与高级解码策略</a></li>
+        <li><a href="#ch7">生产环境解码参数配置指南</a></li>
+        <li><a href="#q-a">Q&amp;A</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+    <header class="hero">
+      <div class="badge">L16 · AI 工程</div>
+      <h1>大模型解码策略详解</h1>
+      <p class="sub">Decoding Strategies — 贪心解码 / Beam Search / Temperature与Top-P / 推测解码 / Self-Consistency</p>
+      <div class="meta-row">
+        <span class="pill cyan">AI 工程</span>
+        <span class="pill green">阅读 ~11 min</span>
+        <span class="pill amber">9 章</span>
+      </div>
+    </header>
+
+    <section class="chapter" id="overview">
+      <div class="ch-head"><div class="num">00</div><div class="t"><h2>概览</h2><div class="sub">解码策略的本质：将模型输出的概率分布映射为具体 token 的选择规则——不同规则对应不同的…</div></div></div>
+      <div class="intuition-box"><p>解码策略的本质：将模型输出的概率分布映射为具体 token 的选择规则——不同规则对应不同的任务哲学：确定性追求唯一最优解，随机性拥抱合理多样性。</p></div>
+    </section>
+
+    <section class="chapter" id="ch1">
+      <div class="ch-head"><div class="num">01</div><div class="t"><h2>解码策略全景：从概率分布到文本生成</h2><div class="sub">大模型生成文本时，每一步前向传播都会输出词表中所有 token 的 logits （原始分数…</div></div></div>
+      <p>大模型生成文本时，每一步前向传播都会输出词表中所有 token 的 <span class="term">logits</span>（原始分数），经过 <span class="term">softmax</span> 转换为概率分布。解码策略决定了如何从这个分布中选出下一个 token。</p>
+
+<div class="flow">
+  <div class="flow-title">模型前向传播 → logits 向量 (vocab_size 维)</div>
+  <div class="flow-node accent"><div class="nlabel">logit 修改</div><div class="nsub">重复惩罚/频率惩罚</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">截断策略</div><div class="nsub">Top-K / Top-P / · Min-P / Typical-P</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Temperature</div><div class="nsub">P(i) = exp(z_i/T) · / Σ exp(z_j/T)</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">采样/选择</div><div class="nsub">贪心 argmax · 随机采样 · Beam Search</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">输出下一个 token</div></div>
+</div>
+
+<h3>两大策略阵营</h3>
+
+<table>
+<tr><th>维度</th><th>确定性策略</th><th>随机性策略</th></tr>
+<tr><td>核心假设</td><td>存在唯一最优解</td><td>接受合理答案的多样性</td></tr>
+<tr><td>代表方法</td><td>贪心解码、Beam Search</td><td>Temperature采样、Top-K、Top-P</td></tr>
+<tr><td>输出特征</td><td>稳定可复现、但可能死板</td><td>多样自然、但质量波动</td></tr>
+<tr><td>典型场景</td><td>代码生成、SQL、JSON抽取</td><td>对话、写作、创意生成</td></tr>
+<tr><td>可复现性</td><td>100%可复现</td><td>需固定seed才能复现</td></tr>
+</table>
+
+<div class="highlight">
+<p>2024年清华/腾讯联合论文的关键发现：解码方法的性能高度依赖任务类型，<strong>对齐（alignment）能缩小不同解码策略之间的性能差距</strong>——经过RLHF对齐的模型在贪心解码下的表现，可能比未对齐模型用复杂采样策略更好。</p>
+</div>
+    </section>
+
+    <section class="chapter" id="ch2">
+      <div class="ch-head"><div class="num">02</div><div class="t"><h2>贪心解码：速度与确定性的极致</h2><div class="sub">贪心解码 = 每一步都选概率最高的 token——局部最优的极致追求，代价是可能陷入复读陷阱</div></div></div>
+      <div class="intuition-box"><p>贪心解码 = 每一步都选概率最高的 token——局部最优的极致追求，代价是可能陷入复读陷阱。</p></div>
+
+<h3>核心机制</h3>
+<p>在每一步 t，贪心解码选择概率最高的 token：</p>
+<pre><code>x_t = argmax P(x_t | x_1, ..., x_{t-1})</code></pre>
+
+<p>实现极其简单：只需一次 <span class="term">argmax</span> 操作，零额外计算开销。在 HuggingFace Transformers 中，这是默认的解码策略。</p>
+
+<h3>贪心解码的复读困境</h3>
+<p>当上下文概率分布高度集中时，贪心解码容易陷入重复循环。例如输入"他很可爱"后，模型可能反复输出相似内容，因为前文的强信号使特定 token 的概率持续占据主导地位。</p>
+
+<table>
+<tr><th>现象</th><th>根因分析</th><th>解决方向</th></tr>
+<tr><td>连续重复同一短语</td><td>上下文概率集中，局部最优 ≠ 全局最优</td><td>引入重复惩罚（Repetition Penalty）</td></tr>
+<tr><td>生成内容过于保守</td><td>始终选最高概率，回避低概率但有价值的token</td><td>切换到采样策略</td></tr>
+<tr><td>长文本质量下降</td><td>错误累积，一步错步步错</td><td>限制生成长度或引入 Contrastive Search</td></tr>
+</table>
+
+<h3>生产场景：贪心解码是最佳选择</h3>
+<p>在结构化输出场景中，贪心解码的稳定性和确定性是不可替代的优势：</p>
+<ul>
+<li><strong>代码生成</strong>：代码语法严格，不需要"创意"，需要精确</li>
+<li><strong>SQL 生成</strong>：SQL 有唯一正确答案，多样性反而引入错误</li>
+<li><strong>JSON Schema 输出</strong>：格式约束下，最高概率 = 最合规</li>
+<li><strong>Function Calling</strong>：工具调用参数需要精确，不需要随机性</li>
+</ul>
+
+<div class="highlight">
+<p>生产建议：对于确定性任务，设置 <code>temperature=0</code> 或 <code>do_sample=False</code>。Anthropic Claude API 允许 temperature 在 0.0-1.0 范围，OpenAI 和 Gemini 允许 0.0-2.0，三者默认值均为 1.0。</p>
+</div>
+    </section>
+
+    <section class="chapter" id="beam-search">
+      <div class="ch-head"><div class="num">03</div><div class="t"><h2>Beam Search：全局最优的追求与时代局限</h2><div class="sub">Beam Search 同时维护 K 条候选路径，最终选整体概率最高的序列——能&quot;看到&quot;贪心…</div></div></div>
+      <div class="intuition-box"><p>Beam Search 同时维护 K 条候选路径，最终选整体概率最高的序列——能"看到"贪心解码错过的更优路径，但代价是 K 倍的显存和计算。</p></div>
+
+<h3>工作原理</h3>
+<pre><code>Beam Search (beam_width=3) 示例：
+
+Step 1:  生成候选 → 保留 Top-3 序列
+         "The" (0.4) | "A" (0.3) | "It" (0.15)
+
+Step 2:  每条路径扩展 → 共产生 3×vocab 候选 → 保留 Top-3
+         "The cat" (0.32) | "The dog" (0.28) | "A cat" (0.21)
+
+Step 3:  继续扩展 → 保留 Top-3
+         "The cat sat" (0.25) | "The dog sat" (0.22) | ...
+
+...直到所有路径生成 EOS 或达到最大长度
+最终选择：整体概率最高的完整序列</code></pre>
+
+<h3>核心参数</h3>
+<table>
+<tr><th>参数</th><th>含义</th><th>典型值</th><th>影响</th></tr>
+<tr><td><code>num_beams</code></td><td>同时维护的候选路径数</td><td>4-8</td><td>↑ 质量↑ 但显存×K</td></tr>
+<tr><td><code>length_penalty</code></td><td>长度惩罚系数</td><td>0.6-1.0</td><td>防止偏好短序列</td></tr>
+<tr><td><code>early_stopping</code></td><td>首个完成即停止</td><td>True/False</td><td>加速但可能错过更优解</td></tr>
+<tr><td><code>no_repeat_ngram_size</code></td><td>禁止N-gram重复</td><td>2-3</td><td>缓解复读问题</td></tr>
+</table>
+
+<h3>Beam Search 在 LLM 时代"失宠"的原因</h3>
+<ol>
+<li><strong>本质矛盾</strong>：开放式生成任务没有唯一最优解，而 Beam Search 追求整体概率最高——这反而导致生成内容枯燥、缺乏多样性</li>
+<li><strong>显存瓶颈</strong>：需维护 K 条路径的 <span class="term">KV Cache</span>，显存消耗线性增长。在 70B 模型上 beam_width=4 意味着 4 倍 KV Cache</li>
+<li><strong>与 Flash Attention 不兼容</strong>：Flash Attention 的 IO-aware 优化假设单次前向传播，Beam Search 的多路径并行与之冲突</li>
+<li><strong>吞吐量线性下降</strong>：beam_width=4 时吞吐量约为贪心的 1/4，在大模型场景下不可接受</li>
+</ol>
+
+<table>
+<tr><th>Beam Width</th><th>质量提升</th><th>吞吐量代价</th><th>适用场景</th></tr>
+<tr><td>1（贪心）</td><td>基线</td><td>1x</td><td>代码/结构化输出</td></tr>
+<tr><td>4</td><td>+5-10%</td><td>~4x</td><td>机器翻译</td></tr>
+<tr><td>8</td><td>+8-15%</td><td>~8x</td><td>受约束生成</td></tr>
+<tr><td>16+</td><td>边际递减</td><td>~16x+</td><td>一般不推荐</td></tr>
+</table>
+
+<h3>Diverse Beam Search 变体</h3>
+<p>为了缓解 Beam Search 输出过于相似的问题，<span class="term">Diverse Beam Search</span> 将 beam 分成多个组，组间强制引入多样性惩罚。例如 <code>num_beams=4, num_beam_groups=2, diversity_penalty=0.5</code>，让不同组产出风格各异的候选。</p>
+    </section>
+
+    <section class="chapter" id="temperature-top-k-top-p-min-p">
+      <div class="ch-head"><div class="num">04</div><div class="t"><h2>采样策略：Temperature、Top-K、Top-P 与 Min-P</h2><div class="sub">采样 = 按概率分布掷骰子</div></div></div>
+      <div class="intuition-box"><p>采样 = 按概率分布掷骰子。Temperature 控制骰子的"偏向程度"，Top-K/Top-P 控制"哪些候选有资格上骰子"。</p></div>
+
+<h3>Temperature：概率分布的"锐化旋钮"</h3>
+<p><span class="term">Temperature</span> 的数学公式：P(token<sub>i</sub>) = exp(z<sub>i</sub>/T) / Σ exp(z<sub>j</sub>/T)</p>
+
+<table>
+<tr><th>Temperature 值</th><th>效果</th><th>分布形态</th><th>推荐场景</th></tr>
+<tr><td>T → 0</td><td>退化为贪心解码</td><td>极度尖锐，几乎只有 argmax</td><td>代码生成、JSON</td></tr>
+<tr><td>T = 0.2-0.5</td><td>聚焦高概率 token</td><td>较尖锐，少量多样性</td><td>技术写作、RAG 回答</td></tr>
+<tr><td>T = 0.7-1.0</td><td>平衡质量与多样性</td><td>原始分布</td><td>通用对话、摘要</td></tr>
+<tr><td>T = 1.0-1.5</td><td>增强多样性</td><td>扁平化，长尾token概率提升</td><td>创意写作、头脑风暴</td></tr>
+<tr><td>T > 1.5</td><td>过度随机</td><td>接近均匀分布</td><td>一般不推荐</td></tr>
+</table>
+
+<h3>Top-K：硬截断</h3>
+<p><span class="term">Top-K</span> 只保留概率最高的 K 个 token，其余概率置零后重新归一化。优点是简单直接，缺点是 K 值是固定的——无论分布是尖锐还是平坦，都只保留 K 个候选。</p>
+
+<h3>Top-P（Nucleus Sampling）：动态截断</h3>
+<p><span class="term">Top-P</span> 按累计概率动态截断：保留累计概率刚好达到 P 的最小 token 集合。当分布尖锐时自动保留少量候选，分布平坦时自动扩大范围——比 Top-K 更灵活。</p>
+
+<div class="flow">
+  <div class="flow-node accent"><div class="nlabel">Top-K vs Top-P 对比（假设 P=0.9, K=5）：</div><div class="nsub">场景A：分布尖锐（1个token概率0.85） · Top-K=5 → 保留5个token（含4个噪声token） · Top-P=0.9 → 保留2个token（0.85+0.06=0.91 ✓） · 场景B：分布平坦（Top-5概率分别为 0.22, 0.20, 0.18, 0.16, 0.14） · Top-K=5 → 保留5个token · Top-P=0.9 → 保留5个token（0.22+0.20+0.18+0.16+0.14=0.90 ✓）</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">Top-P 能根据分布自适应调整候选集大小</div></div>
+</div>
+
+<h3>Min-P：2025-2026 年的新默认</h3>
+<p><span class="term">Min-P</span> 设定一个相对阈值：只保留概率 ≥ (最高概率 × min_p) 的 token。例如 <code>min_p=0.05</code> 意味着如果最高概率 token 为 0.8，则只保留概率 ≥ 0.04 的候选。它结合了 Top-P 的自适应性，同时避免了 Top-P 在极端分布下保留过多低质量 token 的问题。</p>
+
+<table>
+<tr><th>截断策略</th><th>截断方式</th><th>自适应性</th><th>推荐值</th><th>趋势</th></tr>
+<tr><td>Top-K</td><td>固定数量K</td><td>无</td><td>20-50</td><td>逐渐被替代</td></tr>
+<tr><td>Top-P</td><td>累计概率P</td><td>有</td><td>0.85-0.95</td><td>仍广泛使用</td></tr>
+<tr><td>Min-P</td><td>相对阈值</td><td>强</td><td>0.05-0.1</td><td>2025-2026新默认</td></tr>
+<tr><td>Typical-P</td><td>信息熵过滤</td><td>强</td><td>0.9-0.95</td><td>小众但有优势</td></tr>
+</table>
+
+<div class="highlight">
+<p>现代采样管线推荐顺序（2026最佳实践）：原始 logits → 重复惩罚 → DRY → Top-K（可选）→ Top-P / Min-P → Temperature → XTC（仅创意场景）→ softmax → 采样。Temperature 放在截断之后是因为它不影响截断结果的相对排序。</p>
+</div>
+    </section>
+
+    <section class="chapter" id="ch5">
+      <div class="ch-head"><div class="num">05</div><div class="t"><h2>推测解码：用&quot;小模型起草+大模型验证&quot;突破速度瓶颈</h2><div class="sub">推测解码的核心思想：用小模型快速生成 N 个候选 token，大模型一次性并行验证——如果验…</div></div></div>
+      <div class="intuition-box"><p>推测解码的核心思想：用小模型快速生成 N 个候选 token，大模型一次性并行验证——如果验证通过，一次前向传播就能产出 N 个 token 而非 1 个，提速 2-5 倍且输出分布完全不变。</p></div>
+
+<h3>为什么自回归解码慢？</h3>
+<p>自回归解码的瓶颈不在计算，而在<strong>内存带宽</strong>。以 70B 参数模型（FP8）为例：每生成 1 个 token 需要从 HBM 读取约 70GB 权重，在 H200 GPU（~4.8 TB/s 带宽）上单 token 延迟地板约 14ms。算术强度仅约 2 ops/byte，而 GPU 需要 300+ ops/byte 才能达到计算饱和——<strong>解码阶段 95% 的时间在等内存</strong>。</p>
+
+<div class="flow">
+  <div class="flow-title">推测解码流程（Draft 1B → Target 70B）</div>
+  <div class="flow-node accent"><div class="nlabel">1. Draft Model 起草</div><div class="nsub">小模型快速生成 N 个候选 token [tok₁…tok₄]</div></div>
+  <div class="flow-arrow" data-label="提交候选"></div>
+  <div class="flow-node"><div class="nlabel">2. Target Model 并行验证</div><div class="nsub">大模型一次前向传播，并行验证所有 N 个 token</div></div>
+  <div class="flow-arrow" data-label="拒绝采样"></div>
+  <div class="flow-node good"><div class="nlabel">3. 拒绝采样决定前进步数</div>
+    <ul class="pairs">
+      <li><b>全部接受</b><span>前进 N 步</span></li>
+      <li><b>部分接受</b><span>前进 k 步（k&lt;N）+ 重采样</span></li>
+      <li><b>全部拒绝</b><span>前进 1 步 + 重采样</span></li>
+    </ul>
+  </div>
+</div>
+
+<h3>数学保证：输出分布完全不变</h3>
+<p>推测解码通过 <span class="term">拒绝采样</span>（Rejection Sampling）保证输出分布与直接用目标模型采样完全一致。接受概率公式：</p>
+<pre><code>P_accept = min(1, P_target(x) / P_draft(x))</code></pre>
+<p>这意味着质量零损失——不是近似，而是数学上的精确等价。</p>
+
+<h3>四大草稿方法家族（2026年现状）</h3>
+<table>
+<tr><th>方法</th><th>原理</th><th>典型加速比</th><th>部署复杂度</th><th>代表框架</th></tr>
+<tr><td>Vanilla（外部小模型）</td><td>独立小模型（如1B蒸馏版）做草稿</td><td>2-3x</td><td>中（需额外模型）</td><td>vLLM, TensorRT-LLM</td></tr>
+<tr><td>Medusa</td><td>在目标模型上加多个预测头</td><td>2-3x</td><td>低（无需额外模型）</td><td>SGLang</td></tr>
+<tr><td>EAGLE-3</td><td>利用目标模型多层特征做草稿</td><td>3-4x</td><td>中</td><td>SGLang, vLLM</td></tr>
+<tr><td>DFlash（块扩散）</td><td>一次前向传播生成整个候选块</td><td>5-15x</td><td>高</td><td>TensorRT-LLM, vLLM</td></tr>
+</table>
+
+<div class="highlight">
+<p>NVIDIA 2026年6月发布 DFlash 推测解码，在 Blackwell GPU 上对 gpt-oss-120b 模型实现了 <strong>15 倍吞吐量提升</strong>（对比自回归解码），比 EAGLE-3 高 1.5 倍。在 TPU v5p 上，DFlash 实现了平均 3.13 倍加速，峰值达 6 倍。</p>
+</div>
+
+<h3>关键生产参数</h3>
+<table>
+<tr><th>参数</th><th>含义</th><th>推荐值</th><th>调优要点</th></tr>
+<tr><td>Speculative Length (N)</td><td>每次草稿的 token 数</td><td>4-8</td><td>接受率>70%则可增大</td></tr>
+<tr><td>Acceptance Threshold</td><td>接受概率阈值</td><td>默认按公式</td><td>过高会浪费草稿</td></tr>
+<tr><td>Draft Model Size</td><td>草稿模型大小</td><td>目标模型的1-5%</td><td>太大得不偿失</td></tr>
+<tr><td>Acceptance Rate (DAR)</td><td>草稿接受率</td><td>70-85%（结构化）</td><td><50%需排查</td></tr>
+</table>
+    </section>
+
+    <section class="chapter" id="self-consistency">
+      <div class="ch-head"><div class="num">06</div><div class="t"><h2>Self-Consistency 与高级解码策略</h2><div class="sub">Self-Consistency = 让模型用不同采样路径回答同一问题多次，然后多数投票——…</div></div></div>
+      <div class="intuition-box"><p>Self-Consistency = 让模型用不同采样路径回答同一问题多次，然后多数投票——用"群体智慧"对抗单次采样的不稳定性。</p></div>
+
+<h3>Self-Consistency 工作原理</h3>
+<pre><code>Self-Consistency 流程：
+
+问题："24 ÷ 3 + 5 × 2 = ?"
+
+路径1 (T=0.7): "24÷3=8, 5×2=10, 8+10=18"  → 答案: 18
+路径2 (T=0.8): "先算24÷3得8，再5×2得10，加起来18" → 答案: 18
+路径3 (T=0.9): "24÷3=8, 然后5×2=10, 结果是18"   → 答案: 18
+路径4 (T=1.0): "让我算算... 24÷3=7? 不对，=8..." → 答案: 18
+路径5 (T=1.1): "24÷3=8, 5×2=10... 嗯... 20?"   → 答案: 20 ✗
+
+多数投票：18 (4票) vs 20 (1票) → 最终答案: 18 ✓</code></pre>
+
+<h3>适用场景与代价</h3>
+<table>
+<tr><th>维度</th><th>Self-Consistency</th><th>单次采样</th></tr>
+<tr><td>准确率</td><td>显著提升（+5-15% on 数学推理）</td><td>基线</td></tr>
+<tr><td>推理成本</td><td>N 倍（N=采样路径数，通常5-20）</td><td>1x</td></tr>
+<tr><td>延迟</td><td>N 倍串行或并行（受限于batch size）</td><td>1x</td></tr>
+<tr><td>适用任务</td><td>数学推理、逻辑题、代码验证</td><td>通用</td></tr>
+<tr><td>不适用</td><td>开放式生成（无"正确答案"可投票）</td><td>—</td></tr>
+</table>
+
+<h3>其他进阶策略</h3>
+
+<table>
+<tr><th>策略</th><th>核心思想</th><th>应用场景</th></tr>
+<tr><td><span class="term">Contrastive Search</span></td><td>在似然度和退化度之间平衡，减少重复</td><td>长文本生成</td></tr>
+<tr><td><span class="term">Mirostat</span></td><td>自适应控制困惑度（perplexity），维持输出"惊喜度"</td><td>创意写作</td></tr>
+<tr><td><span class="term">DRY</span>（Don't Repeat Yourself）</td><td>智能重复惩罚，区分"合理重复"和"病态重复"</td><td>代码生成中的长序列</td></tr>
+<tr><td><span class="term">XTC</span>（Exclude Top Choices）</td><td>偶尔排除最高概率 token，强迫模型探索</td><td>极端创意场景</td></tr>
+<tr><td><span class="term">Constrained Generation</span></td><td>通过 JSON Schema / 正则约束输出格式</td><td>结构化输出（JSON Mode）</td></tr>
+</table>
+
+<div class="highlight">
+<p>2024年研究发现：采样策略的随机性结合 Self-Consistency，可以在封闭式任务上超越确定性方法——虽然单次不如 Beam Search 稳定，但多次投票后的准确率更高。这是"用随机性换多样性，用投票换可靠性"的精妙平衡。</p>
+</div>
+    </section>
+
+    <section class="chapter" id="ch7">
+      <div class="ch-head"><div class="num">07</div><div class="t"><h2>生产环境解码参数配置指南</h2><div class="sub">没有&quot;万能参数&quot;——解码策略的选择必须匹配任务需求</div></div></div>
+      <div class="intuition-box"><p>没有"万能参数"——解码策略的选择必须匹配任务需求。确定性任务用贪心，创意任务用采样，推理任务用 Self-Consistency。</p></div>
+
+<h3>按场景推荐参数</h3>
+<table>
+<tr><th>场景</th><th>Temperature</th><th>Top-P</th><th>Top-K</th><th>Min-P</th><th>特殊配置</th></tr>
+<tr><td>代码生成</td><td>0.0-0.2</td><td>0.95</td><td>—</td><td>0.05</td><td>Constrained Gen</td></tr>
+<tr><td>RAG 回答</td><td>0.1-0.3</td><td>0.9</td><td>—</td><td>0.05</td><td>—</td></tr>
+<tr><td>通用对话</td><td>0.7</td><td>0.9</td><td>—</td><td>0.05</td><td>—</td></tr>
+<tr><td>创意写作</td><td>0.8-1.2</td><td>0.95</td><td>—</td><td>0.03</td><td>XTC可选</td></tr>
+<tr><td>JSON/Schema</td><td>0.0</td><td>—</td><td>—</td><td>—</td><td>Grammar约束</td></tr>
+<tr><td>数学推理</td><td>0.7-1.0</td><td>0.9</td><td>—</td><td>0.05</td><td>Self-Consistency×8</td></tr>
+<tr><td>角色扮演</td><td>1.0-1.3</td><td>0.95</td><td>—</td><td>0.03</td><td>DRY+XTC</td></tr>
+</table>
+
+<h3>GPU 能耗视角</h3>
+<p>2025年一项系统研究表明，不同解码策略对 GPU 能耗影响巨大。Beam Search 虽然质量可能更高，但能耗成倍增长；而合适的采样策略在质量损失极小的情况下可显著降低能耗。在绿色 AI 的趋势下，解码策略选择也需考虑能效比。</p>
+
+<div class="practice-grid">
+<div class="do">
+<ul>
+<li>按任务类型选择策略，不要一个参数打天下</li>
+<li>生产环境固定 seed 保证可复现性</li>
+<li>对 RAG 场景优先 Temperature=0.1-0.3 + Min-P=0.05</li>
+<li>大规模部署时启用推测解码（vLLM 0.7+ 默认开启）</li>
+<li>监控 Acceptance Rate 指标，<50% 需调优</li>
+</ul>
+</div>
+<div class="dont">
+<ul>
+<li>不要对代码生成使用高 Temperature（会产生语法错误）</li>
+<li>不要在 70B 模型上用大 beam_width（显存爆炸）</li>
+<li>不要忽略 Min-P——它是 2026 年的最佳实践默认值</li>
+<li>不要同时启用 Top-K 和 Top-P——通常只需一个</li>
+<li>不要在没有 Self-Consistency 的情况下对数学推理用高 Temperature</li>
+</ul>
+</div>
+</div>
+    </section>
+
+    <section class="chapter" id="q-a">
+      <div class="ch-head"><div class="num">08</div><div class="t"><h2>Q&amp;A</h2></div></div>
+      <details class="qa">
+<summary>贪心解码和 Beam Search 的核心区别是什么？为什么 LLM 时代 Beam Search 不再主流？</summary>
+<div class="a">贪心解码每步只保留 1 个最优 token，Beam Search 同时维护 K 条路径最终选整体最优序列。Beam Search 在 LLM 时代失宠的三个核心原因：(1) 开放式生成没有唯一最优解，Beam 追求全局最优反而导致输出枯燥；(2) K 条路径需要 K 倍 KV Cache，在 70B 模型上显存消耗巨大；(3) 与 Flash Attention 等现代优化不兼容，吞吐量线性下降。</div>
+</details>
+
+<details class="qa">
+<summary>Temperature、Top-K、Top-P 三者如何配合？推荐的使用顺序是什么？</summary>
+<div class="a">2026 年推荐实践：(1) 首先用 Min-P（0.05-0.1）做相对阈值截断，替代 Top-K 的硬截断；(2) 可选叠加 Top-P（0.85-0.95）做累计概率截断；(3) 最后应用 Temperature 调节分布锐度。关键原则是 Temperature 放在截断之后，因为截断只看相对排序不受 Temperature 影响，这样不同 Temperature 下截断行为更一致。</div>
+</details>
+
+<details class="qa">
+<summary>推测解码如何保证输出质量不变？实际加速比受什么因素影响？</summary>
+<div class="a">推测解码通过拒绝采样（Rejection Sampling）保证输出分布与目标模型完全一致——接受概率 P_accept = min(1, P_target/P_draft)。当草稿模型与目标模型分布越接近，接受率越高，加速比越大。实际加速比取决于：(1) 草稿模型质量（接受率 70-85% 为健康范围）；(2) 草稿长度（通常 4-8 tokens）；(3) 任务类型（结构化文本接受率高于创意文本）。2026 年 DFlash 方法在 Blackwell GPU 上实现了最高 15 倍加速。</div>
+</details>
+
+<details class="qa">
+<summary>Self-Consistency 适用于哪些任务？成本如何控制？</summary>
+<div class="a">Self-Consistency 最适合有"正确答案"的推理任务：数学题、逻辑推理、代码验证等。它通过多次采样（通常 5-20 条路径）+ 多数投票来提升准确率，代价是 N 倍的推理成本和延迟。成本控制方法：(1) 用较低 Temperature（0.7-1.0）减少路径发散；(2) 设置早停——如果前 5 条路径中 4 条一致就提前终止；(3) 只在高价值/高风险查询上启用。不适用于开放式生成任务（无正确答案可投票）。</div>
+</details>
+
+<details class="qa">
+<summary>Min-P 为什么被认为是 2026 年的最佳默认截断策略？</summary>
+<div class="a">Min-P 设定相对阈值：只保留概率 ≥ (最高概率 × min_p) 的 token。相比 Top-K（固定数量）和 Top-P（累计概率），Min-P 的优势在于：(1) 自适应性强——分布尖锐时自动保留少量候选，平坦时自动扩大；(2) 避免了 Top-P 在极端分布下保留过多低质量 token 的问题；(3) 语义更直观——"至少要有最优候选的 5% 概率才值得考虑"。推荐值 min_p=0.05-0.1，几乎所有场景都适用。</div>
+</details>
+
+<details class="qa">
+<summary>如何在生产环境中为不同场景配置解码参数？</summary>
+<div class="a">按任务类型配置：(1) 代码/JSON 生成：temperature=0, constrained generation；(2) RAG 回答：temperature=0.1-0.3, min_p=0.05, top_p=0.9；(3) 通用对话：temperature=0.7, min_p=0.05, top_p=0.9；(4) 创意写作：temperature=0.8-1.2, min_p=0.03, top_p=0.95。大规模部署时启用推测解码（vLLM 0.7+ 默认开启），监控 Acceptance Rate。生产环境务必固定 random seed 保证可复现性。</div>
+</details>
+
+<details class="qa">
+<summary>DRY 和 XTC 这些新策略分别解决什么问题？</summary>
+<div class="a">DRY（Don't Repeat Yourself）解决长序列中的重复问题——它能区分"合理重复"（如代码中的循环结构）和"病态重复"（无意义的复读），比简单的 Repetition Penalty 更智能。XTC（Exclude Top Choices）在创意场景中偶尔排除最高概率 token，迫使模型探索更有趣的表达——适用于角色扮演和极端创意写作，但在生产环境中需谨慎使用，因为它会显著降低输出可控性。</div>
+</details>
+    </section>
+
+    <footer>
+      <div class="made">TECH NOTES · AI 工程 · 整理自 AI Knowledge Hub</div>
+    </footer>
+  </main>
+</div>
+
+<script>
+(function(){var bar=document.getElementById('progress');function u(){var h=document.documentElement;bar.style.width=h.scrollTop/(h.scrollHeight-h.clientHeight)*100+'%';}window.addEventListener('scroll',u,{passive:true});u();})();
+(function(){var links=document.querySelectorAll('aside.toc nav a');var secs=Array.from(document.querySelectorAll('section.chapter'));if(!secs.length)return;function u(){var y=window.scrollY+100,cur=secs[0];for(var i=0;i<secs.length;i++){if(secs[i].offsetTop<=y)cur=secs[i];}var id=cur.id;links.forEach(function(a){a.classList.toggle('active',a.getAttribute('href')==='#'+id);});}window.addEventListener('scroll',u,{passive:true});u();})();
+</script>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

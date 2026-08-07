@@ -1,0 +1,667 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>预训练全流程 · AI 工程 — Tech Notes</title>
+<meta name="description" content="Pre-training Pipeline — 从数据到基础模型的完整链路">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<link rel="stylesheet" href="../assets/kh-guide.css">
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav">
+
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="ai_engineering_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 14 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>W01 · AI 工程</h2>
+    <nav>
+      <ol>
+        <li><a href="#s1" class="active">· 预训练目标</a></li>
+        <li><a href="#s2">· 数据准备</a></li>
+        <li><a href="#s3">· 课程学习 (Curriculum Learning)</a></li>
+        <li><a href="#s4">· 分布式并行策略</a></li>
+        <li><a href="#s5">· 训练稳定性</a></li>
+        <li><a href="#s6">· Checkpoint 与恢复</a></li>
+        <li><a href="#s7">· 训练监控</a></li>
+        <li><a href="#s8">· 训练基础设施</a></li>
+        <li><a href="#s9">· 预训练成本估算</a></li>
+        <li><a href="#qa">Q&amp;A</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+    <header class="hero">
+      <div class="badge">W01 · AI 工程</div>
+      <h1>预训练全流程</h1>
+      <p class="sub">Pre-training Pipeline — 从数据到基础模型的完整链路</p>
+      <div class="meta-row">
+        <span class="pill cyan">AI 工程</span>
+        <span class="pill green">阅读 ~14 min</span>
+        <span class="pill amber">10 章</span>
+      </div>
+    </header>
+
+    <section class="chapter" id="s1">
+      <div class="ch-head"><div class="num">01</div><div class="t"><h2>· 预训练目标</h2><div class="sub">自回归语言模型的核心训练目标：给定前缀序列 x 1 , x 2 , …, x t-1 ，预测…</div></div></div>
+      <h3>1.1 Next Token Prediction (Causal LM)</h3>
+<p>自回归语言模型的核心训练目标：给定前缀序列 <code>x<sub>1</sub>, x<sub>2</sub>, …, x<sub>t-1</sub></code>，预测下一个 token <code>x<sub>t</sub></code>。目标函数为对数似然的最大化：</p>
+<pre><code>L = -∑ log P(x_t | x_1, x_2, ..., x_{t-1}; θ)</code></pre>
+<p>训练时通过 <strong>Causal Mask</strong>（下三角注意力掩码）确保每个位置只能关注其左侧的 token，从而实现自回归生成。</p>
+
+<h3>1.2 为什么简单的语言建模目标如此有效？</h3>
+<ul>
+<li><strong>隐式多任务学习</strong> — 为了准确预测下一个 token，模型需要理解语法、语义、推理、世界知识等，相当于同时学习了无数个子任务。</li>
+<li><strong>无限扩展的无监督数据</strong> — 不需要人工标注，互联网文本天然构成训练样本，可无限扩展数据规模。</li>
+<li><strong>Scaling Law 验证</strong> — Kaplan et al. (2020) 和 Hoffmann et al. (2022, Chinchilla) 证明了在足够数据和算力下，模型性能随参数量/数据量/计算量呈幂律增长。</li>
+<li><strong>信息压缩视角</strong> — 预测下一个 token 本质上是对数据进行压缩，模型被迫构建高效的世界模型来最小化预测误差。</li>
+</ul>
+
+<div class="interview-box">
+<h4>💡 知识要点</h4>
+<ul>
+<li>能完整写出 Causal LM 的损失函数</li>
+<li>理解 Causal Mask 的作用与实现方式（下三角矩阵）</li>
+<li>区分 CLM vs MLM (BERT) 的训练目标差异及其对生成能力的影响</li>
+<li>解释 Scaling Law 的核心发现：参数量、数据量、计算量三者之间的关系</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="s2">
+      <div class="ch-head"><div class="num">02</div><div class="t"><h2>· 数据准备</h2><div class="sub">典型清洗 Pipeline：</div></div></div>
+      <h3>2.1 数据来源</h3>
+<table>
+<tr><th>数据源</th><th>规模</th><th>特点</th><th>典型用途</th></tr>
+<tr><td>Common Crawl</td><td>PB 级</td><td>覆盖面广，但噪声多</td><td>通用知识</td></tr>
+<tr><td>Books (Books3, Gutenberg)</td><td>数百 GB</td><td>长文本、高质量叙述</td><td>长程依赖、文学能力</td></tr>
+<tr><td>Code (GitHub, StackOverflow)</td><td>数 TB</td><td>结构化、逻辑性强</td><td>代码生成、推理能力</td></tr>
+<tr><td>Wikipedia</td><td>约 20GB (en)</td><td>事实性强、结构清晰</td><td>知识密度</td></tr>
+<tr><td>学术论文 (ArXiv, S2ORC)</td><td>数百 GB</td><td>专业性强</td><td>科学推理</td></tr>
+<tr><td>社交媒体 / 论坛 (Reddit)</td><td>数 TB</td><td>对话式、口语化</td><td>对话能力</td></tr>
+</table>
+
+<h3>2.2 数据清洗流程</h3>
+<p>典型清洗 Pipeline：</p>
+<pre><code>Raw Data → 语言识别 → URL/HTML 清洗 → 去重(Exact/Fuzzy)
+         → 质量过滤(Perplexity/分类器) → 毒性过滤 → 个人信息移除 → 最终数据集</code></pre>
+<ul>
+<li><strong>Exact Dedup</strong>：基于 hash 的精确去重（文档级 / 段落级）</li>
+<li><strong>Fuzzy Dedup (MinHash + LSH)</strong>：将文档转化为 n-gram 集合 → 计算 MinHash 签名 → LSH 分桶 → 相似度阈值过滤（通常 Jaccard &gt; 0.8）</li>
+<li><strong>质量评分</strong>：使用 fastText 分类器 或 KenLM Perplexity 打分，过滤低质量文本</li>
+</ul>
+
+<h3>2.3 MinHash 去重详解</h3>
+<pre><code># MinHash 去重核心流程
+1. 对每个文档提取 n-gram (通常 5-gram)
+2. 对每个 n-gram 集合计算 K 个 hash 函数的最小值 → 签名向量 (K维)
+3. 将签名向量切分为 B 个 band，每个 band 含 R 行 (K = B × R)
+4. 同一 band 内签名完全相同的文档放入同一桶
+5. 对桶内文档对计算精确 Jaccard 相似度
+6. 相似度 > 阈值的文档保留一个，其余删除
+
+# 参数选择
+- K=128, B=20, R=5 → 候选对阈值约 ≈ (1/20)^(1/5) ≈ 0.55
+- 实际使用中常见 Jaccard 阈值 0.7~0.9</code></pre>
+
+<h3>2.4 数据配比策略</h3>
+<ul>
+<li><strong>经验法则</strong>：Web 数据 ≈ 60-70%，Books ≈ 10-15%，Code ≈ 10-15%，Wikipedia ≈ 5%，学术 ≈ 5%</li>
+<li><strong>Upsampling</strong>：对高质量小规模数据源（如 Wikipedia）进行重复采样，提升其在整体数据中的占比</li>
+<li><strong>DoReMi</strong>（Xie et al., 2023）：使用小规模代理模型自动学习最优数据配比</li>
+<li><strong>数据配比对最终模型能力影响显著</strong>：Code 数据占比提升可增强推理能力（GPT-4 Technical Report 间接证实）</li>
+</ul>
+
+<div class="interview-box">
+<h4>💡 知识要点</h4>
+<ul>
+<li>完整描述 MinHash + LSH 的工作流程及参数含义（B, R, K）</li>
+<li>解释为什么需要 Fuzzy Dedup 而非仅 Exact Dedup</li>
+<li>Web 数据的典型清洗 pipeline 有哪些步骤</li>
+<li>数据配比对模型能力的影响（Code → 推理，Books → 长程依赖）</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="s3">
+      <div class="ch-head"><div class="num">03</div><div class="t"><h2>· 课程学习 (Curriculum Learning)</h2><div class="sub">研究表明，训练数据的呈现顺序会显著影响模型收敛速度和最终性能</div></div></div>
+      <h3>3.1 数据排列顺序的影响</h3>
+<p>研究表明，训练数据的呈现顺序会显著影响模型收敛速度和最终性能。随机 shuffle 是 baseline，但有策略地组织数据顺序可以带来收益。</p>
+
+<h3>3.2 由易到难 (Easy-to-Hard)</h3>
+<ul>
+<li><strong>核心思想</strong>：先用"简单"样本（短文本、低困惑度、结构清晰）训练，逐步引入"困难"样本（长文本、高困惑度、噪声多）</li>
+<li><strong>难度衡量</strong>：文本长度、语言模型困惑度、n-gram 丰富度、领域复杂度</li>
+<li><strong>效果</strong>：加速早期收敛，某些场景下可提升最终性能 1-3%</li>
+</ul>
+
+<h3>3.3 数据混合调度 (Data Mixing Schedule)</h3>
+<ul>
+<li><strong>静态混合</strong>：整个训练过程中各数据源比例固定</li>
+<li><strong>动态混合</strong>：随训练进度调整数据源配比，例如：
+  <ul>
+    <li>早期多用 Web 数据 → 后期增加 Code/Math 占比（增强推理）</li>
+    <li>早期多语言混合 → 后期增加目标语言占比</li>
+  </ul>
+</li>
+<li><strong>GLaM / PaLM 实践</strong>：根据各数据源上的 validation loss 动态调整权重</li>
+</ul>
+
+<div class="interview-box">
+<h4>💡 知识要点</h4>
+<ul>
+<li>Curriculum Learning 对预训练的收益是否一致？实际中更多使用随机 shuffle</li>
+<li>动态数据混合与静态混合的权衡：实现复杂度 vs 性能提升</li>
+<li>如何定义样本"难度"？不同定义对训练行为的影响</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="s4">
+      <div class="ch-head"><div class="num">04</div><div class="t"><h2>· 分布式并行策略</h2><div class="sub">实际大模型训练通常组合使用 DP + TP + PP （即 3D 并行）：</div></div></div>
+      <h3>4.1 Data Parallelism (DP)</h3>
+<ul>
+<li>每个 GPU 持有完整模型副本，对不同 mini-batch 并行前向/反向传播</li>
+<li>反向传播后通过 <strong>AllReduce</strong> 同步梯度</li>
+<li>优点：实现简单，线性加速</li>
+<li>瓶颈：每个 GPU 需容纳完整模型 + 优化器状态 → 大模型放不下</li>
+</ul>
+
+<h3>4.2 Tensor Parallelism (TP)</h3>
+<ul>
+<li>将单个算子（如矩阵乘法）沿行或列维度切分到多个 GPU</li>
+<li>例如：将 <code>Y = XA</code> 中的 A 沿列切分为 <code>[A₁, A₂]</code>，两个 GPU 分别计算 <code>XA₁</code> 和 <code>XA₂</code></li>
+<li>需要 <strong>AllReduce / AllGather</strong> 在每层之间同步中间结果</li>
+<li>要求 <strong>高带宽互连</strong>（NVLink），通常在同节点内使用（TP=4 或 TP=8）</li>
+</ul>
+
+<h3>4.3 Pipeline Parallelism (PP)</h3>
+<ul>
+<li>将模型按层切分，不同层组放在不同 GPU 上</li>
+<li>使用 <strong>micro-batch</strong> 流水线调度减少 GPU 空闲（bubble）</li>
+<li>调度策略：GPipe（同步）、1F1B（one-forward-one-backward，减少峰值显存）</li>
+<li>Bubble Ratio ≈ <code>(pp_degree - 1) / num_micro_batches</code></li>
+</ul>
+
+<h3>4.4 ZeRO (Zero Redundancy Optimizer)</h3>
+<table>
+<tr><th>阶段</th><th>分片内容</th><th>通信量</th><th>显存节省</th></tr>
+<tr><td>ZeRO-1</td><td>优化器状态 (Optimizer States)</td><td>与 DP 相同</td><td>约 4×</td></tr>
+<tr><td>ZeRO-2</td><td>优化器状态 + 梯度 (Gradients)</td><td>与 DP 相同</td><td>约 8×</td></tr>
+<tr><td>ZeRO-3</td><td>优化器状态 + 梯度 + 参数 (Parameters)</td><td>1.5× DP</td><td>线性于 GPU 数</td></tr>
+</table>
+
+<h3>4.5 3D 并行</h3>
+<p>实际大模型训练通常组合使用 <strong>DP + TP + PP</strong>（即 3D 并行）：</p>
+<pre><code>总 GPU 数 = DP_degree × TP_degree × PP_degree
+
+典型配置 (LLaMA-65B, 2048 GPUs):
+- TP = 8   (节点内, 8卡 NVLink 互连)
+- PP = 4   (跨 4 个节点, 流水线)
+- DP = 64  (2048 / 8 / 4 = 64 路数据并行)</code></pre>
+
+<h3>4.6 各策略适用场景对比</h3>
+<table>
+<tr><th>策略</th><th>切分维度</th><th>通信模式</th><th>适用场景</th><th>瓶颈</th></tr>
+<tr><td>DP</td><td>数据 (Batch)</td><td>AllReduce 梯度</td><td>模型放得下单卡</td><td>显存</td></tr>
+<tr><td>TP</td><td>模型 (算子内)</td><td>AllReduce / AllGather 每层</td><td>节点内高带宽</td><td>通信延迟</td></tr>
+<tr><td>PP</td><td>模型 (层间)</td><td>点对点发送激活值</td><td>跨节点、层数多</td><td>Bubble 时间</td></tr>
+<tr><td>ZeRO</td><td>状态 / 梯度 / 参数</td><td>AllGather + ReduceScatter</td><td>显存不足时替代 TP</td><td>通信开销</td></tr>
+<tr><td>3D 并行</td><td>数据+算子+层</td><td>混合</td><td>千卡大模型训练</td><td>调参复杂</td></tr>
+</table>
+
+<div class="interview-box">
+<h4>💡 知识要点</h4>
+<ul>
+<li>画出 3D 并行的 GPU 分组示意，说明 TP/PP/DP 的嵌套关系</li>
+<li>TP 为什么通常限制在节点内？NVLink 带宽 vs PCIe/InfiniBand 带宽差距</li>
+<li>ZeRO-3 与 TP 的取舍：ZeRO-3 通信量更大但实现更灵活</li>
+<li>Pipeline Parallelism 中 bubble 的计算公式及减少 bubble 的方法</li>
+<li>给定 GPU 数量和模型规模，如何设计并行策略？</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="s5">
+      <div class="ch-head"><div class="num">05</div><div class="t"><h2>· 训练稳定性</h2><div class="sub"># 全局梯度范数裁剪 total_norm = sqrt(sum(p</div></div></div>
+      <h3>5.1 Loss Spike 处理</h3>
+<ul>
+<li><strong>现象</strong>：训练过程中 loss 突然飙升，然后缓慢恢复或不恢复</li>
+<li><strong>常见原因</strong>：数据质量问题（异常样本）、学习率过大、数值溢出（fp16 下溢/上溢）、梯度爆炸</li>
+<li><strong>处理方法</strong>：
+  <ul>
+    <li>从最近的健康 checkpoint 回退，跳过问题数据</li>
+    <li>降低学习率重新训练</li>
+    <li>增加梯度裁剪强度</li>
+    <li>PaLM 论文做法：记录 spike 对应的数据 batch，从前一个 checkpoint 跳过该 batch 继续训练</li>
+  </ul>
+</li>
+</ul>
+
+<h3>5.2 梯度裁剪 (Gradient Clipping)</h3>
+<pre><code># 全局梯度范数裁剪
+total_norm = sqrt(sum(p.grad.norm(2)^2 for p in parameters))
+if total_norm > max_norm:
+    scale = max_norm / total_norm
+    for p in parameters:
+        p.grad *= scale
+
+# 常见配置: max_norm = 1.0</code></pre>
+
+<h3>5.3 学习率调度：Warmup + Cosine Decay</h3>
+<pre><code># 典型 LR Schedule
+Phase 1 — Linear Warmup:  lr = lr_max × (step / warmup_steps)
+Phase 2 — Cosine Decay:   lr = lr_min + 0.5×(lr_max - lr_min)×(1 + cos(π × progress))
+
+# 常见配置
+lr_max = 3e-4 (小模型) ~ 1.5e-4 (大模型)
+warmup_steps = 2000
+lr_min = lr_max × 0.1</code></pre>
+<p>Warmup 的作用：训练初期参数随机，梯度方差大，小学习率可以稳定早期训练方向。</p>
+
+<h3>5.4 权重初始化</h3>
+<ul>
+<li><strong>GPT 系列</strong>：残差连接前的线性层权重缩放 <code>1/√(2N)</code>，N 为层数</li>
+<li><strong>μP (Maximal Update Parameterization)</strong>：通过调整初始化和学习率，使超参数可从小模型直接迁移到大模型</li>
+<li><strong>实践建议</strong>：Embedding 层使用 <code>N(0, 0.02)</code>，其余层使用 Xavier/He 初始化</li>
+</ul>
+
+<div class="interview-box">
+<h4>💡 知识要点</h4>
+<ul>
+<li>Loss spike 的排查步骤和应对策略</li>
+<li>梯度裁剪的原理及 max_norm 的选择依据</li>
+<li>为什么需要 Warmup？去掉 Warmup 会怎样？</li>
+<li>Cosine Decay vs Linear Decay 的区别及实践效果</li>
+<li>μP 如何实现超参数迁移？</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="s6">
+      <div class="ch-head"><div class="num">06</div><div class="t"><h2>· Checkpoint 与恢复</h2></div></div>
+      <h3>6.1 Checkpoint 策略</h3>
+<ul>
+<li><strong>保存内容</strong>：模型参数、优化器状态（momentum, variance）、学习率调度器状态、RNG 状态、当前 step/epoch、数据加载器状态</li>
+<li><strong>保存频率</strong>：通常每 500-2000 步保存一次，平衡存储成本与恢复粒度</li>
+<li><strong>异步保存</strong>：将 checkpoint 写入后台线程，避免阻塞训练</li>
+<li><strong>滚动覆盖</strong>：只保留最近 N 个 checkpoint + 关键里程碑 checkpoint</li>
+</ul>
+
+<h3>6.2 断点续训 (Resume from Checkpoint)</h3>
+<ul>
+<li>恢复模型参数 + 优化器状态 + LR scheduler 状态</li>
+<li><strong>数据加载器恢复</strong>：需要记录已消费的数据样本索引，确保不重复/不遗漏</li>
+<li><strong>RNG 状态恢复</strong>：确保 Dropout、数据增强等随机操作的可复现性</li>
+<li><strong>注意</strong>：修改并行策略（如 TP/PP degree 变化）后需要进行 checkpoint resharding</li>
+</ul>
+
+<h3>6.3 Checkpoint 合并</h3>
+<ul>
+<li><strong>分布式 Checkpoint</strong>：TP/PP 训练时每个 rank 保存自己的 shard，合并为完整 checkpoint 用于推理或不同并行度的训练</li>
+<li><strong>合并操作</strong>：将切分的参数张量沿正确维度拼接（TP 列切分 → concat along dim=1）</li>
+<li><strong>工具</strong>：Megatron-LM 提供 <code>tools/checkpoint_converter.py</code>，DeepSpeed 提供 <code>zero_to_fp32.py</code></li>
+</ul>
+
+<div class="interview-box">
+<h4>💡 知识要点</h4>
+<ul>
+<li>Checkpoint 中需要保存哪些状态？缺少哪一项会导致什么问题？</li>
+<li>TP checkpoint 合并时如何确定拼接维度？</li>
+<li>异步 checkpoint 保存的实现思路及注意事项</li>
+<li>如何在修改并行度后进行 checkpoint resharding？</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="s7">
+      <div class="ch-head"><div class="num">07</div><div class="t"><h2>· 训练监控</h2></div></div>
+      <h3>7.1 核心监控指标</h3>
+<table>
+<tr><th>指标</th><th>含义</th><th>健康范围</th><th>异常信号</th></tr>
+<tr><td>Training Loss</td><td>NTP 交叉熵损失</td><td>平滑下降</td><td>突然飙升 (spike)、长时间停滞 (plateau)</td></tr>
+<tr><td>Gradient Norm</td><td>全局梯度 L2 范数</td><td>稳定或缓慢下降</td><td>突然增大 → 梯度爆炸</td></tr>
+<tr><td>Learning Rate</td><td>当前学习率</td><td>按预设 schedule 变化</td><td>异常跳变</td></tr>
+<tr><td>Perplexity</td><td>exp(loss)，衡量预测不确定性</td><td>持续下降</td><td>与 loss 趋势不一致</td></tr>
+<tr><td>MFU</td><td>实际算力利用率 / 理论峰值</td><td>40%-60%</td><td>显著低于预期 → 通信/IO 瓶颈</td></tr>
+</table>
+
+<h3>7.2 MFU (Model FLOPs Utilization)</h3>
+<pre><code>MFU = 实际模型计算 FLOPs / (GPU 理论峰值 FLOPs × 时间)
+
+# 例：A100 80GB
+# BF16 峰值: 312 TFLOPS
+# 实际模型 FLOPs per step: 通过 6ND 公式估算
+# MFU = (tokens_per_sec × 6 × N_params) / (num_gpus × 312e12)
+
+# 业界水平
+# PaLM: ~46.2% MFU (最佳实践)
+# 一般训练: 30%-50%</code></pre>
+
+<h3>7.3 监控工具与实践</h3>
+<ul>
+<li><strong>Weights &amp; Biases (W&amp;B)</strong>：最常用的训练可视化平台</li>
+<li><strong>TensorBoard</strong>：TensorFlow/PyTorch 原生支持</li>
+<li><strong>自定义告警</strong>：loss spike / 梯度范数异常时自动触发 Slack 通知</li>
+<li><strong>日志频率</strong>：每 10-50 步记录一次，避免 IO 开销过大</li>
+</ul>
+
+<div class="interview-box">
+<h4>💡 知识要点</h4>
+<ul>
+<li>MFU 的计算方法及其影响因素（通信开销、显存 IO、kernel 效率）</li>
+<li>训练 loss 出现 plateau 时的排查思路</li>
+<li>梯度范数突然增大说明什么问题？如何处理？</li>
+<li>如何通过 Perplexity 比较不同模型的能力？</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="s8">
+      <div class="ch-head"><div class="num">08</div><div class="t"><h2>· 训练基础设施</h2></div></div>
+      <h3>8.1 GPU 集群</h3>
+<table>
+<tr><th>GPU 型号</th><th>显存</th><th>BF16 算力</th><th>互连</th><th>典型用途</th></tr>
+<tr><td>A100 80GB</td><td>80 GB HBM2e</td><td>312 TFLOPS</td><td>NVLink 600GB/s</td><td>主流训练卡</td></tr>
+<tr><td>H100 SXM</td><td>80 GB HBM3</td><td>989 TFLOPS</td><td>NVLink 900GB/s</td><td>下一代训练卡</td></tr>
+<tr><td>H200</td><td>141 GB HBM3e</td><td>989 TFLOPS</td><td>NVLink 900GB/s</td><td>大显存需求</td></tr>
+</table>
+
+<h3>8.2 网络互连</h3>
+<ul>
+<li><strong>NVLink</strong>：GPU 节点内互连，A100 = 600 GB/s (双向)，H100 = 900 GB/s；用于 Tensor Parallelism</li>
+<li><strong>NVSwitch</strong>：实现节点内所有 GPU 的全互连（全带宽 any-to-any）</li>
+<li><strong>InfiniBand (IB)</strong>：跨节点互连，HDR = 200 Gbps，NDR = 400 Gbps；用于 DP 梯度同步和 PP 激活值传输</li>
+<li><strong>RoCE v2</strong>：基于以太网的 RDMA，成本低于 IB 但延迟略高</li>
+</ul>
+
+<h3>8.3 训练框架选择</h3>
+<table>
+<tr><th>框架</th><th>优势</th><th>适用场景</th></tr>
+<tr><td>Megatron-LM (NVIDIA)</td><td>高度优化的 TP/PP 实现，MFU 高</td><td>NVIDIA GPU 大规模训练</td></tr>
+<tr><td>DeepSpeed (Microsoft)</td><td>ZeRO 系列、易用性强、与 HuggingFace 集成</td><td>快速实验、中小规模训练</td></tr>
+<tr><td>Megatron-DeepSpeed</td><td>结合两者优势</td><td>超大规模训练（如 BLOOM-176B）</td></tr>
+<tr><td>FSDP (PyTorch 原生)</td><td>原生集成、类似 ZeRO-3</td><td>PyTorch 生态、中等规模</td></tr>
+<tr><td>JAX/XLA (Google)</td><td>函数式编程、TPU 优化</td><td>Google 生态、TPU 训练</td></tr>
+</table>
+
+<div class="interview-box">
+<h4>💡 知识要点</h4>
+<ul>
+<li>NVLink vs InfiniBand 的带宽差距及对并行策略设计的影响</li>
+<li>Megatron-LM vs DeepSpeed 的核心差异和选型依据</li>
+<li>FSDP 与 ZeRO-3 的异同</li>
+<li>为什么 TP 必须在 NVLink 互连内？跨节点 TP 会怎样？</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="s9">
+      <div class="ch-head"><div class="num">09</div><div class="t"><h2>· 预训练成本估算</h2><div class="sub">C ≈ 6 × N × D 其中: C = 总计算量 (FLOPs) N = 模型参数量 D…</div></div></div>
+      <h3>9.1 FLOPs 计算公式 (6ND)</h3>
+<pre><code>C ≈ 6 × N × D
+
+其中:
+  C = 总计算量 (FLOPs)
+  N = 模型参数量
+  D = 训练 token 数
+
+# 系数 6 的来源:
+# 前向传播 ≈ 2ND (每个参数参与一次乘法和一次加法)
+# 反向传播 ≈ 4ND (梯度计算约为前向的 2 倍)
+# 合计 ≈ 6ND</code></pre>
+
+<h3>9.2 GPU 小时估算</h3>
+<pre><code>GPU 小时 = C / (GPU_FLOPs × MFU × 3600)
+
+# 示例：LLaMA-2 70B
+N = 70 × 10^9
+D = 2 × 10^12 tokens
+C = 6 × 70e9 × 2e12 = 8.4 × 10^23 FLOPs
+
+# 使用 A100 (312 TFLOPS), MFU = 45%
+GPU_实际算力 = 312e12 × 0.45 = 140.4 TFLOPS
+GPU_秒 = 8.4e23 / 140.4e12 ≈ 5.98 × 10^9 秒
+GPU_小时 ≈ 1,661,538 GPU-hours
+
+# 使用 2048 块 A100
+墙钟时间 ≈ 1,661,538 / 2048 ≈ 811 小时 ≈ 34 天</code></pre>
+
+<h3>9.3 实际成本案例</h3>
+<table>
+<tr><th>模型</th><th>参数量</th><th>训练 Tokens</th><th>GPU 类型×数量</th><th>训练时间</th><th>估算成本 (USD)</th></tr>
+<tr><td>LLaMA-2 7B</td><td>7B</td><td>2T</td><td>A100×—</td><td>—</td><td>~$150K-200K</td></tr>
+<tr><td>LLaMA-2 70B</td><td>70B</td><td>2T</td><td>A100×2048</td><td>~34 天</td><td>~$2M-3M</td></tr>
+<tr><td>GPT-4 (估)</td><td>~1.8T (MoE)</td><td>~13T</td><td>A100×25000</td><td>~100 天</td><td>~$60M-100M</td></tr>
+<tr><td>BLOOM-176B</td><td>176B</td><td>366B</td><td>A100×384</td><td>~118 天</td><td>~$2M-5M</td></tr>
+</table>
+
+<p><strong>云服务参考价格</strong>（2024）：A100 80GB ≈ $1.5-2.0/GPU-hour (竞价实例)，H100 ≈ $2.5-3.5/GPU-hour</p>
+
+<div class="interview-box">
+<h4>💡 知识要点</h4>
+<ul>
+<li>推导 6ND 公式中系数 6 的来源（前向 2 + 反向 4）</li>
+<li>给定模型规模和训练 token 数，估算所需 GPU 小时和成本</li>
+<li>MFU 对实际成本的影响：MFU 从 30% 提升到 50% 可节省 40% 成本</li>
+<li>Chinchilla Optimal：最优的参数量与数据量配比 N ∝ D</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="qa">
+      <div class="ch-head"><div class="num">10</div><div class="t"><h2>Q&amp;A</h2><div class="sub">核心原因 ：</div></div></div>
+      <details class="qa">
+<summary>Q1：为什么大模型预训练几乎都采用 Next Token Prediction 而不是 MLM？</summary>
+<div class="a">
+<p><strong>核心原因</strong>：</p>
+<ul>
+<li><strong>生成能力</strong>：CLM 天然支持自回归生成，训练目标与推理时的生成方式一致；MLM 需要额外适配才能用于文本生成。</li>
+<li><strong>Scaling 效果更好</strong>：实验表明在相同计算预算下，CLM 在大规模时表现更优。GPT-3 证明了 CLM 的 few-shot 能力随规模增长而涌现。</li>
+<li><strong>训练效率</strong>：CLM 每个 token 都参与损失计算（序列中每个位置都要预测），而 MLM 只对被 mask 的 15% token 计算损失。</li>
+<li><strong>简单统一</strong>：一个目标函数覆盖所有能力，无需设计复杂的预训练任务组合。</li>
+</ul>
+</div>
+</details>
+
+<details class="qa">
+<summary>Q2：MinHash 去重中，Band 数 B 和每个 Band 的行数 R 如何影响去重效果？</summary>
+<div class="a">
+<p>设签名长度 K = B × R，两个文档的真实 Jaccard 相似度为 s：</p>
+<ul>
+<li>成为候选对的概率 ≈ <code>1 - (1 - s^R)^B</code></li>
+<li><strong>增大 R</strong>：提高阈值 → 更少误检（false positive），但可能漏检（false negative）</li>
+<li><strong>增大 B</strong>：降低阈值 → 更少漏检，但更多误检</li>
+<li>实际选择需平衡：对于去重任务，通常倾向于低 false negative（不遗漏近似重复），因此适当增大 B</li>
+</ul>
+<p>例：K=128, B=32, R=4 → 阈值约 0.5；K=128, B=16, R=8 → 阈值约 0.7</p>
+</div>
+</details>
+
+<details class="qa">
+<summary>Q3：Tensor Parallelism 和 Pipeline Parallelism 分别适用于什么场景？能否混用？</summary>
+<div class="a">
+<ul>
+<li><strong>TP 适用场景</strong>：节点内高带宽互连（NVLink），单层参数量大需要切分。TP 通信频繁（每层前向/反向各需一次 AllReduce），要求延迟极低。</li>
+<li><strong>PP 适用场景</strong>：跨节点互连（InfiniBand），层数多。PP 只需在流水线边界传递激活值，通信量相对小但有 bubble 开销。</li>
+<li><strong>混用（3D 并行）</strong>：这是大模型训练的标准做法。节点内使用 TP（利用 NVLink），跨节点使用 PP + DP。例如 LLaMA-65B 使用 TP=8（节点内）× PP=4 × DP=64。</li>
+<li>关键设计原则：<strong>通信密集的并行维度放在高带宽互连上</strong>。</li>
+</ul>
+</div>
+</details>
+
+<details class="qa">
+<summary>Q4：ZeRO-3 和 Tensor Parallelism 都能解决模型放不下单卡的问题，如何选择？</summary>
+<div class="a">
+<ul>
+<li><strong>ZeRO-3</strong>：将参数分片存储在不同 GPU，使用时通过 AllGather 收集。优点是实现简单（DeepSpeed 一行配置），不需要修改模型代码。缺点是通信量 = 1.5× DP，且每次前向/反向都需要 AllGather 全量参数。</li>
+<li><strong>TP</strong>：将计算本身切分，每个 GPU 只计算部分结果。通信量相对固定（每层两次 AllReduce），计算和通信可以 overlap。缺点是需要适配模型代码。</li>
+<li><strong>选择建议</strong>：节点内优先 TP（通信效率高），跨节点可用 ZeRO-3（不受带宽限制太多）。实际中两者可结合使用。</li>
+</ul>
+</div>
+</details>
+
+<details class="qa">
+<summary>Q5：训练中出现 Loss Spike 怎么办？具体排查步骤是什么？</summary>
+<div class="a">
+<p><strong>排查步骤</strong>：</p>
+<ol>
+<li><strong>检查数据</strong>：定位 spike 对应的 batch，检查是否有异常样本（超长文本、乱码、重复 token）</li>
+<li><strong>检查梯度范数</strong>：spike 前是否出现梯度范数异常增大</li>
+<li><strong>检查数值</strong>：是否有 NaN/Inf 出现（fp16 溢出）</li>
+<li><strong>检查学习率</strong>：LR schedule 是否异常</li>
+</ol>
+<p><strong>处理方法</strong>：</p>
+<ol>
+<li>回退到 spike 前最近的 checkpoint</li>
+<li>跳过问题数据 batch（PaLM 论文做法）</li>
+<li>如果频繁 spike：降低学习率、增强梯度裁剪、检查数据质量</li>
+<li>考虑切换到 BF16（动态范围更大，不易溢出）</li>
+</ol>
+</div>
+</details>
+
+<details class="qa">
+<summary>Q6：为什么需要 Learning Rate Warmup？去掉会怎样？</summary>
+<div class="a">
+<ul>
+<li><strong>原因</strong>：训练初期参数随机初始化，梯度方差很大且方向不稳定。如果直接使用大学习率，可能导致参数更新过大，模型陷入不好的 loss landscape 区域，甚至发散。</li>
+<li><strong>Warmup 作用</strong>：小学习率让模型先"探索"loss landscape 的大致方向，逐步增大学习率以加速训练。类比开车：先低速观察路况再加速。</li>
+<li><strong>去掉 Warmup 的后果</strong>：
+  <ul>
+    <li>小模型可能影响不大（loss landscape 较简单）</li>
+    <li>大模型大学习率下容易训练不稳定、早期 loss spike</li>
+    <li>Adam 优化器的二阶矩估计在初期不准确，需要时间积累，Warmup 正好提供了这个缓冲期</li>
+  </ul>
+</li>
+</ul>
+</div>
+</details>
+
+<details class="qa">
+<summary>Q7：如何计算预训练所需的总 FLOPs？系数 6 怎么来的？</summary>
+<div class="a">
+<p><strong>公式</strong>：<code>C ≈ 6 × N × D</code>（N = 参数量，D = 训练 token 数）</p>
+<p><strong>系数 6 的推导</strong>：</p>
+<ul>
+<li><strong>前向传播 ≈ 2N FLOPs/token</strong>：Transformer 的计算主体是矩阵乘法，对于形状为 [m, k] × [k, n] 的矩阵乘，计算量为 2mkn。模型的总参数量 N ≈ 12 × L × d²（L 层，维度 d），前向一个 token 约需 2N 次浮点运算。</li>
+<li><strong>反向传播 ≈ 4N FLOPs/token</strong>：反向传播需要计算损失对参数的梯度和对输入的梯度，各自需要一次矩阵乘，因此约为前向的 2 倍。</li>
+<li><strong>合计</strong>：(2 + 4) × N × D = 6ND</li>
+</ul>
+<p><strong>注意</strong>：此公式是近似值，未包含 Attention 计算、LayerNorm、激活函数等开销，实际 FLOPs 可能偏高 5-10%。</p>
+</div>
+</details>
+
+<details class="qa">
+<summary>Q8：Chinchilla Scaling Law 的核心结论是什么？对预训练实践有什么指导？</summary>
+<div class="a">
+<p><strong>核心结论</strong>（Hoffmann et al., 2022）：</p>
+<ul>
+<li>在固定计算预算下，模型参数量 N 和训练数据量 D 应大致等比例扩展：<code>D ≈ 20 × N</code></li>
+<li>这意味着之前许多模型（如 GPT-3 175B 仅用 300B tokens）是"undertrained"的</li>
+</ul>
+<p><strong>实践指导</strong>：</p>
+<ul>
+<li>70B 模型应使用至少 1.4T tokens 训练</li>
+<li>LLaMA 遵循此原则：7B 用 1T tokens，65B 用 1.4T tokens</li>
+<li>LLaMA-2 更进一步：所有尺寸都用 2T tokens，超过 Chinchilla optimal（但推理时更高效）</li>
+<li>近期趋势：<strong>过度训练</strong>（over-training）小模型可能比 Chinchilla optimal 大模型在推理效率上更优</li>
+</ul>
+</div>
+</details>
+
+<details class="qa">
+<summary>Q9：MFU（Model FLOPs Utilization）是什么？影响 MFU 的因素有哪些？</summary>
+<div class="a">
+<p><strong>定义</strong>：MFU = 模型实际计算的 FLOPs / (GPU 理论峰值 FLOPs × 训练时间)</p>
+<p><strong>影响因素</strong>：</p>
+<ul>
+<li><strong>通信开销</strong>：TP/DP/PP 的通信占比越大，MFU 越低。通信与计算的 overlap 能力直接影响 MFU。</li>
+<li><strong>显存 IO</strong>：Attention 计算中的显存读写（FlashAttention 可显著减少）</li>
+<li><strong>CUDA Kernel 效率</strong>：fused kernels、TensorCore 利用率</li>
+<li><strong>Pipeline Bubble</strong>：PP 的空闲时间</li>
+<li><strong>数据加载</strong>：数据预处理和 IO 如果成为瓶颈会降低 MFU</li>
+<li><strong>Batch Size</strong>：过小的 batch size 导致 GPU 利用率低</li>
+</ul>
+<p><strong>业界参考</strong>：PaLM 在 6144 TPU v4 上达到 46.2% MFU，Megatron-LM 在 A100 上可达 50%+。</p>
+</div>
+</details>
+
+<details class="qa">
+<summary>Q10：从零开始预训练一个 7B 模型，你会如何规划整个流程？</summary>
+<div class="a">
+<p><strong>完整流程规划</strong>：</p>
+<ol>
+<li><strong>数据准备（2-4 周）</strong>
+  <ul>
+    <li>收集数据：Common Crawl + Books + Code + Wikipedia + 学术论文</li>
+    <li>清洗 Pipeline：语言识别 → 去重（MinHash）→ 质量过滤 → 毒性过滤</li>
+    <li>Tokenizer 训练：BPE/SentencePiece，词表 32K-64K</li>
+    <li>目标：至少 1-2T tokens 的高质量数据</li>
+  </ul>
+</li>
+<li><strong>超参数设计</strong>
+  <ul>
+    <li>架构：LLaMA-style（RMSNorm, SwiGLU, RoPE, GQA）</li>
+    <li>学习率：3e-4, Warmup 2000 steps, Cosine Decay</li>
+    <li>Batch Size：逐步递增，最终 ~4M tokens/batch</li>
+    <li>使用 μP 从小模型迁移超参数</li>
+  </ul>
+</li>
+<li><strong>基础设施与并行策略</strong>
+  <ul>
+    <li>7B 模型可用 64-128 块 A100，约 20-30 天</li>
+    <li>并行策略：TP=1-2 + DP（7B 单卡放得下），或 FSDP/ZeRO-2</li>
+    <li>框架：Megatron-LM 或 PyTorch FSDP</li>
+  </ul>
+</li>
+<li><strong>训练与监控</strong>
+  <ul>
+    <li>Checkpoint 每 1000 步保存</li>
+    <li>监控 Loss/Grad Norm/MFU</li>
+    <li>Loss spike 应急预案</li>
+  </ul>
+</li>
+<li><strong>评估</strong>
+  <ul>
+    <li>训练中：validation perplexity，few-shot benchmark（MMLU, HellaSwag）</li>
+    <li>训练后：全面 benchmark 评估</li>
+  </ul>
+</li>
+</ol>
+<p><strong>预估成本</strong>：6 × 7e9 × 1e12 = 4.2e22 FLOPs → ~83K A100-hours → ~$125K-170K</p>
+</div>
+</details>
+    </section>
+
+    <footer>
+      <div class="made">TECH NOTES · AI 工程 · 整理自 AI Knowledge Hub</div>
+    </footer>
+  </main>
+</div>
+
+<script>
+(function(){var bar=document.getElementById('progress');function u(){var h=document.documentElement;bar.style.width=h.scrollTop/(h.scrollHeight-h.clientHeight)*100+'%';}window.addEventListener('scroll',u,{passive:true});u();})();
+(function(){var links=document.querySelectorAll('aside.toc nav a');var secs=Array.from(document.querySelectorAll('section.chapter'));if(!secs.length)return;function u(){var y=window.scrollY+100,cur=secs[0];for(var i=0;i<secs.length;i++){if(secs[i].offsetTop<=y)cur=secs[i];}var id=cur.id;links.forEach(function(a){a.classList.toggle('active',a.getAttribute('href')==='#'+id);});}window.addEventListener('scroll',u,{passive:true});u();})();
+</script>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

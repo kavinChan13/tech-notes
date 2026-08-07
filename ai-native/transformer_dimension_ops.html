@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Transformer 升维与降维原理 · Transformer — Tech Notes</title>
+<meta name="description" content="Dimension Operations — 降维压缩 / 升维展开 / FFN 4倍扩展 / 非线性激活 / KV Cache 维度权衡">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<link rel="stylesheet" href="../assets/kh-guide.css">
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav">
+
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="ai_engineering_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 9 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>T14 · Transformer</h2>
+    <nav>
+      <ol>
+        <li><a href="#overview" class="active">概览</a></li>
+        <li><a href="#ch1">为什么需要维度操作</a></li>
+        <li><a href="#ch2">降维的本质：压缩信息，保留精华</a></li>
+        <li><a href="#ch3">升维的本质：展开空间，暴露关系</a></li>
+        <li><a href="#transformer">全景图：升维降维在 Transformer 中的位置</a></li>
+        <li><a href="#ffn-4">FFN 为什么先升 4 倍再降回来</a></li>
+        <li><a href="#kv-cache">KV Cache 中的维度权衡</a></li>
+        <li><a href="#ch7">降维与升维的应用场景</a></li>
+        <li><a href="#q-a-8">Q&amp;A（8 题）</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+    <header class="hero">
+      <div class="badge">T14 · Transformer</div>
+      <h1>Transformer 升维与降维原理</h1>
+      <p class="sub">Dimension Operations — 降维压缩 / 升维展开 / FFN 4倍扩展 / 非线性激活 / KV Cache 维度权衡</p>
+      <div class="meta-row">
+        <span class="pill cyan">Transformer</span>
+        <span class="pill green">阅读 ~9 min</span>
+        <span class="pill amber">9 章</span>
+      </div>
+    </header>
+
+    <section class="chapter" id="overview">
+      <div class="ch-head"><div class="num">00</div><div class="t"><h2>概览</h2><div class="sub">维度变化是手段，信息保持与提取才是目的</div></div></div>
+      <div class="intuition-box">
+<p>维度变化是手段，信息保持与提取才是目的。Transformer 中每一次升维都在"展开地图让隐藏关系显现"，每一次降维都在"压缩行李只保留最重要的东西"。</p>
+</div>
+    </section>
+
+    <section class="chapter" id="ch1">
+      <div class="ch-head"><div class="num">01</div><div class="t"><h2>为什么需要维度操作</h2><div class="sub">模型不能无限大</div></div></div>
+      <h3>效率与性能的平衡术</h3>
+
+<div class="intuition-box">
+<p>模型不能无限大。维度操作的本质是在"特征表达力"和"计算成本"之间寻找最优解。</p>
+</div>
+
+<p>Transformer 模型参数量动辄数十亿，每一次矩阵乘法的计算量与维度直接相关。<span class="term">d_model</span>（模型隐藏维度）决定了信息在层与层之间传递时的"车道宽度"——太窄会丢失信息，太宽会撑爆算力和内存。维度操作正是为了在有限资源下让模型"该宽的地方宽、该窄的地方窄"。</p>
+
+<p>具体来说，维度操作解决三个核心矛盾：</p>
+<ul>
+  <li><strong>表达力 vs 计算量：</strong>d 维特征需要 O(d²) 的矩阵乘法，升 4 倍就是 16 倍计算量</li>
+  <li><strong>信息密度 vs 噪声：</strong>高维空间有更多"自由度"来编码复杂关系，但也更容易过拟合</li>
+  <li><strong>层间一致性 vs 层内灵活性：</strong>残差连接要求输入输出维度一致，但中间过程需要自由扩展</li>
+</ul>
+
+<div class="highlight">
+<strong>核心结论：</strong>维度操作不是 Transformer 的"可选优化"，而是架构设计的基石。没有升维就没有非线性表达力，没有降维就无法堆叠更多层。
+</div>
+    </section>
+
+    <section class="chapter" id="ch2">
+      <div class="ch-head"><div class="num">02</div><div class="t"><h2>降维的本质：压缩信息，保留精华</h2><div class="sub">降维就像 JPEG 压缩——丢掉人眼不敏感的高频细节，保留画面主体</div></div></div>
+      <h3>降维 = 有损压缩</h3>
+
+<div class="intuition-box">
+<p>降维就像 JPEG 压缩——丢掉人眼不敏感的高频细节，保留画面主体。好的降维丢掉的是噪声，留下的是信号。</p>
+</div>
+
+<p>在 Transformer 中，降维出现在多个关键环节。每一次降维都意味着模型在做"信息取舍"——选择保留什么、丢弃什么。这种取舍能力正是模型学到"什么是重要的"的体现。</p>
+
+<table>
+<tr><th>降维方法</th><th>原理</th><th>在 Transformer 中的体现</th><th>信息损失特征</th></tr>
+<tr><td><span class="term">线性投影</span></td><td>矩阵乘法 W·x，W 为 d_out × d_in（d_out &lt; d_in）</td><td>FFN 第二层：4d → d</td><td>线性组合，保留主要方向</td></tr>
+<tr><td><span class="term">注意力加权</span></td><td>用 softmax 权重对 value 做加权求和</td><td>Self-Attention 输出</td><td>动态选择，丢弃低权重 token</td></tr>
+<tr><td>池化（Pooling）</td><td>对局部区域做平均或取最大值</td><td>分类任务的 [CLS] token 提取</td><td>局部压缩，丢失细粒度信息</td></tr>
+<tr><td>非线性激活</td><td>ReLU 将负值归零，等效降维</td><td>FFN 中间层</td><td>约 50% 神经元被"杀死"</td></tr>
+</table>
+
+<h3>ReLU 的"隐性降维"效应</h3>
+
+<p>ReLU 激活函数虽然不改变张量的名义维度，但它将约 50% 的神经元输出置零。从<span class="term">信号处理</span>的角度看，这等于把信息量砍掉一半。如果 FFN 中间层是 4d 维，经过 ReLU 后有效信息只剩约 2d 维——这就是为什么 FFN 需要升 4 倍而不是 2 倍的原因。</p>
+
+<div class="formula">
+FFN(x) = W₂ · ReLU(W₁ · x + b₁) + b₂<br>
+其中 W₁: d → 4d, W₂: 4d → d<br>
+ReLU 后有效维度 ≈ 2d → 经 W₂ 压缩回 d（信息恰好守恒）
+</div>
+    </section>
+
+    <section class="chapter" id="ch3">
+      <div class="ch-head"><div class="num">03</div><div class="t"><h2>升维的本质：展开空间，暴露关系</h2><div class="sub">升维的核心价值在于增加 特征空间的自由度</div></div></div>
+      <h3>升维让线性不可分变为可分</h3>
+
+<p>升维的核心价值在于增加<span class="term">特征空间的自由度</span>。d 维空间中，一个向量只有 d 个自由度来编码信息；扩展到 4d 维后，同一个特征向量获得了 4 倍的"表达空间"，原本纠缠在一起的特征模式可以在更高维空间中被线性分离。</p>
+
+<table>
+<tr><th>升维方法</th><th>原理</th><th>特点</th><th>典型场景</th></tr>
+<tr><td><span class="term">线性扩展</span></td><td>W·x，W 为 d_out × d_in（d_out &gt; d_in）</td><td>纯线性，不增加非线性</td><td>FFN 第一层 d → 4d</td></tr>
+<tr><td><span class="term">前馈网络</span></td><td>线性扩展 + 非线性激活</td><td>同时升维和引入非线性</td><td>FFN 完整流程</td></tr>
+<tr><td>上采样</td><td>重复或插值扩展维度</td><td>信息冗余度高</td><td>解码器维度恢复</td></tr>
+</table>
+
+<div class="highlight">
+<strong>关键洞察：</strong>纯线性升维不会增强表达能力——无论你把 d 维扩展到多少维，如果只是线性变换，它依然只能表达线性关系。升维必须配合非线性激活函数（如 GELU、ReLU）才能真正提升模型的表达力。
+</div>
+    </section>
+
+    <section class="chapter" id="transformer">
+      <div class="ch-head"><div class="num">04</div><div class="t"><h2>全景图：升维降维在 Transformer 中的位置</h2><div class="sub">数据流解读： 输入以 d 维进入 Attention 子层，Attention 内部将 Q/…</div></div></div>
+      <div class="flow">
+  <div class="flow-title">Transformer Block ×N · 升维/降维在何处发生</div>
+  <div class="flow-node accent"><div class="nlabel">Input [seq_len, d_model]</div></div>
+  <div class="flow-arrow" data-label="子层 1 + Add & LayerNorm"></div>
+  <div class="flow-node"><div class="nlabel">Multi-Head Self-Attention</div><div class="nsub">Q/K/V 按头切分 d→d_k（动态降维），多头拼接 h·d_k→d（维度恢复）</div></div>
+  <div class="flow-arrow" data-label="子层 2 + Add & LayerNorm"></div>
+  <div class="flow-node"><div class="nlabel">FFN：d → 4d → d</div><div class="nsub">Linear₁ 升维展开特征空间 → GELU（约 50% 置零）→ Linear₂ 压缩回 d</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">Output [seq_len, d_model]</div><div class="nsub">维度一致 → 可继续堆叠</div></div>
+</div>
+<p class="highlight">数据流维度变化：<code>d —Attn→ d —FFN.up→ 4d —GELU→ ~2d 有效 —FFN.down→ d</code></p>
+
+<p><strong>数据流解读：</strong>输入以 d 维进入 Attention 子层，Attention 内部将 Q/K/V 按头切分（每头 d/h 维），注意力加权本身就是一种"动态降维"——用 softmax 权重选择性地聚合信息。多头拼接后恢复 d 维。随后进入 FFN 子层，先线性扩展到 4d，经过非线性激活后有效信息约 2d，最后线性压缩回 d 维。整个过程保证了输入输出维度一致，使得 Block 可以无限堆叠。</p>
+    </section>
+
+    <section class="chapter" id="ffn-4">
+      <div class="ch-head"><div class="num">05</div><div class="t"><h2>FFN 为什么先升 4 倍再降回来</h2><div class="sub">FFN 升 4 倍的本质原因：ReLU 会&quot;杀死&quot;约 50% 的神经元，所以需要 4 倍扩展…</div></div></div>
+      <h3>信号补偿：ReLU 吃掉了一半信息</h3>
+
+<div class="intuition-box">
+<p>FFN 升 4 倍的本质原因：ReLU 会"杀死"约 50% 的神经元，所以需要 4 倍扩展来补偿——确保经过激活和降维后，仍有 d 维有效信息流出。</p>
+</div>
+
+<p>从信号处理视角推导这个"4 倍"的由来：</p>
+
+<ol>
+  <li>输入 d 维特征，线性扩展到 4d 维</li>
+  <li>经过 ReLU：约 50% 的神经元输出被置零，有效信息从 4d 降到约 2d</li>
+  <li>线性降维：从 2d 有效维度投影到 d 维输出</li>
+  <li>最终输出恰好保留 d 维有效信息——信息守恒</li>
+</ol>
+
+<p>如果只升 2 倍呢？</p>
+<ul>
+  <li>扩展到 2d → ReLU 后有效约 d → 再降维到 d → 有效信息只剩 0.5d</li>
+  <li>信息衰减一半，模型表达能力严重不足</li>
+</ul>
+
+<div class="formula">
+信息守恒链: d →(×4)→ 4d →(ReLU,×0.5)→ 2d →(÷2)→ d  ✅<br>
+若 2 倍扩展: d →(×2)→ 2d →(ReLU,×0.5)→ d →(÷1)→ 0.5d  ❌ 信息不足
+</div>
+
+<h3>GELU 激活：比 ReLU 更"温柔"的非线性</h3>
+
+<div class="intuition-box">
+<p>GELU 不像 ReLU 那样"一刀切"地置零，而是用平滑曲线让接近零的值"逐渐衰减"——信息损失更小，梯度更稳定。</p>
+</div>
+
+<p>现代 Transformer（如 GPT、BERT）普遍用 <span class="term">GELU</span>（Gaussian Error Linear Unit）替代 ReLU。GELU 的公式为 <code>GELU(x) = x · Φ(x)</code>，其中 Φ(x) 是标准正态分布的累积分布函数。它的核心差异在于：</p>
+
+<table>
+<tr><th>特性</th><th>ReLU</th><th>GELU</th></tr>
+<tr><td>负值处理</td><td>完全置零（硬截断）</td><td>平滑衰减（软抑制）</td></tr>
+<tr><td>信息损失</td><td>约 50% 神经元死亡</td><td>约 30-40%（更少）</td></tr>
+<tr><td>梯度连续性</td><td>零点不可导</td><td>处处可导</td></tr>
+<tr><td>训练稳定性</td><td>可能出现 dead neuron</td><td>更稳定</td></tr>
+<tr><td>计算开销</td><td>极低（max 操作）</td><td>略高（需要计算 Φ）</td></tr>
+</table>
+
+<p>正因为 GELU 的信息损失比 ReLU 少，使用 GELU 的模型在理论上可以用更小的升维倍数（如 3 倍），但实践中 4 倍仍是主流选择，因为它提供了更充裕的"表达余量"。</p>
+
+<h3>记忆系统视角：FFN 是 Transformer 的长期记忆</h3>
+
+<p>这个视角由 Geva et al. (2021) 提出，揭示了 FFN 第一层的权重矩阵充当"键"（用于模式匹配），第二层权重充当"值"（用于信息注入）。训练过程中，模型将事实知识"写入"这些权重中。这也解释了为什么 FFN 通常占模型参数的约 2/3——它需要足够的容量来存储知识。</p>
+    </section>
+
+    <section class="chapter" id="kv-cache">
+      <div class="ch-head"><div class="num">06</div><div class="t"><h2>KV Cache 中的维度权衡</h2><div class="sub">KV Cache 的本质是用空间换时间——缓存历史 token 的 K 和 V 向量，避免重…</div></div></div>
+      <h3>推理加速的维度瓶颈</h3>
+
+<div class="intuition-box">
+<p>KV Cache 的本质是用空间换时间——缓存历史 token 的 K 和 V 向量，避免重复计算。而缓存大小直接由维度决定：维度越大，缓存越吃内存。</p>
+</div>
+
+<p>在自回归推理时，每生成一个新 token 都需要与之前所有 token 做注意力计算。<span class="term">KV Cache</span> 将已计算的 Key 和 Value 矩阵缓存起来，新 token 只需要计算自己的 Q/K/V，然后与缓存做点积。但缓存的内存占用与维度直接相关：</p>
+
+<div class="formula">
+KV Cache 内存 = 2 × n_layers × n_heads × seq_len × d_head × sizeof(float16)<br>
+例：LLaMA-7B, 32层, 32头, d_head=128, seq_len=2048<br>
+= 2 × 32 × 32 × 2048 × 128 × 2B ≈ 1.07 GB
+</div>
+
+<p>当序列长度增长到 32K 甚至 128K 时，KV Cache 的内存开销会线性甚至超线性增长，成为长文本推理的核心瓶颈。这催生了两种维度压缩策略：</p>
+
+<table>
+<tr><th>方案</th><th>维度策略</th><th>原理</th><th>效果</th></tr>
+<tr><td><span class="term">MQA</span>（Multi-Query Attention）</td><td>K/V 头数 → 1</td><td>所有 Q 头共享同一组 K/V</td><td>KV Cache 缩小 h 倍（如 32 倍）</td></tr>
+<tr><td><span class="term">GQA</span>（Grouped-Query Attention）</td><td>K/V 头数 → g（如 8）</td><td>每 g 个 Q 头共享一组 K/V</td><td>KV Cache 缩小 h/g 倍（如 4 倍）</td></tr>
+<tr><td>PagedAttention</td><td>分块管理</td><td>类似操作系统的虚拟内存分页</td><td>消除内存碎片，利用率 → ~100%</td></tr>
+</table>
+
+<div class="highlight">
+<strong>维度权衡的核心矛盾：</strong>更多的 K/V 头数 = 更强的注意力表达力 = 更大的 KV Cache。MQA 把 K/V 压到 1 个头，GQA 折中到 g 个头，都是在"表达力"和"推理内存"之间做 trade-off。GPT-4 级别的模型普遍采用 GQA（如 g=8），在几乎不损失质量的前提下将 KV Cache 压缩 4 倍。
+</div>
+    </section>
+
+    <section class="chapter" id="ch7">
+      <div class="ch-head"><div class="num">07</div><div class="t"><h2>降维与升维的应用场景</h2><div class="sub">需要压缩信息时降维，需要发现复杂关系时升维，需要跨模态转换时先降后升</div></div></div>
+      <h3>何时降维、何时升维</h3>
+
+<div class="intuition-box">
+<p>需要压缩信息时降维，需要发现复杂关系时升维，需要跨模态转换时先降后升。</p>
+</div>
+
+<table>
+<tr><th>场景</th><th>操作</th><th>原因</th><th>实例</th></tr>
+<tr><td>文本分类</td><td>降维</td><td>将 seq_len × d 压缩为单一向量做分类</td><td>[CLS] token → Linear(d → num_classes)</td></tr>
+<tr><td>特征交叉</td><td>升维</td><td>低维空间中特征纠缠，高维才能分离</td><td>FFN 的 d → 4d → 非线性变换</td></tr>
+<tr><td>跨模态对齐</td><td>先降后升</td><td>不同模态维度不同，需要在公共空间对齐</td><td>CLIP：图像/文本各降到 512 维再对比</td></tr>
+<tr><td>序列压缩</td><td>降维</td><td>减少 token 数量降低 Attention 复杂度</td><td>PoolingFormer, Perceiver</td></tr>
+<tr><td>知识蒸馏</td><td>降维</td><td>将大模型知识压缩到小模型</td><td>Teacher d=4096 → Student d=1024</td></tr>
+</table>
+
+<h3>生产案例：文本分类系统的维度设计</h3>
+
+<p><strong>背景：</strong>某内容平台的智能审核系统需要将用户评论（平均 50 token）分类为 10 个违规类别。早期方案直接对每个 token 做 10 分类，计算量巨大。</p>
+
+<p><strong>问题：</strong>对 seq_len=50 的每个位置都做分类，等价于 50 次独立的 d→10 线性变换，不仅计算冗余，而且各位置预测互相矛盾（同一句话被同时标记为"正常"和"违规"）。</p>
+
+<p><strong>改造：</strong>引入"降维漏斗"设计——</p>
+<ul>
+  <li>Step 1：Self-Attention 让 50 个 token 互相交流（维度不变 d=768）</li>
+  <li>Step 2：取 [CLS] token 的 d=768 维向量（从 50×768 降到 768）</li>
+  <li>Step 3：FFN 升维 768→3072→768（非线性特征提取）</li>
+  <li>Step 4：Linear 768→10（最终分类）</li>
+</ul>
+
+<p><strong>效果：</strong>计算量从 50×768×10 = 384K 降到 768×10 = 7.68K（减少 98%），分类一致率从 71% 提升至 94%，误判投诉下降 85%。</p>
+
+<div class="practice-grid">
+  <div class="do">
+    <ul>
+      <li>FFN 保持 4 倍扩展比，确保信息守恒</li>
+      <li>用 GELU 替代 ReLU 减少信息损失</li>
+      <li>长序列推理用 GQA 压缩 KV Cache</li>
+      <li>分类任务用 [CLS] + 降维漏斗</li>
+      <li>跨模态对齐时先降到公共维度空间</li>
+    </ul>
+  </div>
+  <div class="dont">
+    <ul>
+      <li>盲目增大 d_model 而不考虑计算成本</li>
+      <li>只用 2 倍扩展（信息衰减至 0.5d）</li>
+      <li>在 Attention 层用 ReLU（应该用 softmax）</li>
+      <li>忽略残差连接的维度一致性约束</li>
+      <li>长文本推理不管理 KV Cache 内存</li>
+    </ul>
+  </div>
+</div>
+    </section>
+
+    <section class="chapter" id="q-a-8">
+      <div class="ch-head"><div class="num">08</div><div class="t"><h2>Q&amp;A（8 题）</h2></div></div>
+      <details class="qa">
+<summary>FFN 层为什么是 4 倍扩展而不是 2 倍或 8 倍？</summary>
+<div class="a">4 倍是信息守恒的数学结果。ReLU 会置零约 50% 的神经元，如果只扩展 2 倍（d→2d），经过 ReLU 后有效维度只剩 d，再投影回 d 维时有效信息只有 0.5d。扩展 4 倍（d→4d）经过 ReLU 后有效 2d，投影回 d 时刚好保留 d 维有效信息。8 倍虽然信息更充裕，但计算量是 4 倍的 4 倍（O(d²) 随维度平方增长），收益递减。4 倍是"刚好够用"与"计算可接受"的平衡点。</div>
+</details>
+
+<details class="qa">
+<summary>Attention 层用 softmax，FFN 层用 GELU/ReLU，为什么不能互换？</summary>
+<div class="a">两者目的完全不同。Attention 中的 softmax 是在 token 维度上做归一化（所有 token 的权重之和为 1），实现"注意力分配"——决定每个 token 应该关注其他 token 的多少信息。FFN 中的 GELU/ReLU 是在特征维度上做非线性变换，让模型学到更复杂的特征组合。如果把 softmax 用在 FFN，所有特征维度的值之和会被约束为 1，严重限制表达能力；如果把 ReLU 用在 Attention，注意力权重可能出现负数，物理含义不对。</div>
+</details>
+
+<details class="qa">
+<summary>KV Cache 的内存为什么和维度成正比？有什么优化方案？</summary>
+<div class="a">KV Cache 需要为每个 token 的每层每头存储 K 和 V 两个矩阵，总量 = 2 × 层数 × 头数 × 序列长度 × 每头维度。LLaMA-7B 在 seq_len=2048 时约 1GB，seq_len=32K 时约 16GB。优化方案有：MQA（所有 Q 头共享 1 组 K/V，Cache 缩小 h 倍），GQA（g 个 Q 头共享 1 组 K/V，Cache 缩小 h/g 倍），PagedAttention（分块管理消除碎片），以及量化（FP16→INT8 减半）。GQA 是当前主流方案，GPT-4 级别模型普遍采用。</div>
+</details>
+
+<details class="qa">
+<summary>为什么说纯线性升维不会增强表达能力？</summary>
+<div class="a">线性变换的复合仍然是线性变换。无论你串联多少个线性层 W₁·W₂·...·Wₙ，其效果等价于单个矩阵 W=W₁·W₂·...·Wₙ。这意味着纯线性模型只能学到输入的线性组合，无法拟合非线性函数（如 XOR 问题）。升维必须配合非线性激活函数（GELU、ReLU 等），才能让模型在高维空间中做"非线性切割"，从而表达更复杂的特征关系。这也是为什么 Transformer 的每一层都同时包含线性变换和非线性激活。</div>
+</details>
+
+<details class="qa">
+<summary>残差连接为什么要求输入输出维度一致？</summary>
+<div class="a">残差连接的公式是 output = LayerNorm(x + Sublayer(x))，其中 x + Sublayer(x) 要求两个张量可以直接相加，这意味着它们必须具有完全相同的 shape。如果 Attention 子层改变了维度，就无法与原始输入做逐元素加法。这就是为什么 Transformer 每个 Block 的输入输出维度都严格保持 d_model 不变——维度变化只发生在 Block 内部（如 FFN 的 d→4d→d），进出 Block 时维度必须恢复。如果不一致，就需要额外的投影矩阵来对齐维度，增加参数量和计算量。</div>
+</details>
+
+<details class="qa">
+<summary>GELU 和 ReLU 在 FFN 中的效果差异有多大？</summary>
+<div class="a">GELU 对负值做平滑衰减而非硬截断，信息损失约 30-40%（vs ReLU 的 50%），梯度处处连续可导。在 BERT 的原始实验中，GELU 相比 ReLU 在 GLUE 基准上提升约 0.5-1 个百分点。差异看似不大，但在大模型规模下（数十亿参数、数千亿 token 训练），这 0.5% 的提升会累积为生成质量的显著差异。此外 GELU 不会出现 "dead neuron" 问题（神经元永久失活），训练更稳定。计算开销略高（需要计算高斯 CDF），但在 GPU 上有高效近似实现。</div>
+</details>
+
+<details class="qa">
+<summary>多头注意力中，每个头的维度是怎么分配的？</summary>
+<div class="a">d_model 被均分给 h 个头，每头维度 d_k = d_model / h。例如 GPT-2 Medium 的 d_model=1024，h=16 头，每头 d_k=64。每个头独立做 Q/K/V 投影和注意力计算，最后将 h 个头的输出拼接（h × d_k = d_model）再通过一个线性层。多头的设计让模型在不同"子空间"中同时关注不同类型的关系——有的头关注语法结构，有的关注语义相似性，有的关注位置关系。这也是为什么不能简单减少头数来降维：头数减少意味着"视角"减少。</div>
+</details>
+
+<details class="qa">
+<summary>图像识别中也有类似的升维降维操作吗？</summary>
+<div class="a">CNN 和 ViT 中都有。CNN 的经典模式是：每个卷积块先通过 1×1 卷积降维（减少通道数以降低后续计算量），再通过 3×3 卷积提取特征，最后通过 1×1 卷积升维恢复通道数——这正是 ResNet Bottleneck 的设计。ViT（Vision Transformer）将图像切成 patch 后直接送入标准 Transformer Block，其中的 FFN 同样执行 d→4d→d 的升维降维循环。Vision Transformer 的实践表明，FFN 的 4 倍扩展对视觉任务同样有效，但 ViT 通常需要更大的 d_model（如 1024）来补偿图像信息的高维度特性。</div>
+</details>
+    </section>
+
+    <footer>
+      <div class="made">TECH NOTES · Transformer · 整理自 AI Knowledge Hub</div>
+    </footer>
+  </main>
+</div>
+
+<script>
+(function(){var bar=document.getElementById('progress');function u(){var h=document.documentElement;bar.style.width=h.scrollTop/(h.scrollHeight-h.clientHeight)*100+'%';}window.addEventListener('scroll',u,{passive:true});u();})();
+(function(){var links=document.querySelectorAll('aside.toc nav a');var secs=Array.from(document.querySelectorAll('section.chapter'));if(!secs.length)return;function u(){var y=window.scrollY+100,cur=secs[0];for(var i=0;i<secs.length;i++){if(secs[i].offsetTop<=y)cur=secs[i];}var id=cur.id;links.forEach(function(a){a.classList.toggle('active',a.getAttribute('href')==='#'+id);});}window.addEventListener('scroll',u,{passive:true});u();})();
+</script>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

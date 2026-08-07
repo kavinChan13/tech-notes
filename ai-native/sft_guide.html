@@ -1,0 +1,617 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SFT 监督微调 · AI 工程 — Tech Notes</title>
+<meta name="description" content="Supervised Fine-Tuning — 让预训练模型学会&quot;听话&quot;">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<link rel="stylesheet" href="../assets/kh-guide.css">
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav">
+
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="ai_engineering_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 11 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>W02 · AI 工程</h2>
+    <nav>
+      <ol>
+        <li><a href="#s1" class="active">SFT 在 LLM 训练流程中的位置</a></li>
+        <li><a href="#s2">指令数据构造</a></li>
+        <li><a href="#s3">全参数微调 vs PEFT</a></li>
+        <li><a href="#s4">Chat 模板</a></li>
+        <li><a href="#s5">多轮对话训练</a></li>
+        <li><a href="#s6">Loss Masking 策略</a></li>
+        <li><a href="#s7">超参数选择</a></li>
+        <li><a href="#s8">SFT 的问题与对策</a></li>
+        <li><a href="#s9">评估 SFT 效果</a></li>
+        <li><a href="#qa">🎯 Q&amp;A</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+    <header class="hero">
+      <div class="badge">W02 · AI 工程</div>
+      <h1>SFT 监督微调</h1>
+      <p class="sub">Supervised Fine-Tuning — 让预训练模型学会&quot;听话&quot;</p>
+      <div class="meta-row">
+        <span class="pill cyan">AI 工程</span>
+        <span class="pill green">阅读 ~11 min</span>
+        <span class="pill amber">10 章</span>
+      </div>
+    </header>
+
+    <section class="chapter" id="s1">
+      <div class="ch-head"><div class="num">01</div><div class="t"><h2>SFT 在 LLM 训练流程中的位置</h2></div></div>
+      <pre><code><div class="flow-step">Pre-train<br><small>海量语料自监督</small></code></pre>
+<span class="flow-arrow">→</span>
+<div class="flow-step active">SFT<br><small>指令微调</small></div>
+<span class="flow-arrow">→</span>
+<div class="flow-step">RLHF / DPO<br><small>对齐人类偏好</small></div>
+</div>
+
+<h3>三阶段概览</h3>
+<table>
+<tr><th>阶段</th><th>目标</th><th>数据</th><th>成本</th></tr>
+<tr><td><span class="tag tag-blue">Pre-train</span></td><td>学习语言知识、世界知识</td><td>数万亿 Token 无标签文本</td><td>极高（数百~千万美元）</td></tr>
+<tr><td><span class="tag tag-green">SFT</span></td><td>学会对话格式，遵循指令</td><td>数千~数十万条指令-回答对</td><td>中等（数小时~数天 GPU）</td></tr>
+<tr><td><span class="tag tag-purple">RLHF</span></td><td>对齐人类价值观、提高回答质量</td><td>偏好排序数据</td><td>较高（需要 Reward Model）</td></tr>
+</table>
+
+<h3>SFT 的核心作用</h3>
+<ul>
+<li><strong>格式对齐</strong>：预训练模型只会"续写"，SFT 让模型学会"问→答"的交互格式</li>
+<li><strong>能力激发</strong>：预训练已经学会的能力（推理、翻译、编程），通过 SFT 以指令方式"解锁"</li>
+<li><strong>行为控制</strong>：引导模型以特定风格（简洁/详细/安全）进行回答</li>
+<li><strong>不注入新知识</strong>：SFT 主要调整模型的输出行为，而非灌入大量新知识</li>
+</ul>
+
+<div class="interview-box">
+<ul>
+<li>SFT 不改变模型的知识储备，而是改变模型的<strong>表达方式和行为模式</strong></li>
+<li>SFT 的关键洞察：预训练模型已具备强大能力，SFT 只需很少的数据就能激活这些能力</li>
+<li>面试常问：SFT 和 Pre-train 的核心区别？→ Pre-train 学知识，SFT 学格式与行为</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="s2">
+      <div class="ch-head"><div class="num">02</div><div class="t"><h2>指令数据构造</h2><div class="sub">标准的 SFT 数据通常包含三个字段：</div></div></div>
+      <h3>指令格式</h3>
+<p>标准的 SFT 数据通常包含三个字段：</p>
+<pre><code>{
+  "instruction": "将以下句子翻译成英文",
+  "input": "今天天气真好",
+  "output": "The weather is really nice today."
+}</code></pre>
+<p>其中 <code>input</code> 可以为空（零输入任务，如"讲一个笑话"）。</p>
+
+<h3>数据构造方法</h3>
+<table>
+<tr><th>方法</th><th>核心思路</th><th>代表工作</th></tr>
+<tr><td><strong>Self-Instruct</strong></td><td>用 LLM 自身生成指令 + 回答，再做过滤</td><td>Wang et al., 2023</td></tr>
+<tr><td><strong>Evol-Instruct</strong></td><td>对种子指令做"进化"（加约束 / 深化 / 改写）</td><td>WizardLM</td></tr>
+<tr><td><strong>GPT-4 蒸馏</strong></td><td>用 GPT-4 批量生成高质量回答作为训练标签</td><td>Alpaca、Vicuna</td></tr>
+<tr><td><strong>人工标注</strong></td><td>人类专家编写指令-回答对</td><td>OpenAssistant、Dolly</td></tr>
+</table>
+
+<h3>主流开源数据集</h3>
+<div class="card">
+<ul>
+<li><span class="tag tag-blue">Alpaca-52k</span> — Stanford 用 Self-Instruct + GPT-3.5 生成，52k 条指令</li>
+<li><span class="tag tag-green">ShareGPT</span> — 真实用户与 ChatGPT 的多轮对话，质量高但有版权争议</li>
+<li><span class="tag tag-purple">OpenAssistant</span> — 社区众包的多轮对话，含多语言</li>
+<li><span class="tag tag-orange">FLAN Collection</span> — Google 整合 1800+ NLP 任务，规模最大</li>
+<li><span class="tag tag-blue">UltraChat</span> — 大规模多轮对话数据，150 万条</li>
+</ul>
+</div>
+
+<div class="interview-box">
+<ul>
+<li>Self-Instruct 的关键步骤：种子任务 → LLM 生成新指令 → 过滤低质量 → 生成回答</li>
+<li>Evol-Instruct 通过<strong>多轮进化</strong>提升指令复杂度，生成更有挑战性的训练数据</li>
+<li>数据质量远比数据数量重要 —— LIMA 仅用 1000 条高质量数据就达到了优异效果</li>
+<li>面试常问：GPT-4 蒸馏数据的法律/伦理问题？→ OpenAI ToS 限制商用</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="s3">
+      <div class="ch-head"><div class="num">03</div><div class="t"><h2>全参数微调 vs PEFT</h2></div></div>
+      <h3>全参数微调 (Full Fine-Tuning)</h3>
+<ul>
+<li>更新模型的<strong>所有参数</strong>，表达能力最强</li>
+<li>需要完整的优化器状态（Adam 需要 2× 参数量的额外显存）</li>
+<li>典型显存需求：7B 模型 ≈ 60–80 GB（fp16 + Adam）</li>
+<li>适合：数据量充足、计算资源充裕、追求极致性能的场景</li>
+</ul>
+
+<h3>参数高效微调 (PEFT)</h3>
+<table>
+<tr><th>方法</th><th>可训练参数</th><th>核心思路</th></tr>
+<tr><td><strong>LoRA</strong></td><td>~0.1%–1%</td><td>在权重矩阵旁加低秩分解 ΔW = BA</td></tr>
+<tr><td><strong>QLoRA</strong></td><td>~0.1%–1%</td><td>4-bit 量化 + LoRA，显著降低显存</td></tr>
+<tr><td><strong>Prefix Tuning</strong></td><td>~0.1%</td><td>在注意力层前加可训练前缀向量</td></tr>
+<tr><td><strong>Adapter</strong></td><td>~1%–5%</td><td>在 Transformer 层中插入小型适配模块</td></tr>
+<tr><td><strong>IA³</strong></td><td>&lt;0.01%</td><td>学习激活值的缩放因子</td></tr>
+</table>
+
+<h3>如何选择？</h3>
+<div class="card">
+<table>
+<tr><th>场景</th><th>推荐方案</th><th>理由</th></tr>
+<tr><td>显存 ≤ 24 GB (单卡)</td><td>QLoRA</td><td>4-bit 量化大幅降低显存需求</td></tr>
+<tr><td>多任务部署</td><td>LoRA</td><td>不同任务共享基座模型，只需切换 LoRA 权重</td></tr>
+<tr><td>追求最佳性能</td><td>全参数微调</td><td>无信息瓶颈，表达能力最强</td></tr>
+<tr><td>快速实验迭代</td><td>LoRA / QLoRA</td><td>训练速度快，占用少</td></tr>
+<tr><td>70B+ 超大模型</td><td>QLoRA + DeepSpeed</td><td>全参数微调成本过高</td></tr>
+</table>
+</div>
+
+<div class="interview-box">
+<ul>
+<li>LoRA 的数学本质：W' = W + BA，其中 B ∈ R<sup>d×r</sup>，A ∈ R<sup>r×k</sup>，r 为秩（通常 8–64）</li>
+<li>QLoRA 三大创新：4-bit NormalFloat、Double Quantization、Paged Optimizers</li>
+<li>全参数微调 vs LoRA 性能差距通常在 <strong>1–3%</strong> 以内，但资源消耗差 10–50 倍</li>
+<li>面试常问：LoRA 的 rank 怎么选？→ 简单任务 r=8，复杂任务 r=32–64</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="s4">
+      <div class="ch-head"><div class="num">04</div><div class="t"><h2>Chat 模板</h2><div class="sub">LLM 本质上处理的是一维 Token 序列， Chat 模板 将多角色对话结构化地编码为…</div></div></div>
+      <h3>为什么需要 Chat 模板？</h3>
+<p>LLM 本质上处理的是一维 Token 序列，<strong>Chat 模板</strong>将多角色对话结构化地编码为 Token 序列，让模型能区分"谁在说话"。模板不匹配会导致模型行为异常。</p>
+
+<h3>主流模板对比</h3>
+
+<p><strong>ChatML (OpenAI / Qwen)</strong></p>
+<pre><code>&lt;|im_start|&gt;system
+你是一个有用的助手。&lt;|im_end|&gt;
+&lt;|im_start|&gt;user
+你好&lt;|im_end|&gt;
+&lt;|im_start|&gt;assistant
+你好！有什么可以帮助你的？&lt;|im_end|&gt;</code></pre>
+
+<p><strong>LLaMA 2 Chat</strong></p>
+<pre><code>[INST] &lt;&lt;SYS&gt;&gt;
+你是一个有用的助手。
+&lt;&lt;/SYS&gt;&gt;
+
+你好 [/INST] 你好！有什么可以帮助你的？ &lt;/s&gt;</code></pre>
+
+<p><strong>Vicuna / ShareGPT</strong></p>
+<pre><code>A chat between a curious user and an AI assistant.
+
+USER: 你好
+ASSISTANT: 你好！有什么可以帮助你的？&lt;/s&gt;</code></pre>
+
+<h3>特殊 Token 的重要性</h3>
+<ul>
+<li><code>&lt;|im_start|&gt;</code> / <code>&lt;|im_end|&gt;</code>：标记消息边界，模型依赖这些 Token 判断何时停止生成</li>
+<li><code>&lt;s&gt;</code> / <code>&lt;/s&gt;</code>：BOS / EOS Token，控制序列起止</li>
+<li>这些 Token 在 Tokenizer 中通常是 <strong>added_tokens</strong>，不可拆分</li>
+</ul>
+
+<h3>模板不匹配的后果</h3>
+<div class="card" style="border-color:var(--red)">
+<ul>
+<li>🔴 模型不知道何时停止生成（缺少 EOS Token → 无限输出）</li>
+<li>🔴 角色混淆（模型同时扮演 user 和 assistant）</li>
+<li>🔴 系统提示失效（system 消息位置错误 → 模型忽略安全策略）</li>
+<li>🔴 推理时格式与训练时不一致 → 性能显著下降</li>
+</ul>
+</div>
+
+<div class="interview-box">
+<ul>
+<li>Chat 模板本质是一种<strong>序列化协议</strong>，将结构化对话转为扁平 Token 流</li>
+<li>Hugging Face <code>tokenizer.apply_chat_template()</code> 可自动应用正确模板</li>
+<li>面试常问：推理时模板和训练时不一致会怎样？→ 输出质量下降、停止异常、角色混乱</li>
+<li>不同模型家族的模板<strong>不通用</strong>，必须与模型训练时的模板保持一致</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="s5">
+      <div class="ch-head"><div class="num">05</div><div class="t"><h2>多轮对话训练</h2><div class="sub">多轮对话在训练时需要拼接为一条完整序列：</div></div></div>
+      <h3>多轮拼接方式</h3>
+<p>多轮对话在训练时需要拼接为一条完整序列：</p>
+<pre><code>[BOS] system_msg [SEP] user_1 [SEP] assistant_1 [SEP] user_2 [SEP] assistant_2 [EOS]</code></pre>
+<p>关键决策：如何处理多轮中每一轮的 loss 计算？</p>
+
+<h3>Loss Masking（在 assistant 回复上计算 loss）</h3>
+<div class="card">
+<p>标准做法是<strong>只在 assistant 的 Token 上计算 loss</strong>，将 system、user 部分的 loss 掩码为 0：</p>
+<pre><code>Tokens:   [SYS] 你是助手 [USER] 你好 [ASST] 你好！请问有什么...
+Labels:    -100  -100     -100  -100  你好！ 请问  有什么...</code></pre>
+<p><code>-100</code> 是 PyTorch CrossEntropyLoss 的默认 ignore_index，这些位置不参与梯度计算。</p>
+</div>
+
+<h3>Packing（序列打包）</h3>
+<p>问题：短对话浪费 GPU 算力（大量 padding Token）。</p>
+<p>Packing 解决方案：将多个短样本拼接到一个 <code>max_length</code> 的序列中：</p>
+<pre><code>| Sample A tokens... | Sample B tokens... | Sample C tokens... | PAD |
+  ← attention_mask 和 position_id 需要正确分隔 →</code></pre>
+<ul>
+<li>需要使用 <strong>block-diagonal attention mask</strong> 防止不同样本间的交叉注意力</li>
+<li>或使用 Flash Attention 2 的 <code>cu_seqlens</code> 参数高效实现</li>
+<li>Packing 可提升训练吞吐量 <strong>2–5 倍</strong></li>
+</ul>
+
+<div class="interview-box">
+<ul>
+<li>多轮对话训练的核心：<strong>每一轮 assistant 回复都应计算 loss</strong>，而非只计算最后一轮</li>
+<li>Packing 的注意力隔离非常重要，否则不同样本的信息会"泄露"</li>
+<li>面试常问：Packing 时不做注意力隔离会怎样？→ 不同样本互相影响，训练不稳定</li>
+<li><code>position_ids</code> 在 Packing 时也需要重置，否则位置编码会出错</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="s6">
+      <div class="ch-head"><div class="num">06</div><div class="t"><h2>Loss Masking 策略</h2></div></div>
+      <h3>为什么不在 instruction/input 上算 loss？</h3>
+<ul>
+<li><strong>训练目标不匹配</strong>：我们希望模型学会"根据指令生成回答"，而非"复读指令"</li>
+<li><strong>噪声引入</strong>：指令部分的 Token 分布与回答不同，同时优化会互相干扰</li>
+<li><strong>浪费算力</strong>：指令部分的梯度不贡献于生成能力的提升</li>
+</ul>
+
+<h3>三种策略对比</h3>
+<table>
+<tr><th>策略</th><th>Loss 计算范围</th><th>效果</th></tr>
+<tr><td><span class="tag tag-green">Completion-only</span></td><td>只在 assistant 回复上</td><td>✅ 推荐，效果最好，训练最高效</td></tr>
+<tr><td><span class="tag tag-blue">Full Sequence</span></td><td>整条序列（含 instruction）</td><td>⚠️ 小数据集时可能有帮助（正则化效果）</td></tr>
+<tr><td><span class="tag tag-orange">Weighted</span></td><td>instruction 低权重 + completion 高权重</td><td>🔶 折中方案，实际很少使用</td></tr>
+</table>
+
+<h3>实现方式</h3>
+<pre><code># HuggingFace TRL 的 DataCollatorForCompletionOnlyLM
+from trl import DataCollatorForCompletionOnlyLM
+
+response_template = "\n### Response:"
+collator = DataCollatorForCompletionOnlyLM(
+    response_template=response_template,
+    tokenizer=tokenizer
+)</code></pre>
+
+<div class="interview-box">
+<ul>
+<li>Completion-only Loss 是当前 SFT 的<strong>标准做法</strong></li>
+<li>少数研究表明：在数据极少（&lt;1000 条）时，Full Sequence Loss 可能有轻微正则化效果</li>
+<li>面试常问：如果在整条序列上算 loss，模型会学到什么不好的行为？→ 可能学会"复读"指令</li>
+<li>Loss Masking 的实现依赖正确的模板解析——模板错误 → Masking 位置错误 → 训练失败</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="s7">
+      <div class="ch-head"><div class="num">07</div><div class="t"><h2>超参数选择</h2></div></div>
+      <h3>关键超参数</h3>
+<table>
+<tr><th>超参数</th><th>推荐范围</th><th>说明</th></tr>
+<tr><td><strong>学习率 (LR)</strong></td><td>1e-5 ~ 5e-5</td><td>SFT 学习率通常比预训练低 10–100 倍</td></tr>
+<tr><td><strong>Epoch 数</strong></td><td>1–3</td><td>多于 3 轮容易过拟合，1 轮通常够用</td></tr>
+<tr><td><strong>Batch Size</strong></td><td>32–128（有效）</td><td>通过 gradient accumulation 实现大 batch</td></tr>
+<tr><td><strong>Warmup Ratio</strong></td><td>3%–10%</td><td>避免初始学习率过大导致发散</td></tr>
+<tr><td><strong>Max Length</strong></td><td>2048–4096</td><td>根据数据分布设置，过长浪费显存</td></tr>
+<tr><td><strong>Weight Decay</strong></td><td>0 ~ 0.1</td><td>防止过拟合，但 SFT 中影响有限</td></tr>
+<tr><td><strong>LR Scheduler</strong></td><td>cosine</td><td>cosine decay 最常用</td></tr>
+</table>
+
+<h3>为什么 SFT 只需 1–3 个 Epoch？</h3>
+<div class="card">
+<ul>
+<li>SFT 数据量小（数千~数万条），多轮训练极易<strong>过拟合</strong></li>
+<li>SFT 目标是调整行为模式而非学习新知识，少量更新即可</li>
+<li>过拟合的表现：训练 loss 持续下降，但评估指标停滞或下降（<strong>Alignment Tax</strong>）</li>
+<li>实验表明：很多场景下 <strong>1 个 Epoch</strong> 就能达到最佳效果</li>
+</ul>
+</div>
+
+<h3>学习率的重要性</h3>
+<ul>
+<li>学习率太高 → <strong>灾难性遗忘</strong>，模型丢失预训练知识</li>
+<li>学习率太低 → 收敛过慢，SFT 效果不明显</li>
+<li>LoRA 的学习率通常比全参数微调<strong>高 5–10 倍</strong>（如 1e-4 ~ 3e-4）</li>
+</ul>
+
+<div class="interview-box">
+<ul>
+<li>SFT 超参数的核心原则：<strong>小学习率 + 少轮次 + 大 batch</strong></li>
+<li>面试常问：为什么 SFT 学习率比预训练低得多？→ 避免破坏预训练学到的知识表示</li>
+<li>面试常问：如何判断 SFT 是否过拟合？→ 训练 loss 下降但 eval loss 上升 / 输出多样性降低</li>
+<li>Warmup 的作用：在模型还不稳定时用小学习率过渡，防止初期梯度爆炸</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="s8">
+      <div class="ch-head"><div class="num">08</div><div class="t"><h2>SFT 的问题与对策</h2><div class="sub">现象 ：SFT 后模型在某些预训练任务上性能下降</div></div></div>
+      <h3>灾难性遗忘 (Catastrophic Forgetting)</h3>
+<div class="card">
+<p><strong>现象</strong>：SFT 后模型在某些预训练任务上性能下降。</p>
+<p><strong>原因</strong>：SFT 数据分布窄，梯度更新偏向 SFT 任务，覆盖预训练知识。</p>
+<p><strong>对策</strong>：</p>
+<ul>
+<li>混入一定比例的预训练数据（如 5%–10%）</li>
+<li>使用较小的学习率</li>
+<li>减少训练轮次（1–2 个 Epoch）</li>
+<li>使用 LoRA 等 PEFT 方法（冻结大部分参数）</li>
+<li>Elastic Weight Consolidation (EWC) 等正则化方法</li>
+</ul>
+</div>
+
+<h3>对齐税 (Alignment Tax)</h3>
+<ul>
+<li><strong>定义</strong>：为了让模型"对齐"人类偏好，牺牲了部分基础能力</li>
+<li>例如：SFT 后模型变得更"安全"，但可能拒绝正常请求或代码能力下降</li>
+<li>缓解方法：在 SFT 数据中加入多样化任务（代码、数学、推理等）</li>
+</ul>
+
+<h3>数据质量 > 数据数量</h3>
+<div class="card">
+<p><strong>LIMA 论文的核心发现</strong>（Less Is More for Alignment）：</p>
+<ul>
+<li>仅用 <strong>1000 条</strong>精心策划的数据，就训练出了媲美 GPT-3.5 的模型</li>
+<li>启示：预训练已经注入了绝大部分知识，SFT 只需要少量高质量数据来"激活"</li>
+<li>数据质量的标准：格式规范、回答准确、多样性高、无矛盾</li>
+</ul>
+</div>
+
+<h3>常见数据问题</h3>
+<table>
+<tr><th>问题</th><th>影响</th><th>解决方案</th></tr>
+<tr><td>标签噪声</td><td>模型学到错误模式</td><td>多人标注 + 一致性检查</td></tr>
+<tr><td>数据不平衡</td><td>某些任务过强，其他退化</td><td>任务采样均衡化</td></tr>
+<tr><td>回答过长/过短</td><td>模型输出长度偏差</td><td>控制回答长度分布</td></tr>
+<tr><td>格式不统一</td><td>模型输出格式混乱</td><td>严格统一 Chat 模板</td></tr>
+</table>
+
+<div class="interview-box">
+<ul>
+<li>灾难性遗忘是 SFT 的<strong>头号问题</strong>，LoRA 天然缓解此问题（冻结主参数）</li>
+<li>LIMA 论文是面试高频考点：证明了 SFT 阶段数据质量远比数量重要</li>
+<li>面试常问：如何平衡安全性和有用性？→ 多样化 SFT 数据 + 细粒度的安全策略</li>
+<li>实践中混入预训练数据（Replay）是防止遗忘的最有效手段之一</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="s9">
+      <div class="ch-head"><div class="num">09</div><div class="t"><h2>评估 SFT 效果</h2></div></div>
+      <h3>主流评估方法</h3>
+<table>
+<tr><th>评估方法</th><th>类型</th><th>说明</th></tr>
+<tr><td><strong>MT-Bench</strong></td><td>自动（GPT-4 打分）</td><td>80 道多轮问题，GPT-4 1–10 打分，考察多轮对话能力</td></tr>
+<tr><td><strong>AlpacaEval</strong></td><td>自动（GPT-4 对比）</td><td>与 GPT-4 回答对比的胜率，简单高效</td></tr>
+<tr><td><strong>Arena ELO</strong></td><td>人工（匿名投票）</td><td>Chatbot Arena 中用户盲评，最贴近真实使用体验</td></tr>
+<tr><td><strong>MMLU / HellaSwag</strong></td><td>自动（选择题）</td><td>评估知识保留，检测是否发生灾难性遗忘</td></tr>
+<tr><td><strong>HumanEval / MBPP</strong></td><td>自动（代码执行）</td><td>评估代码生成能力是否受损</td></tr>
+</table>
+
+<h3>人工评估 vs 自动评估</h3>
+<div class="card">
+<table>
+<tr><th>维度</th><th>人工评估</th><th>自动评估</th></tr>
+<tr><td>成本</td><td>高（需要专家标注）</td><td>低（API 调用）</td></tr>
+<tr><td>可复现性</td><td>低（主观性强）</td><td>高（确定性结果）</td></tr>
+<tr><td>可信度</td><td>最高（真实用户感受）</td><td>中等（与人类偏好相关但不完全一致）</td></tr>
+<tr><td>速度</td><td>慢（数天~数周）</td><td>快（数分钟~数小时）</td></tr>
+<tr><td>偏见</td><td>标注者偏见</td><td>GPT-4 偏好更长/更结构化的回答</td></tr>
+</table>
+</div>
+
+<h3>评估最佳实践</h3>
+<ul>
+<li>开发阶段用自动评估（MT-Bench / AlpacaEval）快速迭代</li>
+<li>发布前用人工评估做最终质量把关</li>
+<li>同时监控<strong>基础能力指标</strong>（MMLU 等），防止灾难性遗忘</li>
+<li>关注输出的<strong>多样性和一致性</strong>，过拟合模型往往输出模式单一</li>
+</ul>
+
+<div class="interview-box">
+<ul>
+<li>MT-Bench 和 AlpacaEval 是目前最主流的 SFT 自动评估方案</li>
+<li>Arena ELO 被认为是最可靠的评估，但成本高、速度慢</li>
+<li>面试常问：GPT-4 自动评估有什么偏见？→ 偏好更长、格式更好的回答（length bias）</li>
+<li>评估 SFT 时要同时看<strong>指令遵循能力</strong>和<strong>基础能力保留</strong>两个维度</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="qa">
+      <div class="ch-head"><div class="num">10</div><div class="t"><h2>🎯 Q&amp;A</h2><div class="sub">预训练 的目标是让模型学习语言知识和世界知识，使用海量无标签文本，通过 next-token…</div></div></div>
+      <details class="qa">
+<summary><span class="q-num">Q1</span>SFT 和预训练的核心区别是什么？</summary>
+<div class="a">
+<p><strong>预训练</strong>的目标是让模型学习语言知识和世界知识，使用海量无标签文本，通过 next-token prediction 进行自监督学习。</p>
+<p><strong>SFT</strong> 的目标是让模型学会"听话"——遵循指令、以对话格式回答问题。使用的是精心构造的指令-回答对，数据量远小于预训练（数千~数万条 vs 数万亿 Token）。</p>
+<p>核心洞察：SFT 不注入新知识，而是改变模型的<strong>行为模式和表达方式</strong>，将预训练阶段学到的能力以指令方式"解锁"。LIMA 论文表明，仅 1000 条数据即可完成有效的行为对齐。</p>
+</div>
+</details>
+
+<details class="qa">
+<summary><span class="q-num">Q2</span>LoRA 的原理是什么？为什么有效？</summary>
+<div class="a">
+<p>LoRA（Low-Rank Adaptation）在冻结原始权重 W 的基础上，添加一个低秩分解的增量：<strong>W' = W + BA</strong>，其中 B ∈ R<sup>d×r</sup>，A ∈ R<sup>r×k</sup>，r ≪ min(d, k)。</p>
+<p><strong>有效的原因</strong>：</p>
+<ul>
+<li>研究发现预训练模型的权重更新具有<strong>低秩特性</strong>（intrinsic low rank）</li>
+<li>SFT 只需微调模型行为，不需要大幅改变权重 → 低秩增量足够表达</li>
+<li>推理时可将 BA 合并回 W，<strong>无额外推理开销</strong></li>
+<li>可训练参数仅 0.1%–1%，显存节省 10 倍以上</li>
+</ul>
+</div>
+</details>
+
+<details class="qa">
+<summary><span class="q-num">Q3</span>什么是 Loss Masking？为什么只在 assistant 回复上计算 loss？</summary>
+<div class="a">
+<p>Loss Masking 指在计算训练损失时，将不需要学习的 Token 位置标记为 <code>-100</code>（PyTorch 的 ignore_index），这些位置不参与梯度计算。</p>
+<p><strong>只在 assistant 回复上计算 loss 的原因</strong>：</p>
+<ul>
+<li>SFT 的目标是训练模型生成高质量回答，不是让模型学会"复读指令"</li>
+<li>指令部分的 Token 分布与回答不同，同时优化会互相干扰</li>
+<li>减少不必要的梯度计算，提高训练效率</li>
+<li>这种做法称为 <strong>Completion-only Loss</strong>，是目前 SFT 的标准做法</li>
+</ul>
+</div>
+</details>
+
+<details class="qa">
+<summary><span class="q-num">Q4</span>Chat 模板不匹配会导致什么问题？如何避免？</summary>
+<div class="a">
+<p><strong>模板不匹配的后果</strong>：</p>
+<ul>
+<li>模型不知何时停止生成（缺少正确的 EOS Token → 无限输出）</li>
+<li>角色混淆（模型可能同时生成 user 和 assistant 的内容）</li>
+<li>系统提示失效（安全策略可能被忽略）</li>
+<li>输出质量显著下降</li>
+</ul>
+<p><strong>如何避免</strong>：</p>
+<ul>
+<li>使用 Hugging Face 的 <code>tokenizer.apply_chat_template()</code> 自动应用正确模板</li>
+<li>确保推理时的模板与训练时<strong>完全一致</strong></li>
+<li>在模型卡片中明确记录使用的 Chat 模板</li>
+</ul>
+</div>
+</details>
+
+<details class="qa">
+<summary><span class="q-num">Q5</span>如何防止 SFT 中的灾难性遗忘？</summary>
+<div class="a">
+<p>灾难性遗忘指 SFT 后模型在预训练任务上性能下降。主要对策包括：</p>
+<ul>
+<li><strong>混入预训练数据</strong>：在 SFT 数据中混入 5%–10% 的预训练数据（Replay）</li>
+<li><strong>小学习率</strong>：使用 1e-5 ~ 5e-5，远低于预训练学习率</li>
+<li><strong>少训练轮次</strong>：1–3 个 Epoch，避免过度拟合 SFT 数据</li>
+<li><strong>使用 PEFT</strong>：LoRA 等方法冻结大部分参数，天然减轻遗忘</li>
+<li><strong>多任务 SFT</strong>：使用多样化任务数据，保持模型各方面能力</li>
+<li><strong>正则化</strong>：EWC、L2 正则化等约束参数变化幅度</li>
+</ul>
+</div>
+</details>
+
+<details class="qa">
+<summary><span class="q-num">Q6</span>LIMA 论文的核心结论是什么？有什么启示？</summary>
+<div class="a">
+<p>LIMA（Less Is More for Alignment）的核心结论：<strong>仅用 1000 条精心策划的高质量数据，就能训练出媲美 GPT-3.5 的对话模型</strong>。</p>
+<p><strong>启示</strong>：</p>
+<ul>
+<li>预训练阶段已经注入了绝大部分知识和能力</li>
+<li>SFT 的本质是教模型"如何表达"，而非"学什么新东西"</li>
+<li><strong>数据质量远比数据数量重要</strong>——1000 条高质量数据 > 10 万条低质量数据</li>
+<li>数据筛选和质量控制是 SFT 成功的关键</li>
+</ul>
+<p>这被称为<strong>浅层对齐假说</strong>（Superficial Alignment Hypothesis）。</p>
+</div>
+</details>
+
+<details class="qa">
+<summary><span class="q-num">Q7</span>SFT 的学习率为什么通常设为 1e-5 ~ 5e-5？</summary>
+<div class="a">
+<p>SFT 学习率远低于预训练（预训练通常 1e-4 ~ 3e-4），原因包括：</p>
+<ul>
+<li><strong>保护预训练知识</strong>：大学习率会大幅改变模型权重，导致灾难性遗忘</li>
+<li><strong>SFT 的目标简单</strong>：只需微调行为模式，不需要大幅更新参数</li>
+<li><strong>数据量小</strong>：小数据 + 大学习率 → 严重过拟合</li>
+<li><strong>收敛快</strong>：预训练模型已在良好的 loss landscape 位置，微小更新即可达到目标</li>
+</ul>
+<p>注意：LoRA 的学习率通常高于全参数微调（1e-4 ~ 3e-4），因为只更新少量参数，每个参数需要更大的更新步幅。</p>
+</div>
+</details>
+
+<details class="qa">
+<summary><span class="q-num">Q8</span>Packing 是什么？有什么好处和注意事项？</summary>
+<div class="a">
+<p><strong>Packing</strong>（序列打包）是将多个短样本拼接成一个长序列的训练技巧，以减少 padding Token 的浪费。</p>
+<p><strong>好处</strong>：</p>
+<ul>
+<li>提升 GPU 利用率，训练吞吐量提高 2–5 倍</li>
+<li>减少内存浪费（消除大量 padding）</li>
+</ul>
+<p><strong>注意事项</strong>：</p>
+<ul>
+<li>必须使用 <strong>block-diagonal attention mask</strong>，防止不同样本间的交叉注意力</li>
+<li><code>position_ids</code> 需要在每个样本边界处重置</li>
+<li>Loss Masking 必须正确设置，只在每个样本的 assistant 部分计算 loss</li>
+<li>Flash Attention 2 的 <code>cu_seqlens</code> 可以高效实现样本隔离</li>
+</ul>
+</div>
+</details>
+
+<details class="qa">
+<summary><span class="q-num">Q9</span>全参数微调和 QLoRA 在 7B 模型上的显存需求分别是多少？</summary>
+<div class="a">
+<p><strong>全参数微调（FP16 + Adam）</strong>：</p>
+<ul>
+<li>模型参数：7B × 2 bytes = 14 GB</li>
+<li>Adam 优化器状态（momentum + variance）：7B × 2 × 4 bytes = 56 GB</li>
+<li>梯度：7B × 2 bytes = 14 GB</li>
+<li>总计：约 <strong>80+ GB</strong>（需要多卡或 80 GB A100）</li>
+</ul>
+<p><strong>QLoRA（4-bit 量化 + LoRA rank=16）</strong>：</p>
+<ul>
+<li>量化模型参数：7B × 0.5 bytes ≈ 3.5 GB</li>
+<li>LoRA 参数 + 优化器状态：约 0.5–1 GB</li>
+<li>总计：约 <strong>6–10 GB</strong>（单张消费级 GPU 即可）</li>
+</ul>
+<p>这使得在 RTX 3090/4090（24 GB）上微调 7B 甚至 13B 模型成为可能。</p>
+</div>
+</details>
+
+<details class="qa">
+<summary><span class="q-num">Q10</span>如何评估 SFT 模型的效果？有哪些主流基准？</summary>
+<div class="a">
+<p>评估 SFT 效果需要从<strong>指令遵循能力</strong>和<strong>基础能力保留</strong>两个维度考量：</p>
+<p><strong>指令遵循评估</strong>：</p>
+<ul>
+<li><strong>MT-Bench</strong>：80 道多轮问题，GPT-4 打分（1–10），考察推理、写作、编程等 8 个维度</li>
+<li><strong>AlpacaEval</strong>：与参考回答（GPT-4）对比的胜率，支持 length-controlled 版本</li>
+<li><strong>Arena ELO</strong>：Chatbot Arena 中用户匿名盲评，最贴近真实使用体验</li>
+</ul>
+<p><strong>基础能力评估</strong>：</p>
+<ul>
+<li><strong>MMLU</strong>：57 个学科的选择题，检测知识保留</li>
+<li><strong>HumanEval / MBPP</strong>：代码生成 Pass@k</li>
+<li><strong>GSM8K</strong>：数学推理能力</li>
+</ul>
+<p><strong>最佳实践</strong>：开发迭代用自动评估（快），发布前用人工评估（准）。注意 GPT-4 评估存在 length bias（偏好更长的回答）。</p>
+</div>
+</details>
+    </section>
+
+    <footer>
+      <div class="made">TECH NOTES · AI 工程 · 整理自 AI Knowledge Hub</div>
+    </footer>
+  </main>
+</div>
+
+<script>
+(function(){var bar=document.getElementById('progress');function u(){var h=document.documentElement;bar.style.width=h.scrollTop/(h.scrollHeight-h.clientHeight)*100+'%';}window.addEventListener('scroll',u,{passive:true});u();})();
+(function(){var links=document.querySelectorAll('aside.toc nav a');var secs=Array.from(document.querySelectorAll('section.chapter'));if(!secs.length)return;function u(){var y=window.scrollY+100,cur=secs[0];for(var i=0;i<secs.length;i++){if(secs[i].offsetTop<=y)cur=secs[i];}var id=cur.id;links.forEach(function(a){a.classList.toggle('active',a.getAttribute('href')==='#'+id);});}window.addEventListener('scroll',u,{passive:true});u();})();
+</script>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

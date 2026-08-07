@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RAG 处理 Word 文档指南 · AI 工程 — Tech Notes</title>
+<meta name="description" content="Word Document Processing — 结构保留 / 表格按行切分 / OCR关联 / 语义Chunk切分">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<link rel="stylesheet" href="../assets/kh-guide.css">
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav">
+
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="ai_engineering_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 13 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>G23 · AI 工程</h2>
+    <nav>
+      <ol>
+        <li><a href="#overview" class="active">概览</a></li>
+        <li><a href="#word">Word 文档的特殊性：为什么不能简单转文本</a></li>
+        <li><a href="#word-2">六步解决方案：从 Word 到可检索知识单元</a></li>
+        <li><a href="#chunk">语义 Chunk 切分策略</a></li>
+        <li><a href="#ch4">检索优化：多路召回与重排序</a></li>
+        <li><a href="#ch5">端到端实践：工具选型与性能数据</a></li>
+        <li><a href="#ch6">核心结论：将半结构化文档还原为可检索知识单元</a></li>
+        <li><a href="#ch7">常见问题</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+    <header class="hero">
+      <div class="badge">G23 · AI 工程</div>
+      <h1>RAG 处理 Word 文档指南</h1>
+      <p class="sub">Word Document Processing — 结构保留 / 表格按行切分 / OCR关联 / 语义Chunk切分</p>
+      <div class="meta-row">
+        <span class="pill cyan">AI 工程</span>
+        <span class="pill green">阅读 ~13 min</span>
+        <span class="pill amber">8 章</span>
+      </div>
+    </header>
+
+    <section class="chapter" id="overview">
+      <div class="ch-head"><div class="num">00</div><div class="t"><h2>概览</h2><div class="sub">Word 文档不是&quot;带格式的文字&quot;，而是&quot;半结构化的知识容器&quot;</div></div></div>
+      <div class="intuition-box">
+  <p>Word 文档不是"带格式的文字"，而是"半结构化的知识容器"。标题层级表达信息从属关系，表格承载结构化数据，图片传达文字无法描述的视觉信息。简单转纯文本丢掉的不是格式，而是语义关系——这才是 RAG 系统检索质量崩塌的根源。</p>
+</div>
+    </section>
+
+    <section class="chapter" id="word">
+      <div class="ch-head"><div class="num">01</div><div class="t"><h2>Word 文档的特殊性：为什么不能简单转文本</h2><div class="sub">在企业 RAG 系统中，Word 文档（</div></div></div>
+      <p>在企业 RAG 系统中，Word 文档（.docx）是最常见的知识载体之一。与 PDF 相比，Word 文档有一个"隐藏优势"——它的底层是 <span class="term">XML 结构化存储</span>（Office Open XML 格式），包含丰富的语义标注信息。但大多数 RAG 管道在第一步就把这些结构信息全部丢弃了。</p>
+
+<h3>Word 文档包含的六大结构化元素</h3>
+
+<table>
+<tr><th>元素类型</th><th>语义价值</th><th>丢失后果</th><th>典型场景</th></tr>
+<tr><td>标题层级 (H1-H6)</td><td>信息从属关系</td><td>无法定位"某章节下的某规则"</td><td>制度文件、操作手册</td></tr>
+<tr><td>表格</td><td>结构化数据关系</td><td>行列关系散乱，数据无法精确匹配</td><td>报价单、参数表、流程图</td></tr>
+<tr><td>图片</td><td>视觉信息（流程图、截图）</td><td>图片内容完全丢失</td><td>操作截图、架构图</td></tr>
+<tr><td>页眉页脚</td><td>文档元数据（版本、密级）</td><td>丢失文档来源和版本信息</td><td>公司制度文件、合同</td></tr>
+<tr><td>批注/修订</td><td>审阅意见和变更历史</td><td>无法区分最终版本和草稿</td><td>合同审批、方案评审</td></tr>
+<tr><td>样式标记</td><td>段落角色（正文/注释/引用）</td><td>无法区分正文和辅助信息</td><td>学术论文、技术文档</td></tr>
+</table>
+
+<div class="highlight">
+  <p>实测数据：某银行将 200 份内部制度 Word 文档直接转纯文本后入库，用户提问"差旅报销中一线城市住宿标准是多少"时，RAG 系统召回的 Top-5 结果中有 3 条来自错误的章节——因为"差旅报销→住宿标准→一线城市"这个层级路径在纯文本中已不可区分，系统只能靠关键词模糊匹配。</p>
+</div>
+
+<h3>三大核心问题</h3>
+<ol>
+<li><strong>结构保留</strong>：如何在不破坏语义关系的前提下提取文档内容？标题层级、表格行列、图文对应关系都需要保留。</li>
+<li><strong>非正文内容处理</strong>：页眉页脚、批注、修订痕迹中哪些该保留、哪些该丢弃？处理不当会引入噪声或丢失关键元数据。</li>
+<li><strong>语义完整性保障</strong>：切分为 chunk 后，每个 chunk 是否仍然是一个语义完整的知识单元？跨段落引用的信息能否被正确关联？</li>
+</ol>
+
+<div class="arch-diagram">┌──────────────────────────────────────────────────────────────────┐
+│           Word 文档 vs 纯文本：信息损失分析                         │
+├──────────────────────────────────────────────────────────────────┤
+│                                                                    │
+│  Word 文档原始结构:                                                │
+│  ┌──────────────────────────────────────────┐                     │
+│  │ [H1] 差旅费管理办法                       │                     │
+│  │  ├─ [H2] 第三章 住宿标准                  │                     │
+│  │  │   ├─ [H3] 一线城市                     │                     │
+│  │  │   │   └─ [表格] 北京600 上海600 广州500 │  ← 表格在H3下       │
+│  │  │   └─ [H3] 二线城市                     │                     │
+│  │  │       └─ [表格] 成都400 武汉350         │  ← 表格在H3下       │
+│  │  └─ [H2] 第四章 交通标准                  │                     │
+│  │      └─ [正文] 高铁二等座...               │                     │
+│  └──────────────────────────────────────────┘                     │
+│                                                                    │
+│  纯文本提取后:                                                     │
+│  ┌──────────────────────────────────────────┐                     │
+│  │ 差旅费管理办法                            │                     │
+│  │ 第三章 住宿标准                            │                     │
+│  │ 一线城市                                   │                     │
+│  │ 北京 600 上海 600 广州 500  ← 丢失层级     │                     │
+│  │ 二线城市                                   │                     │
+│  │ 成都 400 武汉 350     ← 不知道属于哪个标准  │                     │
+│  │ 第四章 交通标准                            │                     │
+│  │ 高铁二等座...                              │                     │
+│  └──────────────────────────────────────────┘                     │
+│                                                                    │
+│  结构化提取后（保留路径）:                                          │
+│  ┌──────────────────────────────────────────┐                     │
+│  │ chunk_1: {                               │                     │
+│  │   path: "差旅费管理>住宿标准>一线城市",    │                     │
+│  │   table: [{城市:"北京",标准:"600元/天"},   │                     │
+│  │           {城市:"上海",标准:"600元/天"}]   │                     │
+│  │ }                                        │                     │
+│  │ chunk_2: {                               │                     │
+│  │   path: "差旅费管理>住宿标准>二线城市",    │                     │
+│  │   table: [{城市:"成都",标准:"400元/天"}]   │                     │
+│  │ }                                        │                     │
+│  └──────────────────────────────────────────┘                     │
+│                                                                    │
+└──────────────────────────────────────────────────────────────────┘</div>
+
+<div class="intuition-box">
+  <p>核心认知：Word 文档处理的目标不是"提取文字"，而是"还原知识单元"。一个标题路径（如"差旅报销→住宿标准→一线城市"）加上其下属内容（表格或段落），构成一个完整的、可独立回答问题的知识单元。这就是 RAG chunk 的理想形态。</p>
+</div>
+    </section>
+
+    <section class="chapter" id="word-2">
+      <div class="ch-head"><div class="num">02</div><div class="t"><h2>六步解决方案：从 Word 到可检索知识单元</h2><div class="sub">以下是一套经过生产验证的 Word 文档处理流水线，覆盖从文档解析到检索优化的完整链路</div></div></div>
+      <p>以下是一套经过生产验证的 Word 文档处理流水线，覆盖从文档解析到检索优化的完整链路。每一步都针对前述三大问题中的一个或多个。</p>
+
+<div class="flow">
+  <div class="flow-title">Word 文档处理六步流水线（.docx → 结构化 chunk 集合）</div>
+  <div class="flow-node accent"><div class="nlabel">Step 1 · 文档解析（结构保留）</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Step 2 · 表格处理（按行转文本）</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Step 3 · 图片 OCR（关联段落）</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Step 4 · 页眉页脚 / 批注过滤</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Step 5 · 语义切分（元数据补充）</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">Step 6 · 检索优化（多路召回）→ 含 metadata 的 chunk 集合</div></div>
+</div>
+
+<h3>Step 1：文档解析与结构保留</h3>
+
+<p>Word 文档的底层是 Office Open XML 格式，每个段落都有明确的样式标记（<code>w:pStyle</code>），可以直接读取标题层级。推荐使用 <span class="term">python-docx</span> 或 <span class="term">Unstructured</span> 库进行解析，而非简单的文本提取。</p>
+
+<p>关键操作是构建<span class="term">语义路径</span>（Semantic Path）：从根标题到当前段落的完整路径。例如"差旅报销→住宿标准→一线城市→600元/天"。这个路径会被附加到每个 chunk 的元数据中，使检索时能精确定位信息来源。</p>
+
+<div class="highlight">
+  <p>生产数据：在 500 份企业制度文档的测试中，保留语义路径的检索方案 Recall@5 达到 87.3%，而纯文本方案的 Recall@5 仅为 62.1%。差距最大的场景是"跨章节同名概念"——多个章节都提到"标准"，纯文本方案无法区分是哪个章节的标准。</p>
+</div>
+
+<h3>Step 2：表格处理——按行转结构化文本</h3>
+
+<p>表格是 Word 文档中信息密度最高的元素，也是最容易被错误处理的元素。常见的错误做法是将整个表格转成一个长字符串或按列拼接，导致行列对应关系丢失。</p>
+
+<p>正确做法是将<span class="term">每行视为独立语义单元</span>：表头作为键（Key），每行数据作为值（Value），组合成结构化的 Key-Value 文本。这样每一行都可以被独立检索和回答问题。</p>
+
+<table>
+<tr><th>处理方式</th><th>示例输出</th><th>检索效果</th><th>问题</th></tr>
+<tr><td>整表拼接</td><td>"城市 标准 北京 600 上海 600 广州 500"</td><td>差</td><td>无法区分哪个城市对应哪个标准</td></tr>
+<tr><td>按列拼接</td><td>"城市:北京,上海,广州 | 标准:600,600,500"</td><td>中</td><td>索引对应关系靠推理，容易出错</td></tr>
+<tr><td>按行转 KV</td><td>"一线城市住宿标准: 北京=600元/天, 上海=600元/天"</td><td>优</td><td>每行独立可检索，语义完整</td></tr>
+</table>
+
+<div class="intuition-box">
+  <p>表格处理的核心原则：一个表格行回答一个问题。用户问"北京住宿标准是多少"时，系统应该能直接召回"北京=600元/天"这一行，而不是把整个表格都返回。按行切分使得每个 chunk 精准对应一个可回答的知识点。</p>
+</div>
+
+<h3>Step 3：图片 OCR 提取并关联原段落</h3>
+
+<p>Word 文档中的图片（操作截图、流程图、架构图）通常包含关键信息。处理策略分两层：</p>
+<ul>
+<li><strong>OCR 提取</strong>：使用 Tesseract 或 PaddleOCR 从图片中提取文字内容</li>
+<li><strong>段落关联</strong>：将 OCR 结果与图片前后的文字段落关联，形成完整的上下文。图片的 <code>alt text</code> 和前后段落的标题路径也作为关联元数据</li>
+</ul>
+
+<p>如果图片是纯图形（如流程图无文字），则使用多模态模型（如 GPT-4o）生成图片描述，并将描述文本作为一个 chunk 入库。实测中，OCR 关联处理使涉及图片内容的问答准确率从 12%（完全不处理）提升到 71%。</p>
+
+<h3>Step 4：页眉页脚与批注过滤</h3>
+
+<p>页眉页脚和批注中混杂着有价值的元数据和无意义的噪声。处理策略需要区分对待：</p>
+
+<table>
+<tr><th>元素类型</th><th>保留策略</th><th>处理方式</th><th>示例</th></tr>
+<tr><td>页眉-文档标题</td><td>保留为全局元数据</td><td>附加到每个 chunk 的 source 字段</td><td>"XX公司差旅管理办法 V2.3"</td></tr>
+<tr><td>页眉-密级标识</td><td>保留为安全元数据</td><td>附加到每个 chunk 的 security_level 字段</td><td>"内部-机密"</td></tr>
+<tr><td>页脚-页码</td><td>丢弃</td><td>过滤</td><td>"第 3 页 / 共 15 页"</td></tr>
+<tr><td>批注-审阅意见</td><td>仅保留最终修订版本</td><td>接受所有修订，删除批注文本</td><td>保留"标准修改为600"的最终文本</td></tr>
+<tr><td>修订痕迹</td><td>接受最终版本</td><td>使用 accept_all_revisions() 处理</td><td>删除红色删除线标记</td></tr>
+</table>
+
+<div class="intuition-box">
+  <p>批注和修订的处理原则："只保留最终真相"。一份经过 5 轮审批的合同可能包含 200 条批注和修订痕迹，但最终用户只需要知道最终条款是什么。在 RAG 场景中，保留中间版本反而会引入噪声——系统可能召回已经被否决的旧条款来回答问题。</p>
+</div>
+    </section>
+
+    <section class="chapter" id="chunk">
+      <div class="ch-head"><div class="num">03</div><div class="t"><h2>语义 Chunk 切分策略</h2><div class="sub">语义切分 的核心原则：每个 chunk 应该是一个完整的、可独立回答问题的知识单元</div></div></div>
+      <h3>语义切分 vs 固定长度切分</h3>
+
+<p><span class="term">语义切分</span>的核心原则：每个 chunk 应该是一个完整的、可独立回答问题的知识单元。切分边界应该在"话题变化"的地方，而非在第 N 个 token 处。</p>
+
+<p>具体实现策略：</p>
+<ol>
+<li><strong>以标题层级为主边界</strong>：每个 H2/H3 标题下的内容作为一个或若干个 chunk。一个 H3 下的所有内容通常构成一个完整的知识点。</li>
+<li><strong>段落为次边界</strong>：如果一个标题下的内容过长（超过 800 token），则在段落边界处进一步切分，而非在句子中间截断。</li>
+<li><strong>表格行独立成 chunk</strong>：如 Step 2 所述，每行 KV 结构独立成 chunk，不与相邻文本合并。</li>
+<li><strong>补充上下文路径</strong>：每个 chunk 的开头自动加上其语义路径前缀，如"差旅费管理办法 > 住宿标准 > 一线城市"。</li>
+</ol>
+
+<table>
+<tr><th>切分策略</th><th>平均 chunk 大小</th><th>Recall@5</th><th>MRR</th><th>适用场景</th></tr>
+<tr><td>固定 256 token</td><td>256 tokens</td><td>58.2%</td><td>0.41</td><td>简单 FAQ 文档</td></tr>
+<tr><td>固定 512 token + 10% overlap</td><td>512 tokens</td><td>64.7%</td><td>0.48</td><td>通用文本</td></tr>
+<tr><td>段落边界切分</td><td>~380 tokens</td><td>72.1%</td><td>0.56</td><td>叙事性文档</td></tr>
+<tr><td>标题层级语义切分</td><td>~450 tokens</td><td>82.6%</td><td>0.67</td><td>结构化制度文档</td></tr>
+<tr><td>语义切分 + metadata 补充</td><td>~450 tokens</td><td>87.3%</td><td>0.73</td><td>企业知识库（推荐）</td></tr>
+</table>
+
+<h3>Metadata 补充策略</h3>
+
+<p>每个 chunk 除了正文内容外，还需要附加以下元数据字段：</p>
+
+<table>
+<tr><th>Metadata 字段</th><th>内容示例</th><th>检索用途</th></tr>
+<tr><td>semantic_path</td><td>"差旅管理>住宿标准>一线城市"</td><td>精确匹配 + 层级过滤</td></tr>
+<tr><td>doc_title</td><td>"XX公司差旅费管理办法"</td><td>来源追溯</td></tr>
+<tr><td>doc_version</td><td>"V2.3"</td><td>版本过滤</td></tr>
+<tr><td>section_heading</td><td>"一线城市住宿标准"</td><td>上下文补全</td></tr>
+<tr><td>chunk_type</td><td>"text" / "table_row" / "image_desc"</td><td>类型过滤</td></tr>
+<tr><td>security_level</td><td>"internal" / "public"</td><td>权限控制</td></tr>
+</table>
+
+<div class="intuition-box">
+  <p>Metadata 的真正价值在于"缩小检索范围"。当用户问"一线城市住宿标准"时，系统可以先用 semantic_path 过滤出"住宿标准"相关的 chunk（从 2000 个 chunk 缩小到 50 个），再在这 50 个 chunk 中做向量检索。这种"先过滤后检索"的两阶段策略比直接在 2000 个 chunk 中检索的准确率高 15-20 个百分点。</p>
+</div>
+    </section>
+
+    <section class="chapter" id="ch4">
+      <div class="ch-head"><div class="num">04</div><div class="t"><h2>检索优化：多路召回与重排序</h2><div class="sub">Word 文档处理完成后，检索阶段需要针对 Word 文档的特点做专项优化</div></div></div>
+      <p>Word 文档处理完成后，检索阶段需要针对 Word 文档的特点做专项优化。核心挑战是：Word 文档中既有精确数据（如"600元/天"），又有描述性文本（如"员工出差应优先选择经济型交通工具"），单一检索方式难以同时覆盖两种查询模式。</p>
+
+<h3>BM25 + 向量检索 多路召回</h3>
+
+<p><span class="term">BM25</span> 关键词检索擅长精确匹配——用户搜"600"就能命中包含"600"的 chunk。<span class="term">向量检索</span>擅长语义匹配——用户搜"住宿费用上限"能命中"住宿标准"相关的 chunk，即使没有出现"费用上限"这四个字。两路并行召回，取并集后交给重排序器。</p>
+
+<div class="flow">
+  <div class="flow-title">多路召回 + 重排序检索流程（示例查询："一线城市住宿标准是多少"）</div>
+  <div class="flow-node accent"><div class="nlabel">Metadata 过滤：semantic_path LIKE '%住宿标准%'</div><div class="nsub">2000 chunks → 50 chunks，先缩小范围</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">并行双路召回</div><div class="nsub">BM25 关键词（"一线城市"+"住宿"+"标准" Top-20，精确匹配） ∥ 向量语义检索（Embedding Top-20，语义相似）</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">结果合并（并集 ~30–35 chunks）→ Cross-Encoder 重排序</div><div class="nsub">对每个 (query, chunk) 计算精确相关性分数</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">Top-5 送入 LLM 生成答案</div><div class="nsub">最终召回：北京 600 / 上海 600 / 广州 500 · 超标个人承担 · 含早餐费用</div></div>
+</div>
+
+<h3>Cross-Encoder 重排序</h3>
+
+<p>多路召回返回的 30-35 个候选 chunk 质量参差不齐——BM25 可能因为关键词匹配召回了语义不相关的结果，向量检索可能召回了语义相似但不精确的结果。<span class="term">Cross-Encoder</span> 重排序器（如 bge-reranker-v2）对每个 (query, chunk) 对做精细的相关性打分，然后按分数降序排列，取 Top-5 送入 LLM。</p>
+
+<div class="highlight">
+  <p>实测效果：在 200 份企业制度文档的测试集上，BM25 单独的 Recall@5 为 68.2%，向量检索单独为 74.5%，两路召回合并后为 81.3%，加上 Cross-Encoder 重排序后达到 87.3%。每一步提升都是显著的，尤其 Cross-Encoder 贡献了 6 个百分点的提升。</p>
+</div>
+
+<table>
+<tr><th>检索方案</th><th>Recall@5</th><th>MRR</th><th>延迟 P50</th><th>延迟 P99</th></tr>
+<tr><td>BM25 单独</td><td>68.2%</td><td>0.52</td><td>15ms</td><td>45ms</td></tr>
+<tr><td>向量检索单独</td><td>74.5%</td><td>0.58</td><td>35ms</td><td>120ms</td></tr>
+<tr><td>BM25 + 向量 双路召回</td><td>81.3%</td><td>0.64</td><td>50ms</td><td>150ms</td></tr>
+<tr><td>双路召回 + Cross-Encoder</td><td>87.3%</td><td>0.73</td><td>180ms</td><td>450ms</td></tr>
+</table>
+
+<div class="intuition-box">
+  <p>检索优化的关键洞察：不同检索方式解决不同类型的查询。"北京住宿标准多少钱"是精确查询（BM25 强项），"出差住什么档次的酒店"是语义查询（向量检索强项），"住宿超标怎么处理"是跨章节查询（Metadata 路径过滤强项）。多路召回不是"冗余"，而是"互补"。</p>
+</div>
+    </section>
+
+    <section class="chapter" id="ch5">
+      <div class="ch-head"><div class="num">05</div><div class="t"><h2>端到端实践：工具选型与性能数据</h2><div class="sub">以下是处理 500 份企业制度 Word 文档（平均每文档 15 页、含 8 个表格、3 张…</div></div></div>
+      <h3>文档解析工具对比</h3>
+
+<table>
+<tr><th>工具</th><th>结构保留</th><th>表格处理</th><th>图片 OCR</th><th>性能</th><th>推荐场景</th></tr>
+<tr><td><span class="term">python-docx</span></td><td>标题层级好</td><td>需自行处理</td><td>不支持</td><td>快 (~2s/文档)</td><td>简单结构化文档</td></tr>
+<tr><td><span class="term">Unstructured</span></td><td>优秀</td><td>内置表格提取</td><td>集成 Tesseract</td><td>中 (~8s/文档)</td><td>通用企业文档（推荐）</td></tr>
+<tr><td><span class="term">MarkItDown</span></td><td>良好</td><td>转 Markdown 表格</td><td>有限</td><td>中 (~5s/文档)</td><td>需要 Markdown 输出</td></tr>
+<tr><td>NeMo Retriever</td><td>优秀</td><td>GPU 加速</td><td>集成 OCR</td><td>快 (~3s/文档 GPU)</td><td>大规模处理</td></tr>
+</table>
+
+<h3>生产部署的关键指标</h3>
+
+<div class="practice-grid">
+<div class="do">
+<strong>推荐的生产实践：</strong>
+<ul>
+<li>解析阶段保留完整标题路径作为 metadata</li>
+<li>表格按行转 KV 结构，每行独立成 chunk</li>
+<li>图片做 OCR + 段落关联，无法 OCR 的用多模态模型描述</li>
+<li>接受所有修订后入库，丢弃中间版本</li>
+<li>语义切分 + metadata 补充，chunk 大小 300-600 token</li>
+<li>BM25 + 向量双路召回 + Cross-Encoder 重排序</li>
+<li>每个 chunk 附加 security_level 做权限控制</li>
+</ul>
+</div>
+<div class="dont">
+<strong>常见的反模式：</strong>
+<ul>
+<li>Word 转纯文本后直接入向量库</li>
+<li>整个表格作为一个 chunk 存储</li>
+<li>忽略图片内容，只处理文字</li>
+<li>保留批注和修订痕迹导致新旧信息混淆</li>
+<li>固定 512 token 切分，不考虑语义边界</li>
+<li>只用向量检索，不做关键词检索</li>
+<li>忽略文档版本，新旧文档混合索引</li>
+</ul>
+</div>
+</div>
+
+<h3>处理流水线性能基准</h3>
+
+<p>以下是处理 500 份企业制度 Word 文档（平均每文档 15 页、含 8 个表格、3 张图片）的实测性能数据：</p>
+
+<table>
+<tr><th>处理阶段</th><th>单文档耗时</th><th>500 文档总耗时</th><th>输出质量</th><th>瓶颈分析</th></tr>
+<tr><td>文档解析 + 结构提取</td><td>2.3s</td><td>~19 分钟</td><td>标题路径完整率 98%</td><td>CPU 密集，可并行</td></tr>
+<tr><td>表格处理 (按行 KV)</td><td>0.8s</td><td>~7 分钟</td><td>行列正确率 96%</td><td>复杂表格需人工校验</td></tr>
+<tr><td>图片 OCR + 关联</td><td>3.5s</td><td>~29 分钟</td><td>OCR 准确率 89%</td><td>GPU 加速可降至 1.2s</td></tr>
+<tr><td>页眉页脚/批注过滤</td><td>0.3s</td><td>~2.5 分钟</td><td>过滤准确率 99%</td><td>规则引擎，速度快</td></tr>
+<tr><td>语义切分 + metadata</td><td>0.5s</td><td>~4 分钟</td><td>切分合理率 92%</td><td>依赖标题质量</td></tr>
+<tr><td>Embedding + 入库</td><td>1.2s</td><td>~10 分钟</td><td>向量质量取决于模型</td><td>GPU 加速，可批量</td></tr>
+</table>
+
+<div class="intuition-box">
+  <p>端到端处理 500 份文档约需 70 分钟（串行），并行化后可压缩至 15-20 分钟。平均每份文档产出约 45 个语义 chunk，总计约 22,500 个 chunk。相比直接文本提取的 60,000+ chunk（固定 256 token 切分），语义切分的 chunk 数量更少但质量更高——每个 chunk 都是完整的知识单元。</p>
+</div>
+    </section>
+
+    <section class="chapter" id="ch6">
+      <div class="ch-head"><div class="num">06</div><div class="t"><h2>核心结论：将半结构化文档还原为可检索知识单元</h2><div class="sub">整套方案的核心思想可以浓缩为一句话： Word 文档处理的本质不是&quot;提取文字&quot;，而是&quot;还原知…</div></div></div>
+      <p>整套方案的核心思想可以浓缩为一句话：<strong>Word 文档处理的本质不是"提取文字"，而是"还原知识单元"</strong>。</p>
+
+<h3>六步方案的协同效应</h3>
+<ul>
+<li><strong>Step 1-4（解析阶段）</strong>：将 Word 文档从"排版格式"还原为"语义结构"——标题层级、表格数据、图片信息、元数据各司其职</li>
+<li><strong>Step 5（切分阶段）</strong>：将语义结构转化为"可独立检索的知识单元"——每个 chunk 语义完整、大小合理、元数据丰富</li>
+<li><strong>Step 6（检索阶段）</strong>：利用结构化元数据实现"先过滤后检索"的两阶段策略，结合多路召回和重排序提升精度</li>
+</ul>
+
+<table>
+<tr><th>处理环节</th><th>输入</th><th>输出</th><th>核心价值</th><th>质量指标</th></tr>
+<tr><td>文档解析</td><td>.docx 文件</td><td>结构化元素集合</td><td>保留标题层级和信息从属关系</td><td>路径完整率 98%</td></tr>
+<tr><td>表格处理</td><td>Word 表格</td><td>按行 KV 结构</td><td>每行独立可检索</td><td>行列正确率 96%</td></tr>
+<tr><td>图片处理</td><td>嵌入图片</td><td>OCR 文本 + 关联段落</td><td>视觉信息不丢失</td><td>OCR 准确率 89%</td></tr>
+<tr><td>噪声过滤</td><td>页眉/页脚/批注</td><td>干净文本 + 元数据</td><td>去除干扰，保留最终版本</td><td>过滤准确率 99%</td></tr>
+<tr><td>语义切分</td><td>结构化文本</td><td>知识单元 chunk 集合</td><td>语义完整，大小合理</td><td>切分合理率 92%</td></tr>
+<tr><td>检索优化</td><td>用户查询</td><td>Top-5 精准结果</td><td>多路互补，精准排序</td><td>Recall@5 达 87.3%</td></tr>
+</table>
+
+<div class="highlight">
+  <p>最终效果对比：同一套 200 份企业制度文档，纯文本方案（固定 512 token 切分 + 向量检索）的端到端问答准确率为 54.2%，六步方案的端到端问答准确率为 83.7%——提升 29.5 个百分点。这个差距中，结构保留贡献约 12%，表格处理贡献约 8%，检索优化贡献约 6%，其他步骤贡献约 3.5%。</p>
+</div>
+
+<div class="intuition-box">
+  <p>最后一个关键认知：Word 文档处理是整个 RAG 管道中 ROI 最高的优化环节。在检索算法和 LLM 上投入大量资源可能只提升 3-5 个百分点，而仅仅把"Word 转纯文本"改为"结构化提取 + 语义切分"就能提升 20+ 个百分点。因为 80% 的信息损失发生在第一步——文档解析阶段。</p>
+</div>
+    </section>
+
+    <section class="chapter" id="ch7">
+      <div class="ch-head"><div class="num">07</div><div class="t"><h2>常见问题</h2><div class="sub">G23 · RAG 处理 Word 文档指南 | AI Knowledge Base</div></div></div>
+      <details class="qa">
+<summary>Word 文档和 PDF 的处理策略有什么本质区别？</summary>
+<div class="a">核心区别在于结构信息的可获得性。Word 文档底层是 XML 格式，标题层级、表格边界、样式标记都是显式标注的，可以直接程序化读取。PDF 本质上是"画布"——文字按照坐标位置排列，标题层级和表格结构需要推断（通过字体大小、位置等启发式规则）。因此 Word 文档的结构保留率可以接近 100%，而 PDF 通常在 80-90%。如果条件允许，优先获取 Word 源文件而非 PDF。</div>
+</details>
+
+<details class="qa">
+<summary>嵌套表格和合并单元格怎么处理？</summary>
+<div class="a">嵌套表格需要递归处理——外层表格的每个单元格如果包含子表格，则先处理子表格再嵌入。合并单元格的处理策略是"展开还原"——将合并单元格的内容复制到所有被合并的位置。例如一个"住宿标准"单元格横跨 3 行，处理后每行都独立包含"住宿标准"这个信息。实现上 python-docx 的 cell.merged_cells 属性可以检测合并关系，处理时需要小心边界情况。</div>
+</details>
+
+<details class="qa">
+<summary>一份文档有多个版本时怎么处理？是保留所有版本还是只保留最新版？</summary>
+<div class="a">推荐策略是"最新版为主 + 历史版可查"。具体实现：每个 chunk 的 metadata 中加入 doc_version 和 is_latest 字段。默认检索时只召回 is_latest=true 的结果（用户看到最新内容），但支持管理员通过 metadata 过滤查询历史版本（如"V2.0 中的住宿标准是什么"）。这需要在索引时同时保留所有版本，但通过 metadata 过滤控制默认行为。</div>
+</details>
+
+<details class="qa">
+<summary>如何处理 Word 文档中的公式和特殊符号？</summary>
+<div class="a">Word 中的公式使用 OMML（Office Math Markup Language）编码，可以通过 python-docx 或 Mathpix API 转换为 LaTeX 格式。转换后的 LaTeX 文本可以直接作为 chunk 内容入库。特殊符号（如化学式、数学符号）建议使用 Unicode 标准化处理。如果公式是图片形式嵌入的，则走 OCR 路径。实测中 Mathpix 的公式识别准确率达 97%，优于 Tesseract 的 82%。</div>
+</details>
+
+<details class="qa">
+<summary>语义切分时如果一个 H3 下的内容太短（不到 100 token），要和相邻章节合并吗？</summary>
+<div class="a">不建议合并。短 chunk 虽然信息量少，但语义完整——它精确对应一个知识点。合并会破坏语义边界，导致检索精度下降。正确做法是保持短 chunk 独立，通过 metadata 中的 semantic_path 建立上下文关联。检索时如果召回了短 chunk，可以通过其 semantic_path 自动扩展召回同一路径下的相邻 chunk（类似 Parent Document Retriever 策略）。这样既保持了检索精度，又补全了上下文。</div>
+</details>
+
+<details class="qa">
+<summary>大规模处理时，增量更新怎么做？新文档进来需要全量重新处理吗？</summary>
+<div class="a">不需要全量重新处理。增量更新策略：① 新文档走完整六步流水线，新生成的 chunk 带上 doc_id + doc_version 入索引；② 文档更新时，先按 doc_id 删除旧 chunk，再处理新版本文档入库（delete-then-insert 模式）；③ 对于小范围修订（如修改一个表格数值），可以精确定位到受影响的 chunk 做局部更新。建议维护一份文档清单（doc_id, version, status），每次更新时对比差异，只处理变化的文档。500 份文档库中，通常每次更新只涉及 5-10 份文档。</div>
+</details>
+
+<details class="qa">
+<summary>表格特别大（超过 50 行）时，按行切分会产生太多 chunk 吗？</summary>
+<div class="a">50 行的表格按行切分产生 50 个 chunk，看起来很多，但实际上这不是问题。每个 chunk 都很小（通常 20-50 token），在检索时向量库处理小 chunk 的效率反而更高。真正的优化点在于"分组索引"——将逻辑相关的行（如同一部门的数据行）用 group_id 关联，检索时召回一行后自动扩展同组的其他行。如果表格确实巨大（500+ 行），可以考虑在表格级别创建一个摘要 chunk（"本表格包含 XX 部门的 500 条产品报价记录"），作为导航入口。</div>
+</details>
+
+
+
+<div class="highlight">
+<strong>总结：</strong>Word 文档 RAG 处理的核心在于将半结构化文档还原为可检索的知识单元。六步流水线——文档解析保留结构路径、表格按行转 KV、图片 OCR 关联段落、页眉批注智能过滤、语义边界切分、BM25 + 向量 + Cross-Encoder 多路召回重排序——协同工作，将端到端问答准确率从纯文本方案的 54.2% 提升至 83.7%。记住：80% 的信息损失发生在文档解析阶段，这是 ROI 最高的优化环节。
+</div>
+
+<div class="footer">
+<p>G23 · RAG 处理 Word 文档指南 | AI Knowledge Base</p>
+</div>
+    </section>
+
+    <footer>
+      <div class="made">TECH NOTES · AI 工程 · 整理自 AI Knowledge Hub</div>
+    </footer>
+  </main>
+</div>
+
+<script>
+(function(){var bar=document.getElementById('progress');function u(){var h=document.documentElement;bar.style.width=h.scrollTop/(h.scrollHeight-h.clientHeight)*100+'%';}window.addEventListener('scroll',u,{passive:true});u();})();
+(function(){var links=document.querySelectorAll('aside.toc nav a');var secs=Array.from(document.querySelectorAll('section.chapter'));if(!secs.length)return;function u(){var y=window.scrollY+100,cur=secs[0];for(var i=0;i<secs.length;i++){if(secs[i].offsetTop<=y)cur=secs[i];}var id=cur.id;links.forEach(function(a){a.classList.toggle('active',a.getAttribute('href')==='#'+id);});}window.addEventListener('scroll',u,{passive:true});u();})();
+</script>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

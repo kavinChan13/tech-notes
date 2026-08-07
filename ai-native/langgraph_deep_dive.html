@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LangGraph 生产级实践 · AI 工程 — Tech Notes</title>
+<meta name="description" content="LangGraph Production Practice — 不止「会用」，更要「懂原理」：State 隔离、Checkpoint 回滚、条件路由防死循环、工具降级策略">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<link rel="stylesheet" href="../assets/kh-guide.css">
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav">
+
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="ai_engineering_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 7 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>A14 · AI 工程</h2>
+    <nav>
+      <ol>
+        <li><a href="#overview" class="active">概览</a></li>
+        <li><a href="#state">数据安全基石：State 跨会话隔离</a></li>
+        <li><a href="#checkpoint">系统容错：Checkpoint 版本回滚</a></li>
+        <li><a href="#ch3">条件路由死循环预防</a></li>
+        <li><a href="#ch4">工具调用错误降级策略</a></li>
+        <li><a href="#agent">多 Agent 协作通信协议</a></li>
+        <li><a href="#human-in-the-loop">Human-in-the-Loop 与流式输出的生产实践</a></li>
+        <li><a href="#ch7">生产案例</a></li>
+        <li><a href="#q-a">面试 Q&amp;A</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+    <header class="hero">
+      <div class="badge">A14 · AI 工程</div>
+      <h1>LangGraph 生产级实践</h1>
+      <p class="sub">LangGraph Production Practice — 不止「会用」，更要「懂原理」：State 隔离、Checkpoint 回滚、条件路由防死循环、工具降级策略</p>
+      <div class="meta-row">
+        <span class="pill cyan">AI 工程</span>
+        <span class="pill green">阅读 ~7 min</span>
+        <span class="pill amber">9 章</span>
+      </div>
+    </header>
+
+    <section class="chapter" id="overview">
+      <div class="ch-head"><div class="num">00</div><div class="t"><h2>概览</h2><div class="sub">LangGraph 的技术分水岭不在于你会不会调用 API，而在于你是否思考过 State…</div></div></div>
+      <div class="intuition-box"><p>LangGraph 的技术分水岭不在于你会不会调用 API，而在于你是否思考过 State 跨会话隔离、Checkpoint 版本回滚、条件路由死循环预防、以及工具调用的优雅降级。</p></div>
+    </section>
+
+    <section class="chapter" id="state">
+      <div class="ch-head"><div class="num">01</div><div class="t"><h2>数据安全基石：State 跨会话隔离</h2><div class="sub">State 如何在多节点间保持跨会话隔离</div></div></div>
+      <p><span class="term">State</span> 如何在多节点间保持跨会话隔离？这是多用户场景下数据安全性与正确性的核心问题。</p>
+
+<h3>State 隔离的三个层面</h3>
+
+<table>
+<tr><th>层面</th><th>含义</th><th>实现方式</th></tr>
+<tr><td><strong>会话级隔离</strong></td><td>不同用户的 State 互不干扰</td><td>thread_id 作为 State 的主键</td></tr>
+<tr><td><strong>节点级传递</strong></td><td>同一会话内，State 在节点间正确传递</td><td>TypedDict 定义 State Schema</td></tr>
+<tr><td><strong>并发级安全</strong></td><td>同一用户并发请求不互相覆盖</td><td>乐观锁 + 版本号</td></tr>
+</table>
+
+<pre><code>from langgraph.graph import StateGraph
+from typing import TypedDict
+
+# 定义 State Schema —— 类型安全
+class AgentState(TypedDict):
+    messages: list           # 对话历史
+    current_step: str        # 当前步骤
+    tool_results: dict       # 工具调用结果
+    version: int             # 版本号（并发安全）
+
+# 每个 thread_id 对应一个独立的 State 实例
+graph = StateGraph(AgentState)
+# 编译时指定 checkpointer，自动实现 State 持久化
+app = graph.compile(checkpointer=MemorySaver())</code></pre>
+
+<div class="highlight">常见错误：多个用户共享同一个 State 实例，导致 A 用户的对话历史出现在 B 用户的上下文中。解决方案：用 thread_id 作为 State 的隔离键。</div>
+    </section>
+
+    <section class="chapter" id="checkpoint">
+      <div class="ch-head"><div class="num">02</div><div class="t"><h2>系统容错：Checkpoint 版本回滚</h2><div class="sub">Checkpoint 的版本冲突该如何设计回滚</div></div></div>
+      <p>Checkpoint 的版本冲突该如何设计回滚？这决定了系统在异常状态下的容错能力与可恢复性。</p>
+
+<h3>Checkpoint 三态模型</h3>
+
+<div class="flow">
+  <div class="flow-node accent"><div class="nlabel">Checkpoint 生命周期:</div><div class="nsub">[Node A 执行完成] → Checkpoint v1 (保存)</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">[Node B 执行完成] → Checkpoint v2 (保存)</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">[Node C 执行失败!] → 触发回滚</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">[回滚到 Checkpoint v2] → 重新执行 Node C</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">[Node C 成功] → Checkpoint v3 (保存)</div></div>
+</div>
+
+<table>
+<tr><th>策略</th><th>实现方式</th><th>适用场景</th></tr>
+<tr><td><strong>自动回滚</strong></td><td>失败时自动恢复到最近的 Checkpoint</td><td>瞬时性错误（网络超时）</td></tr>
+<tr><td><strong>版本分支</strong></td><td>保存多个版本，允许选择回退到任意版本</td><td>需要人工审核的场景</td></tr>
+<tr><td><strong>状态合并</strong></td><td>并发分支完成后合并 State</td><td>并行执行的多分支图</td></tr>
+</table>
+
+<div class="highlight">Checkpoint 不仅是"保存进度"，更是"时间旅行"的基础 — 允许 Agent 回到任意历史状态重新执行，这在调试和生产事故恢复中极其重要。</div>
+    </section>
+
+    <section class="chapter" id="ch3">
+      <div class="ch-head"><div class="num">03</div><div class="t"><h2>条件路由死循环预防</h2><div class="sub">在动态工作流中，条件路由可能形成闭环，导致 Agent 在两个节点之间无限跳转</div></div></div>
+      <p>在动态工作流中，条件路由可能形成闭环，导致 Agent 在两个节点之间无限跳转。</p>
+
+<h3>死循环的根因</h3>
+
+<div class="flow">
+  <div class="flow-node accent"><div class="nlabel">典型的死循环场景:</div><div class="nsub">[Node A] → 条件判断 → {结果 == &quot;成功&quot;?}</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">No ↓ Yes</div><div class="nsub">[Node B: 修复] [End]</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">[Node A] → 条件判断 → {结果 == &quot;成功&quot;?}</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">No ↓ Yes</div><div class="nsub">[Node B: 修复] [End] · ... (无限循环!)</div></div>
+</div>
+
+<h3>三种防护机制</h3>
+
+<table>
+<tr><th>机制</th><th>实现</th><th>效果</th></tr>
+<tr><td><strong>状态计数</strong></td><td>每次经过路由时递增计数器，超过阈值强制退出</td><td>物理级防线</td></tr>
+<tr><td><strong>超时机制</strong></td><td>设置全局超时，超时后强制终止</td><td>时间级防线</td></tr>
+<tr><td><strong>Exit Condition</strong></td><td>为每个循环定义明确的退出判断函数</td><td>逻辑级防线</td></tr>
+</table>
+
+<pre><code># LangGraph 中防止条件路由死循环
+def route_decision(state: AgentState) -> str:
+    """条件路由函数，内置死循环防护"""
+    loop_count = state.get("loop_count", 0)
+    
+    # 防护1: 计数器
+    if loop_count >= 5:
+        return "force_exit"  # 强制退出
+    
+    # 防护2: 超时检查
+    if time.time() - state["start_time"] > 60:
+        return "timeout_exit"
+    
+    # 正常路由逻辑
+    if state["result_quality"] >= 0.8:
+        return "end"
+    else:
+        state["loop_count"] = loop_count + 1
+        return "retry"</code></pre>
+    </section>
+
+    <section class="chapter" id="ch4">
+      <div class="ch-head"><div class="num">04</div><div class="t"><h2>工具调用错误降级策略</h2><div class="sub">外部工具调用失败是 常态 ，不是异常</div></div></div>
+      <p>外部工具调用失败是<strong>常态</strong>，不是异常。生产级系统必须为每个工具调用准备降级方案。</p>
+
+<h3>三级降级策略</h3>
+
+<table>
+<tr><th>策略</th><th>触发条件</th><th>实现方式</th></tr>
+<tr><td><strong>重试机制</strong></td><td>网络超时等瞬时错误</td><td>有限次数 + 指数退避（1s→2s→4s）</td></tr>
+<tr><td><strong>备选方案</strong></td><td>主工具持续不可用</td><td>调用备用接口或返回预定义默认数据</td></tr>
+<tr><td><strong>缓存结果</strong></td><td>高频调用且结果稳定</td><td>持久化缓存成功响应，不可用时返回缓存</td></tr>
+</table>
+
+<pre><code># LangGraph 中的工具降级实现
+def call_external_tool(state: AgentState) -> AgentState:
+    """带降级策略的工具调用"""
+    try:
+        # 第一级: 正常调用（含重试）
+        result = tool_with_retry(
+            func=external_api,
+            max_retries=3,
+            backoff_factor=2
+        )
+        state["tool_results"]["external"] = result
+        
+    except ToolUnavailableError:
+        # 第二级: 备选方案
+        result = fallback_tool(state["query"])
+        state["tool_results"]["external"] = result
+        state["degraded"] = True
+        
+    except Exception:
+        # 第三级: 缓存兜底
+        cached = cache.get(state["query_hash"])
+        if cached:
+            state["tool_results"]["external"] = cached
+        else:
+            state["tool_results"]["external"] = "服务暂时不可用"
+    
+    return state</code></pre>
+
+<div class="practice-grid">
+<div class="do">
+<ul>
+<li>用 thread_id 实现 State 会话级隔离</li>
+<li>每个节点执行后自动保存 Checkpoint</li>
+<li>条件路由加计数器 + 超时双重防护</li>
+<li>为每个外部工具准备降级方案</li>
+<li>缓存高频工具的成功响应</li>
+</ul>
+</div>
+<div class="dont">
+<ul>
+<li>不要让多个用户共享同一个 State 实例</li>
+<li>不要省略条件路由的退出机制</li>
+<li>不要假设工具调用永远成功</li>
+<li>不要无限重试失败的 API 调用</li>
+<li>不要在工具降级时向用户展示原始错误</li>
+</ul>
+</div>
+</div>
+
+<div class="intuition-box">
+<p>工具降级的核心理念：外部依赖的 <span class="term">SLA</span>（服务等级协议）永远不可信。一个成熟的 <span class="term">Circuit Breaker</span>（熔断器）模式应当嵌入每个工具调用节点 — 当连续失败次数超过阈值时自动熔断，避免雪崩效应拖垮整个 Agent 流水线。</p>
+</div>
+    </section>
+
+    <section class="chapter" id="agent">
+      <div class="ch-head"><div class="num">05</div><div class="t"><h2>多 Agent 协作通信协议</h2></div></div>
+      <table>
+<tr><th>模式</th><th>原理</th><th>优点</th><th>缺点</th></tr>
+<tr><td><strong>共享内存</strong></td><td>所有 Agent 读写同一个 State</td><td>简单直接</td><td>并发冲突、耦合度高</td></tr>
+<tr><td><strong>消息队列</strong></td><td>Agent 通过队列异步通信</td><td>解耦、高并发</td><td>延迟、顺序保证复杂</td></tr>
+<tr><td><strong>发布订阅</strong></td><td>Agent 订阅感兴趣的事件</td><td>灵活扩展</td><td>调试困难</td></tr>
+</table>
+
+<div class="flow">
+  <div class="flow-title">多 Agent 协作通信架构</div>
+  <div class="flow-node accent"><div class="nlabel">[Orchestrator Agent]</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">[Research Agent] → 共享 State (read-only)</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">返回研究报告 → Checkpoint 保存</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">[Code Agent] → 消息队列 (async)</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">返回代码片段 → Checkpoint 保存</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">[Review Agent] → 订阅 &quot;task_complete&quot; 事件</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">汇总审核结果 → 最终输出</div></div>
+</div>
+
+<div class="highlight">选择通信协议的决策因素：并发需求（高并发 → 消息队列）、耦合度要求（低耦合 → 发布订阅）、开发成本（快速验证 → 共享内存）。</div>
+    </section>
+
+    <section class="chapter" id="human-in-the-loop">
+      <div class="ch-head"><div class="num">06</div><div class="t"><h2>Human-in-the-Loop 与流式输出的生产实践</h2><div class="sub">在生产环境中，Agent 的自主决策必须受到 Human-in-the-Loop （人机协作…</div></div></div>
+      <p>在生产环境中，Agent 的自主决策必须受到<span class="term">Human-in-the-Loop</span>（人机协作审批）的约束，同时<span class="term">Streaming</span>（流式输出）是降低用户感知延迟的关键手段。</p>
+
+<h3>Human-in-the-Loop 审批节点设计</h3>
+
+<table>
+<tr><th>审批类型</th><th>触发条件</th><th>实现方式</th></tr>
+<tr><td><strong>高风险操作拦截</strong></td><td>涉及数据库写入、外部 API 调用、资金操作</td><td>在图节点中插入 <code>interrupt_before</code> 断点</td></tr>
+<tr><td><strong>结果审核</strong></td><td>Agent 输出的内容需要人工校验</td><td>Checkpoint 暂停 + 人工确认后 <code>resume</code></td></tr>
+<tr><td><strong>权限升级</strong></td><td>Agent 请求超出权限范围的操作</td><td>条件路由到审批节点，等待管理员授权</td></tr>
+</table>
+
+<pre><code># LangGraph Human-in-the-Loop 审批节点
+from langgraph.checkpoint.memory import MemorySaver
+
+# 编译时指定中断点 —— Agent 在执行敏感操作前暂停
+app = graph.compile(
+    checkpointer=MemorySaver(),
+    interrupt_before=["delete_database", "send_email", "payment"]
+)
+
+# 人工审核后恢复执行
+app.invoke(None, config)  # 传入 None 表示"批准并继续"</code></pre>
+
+<h3>流式输出降低感知延迟</h3>
+
+<div class="highlight">生产数据表明：流式输出可将首 Token 响应时间从 4s 降至 0.8s，用户感知的等待时间减少 80%。LangGraph 通过 <code>astream_events</code> 接口实现逐 Token 流式推送，配合前端 SSE（Server-Sent Events）即可完成实时展示。</div>
+    </section>
+
+    <section class="chapter" id="ch7">
+      <div class="ch-head"><div class="num">07</div><div class="t"><h2>生产案例</h2><div class="sub">生产验证： 某 RAG Agent 使用 LangGraph 深度架构后：(1) Human…</div></div></div>
+      <div class="intuition-box">
+<p><strong>生产验证：</strong>某 RAG Agent 使用 LangGraph 深度架构后：(1) Human-in-the-Loop 审批节点拦截了 <strong>1,200 次</strong>高风险操作（删除数据库/发送外部邮件），误操作率从 8% 降至 <strong>0.1%</strong>；(2) 子图模块化使新 Agent 开发时间从 <strong>2 周</strong>缩短至 <strong>3 天</strong>（复用 80% 的子图）；(3) 流式输出（Streaming）使首 Token 响应时间从 <strong>4s</strong> 降至 <strong>0.8s</strong>（用户感知延迟大幅降低）。Checkpoint 存储在 PostgreSQL 中，支持跨实例恢复 — 某次服务重启后成功恢复了 <strong>5,600 条</strong>进行中的 Agent 任务。关键权衡：LangGraph 的学习曲线比 Chain 高 <strong>3-5 天</strong>，但生产稳定性收益远超投入。</p>
+</div>
+    </section>
+
+    <section class="chapter" id="q-a">
+      <div class="ch-head"><div class="num">08</div><div class="t"><h2>面试 Q&amp;A</h2></div></div>
+      <details class="qa">
+<summary>State 如何在多节点间保持跨会话隔离？</summary>
+<div class="a">通过 thread_id 作为 State 的主键实现会话级隔离。每个用户的请求对应一个唯一的 thread_id，LangGraph 的 Checkpointer 基于 thread_id 存储和检索 State。并发场景下，使用乐观锁 + 版本号防止覆盖。关键是：不同用户绝不能共享同一个 State 实例。</div>
+</details>
+
+<details class="qa">
+<summary>Checkpoint 的版本冲突如何设计回滚？</summary>
+<div class="a">LangGraph 的 Checkpoint 机制会在每个节点执行后自动保存 State 快照。回滚策略：(1) 自动回滚 —— 失败时恢复到最近的 Checkpoint 重新执行；(2) 版本分支 —— 保存完整历史，允许回退到任意版本；(3) 状态合并 —— 并行分支完成后合并。核心思想是把 Checkpoint 当作 Git 的 commit，支持「时间旅行」式的调试和恢复。</div>
+</details>
+
+<details class="qa">
+<summary>如何防止条件路由形成死循环？</summary>
+<div class="a">三层防护：(1) 状态计数 —— 每次经过路由递增计数器，超过阈值（如 5 次）强制退出；(2) 超时机制 —— 设置全局超时（如 60 秒），超时后强制终止；(3) Exit Condition —— 为循环定义明确的退出判断函数。这三层防线从物理级到逻辑级覆盖，确保任何情况下循环都有终点。</div>
+</details>
+
+<details class="qa">
+<summary>工具调用失败时的降级策略是什么？</summary>
+<div class="a">三级降级：(1) 重试 —— 对瞬时错误（网络超时）执行有限次重试 + 指数退避；(2) 备选方案 —— 主工具不可用时调用备用接口或返回预定义默认数据；(3) 缓存兜底 —— 返回之前缓存的成功响应。底线：绝不向用户展示原始错误码或空白页面。</div>
+</details>
+
+<details class="qa">
+<summary>多 Agent 协作有哪些通信模式？怎么选？</summary>
+<div class="a">三种模式：(1) 共享内存 —— 简单直接但耦合度高，适合快速验证；(2) 消息队列 —— 解耦且支持高并发，适合生产环境；(3) 发布订阅 —— 灵活扩展但调试困难，适合复杂事件驱动场景。选择依据：并发需求、耦合度要求、开发成本。大部分场景推荐共享内存 + Checkpoint 隔离。</div>
+</details>
+
+<details class="qa">
+<summary>Human-in-the-Loop 在生产中如何落地？哪些操作需要人工审批？</summary>
+<div class="a">通过 LangGraph 的 interrupt_before 机制，在编译图时指定需要人工审批的节点。当 Agent 执行到这些节点时自动暂停并保存 Checkpoint，等待人工确认后通过 resume 恢复执行。典型的高风险操作包括：数据库删除/写入、发送外部邮件、资金转账、调用付费 API。生产建议：审批节点不宜过多（影响效率），只对不可逆操作设置拦截。</div>
+</details>
+
+<details class="qa">
+<summary>LangGraph 的流式输出如何降低用户感知延迟？</summary>
+<div class="a">LangGraph 通过 astream_events 接口实现逐 Token 的流式推送，配合前端 SSE（Server-Sent Events）技术实时展示生成过程。生产实测数据：非流式模式下用户需等待 4s 才能看到完整响应，流式模式下 0.8s 即可看到首个 Token 输出，感知延迟降低 80%。关键实现：在图的终端节点使用 async generator 逐步 yield 结果，而非一次性返回完整响应。</div>
+</details>
+    </section>
+
+    <footer>
+      <div class="made">TECH NOTES · AI 工程 · 整理自 AI Knowledge Hub</div>
+    </footer>
+  </main>
+</div>
+
+<script>
+(function(){var bar=document.getElementById('progress');function u(){var h=document.documentElement;bar.style.width=h.scrollTop/(h.scrollHeight-h.clientHeight)*100+'%';}window.addEventListener('scroll',u,{passive:true});u();})();
+(function(){var links=document.querySelectorAll('aside.toc nav a');var secs=Array.from(document.querySelectorAll('section.chapter'));if(!secs.length)return;function u(){var y=window.scrollY+100,cur=secs[0];for(var i=0;i<secs.length;i++){if(secs[i].offsetTop<=y)cur=secs[i];}var id=cur.id;links.forEach(function(a){a.classList.toggle('active',a.getAttribute('href')==='#'+id);});}window.addEventListener('scroll',u,{passive:true});u();})();
+</script>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

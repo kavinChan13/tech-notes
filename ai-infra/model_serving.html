@@ -1,0 +1,709 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>模型部署与 Serving · AI Infra — Tech Notes</title>
+<meta name="description" content="从训练好的模型到生产级推理服务——框架选型、性能优化与面试高频考点">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<link rel="stylesheet" href="../assets/kh-guide.css">
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav">
+
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="ai_infra_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 14 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>S02 · AI Infra</h2>
+    <nav>
+      <ol>
+        <li><a href="#ch1" class="active">模型部署挑战</a></li>
+        <li><a href="#vllm">vLLM</a></li>
+        <li><a href="#tgi-text-generation-inference">TGI (Text Generation Inference)</a></li>
+        <li><a href="#tensorrt-llm">TensorRT-LLM</a></li>
+        <li><a href="#triton-inference-server">Triton Inference Server</a></li>
+        <li><a href="#gpu">GPU 资源管理</a></li>
+        <li><a href="#batching">动态 Batching</a></li>
+        <li><a href="#ch8">模型格式</a></li>
+        <li><a href="#serving">Serving 框架对比表</a></li>
+        <li><a href="#q-a-top-10">📝 Q&amp;A（Top 10）</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+    <header class="hero">
+      <div class="badge">S02 · AI Infra</div>
+      <h1>模型部署与 Serving</h1>
+      <p class="sub">从训练好的模型到生产级推理服务——框架选型、性能优化与面试高频考点</p>
+      <div class="meta-row">
+        <span class="pill cyan">AI Infra</span>
+        <span class="pill green">阅读 ~14 min</span>
+        <span class="pill amber">10 章</span>
+      </div>
+    </header>
+
+    <section class="chapter" id="ch1">
+      <div class="ch-head"><div class="num">01</div><div class="t"><h2>模型部署挑战</h2><div class="sub">大模型推理部署面临四大核心挑战：</div></div></div>
+      <div class="card">
+<p>大模型推理部署面临四大核心挑战：</p>
+
+<h3>显存需求</h3>
+<ul>
+<li>7B 模型 FP16 ≈ 14GB 显存（仅参数权重）</li>
+<li>70B 模型 FP16 ≈ 140GB，需要多卡甚至多机</li>
+<li>推理时还需要 KV Cache + 激活值内存</li>
+</ul>
+
+<h3>延迟要求</h3>
+<ul>
+<li>首 Token 延迟（TTFT）：用户感知关键指标</li>
+<li>Token 间延迟（ITL）：决定流式输出流畅度</li>
+<li>端到端延迟 = Prefill时间 + Decode时间</li>
+</ul>
+
+<h3>吞吐量</h3>
+<ul>
+<li>Tokens/second：单请求生成速度</li>
+<li>Requests/second：系统整体并发能力</li>
+<li>吞吐量与延迟通常是 trade-off 关系</li>
+</ul>
+
+<h3>成本</h3>
+<ul>
+<li>GPU 硬件成本：A100 80GB ≈ $10k+，H100 ≈ $30k+</li>
+<li>云端 GPU 计算时长费用</li>
+<li>$/1M tokens 成为衡量标准</li>
+<li>提高 GPU 利用率是降本核心</li>
+</ul>
+</div>
+
+<div class="interview-tip">
+<ul>
+<li>能说出"延迟与吞吐量 trade-off"，知道 Batch Size↑ → 吞吐↑ 但单请求延迟↑</li>
+<li>知道 7B FP16 ≈ 14GB，能快速估算不同规模模型的显存需求</li>
+<li>理解 Prefill（计算密集）vs Decode（内存密集）的不同瓶颈</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="vllm">
+      <div class="ch-head"><div class="num">02</div><div class="t"><h2>vLLM</h2><div class="sub">开源 高性能 UC Berkeley</div></div></div>
+      <div class="card">
+<p><span class="tag green">开源</span><span class="tag">高性能</span><span class="tag purple">UC Berkeley</span></p>
+
+<h3>PagedAttention</h3>
+<ul>
+<li>借鉴操作系统虚拟内存分页思想管理 KV Cache</li>
+<li>将 KV Cache 分为固定大小的 Block（如 16 tokens/block）</li>
+<li>按需分配物理 Block，消除内存碎片化</li>
+<li>支持 Copy-on-Write 实现 Beam Search 零拷贝</li>
+<li>KV Cache 利用率从 ~20-40% 提升至 >95%</li>
+</ul>
+
+<h3>Continuous Batching</h3>
+<ul>
+<li>请求完成后立即释放 slot，新请求动态加入</li>
+<li>不同于 Static Batching 需等整个 batch 完成</li>
+<li>吞吐量提升 2-5x</li>
+</ul>
+
+<h3>Tensor Parallel</h3>
+<ul>
+<li>支持多 GPU 张量并行推理</li>
+<li>自动将模型权重切分到多张 GPU</li>
+<li>使用 NCCL 进行 AllReduce 通信</li>
+</ul>
+
+<h3>其他特性</h3>
+<ul>
+<li><strong>OpenAI 兼容 API</strong>：一行代码替换 OpenAI 后端</li>
+<li><strong>LoRA 支持</strong>：单次部署多个 LoRA adapter，共享 base 模型</li>
+<li><strong>Speculative Decoding</strong>：小模型草稿 + 大模型验证加速</li>
+<li><strong>Prefix Caching</strong>：相同 system prompt 复用 KV Cache</li>
+</ul>
+
+<h3>性能数据（参考）</h3>
+<pre><code># A100 80GB, LLaMA-2 13B, FP16
+# vLLM vs HuggingFace Transformers
+# 吞吐量提升: ~14-24x
+# 延迟(TTFT): ~200ms (batch=1)
+# Token 吞吐: ~2000-3000 tokens/s (batch=32)</code></pre>
+</div>
+
+<div class="interview-tip">
+<ul>
+<li>核心：PagedAttention 解决了什么问题？→ KV Cache 内存碎片化与浪费</li>
+<li>类比操作系统分页，物理块按需分配，逻辑到物理映射表</li>
+<li>Continuous Batching 与 Static Batching 的关键区别和性能差距</li>
+<li>vLLM 的 OpenAI 兼容 API 如何简化迁移</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="tgi-text-generation-inference">
+      <div class="ch-head"><div class="num">03</div><div class="t"><h2>TGI (Text Generation Inference)</h2><div class="sub">HuggingFace Rust实现 生产级</div></div></div>
+      <div class="card">
+<p><span class="tag green">HuggingFace</span><span class="tag">Rust实现</span><span class="tag purple">生产级</span></p>
+
+<h3>核心特性</h3>
+<ul>
+<li><strong>HuggingFace 出品</strong>：与 HuggingFace 生态深度集成，模型仓库直接部署</li>
+<li><strong>Rust + Python 架构</strong>：Router(Rust) + Model Server(Python)，高并发低延迟</li>
+<li><strong>Flash Attention 集成</strong>：自动使用 Flash Attention 2 加速注意力计算</li>
+<li><strong>Token Streaming</strong>：SSE（Server-Sent Events）流式返回 token</li>
+<li><strong>Watermark</strong>：内置文本水印算法，可检测 AI 生成内容</li>
+</ul>
+
+<h3>架构设计</h3>
+<pre><code>Client Request
+    ↓
+[Router (Rust)] → 请求调度、Batching、队列管理
+    ↓
+[Model Server (Python)] → 模型推理、Flash Attention
+    ↓
+Token Streaming Response (SSE)</code></pre>
+
+<h3>部署方式</h3>
+<pre><code># Docker 一键部署
+docker run --gpus all -p 8080:80 \
+  -v /data/models:/models \
+  ghcr.io/huggingface/text-generation-inference:latest \
+  --model-id meta-llama/Llama-2-13b-chat-hf \
+  --quantize bitsandbytes-nf4 \
+  --max-batch-prefill-tokens 4096</code></pre>
+
+<h3>与 vLLM 的差异</h3>
+<ul>
+<li>TGI 更偏向"开箱即用"的企业级 Serving</li>
+<li>vLLM 在纯吞吐量上通常略胜</li>
+<li>TGI 的水印功能是独有亮点</li>
+<li>HuggingFace Hub 集成更加无缝</li>
+</ul>
+</div>
+
+<div class="interview-tip">
+<ul>
+<li>TGI 的 Rust Router 层负责什么？→ 请求调度、动态 Batching、队列管理</li>
+<li>Watermark 原理：通过影响 token 采样概率分布嵌入可检测信号</li>
+<li>Flash Attention 的核心优化：减少 HBM 读写次数（IO-aware）</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="tensorrt-llm">
+      <div class="ch-head"><div class="num">04</div><div class="t"><h2>TensorRT-LLM</h2><div class="sub">NVIDIA 极致性能 FP8/INT4</div></div></div>
+      <div class="card">
+<p><span class="tag orange">NVIDIA</span><span class="tag">极致性能</span><span class="tag green">FP8/INT4</span></p>
+
+<h3>NVIDIA 优化</h3>
+<ul>
+<li>NVIDIA 官方推出的 LLM 推理优化库</li>
+<li>底层使用 TensorRT 引擎，针对 NVIDIA GPU 深度优化</li>
+<li>自定义 CUDA Kernel：针对 Transformer 每一层手写优化</li>
+<li>支持 Hopper（H100）特有指令集：FP8、TMA</li>
+</ul>
+
+<h3>量化支持</h3>
+<ul>
+<li><strong>FP8</strong>（H100+）：几乎无损精度，2x 吞吐提升</li>
+<li><strong>INT8</strong>：SmoothQuant、GPTQ、AWQ</li>
+<li><strong>INT4</strong>：GPTQ、AWQ，4x 显存节省</li>
+<li><strong>Weight-Only</strong> vs <strong>Weight+Activation</strong> 量化</li>
+</ul>
+
+<h3>Inflight Batching</h3>
+<ul>
+<li>类似 Continuous Batching，请求级别动态调度</li>
+<li>支持不同请求处于不同 decode 阶段</li>
+<li>与 Triton Inference Server 协同工作</li>
+</ul>
+
+<h3>与 Triton 集成</h3>
+<div class="flow">
+  <div class="flow-title"># TensorRT-LLM 作为 Triton Backend</div>
+  <div class="flow-node accent"><div class="nlabel">model_repository/</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">preprocessing/ # Tokenizer</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">tensorrt_llm/ # TRT-LLM Engine</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">postprocessing/ # Detokenizer</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">ensemble/ # Pipeline 编排</div></div>
+</div>
+
+<h3>编译流程</h3>
+<pre><code># 1. 转换权重
+python convert_checkpoint.py --model_dir ./llama-2-7b \
+  --output_dir ./checkpoint --dtype float16
+
+# 2. 构建 TRT Engine
+trtllm-build --checkpoint_dir ./checkpoint \
+  --output_dir ./engine \
+  --gemm_plugin float16 \
+  --max_batch_size 64 \
+  --max_input_len 2048 \
+  --max_output_len 512</code></pre>
+</div>
+
+<div class="interview-tip">
+<ul>
+<li>TensorRT-LLM vs vLLM 核心区别？→ TRT-LLM 需要预编译 engine，针对特定 GPU 架构极致优化；vLLM 更灵活开箱即用</li>
+<li>FP8 量化为什么能几乎无损？→ H100 硬件原生支持，动态范围足够覆盖 LLM 权重分布</li>
+<li>Inflight Batching 和 Continuous Batching 本质相同，只是 NVIDIA 的命名</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="triton-inference-server">
+      <div class="ch-head"><div class="num">05</div><div class="t"><h2>Triton Inference Server</h2><div class="sub">NVIDIA 多模型管理 生产级</div></div></div>
+      <div class="card">
+<p><span class="tag orange">NVIDIA</span><span class="tag">多模型管理</span><span class="tag purple">生产级</span></p>
+
+<h3>核心功能</h3>
+<ul>
+<li><strong>多模型管理</strong>：单实例同时服务多个模型（LLM、Embedding、Reranker）</li>
+<li><strong>多 Backend 支持</strong>：TensorRT、PyTorch、ONNX、TensorFlow、Python、vLLM</li>
+<li><strong>动态 Batching</strong>：自动聚合请求，提高 GPU 利用率</li>
+<li><strong>Model Ensemble</strong>：串联多模型形成 Pipeline（如预处理→推理→后处理）</li>
+<li><strong>模型版本管理</strong>：支持 A/B Testing 和灰度发布</li>
+</ul>
+
+<h3>通信协议</h3>
+<ul>
+<li><strong>gRPC</strong>：低延迟，适合内部微服务通信</li>
+<li><strong>HTTP/REST</strong>：易于调试，适合外部 API</li>
+<li><strong>Shared Memory</strong>：GPU Direct 减少数据拷贝</li>
+</ul>
+
+<h3>Model Ensemble 示例</h3>
+<pre><code># config.pbtxt - Ensemble 配置
+name: "llm_pipeline"
+platform: "ensemble"
+ensemble_scheduling {
+  step {
+    model_name: "tokenizer"
+    model_version: 1
+    input_map { key: "text" value: "INPUT" }
+    output_map { key: "input_ids" value: "TOKENS" }
+  }
+  step {
+    model_name: "llm_engine"
+    model_version: 1
+    input_map { key: "input_ids" value: "TOKENS" }
+    output_map { key: "logits" value: "OUTPUT" }
+  }
+}</code></pre>
+
+<h3>动态 Batching 配置</h3>
+<pre><code>dynamic_batching {
+  preferred_batch_size: [4, 8, 16, 32]
+  max_queue_delay_microseconds: 100000  # 100ms
+}</code></pre>
+</div>
+
+<div class="interview-tip">
+<ul>
+<li>Triton 的定位：不是推理引擎本身，而是模型 Serving 的"管理平台"</li>
+<li>Model Ensemble 的典型场景：Tokenize → LLM Inference → Detokenize</li>
+<li>gRPC vs HTTP 选择：内部调用用 gRPC（低延迟），外部暴露用 HTTP</li>
+<li>与 TensorRT-LLM 的关系：TRT-LLM 是"引擎"，Triton 是"服务框架"</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="gpu">
+      <div class="ch-head"><div class="num">06</div><div class="t"><h2>GPU 资源管理</h2><div class="sub">详细拆解：</div></div></div>
+      <div class="card">
+<h3>GPU 显存估算公式</h3>
+<div class="formula">
+显存需求 ≈ 模型参数 × 精度字节 + KV Cache + 激活值内存
+</div>
+
+<p><strong>详细拆解：</strong></p>
+<ul>
+<li><strong>模型参数</strong>：参数量 × bytes_per_param（FP16=2B, INT8=1B, INT4=0.5B）</li>
+<li><strong>KV Cache</strong>：2 × num_layers × hidden_size × seq_len × batch_size × bytes_per_param</li>
+<li><strong>激活值</strong>：推理时通常较小，约占参数量的 5-10%</li>
+</ul>
+
+<pre><code># 示例：LLaMA-2 7B FP16, batch=1, seq_len=2048
+参数显存 = 7B × 2 bytes = 14 GB
+KV Cache = 2 × 32 × 4096 × 2048 × 1 × 2 bytes ≈ 1 GB
+激活值 ≈ 0.5-1 GB
+总计 ≈ 15.5-16 GB → 需要 1× A100 40GB 或 1× RTX 4090 24GB
+
+# LLaMA-2 70B FP16, batch=1, seq_len=2048
+参数显存 = 70B × 2 bytes = 140 GB
+→ 需要 2× A100 80GB (TP=2) 或 4× A100 40GB (TP=4)</code></pre>
+
+<h3>多卡推理</h3>
+<table>
+<tr><th>策略</th><th>原理</th><th>适用场景</th><th>通信开销</th></tr>
+<tr><td><strong>Tensor Parallel (TP)</strong></td><td>将权重矩阵按列/行切分到多 GPU</td><td>单节点多卡，降低延迟</td><td>高（AllReduce 每层）</td></tr>
+<tr><td><strong>Pipeline Parallel (PP)</strong></td><td>将不同 Transformer 层分配到不同 GPU</td><td>多节点，超大模型</td><td>低（层间传递激活）</td></tr>
+<tr><td><strong>TP + PP</strong></td><td>节点内 TP，节点间 PP</td><td>多节点大规模部署</td><td>混合</td></tr>
+</table>
+
+<h3>GPU 共享技术</h3>
+<ul>
+<li><strong>NVIDIA MPS (Multi-Process Service)</strong>：多进程共享 GPU，适合小模型多实例</li>
+<li><strong>NVIDIA MIG (Multi-Instance GPU)</strong>：A100/H100 硬件级分区，最多 7 个独立实例</li>
+<li><strong>Time-Slicing</strong>：时间片轮转共享，最简单但延迟不稳定</li>
+</ul>
+
+<pre><code># MIG 分区示例 (A100 80GB)
+sudo nvidia-smi mig -cgi 9,9,9  # 创建 3 个 GPU Instance (各约 20GB)
+sudo nvidia-smi mig -cci         # 创建 Compute Instance
+
+# 效果：一张 A100 变成 3 个独立的 "小 GPU"
+# 适合同时部署 3 个 7B 模型</code></pre>
+</div>
+
+<div class="interview-tip">
+<ul>
+<li>能手算：给定模型参数量和精度，估算所需 GPU 数量</li>
+<li>TP vs PP 的选择原则：TP 降延迟（但通信多），PP 扩规模（通信少）</li>
+<li>MIG vs MPS 区别：MIG 硬件隔离（更安全稳定），MPS 软件共享（更灵活）</li>
+<li>KV Cache 为什么随 batch_size 和 seq_len 线性增长？→ 每个请求每层独立缓存</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="batching">
+      <div class="ch-head"><div class="num">07</div><div class="t"><h2>动态 Batching</h2></div></div>
+      <div class="card">
+<h3>为什么需要动态 Batching？</h3>
+<ul>
+<li>GPU 计算能力远大于单请求需求 → 单请求 GPU 利用率极低（<10%）</li>
+<li>Batching 通过并行处理多请求，提高 GPU 计算单元利用率</li>
+<li>LLM 推理的 Decode 阶段是 Memory-Bound → Batch 可以"免费"增加计算</li>
+</ul>
+
+<h3>Static Batching vs Continuous Batching</h3>
+<table>
+<tr><th>特性</th><th>Static Batching</th><th>Continuous Batching</th></tr>
+<tr><td>请求管理</td><td>等所有请求完成才释放</td><td>完成一个立即释放 slot</td></tr>
+<tr><td>GPU 利用率</td><td>低（短请求等长请求）</td><td>高（动态填充空位）</td></tr>
+<tr><td>吞吐量</td><td>较低</td><td>2-5x 提升</td></tr>
+<tr><td>实现复杂度</td><td>简单</td><td>需要迭代级调度</td></tr>
+<tr><td>适用场景</td><td>离线批处理</td><td>在线 Serving</td></tr>
+</table>
+
+<pre><code># Static Batching 的问题示意
+Request A: [████████████████]  (生成 200 tokens)
+Request B: [████]              (生成 50 tokens)
+Request C: [██████████]        (生成 100 tokens)
+                              ↑ B和C完成后空等A
+
+# Continuous Batching
+Request A: [████████████████]
+Request B: [████] → 释放 → Request D: [██████]
+Request C: [██████████] → 释放 → Request E: [████]
+                              ↑ GPU 始终满载</code></pre>
+
+<h3>最优 Batch 参数调优</h3>
+<ul>
+<li><strong>max_batch_size</strong>：受限于 GPU 显存（主要是 KV Cache）</li>
+<li><strong>max_waiting_tokens</strong>：新请求最多等多久才被调度</li>
+<li><strong>max_concurrent_requests</strong>：同时处理的请求上限</li>
+<li>调优方向：在"延迟 SLA"约束下最大化吞吐量</li>
+</ul>
+
+<div class="formula">
+最大 Batch ≈ (GPU显存 - 模型参数) / (单请求 KV Cache 大小)
+</div>
+</div>
+
+<div class="interview-tip">
+<ul>
+<li>Decode 阶段为什么是 Memory-Bound？→ 每步只生成 1 token，计算量小但需读取全部权重</li>
+<li>Continuous Batching 的"迭代级调度"含义：每个 decode step 都可以增删请求</li>
+<li>Batch Size 增大后延迟为什么不一定线性增长？→ GPU 并行计算，Memory-Bound 阶段 Batch 几乎"免费"</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="ch8">
+      <div class="ch-head"><div class="num">08</div><div class="t"><h2>模型格式</h2></div></div>
+      <div class="card">
+<h3>格式转换流水线</h3>
+<pre><code>PyTorch (.bin/.pt)
+   ↓ torch.onnx.export()
+ONNX (.onnx)          → 跨框架通用格式
+   ↓ trtexec / polygraphy
+TensorRT (.engine)     → NVIDIA GPU 极致优化
+   
+PyTorch (.bin/.pt)
+   ↓ convert_to_safetensors
+SafeTensors (.safetensors) → 安全 + 快速加载
+
+PyTorch (.bin/.pt)
+   ↓ llama.cpp convert
+GGUF (.gguf)           → CPU/Apple Silicon 推理</code></pre>
+
+<h3>各格式详解</h3>
+<table>
+<tr><th>格式</th><th>用途</th><th>优势</th><th>劣势</th></tr>
+<tr><td><strong>PyTorch</strong></td><td>训练、研究</td><td>灵活、生态完善</td><td>推理慢、pickle 不安全</td></tr>
+<tr><td><strong>ONNX</strong></td><td>跨框架部署</td><td>框架无关、优化工具多</td><td>大模型支持有限</td></tr>
+<tr><td><strong>TensorRT</strong></td><td>NVIDIA GPU 生产推理</td><td>极致性能</td><td>仅 NVIDIA、编译耗时</td></tr>
+<tr><td><strong>SafeTensors</strong></td><td>安全存储与加载</td><td>无代码执行风险、mmap 快速加载</td><td>仅存储格式，非推理格式</td></tr>
+<tr><td><strong>GGUF</strong></td><td>CPU / 端侧推理</td><td>多种量化、无需 GPU</td><td>性能低于 GPU 方案</td></tr>
+</table>
+
+<h3>SafeTensors 为什么重要</h3>
+<ul>
+<li>PyTorch 使用 pickle 序列化 → <strong>可注入任意代码</strong>（安全隐患）</li>
+<li>SafeTensors 仅存储纯张量数据，无代码执行能力</li>
+<li>支持 mmap：加载 70B 模型只需几秒（零拷贝映射到内存）</li>
+<li>已成为 HuggingFace 默认推荐格式</li>
+</ul>
+
+<h3>GGUF (GPT-Generated Unified Format)</h3>
+<ul>
+<li>llama.cpp 项目推出，替代旧的 GGML 格式</li>
+<li>支持 Q2_K 到 Q8_0 多种量化级别</li>
+<li>元数据自包含：Tokenizer、模型配置全在文件内</li>
+<li>适用：MacBook（Metal）、纯 CPU 服务器、边缘设备</li>
+</ul>
+</div>
+
+<div class="interview-tip">
+<ul>
+<li>SafeTensors vs pickle 的安全区别？→ pickle 可执行任意 Python 代码，SafeTensors 只有纯数据</li>
+<li>TensorRT engine 为什么不可跨 GPU 架构？→ 编译时针对特定 SM 版本优化 kernel</li>
+<li>GGUF 适用场景？→ 资源受限环境、没有 NVIDIA GPU、开发测试</li>
+<li>ONNX 在 LLM 时代的局限？→ 动态 shape 支持、超大模型的图优化效率</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="serving">
+      <div class="ch-head"><div class="num">09</div><div class="t"><h2>Serving 框架对比表</h2></div></div>
+      <div class="card">
+<table>
+<tr>
+<th>维度</th>
+<th>vLLM</th>
+<th>TGI</th>
+<th>TensorRT-LLM</th>
+<th>Triton</th>
+<th>llama.cpp</th>
+</tr>
+<tr>
+<td><strong>开发者</strong></td>
+<td>UC Berkeley</td>
+<td>HuggingFace</td>
+<td>NVIDIA</td>
+<td>NVIDIA</td>
+<td>社区 (ggerganov)</td>
+</tr>
+<tr>
+<td><strong>语言</strong></td>
+<td>Python/C++</td>
+<td>Rust/Python</td>
+<td>C++/Python</td>
+<td>C++</td>
+<td>C/C++</td>
+</tr>
+<tr>
+<td><strong>核心优势</strong></td>
+<td>PagedAttention<br>内存效率最高</td>
+<td>HF生态集成<br>开箱即用</td>
+<td>NVIDIA极致优化<br>最高吞吐</td>
+<td>多模型管理<br>生产级Serving</td>
+<td>CPU/边缘<br>极简部署</td>
+</tr>
+<tr>
+<td><strong>量化</strong></td>
+<td>AWQ, GPTQ,<br>FP8, SqueezeLLM</td>
+<td>bitsandbytes,<br>GPTQ, AWQ</td>
+<td>FP8, INT8, INT4<br>SmoothQuant</td>
+<td>依赖后端</td>
+<td>Q2-Q8 GGUF<br>多种格式</td>
+</tr>
+<tr>
+<td><strong>Batching</strong></td>
+<td>Continuous</td>
+<td>Continuous</td>
+<td>Inflight</td>
+<td>Dynamic</td>
+<td>Continuous</td>
+</tr>
+<tr>
+<td><strong>多GPU</strong></td>
+<td>TP, PP</td>
+<td>TP</td>
+<td>TP, PP</td>
+<td>Model Repo</td>
+<td>部分支持</td>
+</tr>
+<tr>
+<td><strong>API兼容</strong></td>
+<td>OpenAI API</td>
+<td>自有API +<br>Messages API</td>
+<td>Triton协议</td>
+<td>gRPC/HTTP</td>
+<td>OpenAI API</td>
+</tr>
+<tr>
+<td><strong>LoRA</strong></td>
+<td>✅ 多LoRA</td>
+<td>✅ 单LoRA</td>
+<td>✅ 多LoRA</td>
+<td>依赖后端</td>
+<td>✅ 单LoRA</td>
+</tr>
+<tr>
+<td><strong>部署复杂度</strong></td>
+<td>⭐⭐ 简单</td>
+<td>⭐ 最简单</td>
+<td>⭐⭐⭐⭐ 复杂</td>
+<td>⭐⭐⭐ 中等</td>
+<td>⭐ 最简单</td>
+</tr>
+<tr>
+<td><strong>性能(吞吐)</strong></td>
+<td>⭐⭐⭐⭐</td>
+<td>⭐⭐⭐</td>
+<td>⭐⭐⭐⭐⭐</td>
+<td>⭐⭐⭐⭐</td>
+<td>⭐⭐</td>
+</tr>
+<tr>
+<td><strong>适用场景</strong></td>
+<td>通用LLM Serving<br>多LoRA场景</td>
+<td>HF模型快速上线<br>小团队</td>
+<td>极致性能需求<br>NVIDIA硬件</td>
+<td>多模型平台<br>企业级Serving</td>
+<td>本地开发/测试<br>CPU推理</td>
+</tr>
+</table>
+
+<h3>选型建议</h3>
+<ul>
+<li><strong>追求性价比 + 易用性</strong>：首选 vLLM，社区活跃、OpenAI API 兼容</li>
+<li><strong>HuggingFace 全家桶用户</strong>：选 TGI，模型仓库一键部署</li>
+<li><strong>追求极致性能 + NVIDIA 硬件</strong>：选 TensorRT-LLM（接受编译复杂度）</li>
+<li><strong>企业多模型管理</strong>：Triton + TensorRT-LLM/vLLM 组合</li>
+<li><strong>无 GPU 或边缘部署</strong>：llama.cpp + GGUF 量化</li>
+</ul>
+</div>
+
+<div class="interview-tip">
+<ul>
+<li>面试高频：给一个场景让你选框架 → 说出选择理由和 trade-off</li>
+<li>vLLM 和 TensorRT-LLM 可以在 Triton 中作为 Backend 使用</li>
+<li>生产环境常见组合：Triton (Serving) + TensorRT-LLM (Engine) + Kubernetes (编排)</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="q-a-top-10">
+      <div class="ch-head"><div class="num">10</div><div class="t"><h2>📝 Q&amp;A（Top 10）</h2><div class="sub">答： PagedAttention 借鉴了操作系统虚拟内存的分页机制来管理 KV Cache</div></div></div>
+      <details class="qa">
+<summary>Q1: 解释 PagedAttention 的原理和为什么能提升性能？</summary>
+<p><strong>答：</strong>PagedAttention 借鉴了操作系统虚拟内存的分页机制来管理 KV Cache。传统方法为每个请求预分配最大序列长度的连续显存，导致大量碎片和浪费（利用率仅 20-40%）。PagedAttention 将 KV Cache 切分为固定大小的 Block（如 16 tokens），使用 Block Table 维护逻辑到物理的映射，按需分配物理块，不要求连续显存。这样 KV Cache 利用率提升至 95%+，同等显存可服务更多并发请求，吞吐量提升 2-4x。此外还支持 Copy-on-Write 语义，让 Beam Search 等场景实现 KV Cache 零拷贝共享。</p>
+</details>
+
+<details class="qa">
+<summary>Q2: Continuous Batching 和 Static Batching 的区别？为什么重要？</summary>
+<p><strong>答：</strong>Static Batching 将一批请求组成 batch 后统一处理，必须等 batch 内所有请求都完成才能释放资源处理下一批。如果 batch 内请求生成长度差异大，短请求完成后 GPU 空转等待长请求，利用率极低。</p>
+<p>Continuous Batching（也叫 Iteration-level Scheduling）在每个 decode step 都可以调度——某请求完成立刻释放 slot 并将排队中的新请求加入。GPU 始终满载工作，吞吐量提升 2-5x。这是现代 LLM Serving 框架（vLLM、TGI、TensorRT-LLM）的标配能力。</p>
+</details>
+
+<details class="qa">
+<summary>Q3: 如何估算一个 LLM 推理所需的 GPU 显存？</summary>
+<p><strong>答：</strong>公式：显存 ≈ 参数显存 + KV Cache + 激活值。</p>
+<p>①参数显存 = 参数量 × 精度字节数（FP16=2B, INT8=1B, INT4=0.5B）。例如 70B FP16 = 140GB。</p>
+<p>②KV Cache = 2 × num_layers × hidden_dim × seq_len × batch_size × bytes_per_element。这是随 batch 和 seq_len 动态增长的部分。</p>
+<p>③激活值在推理时较小，约参数量的 5-10%。</p>
+<p>例如 LLaMA-2 7B FP16：14GB + ~1GB(KV) + ~1GB(激活) ≈ 16GB，一张 A100 40GB 可运行。70B FP16 约需 2×A100 80GB。</p>
+</details>
+
+<details class="qa">
+<summary>Q4: Tensor Parallel 和 Pipeline Parallel 如何选择？</summary>
+<p><strong>答：</strong>Tensor Parallel(TP) 将每层权重矩阵切分到多 GPU，每层计算后需要 AllReduce 通信。优点是降低单请求延迟（多卡并行计算同一层），缺点是通信频繁，要求高带宽互联（NVLink）。适合单节点内多卡。</p>
+<p>Pipeline Parallel(PP) 将不同 Transformer 层分配到不同 GPU，仅在层之间传递激活值。通信量小，适合跨节点部署。缺点是引入 Pipeline Bubble，单请求延迟不降反增。</p>
+<p>实际生产中常用 TP + PP：节点内 TP（利用 NVLink），节点间 PP（仅需以太网/InfiniBand 传小张量）。</p>
+</details>
+
+<details class="qa">
+<summary>Q5: vLLM 和 TensorRT-LLM 分别适合什么场景？</summary>
+<p><strong>答：</strong>vLLM 适合：需要快速部署、频繁切换模型、多 LoRA 场景、研发迭代快的团队。优势是 Python 生态友好、OpenAI API 兼容、PagedAttention 内存效率高、不需要预编译。</p>
+<p>TensorRT-LLM 适合：已确定模型和硬件、追求极致性能和最低成本的生产环境。NVIDIA 官方手写 CUDA kernel，支持 FP8 等硬件级量化，吞吐通常比 vLLM 高 20-50%。但需要预编译 engine、模型切换成本高、部署复杂。</p>
+<p>实际中可能组合使用：开发测试用 vLLM，线上高并发用 TensorRT-LLM + Triton。</p>
+</details>
+
+<details class="qa">
+<summary>Q6: 什么是 Flash Attention？它优化了什么？</summary>
+<p><strong>答：</strong>Flash Attention 是一种 IO-aware 的注意力计算算法。标准 Attention 需要 O(N²) 的中间矩阵（Q×K^T），必须写入 HBM（GPU 高带宽内存），内存读写成为瓶颈。</p>
+<p>Flash Attention 通过分块计算（Tiling）+ 在线 Softmax 算法，始终在 SRAM（片上高速缓存）中完成计算，避免 O(N²) 大矩阵的 HBM 读写。结果：计算量不变，但内存 IO 从 O(N²) 降至 O(N)，实际加速 2-4x，且支持更长序列。TGI、vLLM 等框架均内置集成。</p>
+</details>
+
+<details class="qa">
+<summary>Q7: SafeTensors 解决了什么安全问题？</summary>
+<p><strong>答：</strong>PyTorch 的模型保存使用 Python pickle 序列化，pickle 反序列化时可执行任意 Python 代码。攻击者可以在模型文件中注入恶意代码（如 `os.system("rm -rf /")`），用户加载模型时就会执行。</p>
+<p>SafeTensors 格式仅包含纯张量数据（Header + 原始字节），无任何可执行代码。还支持 mmap（内存映射文件），加载速度极快（零拷贝，70B 模型几秒内完成）。现已成为 HuggingFace 默认推荐格式，也被 vLLM、TGI 等框架原生支持。</p>
+</details>
+
+<details class="qa">
+<summary>Q8: MIG 和 MPS 的区别是什么？分别适合什么场景？</summary>
+<p><strong>答：</strong>MIG（Multi-Instance GPU）是 A100/H100 硬件级别的 GPU 分区技术，将一张 GPU 物理划分为最多 7 个独立实例，每个实例有独立的显存、计算单元和缓存，完全隔离互不影响。适合多租户、需要 QoS 保证的场景。</p>
+<p>MPS（Multi-Process Service）是 CUDA 层面的 GPU 共享技术，允许多进程共享 GPU 计算资源（时间和空间复用），但无硬件隔离。适合同一用户的多个小模型推理进程共享 GPU，对隔离性要求不高的场景。</p>
+<p>核心区别：MIG 是硬件隔离（安全、稳定、有保证），MPS 是软件共享（灵活、利用率高、无隔离）。</p>
+</details>
+
+<details class="qa">
+<summary>Q9: 部署 LLM 时如何选择量化方案？</summary>
+<p><strong>答：</strong>选择量化方案需考虑：精度损失容忍度、目标硬件、推理框架。</p>
+<p>① <strong>FP8</strong>（H100+ 硬件支持）：几乎无损，推荐首选，吞吐提升 ~2x。</p>
+<p>② <strong>INT8</strong>（SmoothQuant/W8A8）：轻微精度损失，广泛硬件支持（A100+）。</p>
+<p>③ <strong>INT4</strong>（GPTQ/AWQ）：显存节省 4x，有一定精度损失，适合显存紧张场景。AWQ 通常优于 GPTQ。</p>
+<p>④ <strong>GGUF 量化</strong>（Q4_K_M 等）：llama.cpp 生态，CPU/Metal 推理首选。</p>
+<p>建议优先级：FP8 > INT8 > AWQ INT4 > GPTQ INT4 > 更低比特量化。</p>
+</details>
+
+<details class="qa">
+<summary>Q10: 生产环境部署 LLM 的完整架构是怎样的？</summary>
+<p><strong>答：</strong>典型架构分为四层：</p>
+<p>① <strong>接入层</strong>：API Gateway（Kong/Nginx）→ 认证鉴权、限流、负载均衡</p>
+<p>② <strong>调度层</strong>：请求路由（按模型/LoRA/优先级）→ 队列管理 → 动态扩缩容信号</p>
+<p>③ <strong>Serving 层</strong>：Triton/vLLM 实例集群 → Continuous Batching → 多模型/多LoRA</p>
+<p>④ <strong>基础设施层</strong>：Kubernetes + GPU Operator → 自动扩缩容（基于队列深度/GPU利用率）→ 监控（Prometheus + Grafana 看 TTFT/吞吐/GPU利用率）</p>
+<p>关键指标监控：TTFT P99 < 500ms、吞吐量、GPU 显存/计算利用率、队列等待时间。灰度发布用 Triton 模型版本管理或 K8s Canary Deployment。</p>
+</details>
+    </section>
+
+    <footer>
+      <div class="made">TECH NOTES · AI Infra · 整理自 AI Knowledge Hub</div>
+    </footer>
+  </main>
+</div>
+
+<script>
+(function(){var bar=document.getElementById('progress');function u(){var h=document.documentElement;bar.style.width=h.scrollTop/(h.scrollHeight-h.clientHeight)*100+'%';}window.addEventListener('scroll',u,{passive:true});u();})();
+(function(){var links=document.querySelectorAll('aside.toc nav a');var secs=Array.from(document.querySelectorAll('section.chapter'));if(!secs.length)return;function u(){var y=window.scrollY+100,cur=secs[0];for(var i=0;i<secs.length;i++){if(secs[i].offsetTop<=y)cur=secs[i];}var id=cur.id;links.forEach(function(a){a.classList.toggle('active',a.getAttribute('href')==='#'+id);});}window.addEventListener('scroll',u,{passive:true});u();})();
+</script>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

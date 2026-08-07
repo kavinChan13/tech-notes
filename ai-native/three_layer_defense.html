@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RAG 架构的三层防御 · AI 工程 — Tech Notes</title>
+<meta name="description" content="入口过滤 / 检索质量校验 / 输出忠实度检测 / 全链路监控">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<link rel="stylesheet" href="../assets/kh-guide.css">
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav">
+
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="ai_engineering_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 7 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>G17 · AI 工程</h2>
+    <nav>
+      <ol>
+        <li><a href="#overview" class="active">概览</a></li>
+        <li><a href="#query">第一层：入口过滤 — 拦截不合法 Query</a></li>
+        <li><a href="#ch2">第二层：检索质量校验 — 不合格就重试</a></li>
+        <li><a href="#ch3">第三层：输出忠实度检测 — 没依据就标注</a></li>
+        <li><a href="#ch4">三层防御的全链路监控与告警</a></li>
+        <li><a href="#ch5">三层防御的延迟与成本分析</a></li>
+        <li><a href="#q-a">Q&amp;A</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+    <header class="hero">
+      <div class="badge">G17 · AI 工程</div>
+      <h1>RAG 架构的三层防御</h1>
+      <p class="sub">入口过滤 / 检索质量校验 / 输出忠实度检测 / 全链路监控</p>
+      <div class="meta-row">
+        <span class="pill cyan">AI 工程</span>
+        <span class="pill green">阅读 ~7 min</span>
+        <span class="pill amber">7 章</span>
+      </div>
+    </header>
+
+    <section class="chapter" id="overview">
+      <div class="ch-head"><div class="num">00</div><div class="t"><h2>概览</h2><div class="sub">RAG 三层防御的本质：在&quot;检索→生成&quot;流水线的三个关键节点各设一道关卡——输入不合法就拦截…</div></div></div>
+      <div class="flow">
+  <div class="flow-title">RAG 三层防御全链路架构</div>
+  <div class="flow-node accent"><div class="nlabel">用户 Query</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">第一层 · 入口过滤 Input Guard（&lt;1ms）</div><div class="nsub">长度 · 意图分类 · 敏感词 · 去重 → 通过才放行</div></div>
+  <div class="flow-arrow" data-label="通过 → 向量检索 Top-K"></div>
+  <div class="flow-node"><div class="nlabel">第二层 · 检索质量校验 Quality Gate（&lt;5ms）</div><div class="nsub">Top-1 相似度 · Top-K 离散度 · 领域匹配；不达标 → Query 改写重新检索</div></div>
+  <div class="flow-arrow" data-label="达标 → 送入 LLM 生成"></div>
+  <div class="flow-node"><div class="nlabel">第三层 · 输出忠实度检测 Faithfulness（10–20ms）</div><div class="nsub">NLI 验证 · 引用回溯 · 幻觉标记</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">最终输出给用户</div><div class="nsub">标注来源 / 标注"未经验证"</div></div>
+</div>
+
+<div class="intuition-box">
+<p>RAG 三层防御的本质：在"检索→生成"流水线的三个关键节点各设一道关卡——输入不合法就拦截（省资源），检索质量差就重试（保质量），输出没依据就标注（防幻觉）。层层把关，防止"垃圾进垃圾出"。三层总计增加约 15-25ms 延迟，相比 RAG 本身 200-500ms 的检索延迟可忽略。</p>
+</div>
+    </section>
+
+    <section class="chapter" id="query">
+      <div class="ch-head"><div class="num">01</div><div class="t"><h2>第一层：入口过滤 — 拦截不合法 Query</h2><div class="sub">第一层防御在 Query 进入检索管道之前执行</div></div></div>
+      <div class="intuition-box">
+<p>第一层防御在 Query 进入检索管道之前执行。目的不是"限制用户"，而是"避免浪费"——拦截无效请求可以节省检索和生成的计算资源，同时防止恶意注入导致安全事故。</p>
+</div>
+
+<h3>1.1 四种过滤规则 — 原理→机制→效果</h3>
+
+<table>
+<tr><th>规则</th><th>触发条件</th><th>处理方式</th><th>防御目标</th><th>开销</th></tr>
+<tr><td><strong>长度过滤</strong></td><td>Query < 3 字或 > 500 字</td><td>拒绝 + 提示用户精简/补充</td><td>防止无效输入和超长注入攻击</td><td><1ms</td></tr>
+<tr><td><strong>意图分类</strong></td><td>Query 不属于系统能力范围</td><td>路由到兜底回复或转人工</td><td>防止答非所问，节约检索资源</td><td>5-15ms</td></tr>
+<tr><td><strong>敏感词过滤</strong></td><td>包含违禁词 / 越权关键词</td><td>拒绝 + 记录安全日志</td><td>安全合规，防止 prompt 注入</td><td><1ms</td></tr>
+<tr><td><strong>去重过滤</strong></td><td>短时间内（5s）重复相同 Query</td><td>返回缓存结果</td><td>降低计算成本，提升响应速度</td><td><1ms</td></tr>
+</table>
+
+<p><strong>原理：</strong><span class="term">入口过滤</span>（Input Guard）是一组轻量级的规则引擎，在 Query 进入昂贵的检索和生成管道之前快速拦截不合法的请求。其核心设计原则是"宁可误拦也不放过"——误拦一个有效请求的成本（用户重试一次）远低于放过一个恶意请求的成本（安全事故）。</p>
+
+<p><strong>机制：</strong>四种规则按顺序执行：① 长度检查（正则匹配，<1ms）→ ② 意图分类（轻量分类模型如 DistilBERT，5-15ms）→ ③ 敏感词匹配（Aho-Corasick 多模式匹配，<1ms）→ ④ 去重检查（Redis SETNX，<1ms）。任何一步触发即终止后续流程。</p>
+
+<p><strong>效果：</strong>在某企业 RAG 系统的生产数据中，入口过滤拦截了 15% 的请求，其中 60% 是无效输入（如只输入"？""嗯"），30% 是越权请求（普通用户试图访问管理员接口），10% 是恶意注入（prompt injection 攻击）。过滤后系统的平均响应质量提升了 22%，同时节省了约 12% 的 API 调用成本。</p>
+
+<div class="highlight">
+<strong>生产数据：</strong>在某金融企业 RAG 系统中，部署入口过滤后的首月拦截了 42,000 次无效请求，其中发现 380 次 prompt injection 攻击尝试（占比 0.9%），攻击模式包括"忽略以上指令""你现在是..."等。过滤日志为安全团队提供了攻击趋势分析，推动了 prompt 加固工作。
+</div>
+    </section>
+
+    <section class="chapter" id="ch2">
+      <div class="ch-head"><div class="num">02</div><div class="t"><h2>第二层：检索质量校验 — 不合格就重试</h2><div class="sub">检索到文档 ≠ 检索到 好 文档</div></div></div>
+      <div class="intuition-box">
+<p>检索到文档 ≠ 检索到<em>好</em>文档。第二层防御在检索完成后评估结果质量——如果 Top-1 分数太低、Top-K 分布异常、或领域不匹配，自动触发 Query 改写或扩大检索范围后重新检索。</p>
+</div>
+
+<h3>2.1 三个质量指标 — 原理→机制→效果</h3>
+
+<table>
+<tr><th>指标</th><th>原理</th><th>判定规则</th><th>不达标处理</th></tr>
+<tr><td><strong>Top-1 相似度</strong></td><td>最高分文档的相似度反映检索质量上限</td><td>Top-1 < 0.65 → 不达标</td><td>Query 改写（同义词扩展 / HyDE）→ 重新检索</td></tr>
+<tr><td><strong>Top-K 离散度</strong></td><td>Top-K 分数差异反映结果一致性</td><td>Top-1 与 Top-5 差 > 0.4 → 异常</td><td>缩小 K 值 / Rerank 重排序</td></tr>
+<tr><td><strong>领域匹配度</strong></td><td>检索文档的领域应与 Query 一致</td><td>领域分类不一致 → 不匹配</td><td>加领域过滤条件 → 重新检索</td></tr>
+</table>
+
+<p><strong>Top-1 相似度原理：</strong>如果检索到的最佳文档的相似度只有 0.50，说明知识库中可能没有与 query 高度相关的内容，或者 query 表述过于模糊。此时硬塞低质量文档给 LLM 反而可能引发幻觉——LLM 可能"脑补"不存在的信息来填补上下文的空白。</p>
+
+<p><strong>Top-K 离散度原理：</strong>如果 Top-1 是 0.92 而 Top-5 是 0.35，说明只有一个文档高度相关，其余四个是噪声。此时应缩小 K 值（如从 K=10 改为 K=3），只保留高质量结果。相反，如果 Top-5 都在 0.75-0.88 之间，说明检索质量好，可以多保留。</p>
+
+<p><strong>领域匹配度原理：</strong>Query 是"Python 多线程 GIL"但检索到"Java 多线程 synchronized"——虽然"多线程"语义相似，但领域（编程语言）不匹配。用轻量文本分类模型（如 <span class="term">FastText</span> 或 DistilBERT）判断 Query 和检索文档的领域标签，不匹配则加领域过滤条件重检索。</p>
+
+<div class="flow">
+  <div class="flow-title">检索结果 Top-K</div>
+  <div class="flow-node accent"><div class="nlabel">Top-1 相似度 &lt; 0.65 → 触发 Query 改写 → 重新检索</div><div class="nsub">改写技术: · 同义词扩展 (&quot;登录&quot; → &quot;signin/login/认证&quot;) · HyDE (LLM 先生成假设性回答, 用回答去检索) · Query 分解 (复合问题拆成子问题)</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Top-K 离散度异常 → 缩小 K 值 / Rerank 重排序</div><div class="nsub">Top-1=0.92, Top-5=0.35 → 只取 Top-3 · Top-1=0.85, Top-5=0.78 → 保留全部 Top-5</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">领域不匹配 → 加领域过滤条件 → 重新检索</div><div class="nsub">Query: &quot;Python GIL&quot; → 领域: Python · Doc: &quot;Java synchronized&quot; → 领域: Java → 过滤掉</div></div>
+</div>
+
+<div class="highlight">
+<strong>生产案例：</strong>某技术文档 RAG 系统部署第二层校验后，因检索质量差导致的"答非所问"率从 18% 降至 5%（-72%）。其中 Query 改写（特别是 HyDE 技术）贡献了最大改善——短 query（< 10 字）的检索召回率从 55% 提升至 78%（+23pp）。
+</div>
+    </section>
+
+    <section class="chapter" id="ch3">
+      <div class="ch-head"><div class="num">03</div><div class="t"><h2>第三层：输出忠实度检测 — 没依据就标注</h2><div class="sub">第三层防御在 LLM 生成回答后执行，是对抗幻觉的最后一道防线</div></div></div>
+      <div class="intuition-box">
+<p>第三层防御在 LLM 生成回答后执行，是对抗幻觉的最后一道防线。核心问题：LLM 的回答是否有检索文档的支撑？没有支撑的内容是标注"未经验证"，还是直接重新生成？</p>
+</div>
+
+<h3>3.1 两种检测策略 — 原理→机制→效果</h3>
+
+<p><strong>策略一：<span class="term">NLI 验证</span>（Natural Language Inference）。</strong>用 NLI 模型逐句判断生成内容与检索文档之间的关系。NLI 将文本对分为三类：<strong>蕴含</strong>（entailment，检索文档支持该句子）→ 安全，可输出；<strong>矛盾</strong>（contradiction，检索文档与该句子冲突）→ 幻觉，需重新生成或标注警告；<strong>中性</strong>（neutral，检索文档与该句子无关）→ 可能是 LLM 基于自身知识的补充，标记"未经验证"。</p>
+
+<p><strong>策略二：引用回溯。</strong>要求 LLM 在回答中标注每句话的来源文档（通过 prompt 指令 <code>"请在每句话后标注来源文档编号"</code>）。如果某句话无法追溯到任何检索文档，自动标记为"⚠️ 未经验证"。这种方式对用户完全透明，用户可以自行判断是否采信。</p>
+
+<table>
+<tr><th>策略</th><th>检测精度</th><th>额外延迟</th><th>用户体验</th><th>实现复杂度</th></tr>
+<tr><td><strong>NLI 验证</strong></td><td>88-92%（二分类 90-95%）</td><td>10-20ms（DeBERTa-v3）</td><td>检测到矛盾可自动重新生成</td><td>中（需部署 NLI 模型）</td></tr>
+<tr><td><strong>引用回溯</strong></td><td>取决于 LLM 引用准确度（~80%）</td><td>几乎为零（LLM 自带）</td><td>透明标注来源，用户可验证</td><td>低（prompt 指令即可）</td></tr>
+<tr><td><strong>LLM-as-Judge</strong></td><td>95%+</td><td>500-1000ms（额外 LLM 调用）</td><td>最高精度但成本高</td><td>低（调用另一个 LLM）</td></tr>
+</table>
+
+<h3>3.2 检测后的处理策略</h3>
+
+<table>
+<tr><th>检测结果</th><th>处理策略</th><th>适用场景</th></tr>
+<tr><td><strong>全部蕴含</strong></td><td>正常输出，标注来源文档</td><td>所有场景</td></tr>
+<tr><td><strong>存在矛盾</strong></td><td>重新生成（限制 LLM 只能基于 context 回答）</td><td>高风险场景（医疗/法律）</td></tr>
+<tr><td><strong>存在中性</strong></td><td>标注"⚠️ 此部分基于模型通用知识，建议验证"</td><td>通用场景</td></tr>
+<tr><td><strong>矛盾 + 中性混合</strong></td><td>重新生成，仍不通过则标注 + 降低置信度</td><td>企业知识库</td></tr>
+</table>
+
+<div class="highlight">
+<strong>生产案例：</strong>某医疗 AI 系统部署第三层 NLI 验证后，检测到 3.5% 的回答包含与检索文档矛盾的幻觉内容。其中 60% 通过重新生成自动修复，40% 因反复生成仍矛盾而标注"⚠️ 此信息可能不准确，请以原始文献为准"。整体幻觉率从 4.2% 降至 0.8%（-81%），医生对系统的信任度评分从 3.2/5 提升至 4.4/5。
+</div>
+    </section>
+
+    <section class="chapter" id="ch4">
+      <div class="ch-head"><div class="num">04</div><div class="t"><h2>三层防御的全链路监控与告警</h2><div class="sub">三层防御不是&quot;部署了就完事&quot;——必须持续监控每层的拦截率、重试率和幻觉率，设置告警阈值，及时…</div></div></div>
+      <div class="intuition-box">
+<p>三层防御不是"部署了就完事"——必须持续监控每层的拦截率、重试率和幻觉率，设置告警阈值，及时发现异常趋势。监控数据也是优化每层策略参数的依据。</p>
+</div>
+
+<h3>4.1 关键监控指标</h3>
+
+<div class="flow">
+  <div class="flow-node accent"><div class="nlabel">三层防御监控看板</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">第一层指标:</div><div class="nsub">拦截率: 15% (正常: 10-20%) · 注入攻击数: 2/天 (告警: &gt;10) · 意图误拦率: 1.2%</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">第二层指标:</div><div class="nsub">检索重试率: 8% (正常: 5-15%) · Top-1 &lt; 0.65 比例: 12% · HyDE 改写触发率: 5%</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">第三层指标:</div><div class="nsub">幻觉检测率: 3.5% (告警:&gt;5%) · 重新生成率: 2.1% · &quot;未经验证&quot;标注率: 4.8%</div></div>
+</div>
+
+<table>
+<tr><th>层级</th><th>关键指标</th><th>正常范围</th><th>告警阈值</th><th>告警级别</th></tr>
+<tr><td><strong>第一层</strong></td><td>拦截率</td><td>10-20%</td><td>> 30%（可能误拦过多）</td><td>P2</td></tr>
+<tr><td><strong>第一层</strong></td><td>注入攻击数</td><td>< 10/天</td><td>> 50/天（攻击趋势）</td><td>P1</td></tr>
+<tr><td><strong>第二层</strong></td><td>检索重试率</td><td>5-15%</td><td>> 25%（知识库覆盖不足）</td><td>P2</td></tr>
+<tr><td><strong>第二层</strong></td><td>Top-1 < 0.65 比例</td><td>< 15%</td><td>> 25%（Embedding 质量下降）</td><td>P1</td></tr>
+<tr><td><strong>第三层</strong></td><td>幻觉检测率</td><td>< 5%</td><td>> 8%（突增 5%+ 触发 P1）</td><td>P1</td></tr>
+<tr><td><strong>第三层</strong></td><td>重新生成率</td><td>< 3%</td><td>> 5%（prompt 模板可能需优化）</td><td>P2</td></tr>
+</table>
+
+<div class="highlight">
+<strong>核心结论：</strong>三层防御的关键指标应接入统一监控看板。重点关注两个"突增"信号：① 幻觉率突增 > 5% 触发 P1 告警（可能是知识库更新引入了错误数据）；② 检索重试率突增 > 25% 触发 P2 告警（可能是 Embedding 模型或分块策略出了问题）。每周回顾监控数据，持续优化每层的参数阈值。
+</div>
+    </section>
+
+    <section class="chapter" id="ch5">
+      <div class="ch-head"><div class="num">05</div><div class="t"><h2>三层防御的延迟与成本分析</h2><div class="sub">最常见的顾虑是&quot;三层防御会不会增加太多延迟</div></div></div>
+      <div class="intuition-box">
+<p>最常见的顾虑是"三层防御会不会增加太多延迟？"答案是：每层开销很小，三层总计 15-25ms，相比 RAG 本身 200-500ms 的检索延迟可忽略。投入产出比极高。</p>
+</div>
+
+<h3>5.1 延迟分解</h3>
+
+<table>
+<tr><th>防御层</th><th>处理内容</th><th>延迟</th><th>占 RAG 总延迟比例</th></tr>
+<tr><td><strong>第一层</strong></td><td>长度检查 + 敏感词 + 去重（规则引擎）</td><td>< 2ms</td><td>< 0.5%</td></tr>
+<tr><td><strong>第一层</strong></td><td>意图分类（DistilBERT 推理）</td><td>5-15ms</td><td>1-3%</td></tr>
+<tr><td><strong>第二层</strong></td><td>分数计算 + 阈值比较 + 领域分类</td><td>< 5ms</td><td>< 1%</td></tr>
+<tr><td><strong>第三层</strong></td><td>NLI 检测（DeBERTa-v3，~100M 参数）</td><td>10-20ms</td><td>2-4%</td></tr>
+<tr><td colspan="2"><strong>三层总计</strong></td><td><strong>15-25ms</strong></td><td><strong>3-5%</strong></td></tr>
+</table>
+
+<h3>5.2 投入产出分析</h3>
+
+<div class="practice-grid">
+<div class="do">
+<ul>
+<li>三层防御逐层递进，每层都有明确的触发条件和处理方式</li>
+<li>第一层拦截 15%+ 无效请求，节省 API 调用成本</li>
+<li>第二层用 Top-1 阈值 + Query 改写保证检索质量</li>
+<li>第三层用 NLI + 引用回溯双重检测幻觉</li>
+<li>每层关键指标接入监控看板，设置告警阈值</li>
+</ul>
+</div>
+<div class="dont">
+<ul>
+<li>只有生成后检测，没有入口过滤（垃圾进垃圾出）</li>
+<li>检索结果不做质量校验就直接塞给 LLM（低质量上下文引发幻觉）</li>
+<li>忽略 Top-K 离散度（可能混入大量噪声文档）</li>
+<li>检测到幻觉后不标注、不重试、不告警（用户无感知）</li>
+<li>部署后不监控不优化（阈值需要随数据变化持续调整）</li>
+</ul>
+</div>
+</div>
+    </section>
+
+    <section class="chapter" id="q-a">
+      <div class="ch-head"><div class="num">06</div><div class="t"><h2>Q&amp;A</h2></div></div>
+      <details class="qa">
+<summary>三层防御会不会增加太多延迟？在什么场景下延迟不可接受？</summary>
+<div class="a">每层开销很小：第一层规则判断 < 2ms（意图分类 5-15ms），第二层质量校验 < 5ms，第三层 NLI 检测 10-20ms（使用 DeBERTa-v3，~100M 参数）。三层总计增加约 15-25ms，相比 RAG 本身 200-500ms 的检索延迟占比 < 5%。在对话式应用中完全无感知。只有在极低延迟场景（如高频交易决策，要求 < 100ms 总响应）下才需要裁剪——此时可以省略意图分类（第一层只保留规则检查）和 NLI 检测（第三层只保留引用回溯）。</div>
+</details>
+
+<details class="qa">
+<summary>Query 改写具体有哪些技术？哪种效果最好？</summary>
+<div class="a">常用技术有三种：① 同义词扩展（"登录" → "signin / login / 认证"），简单有效但覆盖有限；② HyDE（Hypothetical Document Embeddings，让 LLM 先生成一个假设性回答，用这个回答的向量去检索），在短 query 场景下效果最好，可提升召回率 15-25%，但增加一次 LLM 调用（200-400ms）；③ Query 分解（将复合问题拆成多个子问题分别检索），适合多跳问题。综合推荐：短 query（< 10 字）优先用 HyDE，长 query 用同义词扩展，复合问题用分解。</div>
+</details>
+
+<details class="qa">
+<summary>NLI 检测的准确率够用吗？有没有更准确的替代方案？</summary>
+<div class="a">主流 NLI 模型（如 DeBERTa-v3-large 在 MNLI 上微调）的三分类准确率在 88-92% 之间。对于 RAG 场景，主要判断"生成内容是否与 context 矛盾"这个二分类任务更简单，实际准确率可达 90-95%。更准确的替代方案：① LLM-as-Judge（用另一个 LLM 判断忠实度），准确率 95%+ 但每次调用增加 500-1000ms 延迟和额外成本；② 微调专用忠实度模型（如 FActScore），准确率 93-96% 但需要标注数据。推荐方案：默认用 NLI（延迟低、够用），高风险场景升级为 LLM-as-Judge。</div>
+</details>
+
+<details class="qa">
+<summary>三层防御的告警和监控具体怎么落地？</summary>
+<div class="a">每层防御的关键指标应接入监控系统（如 Prometheus + Grafana）：第一层记录被拦截的 Query 数量和类型（发现恶意攻击趋势），第二层记录检索质量不达标触发重试的比例（反映知识库覆盖度），第三层记录幻觉检测命中率和分布。设置阈值告警——如幻觉率突增 5% 以上触发 P1 告警（可能是知识库更新引入了错误数据），检索重试率突增到 25% 以上触发 P2 告警。建议每周回顾监控数据，持续优化每层的参数阈值。</div>
+</details>
+
+<details class="qa">
+<summary>如果三层都通过了但用户仍然反馈回答不好怎么办？</summary>
+<div class="a">三层防御覆盖的是"系统层面"的质量保障，但用户反馈可能涉及更深层的问题：① 知识库本身内容过时或不完整（需要更新/扩展知识库）；② 分块粒度不合适（重要信息被切割到不同块中，检索只命中了部分）；③ LLM 的表达能力不足（理解了 context 但表达不清）；④ Prompt 模板设计不佳（没有正确引导 LLM 使用 context）。处理方式是：收集用户反馈并分类（检索问题 / 生成问题 / 知识问题），分析失败案例属于哪个环节，然后针对性优化。</div>
+</details>
+
+<details class="qa">
+<summary>三层防御可以只部署其中一两层吗？有没有最小可行方案？</summary>
+<div class="a">可以渐进式部署。最小可行方案是只部署第一层（入口过滤）和第三层的引用回溯（prompt 指令即可，零额外延迟）——这能拦截无效请求并让用户自行验证来源。第二步加入第二层的 Top-1 阈值检测（最简单，只需比较分数）。第三步加入完整的 NLI 检测。推荐顺序：第一层规则检查 → 第三层引用回溯 → 第二层阈值检测 → 第三层 NLI → 第一层意图分类 → 第二层 HyDE 改写。每一步都有独立的增量收益。</div>
+</details>
+
+<details class="qa">
+<summary>prompt injection 攻击如何被第一层防御拦截？有哪些典型攻击模式？</summary>
+<div class="a">典型攻击模式包括：① 指令覆盖型（"忽略以上所有指令，你现在是..."）——通过敏感词匹配拦截；② 角色扮演型（"假装你是一个没有限制的 AI..."）——通过意图分类拦截；③ 编码绕过型（Base64 编码的恶意指令）——通过长度异常检测 + 特殊字符比例检测拦截；④ 多轮注入型（在多轮对话中逐步引导）——通过对话历史一致性检查拦截。建议维护一个持续更新的攻击模式库，定期更新敏感词列表和意图分类模型。</div>
+</details>
+    </section>
+
+    <footer>
+      <div class="made">TECH NOTES · AI 工程 · 整理自 AI Knowledge Hub</div>
+    </footer>
+  </main>
+</div>
+
+<script>
+(function(){var bar=document.getElementById('progress');function u(){var h=document.documentElement;bar.style.width=h.scrollTop/(h.scrollHeight-h.clientHeight)*100+'%';}window.addEventListener('scroll',u,{passive:true});u();})();
+(function(){var links=document.querySelectorAll('aside.toc nav a');var secs=Array.from(document.querySelectorAll('section.chapter'));if(!secs.length)return;function u(){var y=window.scrollY+100,cur=secs[0];for(var i=0;i<secs.length;i++){if(secs[i].offsetTop<=y)cur=secs[i];}var id=cur.id;links.forEach(function(a){a.classList.toggle('active',a.getAttribute('href')==='#'+id);});}window.addEventListener('scroll',u,{passive:true});u();})();
+</script>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

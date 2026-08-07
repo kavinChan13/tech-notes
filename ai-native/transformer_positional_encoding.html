@@ -1,0 +1,642 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>位置编码 Positional Encoding · Transformer — Tech Notes</title>
+<meta name="description" content="Positional Encoding — 从 Sinusoidal 到 RoPE / ALiBi，理解 Transformer 如何感知序列顺序">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<link rel="stylesheet" href="../assets/kh-guide.css">
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav">
+
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="ai_engineering_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 14 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>T03 · Transformer</h2>
+    <nav>
+      <ol>
+        <li><a href="#ch1" class="active">为什么需要位置编码</a></li>
+        <li><a href="#sinusoidal-pe">正弦余弦位置编码 (Sinusoidal PE)</a></li>
+        <li><a href="#learned-pe">可学习位置编码 (Learned PE)</a></li>
+        <li><a href="#relative-pe">相对位置编码 (Relative PE)</a></li>
+        <li><a href="#rope-rotary-position-embedding">RoPE (Rotary Position Embedding)</a></li>
+        <li><a href="#alibi-attention-with-linear-biases">ALiBi (Attention with Linear Biases)</a></li>
+        <li><a href="#ch7">长上下文扩展</a></li>
+        <li><a href="#ch8">位置编码全方位对比</a></li>
+        <li><a href="#q-a">Q&amp;A</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+    <header class="hero">
+      <div class="badge">T03 · Transformer</div>
+      <h1>位置编码 Positional Encoding</h1>
+      <p class="sub">Positional Encoding — 从 Sinusoidal 到 RoPE / ALiBi，理解 Transformer 如何感知序列顺序</p>
+      <div class="meta-row">
+        <span class="pill cyan">Transformer</span>
+        <span class="pill green">阅读 ~14 min</span>
+        <span class="pill amber">9 章</span>
+      </div>
+    </header>
+
+    <section class="chapter" id="ch1">
+      <div class="ch-head"><div class="num">01</div><div class="t"><h2>为什么需要位置编码</h2><div class="sub">Self-Attention 的计算本质是对输入 token 做 集合运算 ：对于查询向量…</div></div></div>
+      <h3>1.1 Transformer 的排列不变性问题</h3>
+<p>Self-Attention 的计算本质是对输入 token 做<strong>集合运算</strong>：对于查询向量 q，它与所有 key 做点积再加权求和，这一过程<strong>与 token 的输入顺序无关</strong>。数学上：</p>
+<div class="formula">
+Attention(Q, K, V) = softmax(QKᵀ / √d_k) V
+</div>
+<p>如果将输入序列打乱顺序（对 Q、K、V 做相同排列），得到的输出只是同样被打乱，每个位置的注意力分数不变。这意味着：</p>
+<ul>
+<li>"我 喜欢 你" 和 "你 喜欢 我" 在纯 Self-Attention 中<strong>无法区分</strong></li>
+<li>Transformer 本身是一个<strong>排列等变 (Permutation Equivariant)</strong> 函数</li>
+<li>没有位置信息注入，模型退化为"词袋模型 + 注意力"</li>
+</ul>
+
+<h3>1.2 与 RNN 的对比</h3>
+<table>
+<tr><th>特性</th><th>RNN / LSTM</th><th>Transformer (无 PE)</th></tr>
+<tr><td>位置信息来源</td><td>天然具备：按时间步逐个处理，隐状态累积序列顺序</td><td>完全没有：并行处理所有 token，丢失位序</td></tr>
+<tr><td>长距离依赖</td><td>弱：梯度消失/爆炸</td><td>强：任意位置直接交互</td></tr>
+<tr><td>并行性</td><td>差：必须串行</td><td>好：可全并行</td></tr>
+<tr><td>是否需要 PE</td><td>不需要</td><td><strong>必须</strong>需要</td></tr>
+</table>
+
+<h3>1.3 位置编码的作用</h3>
+<div class="intuition-box">
+<p>没有位置编码的 Transformer 就像一个只能听到词汇集合却听不到语序的人——"狗咬人"和"人咬狗"在它耳中完全一样。</p>
+</div>
+<p>位置编码为每个 token 注入一个<strong>位置信号</strong>，使模型能够区分不同位置上的相同词。常见注入方式：</p>
+<ul>
+<li><strong>加法注入</strong>：x' = TokenEmbed(x) + PosEmbed(pos)（主流方案）</li>
+<li><strong>拼接注入</strong>：x' = [TokenEmbed(x); PosEmbed(pos)]（早期尝试，浪费维度）</li>
+<li><strong>注意力偏置</strong>：直接修改 Attention Score（ALiBi 方案）</li>
+<li><strong>旋转编码</strong>：在 Q/K 上做旋转变换（RoPE 方案）</li>
+</ul>
+
+<div class="interview-box">
+<div class="label">知识要点</div>
+<ul>
+<li>Transformer 的 Self-Attention 对输入顺序是<strong>排列等变</strong>的，不加 PE 无法区分词序</li>
+<li>RNN 通过时间步递归天然编码位置，Transformer 必须显式注入位置信息</li>
+<li>位置编码不是"锦上添花"，而是 Transformer 工作的<strong>必要条件</strong></li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="sinusoidal-pe">
+      <div class="ch-head"><div class="num">02</div><div class="t"><h2>正弦余弦位置编码 (Sinusoidal PE)</h2><div class="sub">原始 Transformer（Vaswani et al</div></div></div>
+      <h3>2.1 公式</h3>
+<p>原始 Transformer（Vaswani et al., 2017）提出的<span class="term">sinusoidal encoding</span>方案，使用不同频率的正弦和余弦函数：</p>
+<div class="formula">
+PE(pos, 2i)   = sin(pos / 10000^(2i/d_model))
+PE(pos, 2i+1) = cos(pos / 10000^(2i/d_model))
+</div>
+<p>其中：</p>
+<ul>
+<li><code>pos</code> — token 在序列中的位置（0, 1, 2, ...）</li>
+<li><code>i</code> — 维度索引（0, 1, ..., d_model/2 − 1）</li>
+<li><code>d_model</code> — 模型嵌入维度（如 512、768）</li>
+<li>偶数维用 sin，奇数维用 cos</li>
+</ul>
+
+<h3>2.2 频率的直觉理解</h3>
+<p>分母 <code>10000^(2i/d_model)</code> 随维度 i 增大而增大，对应的频率从高到低：</p>
+<ul>
+<li><strong>低维度（i 小）</strong>：波长短、频率高 → 编码细粒度位置差异（相邻位置区分）</li>
+<li><strong>高维度（i 大）</strong>：波长长、频率低 → 编码粗粒度位置信息（远距离位置关系）</li>
+<li>类比：二进制编码中，低位变化快（每个数都变），高位变化慢（每 2^k 个数才变一次）</li>
+</ul>
+
+<p><strong>Sinusoidal PE 波形示意</strong>（d_model=8, pos=0~7）—— 不同维度对用不同频率编码位置：</p>
+<table>
+<tr><th>维度</th><th>频率 ω</th><th>sin 分量</th><th>cos 分量</th><th>作用</th></tr>
+<tr><td>dim 0-1</td><td>高频 1.000</td><td style="font-family:monospace">▁▂▃▅▇█▇▅</td><td style="font-family:monospace">█▇▅▃▂▁▂▃</td><td>快速振荡 → 区分局部</td></tr>
+<tr><td>dim 2-3</td><td>中频 0.100</td><td style="font-family:monospace">▁▁▂▂▃▃▅▅</td><td style="font-family:monospace">███▇▇▅▅▃</td><td>中速变化</td></tr>
+<tr><td>dim 4-5</td><td>低频 0.010</td><td style="font-family:monospace">▁▁▁▁▁▂▂▂</td><td style="font-family:monospace">████████▇</td><td>缓慢变化</td></tr>
+<tr><td>dim 6-7</td><td>极低频 0.001</td><td style="font-family:monospace">▁▁▁▁▁▁▁▁</td><td style="font-family:monospace">█████████</td><td>缓慢变化 → 编码全局结构</td></tr>
+</table>
+<p class="highlight">类似<strong>二进制计数</strong>：低位（低维）翻转快、高位（高维）翻转慢，多频率组合让每个位置获得唯一"签名"。</p>
+
+<h3>2.3 为什么选正弦/余弦——相对位置的线性变换</h3>
+<p>正弦编码最核心的数学性质：<strong>任意固定偏移 k 的位置编码可以通过当前位置编码的线性变换得到</strong>。</p>
+<div class="formula">
+PE(pos + k) = T_k · PE(pos)
+
+其中 T_k 是一个只依赖于 k 的线性变换矩阵（旋转矩阵）：
+对每对维度 (2i, 2i+1)：
+┌ PE(pos+k, 2i)   ┐   ┌ cos(kω_i)  sin(kω_i) ┐ ┌ PE(pos, 2i)   ┐
+│                  │ = │                        │ │               │
+└ PE(pos+k, 2i+1) ┘   └ -sin(kω_i) cos(kω_i)  ┘ └ PE(pos, 2i+1) ┘
+
+ω_i = 1 / 10000^(2i/d_model)
+</div>
+<p>这意味着模型可以通过学习注意力权重来<strong>捕获相对位置关系</strong>，而不仅仅是绝对位置。</p>
+
+<div class="intuition-box">
+<p>Sinusoidal PE 的本质是一套"多频段时钟"——高频维度像秒针快速跳动区分相邻位置，低频维度像时针缓慢转动标记远距离关系。</p>
+</div>
+
+<h3>2.4 可视化理解</h3>
+<div class="section-card">
+<p>想象一个热力图（pos × d_model）：</p>
+<ul>
+<li>每一行是一个位置的编码向量</li>
+<li>左侧列（低维）：条纹密集、快速振荡 → 高频分量</li>
+<li>右侧列（高维）：条纹稀疏、缓慢变化 → 低频分量</li>
+<li>不同位置的编码向量<strong>两两不同</strong>且<strong>点积随距离衰减</strong></li>
+</ul>
+</div>
+
+<h3>2.5 实现要点</h3>
+<ul>
+<li>Sinusoidal PE 是<strong>固定的</strong>，不参与训练（无可学习参数）</li>
+<li>理论上可泛化到任意长度（公式对任意 pos 有定义）</li>
+<li>与 token embedding <strong>相加</strong>后输入 Encoder/Decoder</li>
+<li>原始论文实验表明 Sinusoidal 与 Learned PE 效果几乎相同</li>
+</ul>
+
+<div class="interview-box">
+<div class="label">知识要点</div>
+<ul>
+<li>必须能写出完整公式，说清偶数维 sin、奇数维 cos</li>
+<li>核心优势：相对位置可通过线性变换表示 → 模型能学到相对位置关系</li>
+<li>频率设计：低维高频编码局部位置，高维低频编码全局位置</li>
+<li>不需要训练，理论上可推广到未见长度</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="learned-pe">
+      <div class="ch-head"><div class="num">03</div><div class="t"><h2>可学习位置编码 (Learned PE)</h2><div class="sub">直接将位置编码作为 可学习的嵌入矩阵 ，与词嵌入一样通过反向传播更新：</div></div></div>
+      <h3>3.1 基本思想</h3>
+<p>直接将位置编码作为<strong>可学习的嵌入矩阵</strong>，与词嵌入一样通过反向传播更新：</p>
+<div class="formula">
+PE = nn.Embedding(max_seq_len, d_model)
+
+x' = TokenEmbed(x) + PE(position_ids)
+</div>
+<p>位置嵌入矩阵形状为 <code>[max_seq_len, d_model]</code>，每个位置对应一个可训练的 d_model 维向量。</p>
+
+<h3>3.2 代表模型</h3>
+<table>
+<tr><th>模型</th><th>位置编码方式</th><th>最大长度</th></tr>
+<tr><td>BERT</td><td>Learned PE</td><td>512</td></tr>
+<tr><td>GPT-2</td><td>Learned PE</td><td>1024</td></tr>
+<tr><td>ViT</td><td>Learned PE（2D 拉平为 1D）</td><td>取决于 patch 数</td></tr>
+<tr><td>原始 Transformer</td><td>Sinusoidal PE</td><td>理论无限</td></tr>
+</table>
+
+<h3>3.3 与 Sinusoidal PE 对比</h3>
+<table>
+<tr><th>对比维度</th><th>Sinusoidal PE</th><th>Learned PE</th></tr>
+<tr><td>是否需要训练</td><td>否（固定公式生成）</td><td>是（反向传播更新）</td></tr>
+<tr><td>参数量</td><td>0</td><td>max_len × d_model</td></tr>
+<tr><td>灵活性</td><td>固定模式</td><td>可适应数据分布</td></tr>
+<tr><td>长度外推</td><td>理论可行（公式对任意 pos 定义）</td><td><strong>不行</strong>（未训练过的位置没有嵌入）</td></tr>
+<tr><td>实际效果</td><td>与 Learned PE 相当</td><td>与 Sinusoidal PE 相当</td></tr>
+<tr><td>适用场景</td><td>需要外推 / 参数效率优先</td><td>固定长度任务（NLU、分类）</td></tr>
+</table>
+
+<div class="interview-box">
+<div class="label">知识要点</div>
+<ul>
+<li>Learned PE 最大的缺点：<strong>无法外推</strong>到训练时未见过的序列长度</li>
+<li>BERT 最大支持 512 tokens 就是因为 Learned PE 限制了最大长度</li>
+<li>原始论文实验表明两者效果几乎相同，但后续 LLM 时代外推需求使得 Sinusoidal 及其改进方案更受青睐</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="relative-pe">
+      <div class="ch-head"><div class="num">04</div><div class="t"><h2>相对位置编码 (Relative PE)</h2><div class="sub">绝对位置编码为每个位置分配固定编码，但自然语言中 相对距离 往往比绝对位置更重要</div></div></div>
+      <h3>4.1 核心思想</h3>
+<p>绝对位置编码为每个位置分配固定编码，但自然语言中<strong>相对距离</strong>往往比绝对位置更重要。例如"主语在谓语前面 2 个位置"比"主语在位置 3"更有意义。</p>
+<p>相对位置编码直接在注意力计算中引入<strong>位置对之间的相对距离</strong>信息。</p>
+
+<h3>4.2 Shaw et al. (2018) — 相对位置表示</h3>
+<p>在注意力分数和值的加权中引入相对位置嵌入：</p>
+<div class="formula">
+e_ij = (x_i W^Q)(x_j W^K + a_ij^K)ᵀ / √d_k
+
+z_i = Σ_j α_ij (x_j W^V + a_ij^V)
+
+a_ij^K, a_ij^V 是相对位置 (i−j) 对应的可学习嵌入
+相对位置被截断到 [-k, k]（如 k=16）
+</div>
+<ul>
+<li>为 Key 和 Value 分别引入相对位置嵌入 a<sup>K</sup> 和 a<sup>V</sup></li>
+<li>相对位置距离被 clip 到 [-k, k]，超出范围的共享边界嵌入</li>
+<li>总参数：2 × (2k+1) × d_k 个可学习参数</li>
+</ul>
+
+<h3>4.3 Transformer-XL (Dai et al., 2019)</h3>
+<p>Transformer-XL 重新分解了注意力分数，将绝对位置项替换为相对位置项：</p>
+<div class="formula">
+原始：e_ij = (E_xi + U_i) W^Q W^K_ᵀ (E_xj + U_j)ᵀ
+
+展开为四项：
+(a) E_xi W^Q W^K_E ᵀ E_xj ᵀ       ← 内容-内容交互
+(b) E_xi W^Q W^K_R ᵀ R_{i-j} ᵀ     ← 内容-位置交互
+(c) u W^K_E ᵀ E_xj ᵀ               ← 全局内容偏置
+(d) v W^K_R ᵀ R_{i-j} ᵀ            ← 全局位置偏置
+
+R_{i-j} = Sinusoidal(i−j)，u 和 v 是可学习全局向量
+</div>
+<ul>
+<li>用相对位置的 Sinusoidal 编码 R<sub>i-j</sub> 替代绝对位置 U</li>
+<li>引入两个全局可学习偏置 u、v，取代原来每个位置的查询偏置</li>
+<li>支持<strong>段级递归 (Segment-level Recurrence)</strong>：建模超长文本</li>
+</ul>
+
+<h3>4.4 T5 Relative Bias (Raffel et al., 2020)</h3>
+<p>T5 采用最简洁的相对位置方案——直接在注意力分数上加一个<strong>标量偏置</strong>：</p>
+<div class="formula">
+e_ij = x_i W^Q (x_j W^K)ᵀ / √d_k + b(i−j)
+
+b(·) 是对数分桶的相对位置偏置：
+将相对距离映射到有限个桶（如 32 个），近距离用精细桶，远距离用粗桶
+每个注意力头有独立的偏置参数
+</div>
+<ul>
+<li>偏置 b 是<strong>每个注意力头独立</strong>的标量参数</li>
+<li>使用<strong>对数分桶</strong>将无限的相对距离映射到有限个离散桶</li>
+<li>近距离分桶精细，远距离分桶粗糙 → 关注局部精确性</li>
+<li>参数量极少，效果优异</li>
+</ul>
+
+<div class="interview-box">
+<div class="label">知识要点</div>
+<ul>
+<li>相对位置编码关注"两个 token 之间的距离"，而非"token 在序列中的绝对位置"</li>
+<li>Shaw 方案为 K/V 都加相对位置嵌入；Transformer-XL 分解为四项并用 Sinusoidal 编码相对距离</li>
+<li>T5 Bias 最简洁：每个头学一组标量偏置 + 对数分桶，参数极少</li>
+<li>相对 PE 天然更适合泛化到不同长度</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="rope-rotary-position-embedding">
+      <div class="ch-head"><div class="num">05</div><div class="t"><h2>RoPE (Rotary Position Embedding)</h2><div class="sub">RoPE（Su et al</div></div></div>
+      <h3>5.1 核心思想</h3>
+<p>RoPE（Su et al., 2021）的核心洞察：<strong>用旋转矩阵编码绝对位置，使得内积自然包含相对位置信息</strong>。</p>
+<p>目标：设计函数 f(x, pos) 使得：</p>
+<div class="formula">
+⟨f(q, m), f(k, n)⟩ = g(q, k, m − n)
+
+即 q 和 k 在施加位置编码后的内积，只依赖于<strong>相对位置 m−n</strong>
+</div>
+
+<h3>5.2 数学推导</h3>
+<h4>复数表示</h4>
+<p>将 d 维向量的每两个分量视为一个复数。对于第 i 对分量 (q<sub>2i</sub>, q<sub>2i+1</sub>)：</p>
+<div class="formula">
+q̃_i = q_{2i} + j · q_{2i+1}    （复数表示）
+
+施加位置编码：
+f(q̃_i, m) = q̃_i · e^{j·m·θ_i}
+
+其中 θ_i = 1 / 10000^(2i/d)
+</div>
+<p>乘以 e<sup>jmθ</sup> 就是对复数做<strong>角度为 mθ 的旋转</strong>。</p>
+
+<h4>旋转矩阵形式</h4>
+<p>展开为实数矩阵运算：</p>
+<div class="formula">
+                ┌ cos(mθ_i)  −sin(mθ_i) ┐ ┌ q_{2i}   ┐
+f(q, m)_i  =   │                        │ │          │
+                └ sin(mθ_i)   cos(mθ_i) ┘ └ q_{2i+1} ┘
+
+对全部 d/2 对维度分别做旋转：
+f(q, m) = R(m) · q
+
+R(m) = diag(R_θ₁(m), R_θ₂(m), ..., R_{θ_{d/2}}(m))
+</div>
+
+<h4>验证内积的相对位置性质</h4>
+<div class="formula">
+⟨f(q, m), f(k, n)⟩ = qᵀ R(m)ᵀ R(n) k = qᵀ R(n−m) k
+
+因为旋转矩阵满足 R(m)ᵀ = R(−m)，R(−m)R(n) = R(n−m)
+
+→ 内积只依赖于相对位置 (n−m) ✓
+</div>
+
+<h3>5.3 RoPE 的优势</h3>
+<ul>
+<li><strong>绝对位置 → 相对位置</strong>：编码绝对位置但内积天然体现相对位置</li>
+<li><strong>相对位置衰减</strong>：随着相对距离 |m−n| 增大，内积呈现<strong>自然衰减</strong>趋势（远距离 token 关注度降低），这符合语言学直觉</li>
+<li><strong>外推性好</strong>：公式对任意位置有定义，配合 NTK 等方法可优雅扩展</li>
+<li><strong>无额外参数</strong>：θ 的值由公式确定（与 Sinusoidal PE 类似），不增加模型参数</li>
+<li><strong>计算高效</strong>：旋转操作等价于逐元素乘法，不引入矩阵乘法开销</li>
+<li><strong>只作用于 Q/K</strong>：不修改 V，保留值向量的纯语义信息</li>
+</ul>
+
+<h3>5.4 为什么 RoPE 成为 LLM 标配</h3>
+<table>
+<tr><th>模型</th><th>位置编码</th><th>备注</th></tr>
+<tr><td>LLaMA / LLaMA-2/3</td><td>RoPE</td><td>Meta 开源 LLM 系列</td></tr>
+<tr><td>Qwen / Qwen-2</td><td>RoPE</td><td>阿里通义千问</td></tr>
+<tr><td>DeepSeek</td><td>RoPE</td><td>深度求索</td></tr>
+<tr><td>Mistral / Mixtral</td><td>RoPE</td><td>Mistral AI</td></tr>
+<tr><td>Gemma</td><td>RoPE</td><td>Google</td></tr>
+<tr><td>ChatGLM</td><td>RoPE (2D)</td><td>智谱 AI</td></tr>
+<tr><td>GPT-NeoX</td><td>RoPE</td><td>EleutherAI</td></tr>
+</table>
+<p>几乎所有主流开源 LLM 都采用 RoPE，原因：<strong>相对位置表达能力强 + 外推扩展方便 + 无需额外参数 + 实现简单高效</strong>。</p>
+
+<div class="interview-box">
+<div class="label">知识要点</div>
+<ul>
+<li>RoPE 的核心："旋转矩阵编码绝对位置，内积体现相对位置"——能用一句话概括</li>
+<li>数学推导：复数乘 e<sup>jmθ</sup> → 旋转矩阵 → R(m)ᵀR(n) = R(n−m)</li>
+<li>只作用于 Q 和 K，不修改 V</li>
+<li>列举至少 3 个使用 RoPE 的 LLM（LLaMA、Qwen、DeepSeek）</li>
+<li>RoPE 的衰减特性：远距离 token 的注意力分数自然衰减</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="alibi-attention-with-linear-biases">
+      <div class="ch-head"><div class="num">06</div><div class="t"><h2>ALiBi (Attention with Linear Biases)</h2><div class="sub">ALiBi（Press et al</div></div></div>
+      <h3>6.1 核心思想</h3>
+<p>ALiBi（Press et al., 2022）提出一个极简方案：<strong>不在嵌入层添加位置编码</strong>，而是直接在注意力分数上加一个与距离成正比的<strong>线性偏置</strong>。</p>
+
+<h3>6.2 公式</h3>
+<div class="formula">
+Attention_ij = softmax(q_i · k_j / √d_k − m · |i − j|)
+
+m 是每个注意力头的固定斜率（不可训练）
+head_1 用 m = 2^(−8/n), head_2 用 m = 2^(−16/n), ...
+n = 注意力头的总数
+</div>
+<p>负号表示距离越远，注意力分数<strong>惩罚越大</strong>（偏置为负值）。不同头使用不同斜率，让模型同时关注局部和远距离：</p>
+<ul>
+<li><strong>大斜率头</strong>：强烈惩罚远距离 → 关注局部上下文</li>
+<li><strong>小斜率头</strong>：轻微惩罚远距离 → 关注全局上下文</li>
+</ul>
+
+<h3>6.3 特性</h3>
+<table>
+<tr><th>特性</th><th>说明</th></tr>
+<tr><td>无可训练位置参数</td><td>斜率 m 由公式确定，不需要学习</td></tr>
+<tr><td>不修改嵌入层</td><td>不在 Q/K/V 之前注入位置信息</td></tr>
+<tr><td>长度外推性强</td><td>训练 1024 长度，推理可直接用于 2048+ 长度</td></tr>
+<tr><td>实现极简</td><td>只需在 attention score 上加一个预计算的偏置矩阵</td></tr>
+<tr><td>计算开销几乎为零</td><td>偏置矩阵可预计算并缓存</td></tr>
+</table>
+
+<h3>6.4 代表模型</h3>
+<ul>
+<li><strong>BLOOM</strong>（BigScience）：176B 参数，使用 ALiBi</li>
+<li><strong>MPT</strong>（MosaicML）：使用 ALiBi 实现长上下文</li>
+<li>相比 RoPE，ALiBi 在 LLM 领域的采用率较低，但在特定场景（如超长文本处理）仍有价值</li>
+</ul>
+
+<div class="interview-box">
+<div class="label">知识要点</div>
+<ul>
+<li>ALiBi 不在嵌入层加位置编码，而是<strong>在注意力分数上减去线性偏置</strong></li>
+<li>斜率 m 按几何级数分配，不需要训练</li>
+<li>天然外推性好：训练短序列可推理长序列</li>
+<li>与 RoPE 的区别：ALiBi 改 attention score，RoPE 改 Q/K 向量</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="ch7">
+      <div class="ch-head"><div class="num">07</div><div class="t"><h2>长上下文扩展</h2><div class="sub">RoPE 虽然公式对任意位置有定义，但模型在有限长度（如 4096）上训练后，直接推理到更长…</div></div></div>
+      <h3>7.1 为什么 RoPE 的长度外推是热门研究方向</h3>
+<p>RoPE 虽然公式对任意位置有定义，但模型在有限长度（如 4096）上训练后，直接推理到更长序列（如 32K、128K）时性能会严重下降。原因：</p>
+<ul>
+<li>训练时未见过的高频旋转角度 → 注意力分布失真</li>
+<li>注意力分数的数值范围超出训练时的分布</li>
+<li>远距离 token 的位置信号与训练分布不匹配</li>
+</ul>
+<p>LLM 长上下文能力是核心竞争力（RAG、长文档理解、代码分析），因此 RoPE 外推成为热门课题。</p>
+
+<h3>7.2 Position Interpolation (PI)</h3>
+<p>Chen et al., 2023 提出<strong>位置插值</strong>——最直接的方案：</p>
+<div class="formula">
+原始：θ_i(pos) = pos / 10000^(2i/d)
+
+PI：θ_i(pos) = (pos × L_train / L_target) / 10000^(2i/d)
+
+将位置缩放到训练长度范围内：pos' = pos × (L_train / L_target)
+</div>
+<ul>
+<li>将长序列的位置<strong>压缩</strong>到训练时的位置范围内</li>
+<li>需要少量微调（几百步）即可恢复性能</li>
+<li>缺点：压缩损失精度，近距离 token 的位置区分度下降</li>
+</ul>
+
+<h3>7.3 NTK-Aware Scaling</h3>
+<p>通过修改 RoPE 的<strong>基频 (base)</strong> 而非缩放位置来实现外推：</p>
+<div class="formula">
+原始：θ_i = 1 / 10000^(2i/d)
+
+NTK-Aware：θ_i = 1 / (10000 × α)^(2i/d)
+
+α = (L_target / L_train)^(d/(d-2))
+</div>
+<ul>
+<li>直觉：调整旋转速度而非压缩位置</li>
+<li>高频分量（低维度）几乎不变 → 保留近距离位置精度</li>
+<li>低频分量（高维度）被缩放 → 扩展远距离表示范围</li>
+<li>甚至可以<strong>无需微调</strong>（Zero-shot）直接使用</li>
+</ul>
+
+<h3>7.4 Dynamic NTK</h3>
+<p>对 NTK-Aware Scaling 的改进：</p>
+<ul>
+<li><strong>动态调整</strong>缩放因子：推理时根据实际序列长度动态计算 α</li>
+<li>短序列不缩放（保持原始精度），长序列自适应缩放</li>
+<li>无需预设目标长度 L_target</li>
+</ul>
+
+<h3>7.5 YaRN (Yet another RoPE extensioN)</h3>
+<p>Peng et al., 2023 综合了多种技术的 RoPE 扩展方案：</p>
+<div class="formula">
+YaRN = NTK-Aware Interpolation + Attention Scaling + 分频段处理
+
+低频维度：做 PI（插值）
+高频维度：不修改（保留局部精度）
+中间维度：在两者之间平滑过渡
+
+额外加一个与序列长度相关的 Attention 温度缩放因子
+</div>
+<ul>
+<li>综合了 PI 和 NTK 各自的优点</li>
+<li>分频段处理：不同频率的维度使用不同策略</li>
+<li>只需少量微调（约 400 步）即可扩展到 128K+</li>
+<li>被 Qwen、Mistral 等模型采用</li>
+</ul>
+
+<h3>7.6 方法对比</h3>
+<table>
+<tr><th>方法</th><th>核心策略</th><th>是否需微调</th><th>近距离精度</th><th>远距离外推</th></tr>
+<tr><td>直接外推</td><td>不做任何修改</td><td>否</td><td>✅ 保持</td><td>❌ 严重衰退</td></tr>
+<tr><td>PI</td><td>缩放位置到训练范围</td><td>需要（少量）</td><td>⚠️ 轻微损失</td><td>✅ 良好</td></tr>
+<tr><td>NTK-Aware</td><td>修改基频</td><td>可选</td><td>✅ 保持</td><td>✅ 良好</td></tr>
+<tr><td>Dynamic NTK</td><td>动态基频</td><td>否</td><td>✅ 保持</td><td>✅ 较好</td></tr>
+<tr><td>YaRN</td><td>分频段 + 温度缩放</td><td>需要（极少）</td><td>✅ 保持</td><td>✅ 优秀</td></tr>
+</table>
+
+<div class="interview-box">
+<div class="label">知识要点</div>
+<ul>
+<li>RoPE 外推问题的本质：训练时未见过的旋转角度导致 OOD</li>
+<li>PI 缩放位置、NTK 缩放基频——两种不同思路</li>
+<li>YaRN 综合了多种技术，分频段处理是亮点</li>
+<li>Dynamic NTK 的优势：无需预设目标长度，自适应调整</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="ch8">
+      <div class="ch-head"><div class="num">08</div><div class="t"><h2>位置编码全方位对比</h2></div></div>
+      <table>
+<tr>
+<th>方案</th>
+<th>编码类型</th>
+<th>作用位置</th>
+<th>是否可外推</th>
+<th>是否需训练</th>
+<th>代表模型</th>
+</tr>
+<tr>
+<td>Sinusoidal PE</td>
+<td>绝对位置</td>
+<td>嵌入层（加到 embedding）</td>
+<td>理论可行</td>
+<td>否</td>
+<td>原始 Transformer</td>
+</tr>
+<tr>
+<td>Learned PE</td>
+<td>绝对位置</td>
+<td>嵌入层（加到 embedding）</td>
+<td><strong>不可</strong></td>
+<td>是</td>
+<td>BERT, GPT-2, ViT</td>
+</tr>
+<tr>
+<td>Relative PE (Shaw)</td>
+<td>相对位置</td>
+<td>Attention (K, V)</td>
+<td>有限（截断范围内）</td>
+<td>是</td>
+<td>Transformer 改进</td>
+</tr>
+<tr>
+<td>Transformer-XL</td>
+<td>相对位置</td>
+<td>Attention Score</td>
+<td>较好</td>
+<td>部分（u, v 可训练）</td>
+<td>Transformer-XL, XLNet</td>
+</tr>
+<tr>
+<td>T5 Relative Bias</td>
+<td>相对位置</td>
+<td>Attention Score（加标量偏置）</td>
+<td>有限（桶数限制）</td>
+<td>是（偏置参数）</td>
+<td>T5, mT5</td>
+</tr>
+<tr>
+<td><strong>RoPE</strong></td>
+<td>绝对 → 相对</td>
+<td>Q, K（旋转变换）</td>
+<td><strong>好</strong>（配合 PI/NTK/YaRN）</td>
+<td>否</td>
+<td>LLaMA, Qwen, DeepSeek</td>
+</tr>
+<tr>
+<td><strong>ALiBi</strong></td>
+<td>相对位置</td>
+<td>Attention Score（加线性偏置）</td>
+<td><strong>优秀</strong></td>
+<td>否</td>
+<td>BLOOM, MPT</td>
+</tr>
+</table>
+
+<h3>选择指南</h3>
+<div class="section-card">
+<ul>
+<li><strong>NLU 固定长度任务</strong>（分类、NER）→ Learned PE 足够</li>
+<li><strong>长文本生成 / LLM</strong> → <span class="compare-highlight">RoPE + YaRN/NTK</span> 是当前主流</li>
+<li><strong>超长上下文推理</strong>（不想微调）→ ALiBi 值得考虑</li>
+<li><strong>Encoder-Decoder 模型</strong> → T5 Relative Bias 经过验证</li>
+<li><strong>教学/理解基础</strong> → Sinusoidal PE 是必须掌握的基础</li>
+</ul>
+</div>
+
+<div class="interview-box">
+<div class="label">知识要点</div>
+<ul>
+<li>能画出或口述上面的对比表，涵盖作用位置、是否可训练、是否可外推</li>
+<li>当前 LLM 主流方案是 RoPE（LLaMA/Qwen/DeepSeek 等），ALiBi 是备选</li>
+<li>Learned PE 的致命问题是无法外推</li>
+<li>Sinusoidal PE 是面试基础题，RoPE 是进阶题</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="q-a">
+      <div class="ch-head"><div class="num">09</div><div class="t"><h2>Q&amp;A</h2><div class="sub">因为 Self-Attention 的计算对输入顺序是 排列等变 (Permutation…</div></div></div>
+      <details class="qa"><summary>Q1: 为什么 Transformer 需要位置编码？</summary><div class="a"><p>因为 Self-Attention 的计算对输入顺序是<strong>排列等变 (Permutation Equivariant)</strong> 的——打乱输入 token 的顺序，每个位置的注意力分数不变（只是输出也被同样打乱）。这意味着纯 Self-Attention 无法区分"我喜欢你"和"你喜欢我"。而 RNN 通过时间步递归天然编码了位置顺序。Transformer 必须通过位置编码显式注入位置信息，否则会退化为"词袋模型 + 注意力权重"。</p></div></details>
+
+<details class="qa"><summary>Q2: 写出 Sinusoidal 位置编码的公式，并解释为什么选用正弦/余弦？</summary><div class="a"><p>公式：PE(pos, 2i) = sin(pos / 10000^(2i/d))，PE(pos, 2i+1) = cos(pos / 10000^(2i/d))。选用正弦/余弦的核心原因：<strong>相对位置可通过线性变换表示</strong>。具体来说，PE(pos+k) 可以通过一个只依赖于 k 的旋转矩阵 T_k 左乘 PE(pos) 得到，即 PE(pos+k) = T_k · PE(pos)。这意味着模型通过学习注意力权重，就能捕获任意相对距离的位置关系。此外，不同维度使用不同频率（低维高频、高维低频），类似二进制编码，能同时表达细粒度和粗粒度的位置信息。</p></div></details>
+
+<details class="qa"><summary>Q3: Learned PE 和 Sinusoidal PE 各有什么优缺点？</summary><div class="a"><p><strong>Learned PE</strong>：优点是灵活，能适应特定数据分布，在固定长度任务（如 BERT 的 512 长度）上效果好；缺点是<strong>无法外推</strong>到训练未见过的序列长度，且增加 max_len × d_model 个参数。<strong>Sinusoidal PE</strong>：优点是无需训练参数，理论上可泛化到任意长度；缺点是固定模式，无法自适应数据。原始 Transformer 论文实验显示两者效果相当，但在 LLM 时代，外推需求使 Sinusoidal 及其改进（RoPE）更受欢迎。</p></div></details>
+
+<details class="qa"><summary>Q4: 什么是相对位置编码？为什么它比绝对位置编码更好？</summary><div class="a"><p>绝对位置编码给每个位置分配固定编码（如位置 0、1、2 各有对应向量），相对位置编码则关注 token 对之间的<strong>距离 (i−j)</strong>。相对 PE 更好的原因：①自然语言中"主谓间隔 2 个词"比"主语在位置 3"更具语义意义；②天然泛化到不同长度；③在翻译等任务中，同一句型出现在不同位置时，相对关系不变。代表方案包括 Shaw（为 K/V 加相对嵌入）、Transformer-XL（分解为四项）、T5 Bias（加标量偏置 + 对数分桶）。</p></div></details>
+
+<details class="qa"><summary>Q5: 解释 RoPE 的核心原理，为什么它成为 LLM 标配？</summary><div class="a"><p>RoPE 将每对维度 (2i, 2i+1) 视为一个复数/二维平面，对位置 m 处的 Q/K 向量做<strong>角度为 mθᵢ 的旋转</strong>（θᵢ = 1/10000^(2i/d)）。核心性质：旋转后的 Q 和 K 的内积 ⟨R(m)q, R(n)k⟩ = qᵀR(n−m)k，<strong>只依赖于相对位置 n−m</strong>。成为 LLM 标配的原因：①编码绝对位置但内积自然体现相对位置——两全其美；②无额外可训练参数；③远距离内积自然衰减，符合语言学直觉；④只作用于 Q/K，保留 V 的语义纯净性；⑤配合 PI/NTK/YaRN 可优雅扩展上下文长度。LLaMA、Qwen、DeepSeek、Mistral 等主流 LLM 均采用 RoPE。</p></div></details>
+
+<details class="qa"><summary>Q6: RoPE 和 ALiBi 有什么区别？各自适合什么场景？</summary><div class="a"><p><strong>RoPE</strong>：在嵌入空间修改 Q/K 向量（旋转变换），位置信息编码进向量本身。<strong>ALiBi</strong>：不修改任何嵌入，直接在 attention score 上减去与距离成正比的线性偏置 m·|i−j|。差异：①RoPE 改向量，ALiBi 改分数；②RoPE 需要配合 PI/NTK 做长度扩展，ALiBi 天然外推性更好；③RoPE 被更多 LLM 采用（生态更丰富），ALiBi 用于 BLOOM/MPT。场景选择：需要强大社区支持和灵活扩展 → RoPE；追求极简实现和零成本外推 → ALiBi。</p></div></details>
+
+<details class="qa"><summary>Q7: RoPE 的长度外推为什么会失败？PI 和 NTK-Aware Scaling 是如何解决的？</summary><div class="a"><p>RoPE 外推失败的原因：模型在训练长度（如 4096）内见到的旋转角度范围有限，推理到更长序列时出现<strong>未见过的高频旋转角度</strong>，导致注意力分布严重失真（OOD 问题）。<strong>PI（Position Interpolation）</strong>：将超出范围的位置<strong>线性压缩</strong>到训练范围内，即 pos' = pos × (L_train/L_target)。优点是简单，缺点是压缩导致近距离位置分辨率下降。<strong>NTK-Aware Scaling</strong>：不压缩位置，而是修改基频 base = 10000 × α，使高频分量不变（保留近距离精度），低频分量扩展（覆盖远距离）。相比 PI，NTK 甚至可以零样本外推。</p></div></details>
+
+<details class="qa"><summary>Q8: YaRN 是什么？它比 PI 和 NTK 好在哪里？</summary><div class="a"><p>YaRN (Yet another RoPE extensioN) 综合了 PI 和 NTK 的优势，核心创新是<strong>分频段处理</strong>：①低频维度做 PI 插值；②高频维度不修改（保留局部精度）；③中间频段平滑过渡。此外还引入 Attention 温度缩放因子来补偿长序列的注意力稀释。优势：①保留近距离精度（高频不动）；②扩展远距离范围（低频插值）；③只需极少微调步数（约 400 步）即可扩展到 128K+。被 Qwen-2、Mistral 等模型采用。</p></div></details>
+
+<details class="qa"><summary>Q9: T5 的相对位置偏置用了"对数分桶"，为什么？</summary><div class="a"><p>T5 将无限的相对距离映射到有限个桶（如 32 个），使用<strong>对数分桶</strong>策略：近距离（如 |i−j| ≤ 8）每个距离一个桶，远距离按对数尺度合并。原因：①自然语言中<strong>近距离关系（相邻词、短语内部）需要精确区分</strong>，而远距离关系只需粗略感知；②对数分桶用有限参数覆盖大范围距离；③符合语言学直觉——"距离 100 和 101"的区别远小于"距离 1 和 2"的区别；④参数高效：32 个桶 × n_heads 个标量就能覆盖所有距离。</p></div></details>
+
+<details class="qa"><summary>Q10: 如果你要从零设计一个支持 128K 上下文的 LLM，位置编码怎么选？</summary><div class="a"><p>推荐方案：<strong>RoPE + YaRN</strong>。理由：①<strong>RoPE 是主流标配</strong>，社区支持好，工程实践成熟（LLaMA/Qwen/DeepSeek 验证）；②<strong>YaRN 分频段扩展</strong>近距离精度和远距离外推兼得；③先在 4K-8K 长度上预训练（数据获取容易、训练效率高），然后用少量长文本数据 + YaRN 扩展到 128K；④配合 FlashAttention-2 和 GQA 保证计算效率。备选方案：如果不想微调，可考虑 Dynamic NTK 做零样本外推；如果追求极简，ALiBi 也可以，但社区生态不如 RoPE。</p></div></details>
+    </section>
+
+    <footer>
+      <div class="made">TECH NOTES · Transformer · 整理自 AI Knowledge Hub</div>
+    </footer>
+  </main>
+</div>
+
+<script>
+(function(){var bar=document.getElementById('progress');function u(){var h=document.documentElement;bar.style.width=h.scrollTop/(h.scrollHeight-h.clientHeight)*100+'%';}window.addEventListener('scroll',u,{passive:true});u();})();
+(function(){var links=document.querySelectorAll('aside.toc nav a');var secs=Array.from(document.querySelectorAll('section.chapter'));if(!secs.length)return;function u(){var y=window.scrollY+100,cur=secs[0];for(var i=0;i<secs.length;i++){if(secs[i].offsetTop<=y)cur=secs[i];}var id=cur.id;links.forEach(function(a){a.classList.toggle('active',a.getAttribute('href')==='#'+id);});}window.addEventListener('scroll',u,{passive:true});u();})();
+</script>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

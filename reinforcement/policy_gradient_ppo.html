@@ -1,0 +1,648 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>策略梯度与 PPO · 强化学习 — Tech Notes</title>
+<meta name="description" content="从 REINFORCE 到 PPO：策略优化的完整进化路径 | 掌握 Actor-Critic、GAE、TRPO 核心思想与 RLHF 应用">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<link rel="stylesheet" href="../assets/kh-guide.css">
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav">
+
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="reinforcement_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 15 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>R03 · 强化学习</h2>
+    <nav>
+      <ol>
+        <li><a href="#policy-gradient" class="active">策略梯度定理</a></li>
+        <li><a href="#baseline">基线 (Baseline)</a></li>
+        <li><a href="#actor-critic">Actor-Critic</a></li>
+        <li><a href="#a2c-a3c">A2C / A3C</a></li>
+        <li><a href="#gae">GAE (Generalized Advantage Estimation)</a></li>
+        <li><a href="#trpo">TRPO (Trust Region Policy Optimization)</a></li>
+        <li><a href="#ppo">PPO (Proximal Policy Optimization)</a></li>
+        <li><a href="#rlhf">PPO 在 RLHF 中的应用</a></li>
+        <li><a href="#comparison">Value-based vs Policy-based vs Actor-Critic 对比</a></li>
+        <li><a href="#qa">Q&amp;A</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+    <header class="hero">
+      <div class="badge">R03 · 强化学习</div>
+      <h1>策略梯度与 PPO</h1>
+      <p class="sub">从 REINFORCE 到 PPO：策略优化的完整进化路径 | 掌握 Actor-Critic、GAE、TRPO 核心思想与 RLHF 应用</p>
+      <div class="meta-row">
+        <span class="pill cyan">强化学习</span>
+        <span class="pill green">阅读 ~15 min</span>
+        <span class="pill amber">10 章</span>
+      </div>
+    </header>
+
+    <section class="chapter" id="policy-gradient">
+      <div class="ch-head"><div class="num">01</div><div class="t"><h2>策略梯度定理</h2><div class="sub">与 Value-based 方法（如 DQN）不同， 策略梯度方法 直接参数化策略 π θ…</div></div></div>
+      <div class="card">
+<h3>直接优化策略参数</h3>
+<p>与 Value-based 方法（如 DQN）不同，<strong>策略梯度方法</strong>直接参数化策略 π<sub>θ</sub>(a|s)，通过梯度上升优化累积回报目标函数 J(θ)。</p>
+<ul>
+<li><strong>策略 π<sub>θ</sub>(a|s)</strong>：一个以 θ 为参数的神经网络，输入状态 s，输出动作概率分布</li>
+<li><strong>目标函数</strong>：J(θ) = E<sub>τ~π<sub>θ</sub></sub>[R(τ)]，即在策略 π<sub>θ</sub> 下的期望累积回报</li>
+<li><strong>优化方式</strong>：梯度上升 θ ← θ + α∇<sub>θ</sub>J(θ)</li>
+</ul>
+
+<h3>策略梯度推导</h3>
+<p>策略梯度定理的核心公式：</p>
+<div class="formula">∇<sub>θ</sub>J(θ) = E<sub>τ~π<sub>θ</sub></sub>[ Σ<sub>t</sub> ∇<sub>θ</sub> log π<sub>θ</sub>(a<sub>t</sub>|s<sub>t</sub>) · R(τ) ]</div>
+<p>推导关键步骤：</p>
+<ol>
+<li>J(θ) = Σ<sub>τ</sub> P(τ;θ) · R(τ)，对 θ 求导</li>
+<li>利用 <strong>log-derivative trick</strong>：∇P(τ;θ) = P(τ;θ) · ∇log P(τ;θ)</li>
+<li>轨迹概率 P(τ;θ) = p(s<sub>0</sub>) Π<sub>t</sub> π<sub>θ</sub>(a<sub>t</sub>|s<sub>t</sub>) · p(s<sub>t+1</sub>|s<sub>t</sub>,a<sub>t</sub>)，取 log 后环境动态部分与 θ 无关，消掉</li>
+<li>最终只需对 <code>log π<sub>θ</sub>(a<sub>t</sub>|s<sub>t</sub>)</code> 求梯度，<strong>不需要知道环境模型</strong>（model-free）</li>
+</ol>
+
+<h3>REINFORCE 算法</h3>
+<p>最基本的策略梯度算法，由 Williams (1992) 提出：</p>
+<pre><code>for each episode:
+    采样轨迹 τ = (s₀, a₀, r₀, s₁, a₁, r₁, ...)
+    计算累积回报 R(τ) = Σₜ γᵗ rₜ
+    for each step t:
+        θ ← θ + α · ∇log π_θ(aₜ|sₜ) · Gₜ
+        其中 Gₜ = Σₖ₌ₜ γᵏ⁻ᵗ rₖ  (从 t 开始的未来回报)</code></pre>
+<p><strong>直觉理解</strong>：如果一个动作带来了高回报（G<sub>t</sub> 大），就增大该动作的概率；反之减小。这就是 "好的行为被强化" 的核心思想。</p>
+
+<h3>REINFORCE 的局限</h3>
+<ul>
+<li><strong>高方差</strong>：使用完整轨迹的蒙特卡洛估计，方差很大</li>
+<li><strong>采样效率低</strong>：每次更新需要完整 episode，on-policy 方法不能复用旧数据</li>
+<li><strong>收敛慢</strong>：高方差导致梯度估计不稳定，学习率难调</li>
+</ul>
+</div>
+
+<div class="interview-box">
+<ul>
+<li><strong>核心公式</strong>：∇J(θ) = E[∇log π(a|s) · R]，log-derivative trick 是推导关键</li>
+<li><strong>无需环境模型</strong>：策略梯度是 model-free 方法，只需采样轨迹</li>
+<li><strong>REINFORCE 问题</strong>：蒙特卡洛采样带来高方差，这是后续所有改进的出发点</li>
+<li><strong>与 Value-based 对比</strong>：策略梯度能处理连续动作空间，能学习随机策略</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="baseline">
+      <div class="ch-head"><div class="num">02</div><div class="t"><h2>基线 (Baseline)</h2><div class="sub">REINFORCE 中梯度估计为 ∇log π(a|s) · G t ，当 G t 总是正数…</div></div></div>
+      <div class="card">
+<h3>方差问题的根源</h3>
+<p>REINFORCE 中梯度估计为 ∇log π(a|s) · G<sub>t</sub>，当 G<sub>t</sub> 总是正数时（比如所有奖励都为正），<strong>所有动作的概率都会被提高</strong>，只是好动作提高得多、差动作提高得少。这导致有效的梯度信号被淹没在高方差的噪声中。</p>
+
+<h3>引入基线减少方差</h3>
+<p>将梯度中的 G<sub>t</sub> 替换为 G<sub>t</sub> - b(s<sub>t</sub>)：</p>
+<div class="formula">∇<sub>θ</sub>J(θ) = E[ Σ<sub>t</sub> ∇<sub>θ</sub> log π<sub>θ</sub>(a<sub>t</sub>|s<sub>t</sub>) · (G<sub>t</sub> - b(s<sub>t</sub>)) ]</div>
+<p>关键性质：<strong>任何只依赖状态 s 的基线 b(s) 都不会引入偏差</strong>（bias），因为：</p>
+<div class="formula">E<sub>a~π</sub>[ ∇log π(a|s) · b(s) ] = b(s) · E<sub>a~π</sub>[ ∇log π(a|s) ] = b(s) · ∇<sub>θ</sub>Σ<sub>a</sub>π(a|s) = b(s) · ∇<sub>θ</sub>1 = 0</div>
+
+<h3>State Value 作为基线</h3>
+<p>最常用的基线是状态值函数 V(s)：</p>
+<ul>
+<li><strong>b(s) = V<sup>π</sup>(s)</strong>：当前状态下的期望回报</li>
+<li>G<sub>t</sub> - V(s<sub>t</sub>) 衡量的是 "这个动作比平均水平好多少"</li>
+<li>正值 → 动作优于平均 → 增大概率；负值 → 动作劣于平均 → 减小概率</li>
+<li>这本质上就是 <strong>Advantage Function</strong> 的雏形：A(s,a) ≈ G<sub>t</sub> - V(s<sub>t</sub>)</li>
+</ul>
+
+<h3>方差减少的直觉</h3>
+<p>假设某状态下所有回报都在 [90, 110] 范围。不用基线时梯度都是正的；用 V(s) ≈ 100 作为基线后，梯度变成 [-10, +10]，<strong>信号更清晰，方差大幅降低</strong>。</p>
+</div>
+
+<div class="interview-box">
+<ul>
+<li><strong>基线不引入偏差的证明</strong>：E[∇log π · b(s)] = 0，因为 Σπ(a|s) = 1 的梯度为零</li>
+<li><strong>最优基线</strong>：V(s) 是最常用的基线，但理论最优基线需要加权（实践中影响不大）</li>
+<li><strong>方差来源</strong>：主要来自蒙特卡洛回报估计的随机性和不同轨迹间回报的差异</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="actor-critic">
+      <div class="ch-head"><div class="num">03</div><div class="t"><h2>Actor-Critic</h2><div class="sub">Actor-Critic 是策略梯度的重要改进，使用两个网络协同训练：</div></div></div>
+      <div class="card">
+<h3>架构设计</h3>
+<p>Actor-Critic 是策略梯度的重要改进，使用两个网络协同训练：</p>
+<ul>
+<li><strong>Actor（策略网络）</strong>：π<sub>θ</sub>(a|s) — 负责选择动作</li>
+<li><strong>Critic（值网络）</strong>：V<sub>w</sub>(s) 或 Q<sub>w</sub>(s,a) — 负责评估动作的好坏</li>
+</ul>
+<p>Actor 根据 Critic 的评估来更新策略，Critic 根据实际回报来更新自己的估计。</p>
+
+<h3>Advantage Function</h3>
+<div class="formula">A(s, a) = Q(s, a) - V(s)</div>
+<p><strong>Advantage</strong> 表示动作 a 在状态 s 下相对于平均水平的优势：</p>
+<ul>
+<li>A &gt; 0：这个动作比平均好 → 增大概率</li>
+<li>A &lt; 0：这个动作比平均差 → 减小概率</li>
+<li>A = 0：这个动作恰好是平均水平</li>
+</ul>
+
+<h3>实践中的 Advantage 估计</h3>
+<p>直接估计 Q(s,a) 和 V(s) 两个网络成本高，通常用 <strong>TD 误差</strong>作为 Advantage 的近似：</p>
+<div class="formula">A(s<sub>t</sub>, a<sub>t</sub>) ≈ δ<sub>t</sub> = r<sub>t</sub> + γV(s<sub>t+1</sub>) - V(s<sub>t</sub>)</div>
+<p>这样只需维护一个 V 网络作为 Critic。TD 误差是 Advantage 的<strong>无偏估计</strong>，但方差低于蒙特卡洛方法。</p>
+
+<h3>Actor-Critic 训练流程</h3>
+<pre><code>for each step:
+    根据 π_θ(a|s) 选择动作 a
+    执行 a，观察 r, s'
+    
+    # Critic 更新（TD 学习）
+    δ = r + γ V_w(s') - V_w(s)
+    w ← w + α_c · δ · ∇_w V_w(s)
+    
+    # Actor 更新（策略梯度）
+    θ ← θ + α_a · δ · ∇_θ log π_θ(a|s)</code></pre>
+
+<h3>减少方差同时保持无偏</h3>
+<p>相比 REINFORCE 使用完整轨迹回报（高方差），Actor-Critic 使用 TD 误差（低方差），同时利用 Critic 的引导（bootstrapping）来减少对完整轨迹的依赖。代价是引入了 Critic 近似带来的 <strong>少量偏差</strong>（biased but lower variance），整体训练更加稳定。</p>
+</div>
+
+<div class="interview-box">
+<ul>
+<li><strong>双网络协同</strong>：Actor 产生策略，Critic 评估好坏，两者共同训练</li>
+<li><strong>Advantage 含义</strong>：A(s,a) = Q(s,a) - V(s)，衡量动作相对于平均水平的优势</li>
+<li><strong>TD 误差近似</strong>：δ = r + γV(s') - V(s) 是 Advantage 的低方差无偏估计</li>
+<li><strong>偏差-方差权衡</strong>：MC（高方差无偏） → TD（低方差有少量偏差）</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="a2c-a3c">
+      <div class="ch-head"><div class="num">04</div><div class="t"><h2>A2C / A3C</h2><div class="sub">由 DeepMind 于 2016 年提出（Mnih et al</div></div></div>
+      <div class="card">
+<h3>A3C — Asynchronous Advantage Actor-Critic</h3>
+<p>由 DeepMind 于 2016 年提出（Mnih et al.），核心思想是<strong>多线程异步并行采样</strong>：</p>
+<ul>
+<li>多个 worker 各自拥有环境副本，独立与环境交互</li>
+<li>每个 worker 计算本地梯度后<strong>异步</strong>更新全局参数</li>
+<li>不需要 Experience Replay Buffer（不同 worker 本身就提供了去相关性）</li>
+</ul>
+<div class="flow">
+  <div class="flow-title">A3C 异步并行 · 多 Worker 各自采样、异步回传梯度</div>
+  <div class="flow-node">
+    <div class="nsub" style="margin-bottom:8px">每个 Worker 持有独立环境副本，采样后本地计算梯度：</div>
+    <div class="flow-chips">
+      <div class="flow-chip"><b>Worker 1</b>环境副本1</div>
+      <div class="flow-chip"><b>Worker 2</b>环境副本2</div>
+      <div class="flow-chip"><b>Worker 3</b>环境副本3</div>
+    </div>
+  </div>
+  <div class="flow-arrow" data-label="异步回传梯度"></div>
+  <div class="flow-node accent"><div class="nlabel">全局网络 (θ_global, w_global)</div><div class="nsub">各 Worker 数据天然去相关 → 无需 Experience Replay</div></div>
+</div>
+
+<h3>A3C 的优势</h3>
+<ul>
+<li><strong>高效利用多核 CPU</strong>：不依赖 GPU，多线程并行</li>
+<li><strong>自然去相关性</strong>：不同 worker 采集的数据天然不相关，替代 Replay Buffer</li>
+<li><strong>更好的探索</strong>：不同 worker 在不同状态空间区域探索</li>
+</ul>
+
+<h3>A2C — Advantage Actor-Critic（同步版本）</h3>
+<p>A2C 是 A3C 的<strong>同步</strong>简化版：</p>
+<ul>
+<li>所有 worker 同步采集一批数据</li>
+<li>汇总梯度后<strong>一次性更新</strong>全局参数</li>
+<li>实现更简单，调试更方便</li>
+<li>在 GPU 环境下通常更高效（batch 操作可以充分利用 GPU 并行）</li>
+</ul>
+
+<h3>A2C vs A3C</h3>
+<table>
+<tr><th>维度</th><th>A3C（异步）</th><th>A2C（同步）</th></tr>
+<tr><td>更新方式</td><td>各 worker 异步更新全局参数</td><td>所有 worker 同步后统一更新</td></tr>
+<tr><td>梯度一致性</td><td>可能使用过时参数计算梯度</td><td>梯度基于最新参数</td></tr>
+<tr><td>硬件适配</td><td>多核 CPU 友好</td><td>GPU 批处理友好</td></tr>
+<tr><td>实现复杂度</td><td>需要线程同步机制</td><td>更简单直接</td></tr>
+<tr><td>实际表现</td><td colspan="2">A2C 通常与 A3C 持平甚至更好（更稳定）</td></tr>
+</table>
+</div>
+
+<div class="interview-box">
+<ul>
+<li><strong>A3C 核心创新</strong>：异步多线程替代 Replay Buffer，自然实现数据去相关性</li>
+<li><strong>A2C 更主流</strong>：同步版本更简单、更稳定，GPU 上效率更高</li>
+<li><strong>趋势</strong>：现代 RL 框架（如 PPO 的实现）多采用同步并行采样</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="gae">
+      <div class="ch-head"><div class="num">05</div><div class="t"><h2>GAE (Generalized Advantage Estimation)</h2><div class="sub">GAE 由 Schulman et al</div></div></div>
+      <div class="card">
+<h3>TD(λ) 思想在 Advantage 上的应用</h3>
+<p>GAE 由 Schulman et al. (2016) 提出，本质是把 <strong>TD(λ)</strong> 的思想应用到 Advantage 估计上，通过指数加权平均不同步数的 TD 误差来平衡偏差与方差。</p>
+
+<h3>不同步数的 Advantage 估计</h3>
+<ul>
+<li><strong>1-step TD</strong>：Â<sup>(1)</sup> = δ<sub>t</sub> = r<sub>t</sub> + γV(s<sub>t+1</sub>) - V(s<sub>t</sub>) — <span class="highlight">低方差、高偏差</span></li>
+<li><strong>2-step TD</strong>：Â<sup>(2)</sup> = δ<sub>t</sub> + γδ<sub>t+1</sub></li>
+<li><strong>n-step TD</strong>：Â<sup>(n)</sup> = Σ<sub>k=0</sub><sup>n-1</sup> γ<sup>k</sup>δ<sub>t+k</sub></li>
+<li><strong>MC (∞-step)</strong>：Â<sup>(∞)</sup> = G<sub>t</sub> - V(s<sub>t</sub>) — <span class="highlight">高方差、无偏差</span></li>
+</ul>
+
+<h3>GAE 公式推导</h3>
+<p>GAE 对所有步数的 TD 估计做<strong>指数加权平均</strong>：</p>
+<div class="formula">Â<sup>GAE(γ,λ)</sup><sub>t</sub> = Σ<sub>k=0</sub><sup>∞</sup> (γλ)<sup>k</sup> δ<sub>t+k</sub></div>
+<p>其中 δ<sub>t</sub> = r<sub>t</sub> + γV(s<sub>t+1</sub>) - V(s<sub>t</sub>) 是单步 TD 误差。</p>
+
+<h3>λ 参数控制偏差-方差权衡</h3>
+<table>
+<tr><th>λ 值</th><th>行为</th><th>特点</th></tr>
+<tr><td>λ = 0</td><td>Â = δ<sub>t</sub>（单步 TD）</td><td>低方差、高偏差，依赖 V 的准确度</td></tr>
+<tr><td>λ = 1</td><td>Â = G<sub>t</sub> - V(s<sub>t</sub>)（MC）</td><td>高方差、无偏差，等价于蒙特卡洛</td></tr>
+<tr><td>0 &lt; λ &lt; 1</td><td>加权平均</td><td>偏差-方差的灵活权衡</td></tr>
+</table>
+<p><strong>实践中</strong>：λ 通常取 0.95–0.99，在偏差与方差之间取得良好平衡。PPO 默认使用 GAE(λ=0.95)。</p>
+
+<h3>高效计算（递推公式）</h3>
+<p>GAE 可以从后向前递推，不需要显式求无穷和：</p>
+<div class="formula">Â<sub>t</sub> = δ<sub>t</sub> + γλ · Â<sub>t+1</sub></div>
+<p>从轨迹末尾开始，Â<sub>T</sub> = 0，向前逐步计算即可。</p>
+</div>
+
+<div class="interview-box">
+<ul>
+<li><strong>核心思想</strong>：用 λ 参数在 TD（低方差高偏差）和 MC（高方差无偏差）之间平滑插值</li>
+<li><strong>公式</strong>：Â<sub>t</sub> = Σ(γλ)<sup>k</sup>δ<sub>t+k</sub>，递推形式 Â<sub>t</sub> = δ<sub>t</sub> + γλÂ<sub>t+1</sub></li>
+<li><strong>λ 选择</strong>：实践中 0.95–0.99，PPO 默认 λ=0.95, γ=0.99</li>
+<li><strong>重要性</strong>：GAE 是 PPO/TRPO 的标配组件，几乎所有现代策略梯度方法都使用它</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="trpo">
+      <div class="ch-head"><div class="num">06</div><div class="t"><h2>TRPO (Trust Region Policy Optimization)</h2><div class="sub">策略梯度方法的一个根本问题： 步长太大会导致策略崩溃</div></div></div>
+      <div class="card">
+<h3>策略更新的问题</h3>
+<p>策略梯度方法的一个根本问题：<strong>步长太大会导致策略崩溃</strong>。与监督学习不同，RL 中数据分布依赖于策略本身——策略变化 → 数据分布变化 → 可能进入糟糕的区域 → 无法恢复。</p>
+
+<h3>信任域约束</h3>
+<p>TRPO（Schulman et al., 2015）的核心思想：每次策略更新<strong>限制在一个信任域内</strong>，确保新策略不会偏离旧策略太远。</p>
+<div class="formula">max<sub>θ</sub> E<sub>s,a~π<sub>old</sub></sub>[ π<sub>θ</sub>(a|s) / π<sub>old</sub>(a|s) · Â(s,a) ]<br>s.t. E<sub>s</sub>[ D<sub>KL</sub>(π<sub>old</sub>(·|s) ‖ π<sub>θ</sub>(·|s)) ] ≤ δ</div>
+<p>其中 r(θ) = π<sub>θ</sub>(a|s) / π<sub>old</sub>(a|s) 是<strong>重要性采样比</strong>（importance sampling ratio）。</p>
+
+<h3>KL 散度约束</h3>
+<p>KL 散度 D<sub>KL</sub>(π<sub>old</sub> ‖ π<sub>θ</sub>) 衡量新旧策略分布的差异：</p>
+<ul>
+<li>KL = 0：新旧策略完全相同</li>
+<li>KL 越大：策略变化越大，越可能导致性能下降</li>
+<li>约束 KL ≤ δ（通常 δ = 0.01）确保更新幅度受控</li>
+</ul>
+
+<h3>为什么能保证单调改进</h3>
+<p>Kakade & Langford (2002) 证明了一个关键定理：</p>
+<div class="formula">J(π<sub>new</sub>) ≥ L<sub>π<sub>old</sub></sub>(π<sub>new</sub>) - C · D<sub>KL</sub><sup>max</sup>(π<sub>old</sub> ‖ π<sub>new</sub>)</div>
+<p>其中 L 是旧策略下的替代目标函数，C 是常数。只要我们在 KL 约束下最大化 L，就能<strong>保证性能单调不下降</strong>（理论上）。TRPO 用这个下界来约束更新。</p>
+
+<h3>计算复杂度问题</h3>
+<p>TRPO 需要求解<strong>带约束的优化问题</strong>：</p>
+<ul>
+<li>使用 <strong>共轭梯度法</strong> 近似求解 Fisher Information Matrix 的逆（避免显式计算二阶导数）</li>
+<li>使用 <strong>线搜索</strong> 确保满足 KL 约束</li>
+<li>计算复杂度远高于普通 SGD</li>
+<li>实现复杂，调试困难</li>
+</ul>
+</div>
+
+<div class="interview-box">
+<ul>
+<li><strong>核心动机</strong>：限制策略更新步长，防止性能崩溃（策略改变 → 数据分布改变）</li>
+<li><strong>KL 约束</strong>：用 KL 散度约束新旧策略的距离，而非参数距离</li>
+<li><strong>单调改进</strong>：在 KL 约束下最大化替代目标函数，理论保证性能不下降</li>
+<li><strong>局限</strong>：需要二阶优化（Fisher 矩阵），计算成本高，实现复杂 → 催生了 PPO</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="ppo">
+      <div class="ch-head"><div class="num">07</div><div class="t"><h2>PPO (Proximal Policy Optimization)</h2><div class="sub">PPO（Schulman et al</div></div></div>
+      <div class="card">
+<h3>PPO 的设计目标</h3>
+<p>PPO（Schulman et al., 2017）的目标：获得 TRPO 的稳定性，同时只使用<strong>一阶优化</strong>（普通 SGD/Adam），实现简单、调参容易。</p>
+
+<h3>Clipped Surrogate Objective</h3>
+<p>PPO 的核心创新——<strong>截断的替代目标函数</strong>：</p>
+<div class="formula">L<sup>CLIP</sup>(θ) = E[ min( r(θ)·Â, clip(r(θ), 1-ε, 1+ε)·Â ) ]</div>
+<p>其中 r(θ) = π<sub>θ</sub>(a|s) / π<sub>old</sub>(a|s) 是新旧策略概率比，ε 通常取 0.1 或 0.2。</p>
+
+<h3>Clip 机制的直觉</h3>
+<table>
+<tr><th>情况</th><th>Â &gt; 0（好动作）</th><th>Â &lt; 0（差动作）</th></tr>
+<tr><td>r(θ) 太大（&gt;1+ε）</td><td>clip 住，<strong>阻止过度增大概率</strong></td><td>不 clip（自然减小概率是好的）</td></tr>
+<tr><td>r(θ) 太小（&lt;1-ε）</td><td>不 clip（自然增大概率是好的）</td><td>clip 住，<strong>阻止过度减小概率</strong></td></tr>
+<tr><td>r(θ) ∈ [1-ε, 1+ε]</td><td colspan="2">正常更新，不受限制</td></tr>
+</table>
+<p><strong>核心思想</strong>：取 min 操作确保我们只在安全范围内优化。当策略变化超出 [1-ε, 1+ε] 时，梯度被截断为零，自动停止更新。</p>
+
+<h3>为什么 PPO 比 TRPO 实用</h3>
+<table>
+<tr><th>维度</th><th>TRPO</th><th>PPO</th></tr>
+<tr><td>优化方式</td><td>带约束优化（二阶）</td><td>无约束优化（一阶 SGD/Adam）</td></tr>
+<tr><td>信任域实现</td><td>显式 KL 约束 + 线搜索</td><td>clip 隐式实现</td></tr>
+<tr><td>实现复杂度</td><td>高（共轭梯度、Fisher 矩阵）</td><td>低（几行代码）</td></tr>
+<tr><td>可扩展性</td><td>大模型上代价高</td><td>与常规 SGD 一样可扩展</td></tr>
+<tr><td>实际表现</td><td colspan="2">PPO 通常与 TRPO 持平或更好</td></tr>
+</table>
+
+<h3>PPO 的两个变体</h3>
+<p><strong>PPO-Clip（主流）</strong>：使用截断目标函数 L<sup>CLIP</sup>，简单高效，几乎所有 PPO 实现的默认选择。</p>
+<p><strong>PPO-Penalty</strong>：将 KL 散度作为惩罚项加入目标函数，自适应调节惩罚系数 β：</p>
+<div class="formula">L<sup>PENALTY</sup>(θ) = E[ r(θ)·Â - β · D<sub>KL</sub>(π<sub>old</sub> ‖ π<sub>θ</sub>) ]</div>
+<ul>
+<li>如果 KL 过大 → 增大 β（惩罚更重）</li>
+<li>如果 KL 过小 → 减小 β（允许更大更新）</li>
+</ul>
+<p>实践中 PPO-Clip 更常用，因为它不需要额外调节 β，且效果稳定。</p>
+
+<h3>PPO 完整目标函数</h3>
+<div class="formula">L(θ) = L<sup>CLIP</sup>(θ) - c₁ · L<sup>VF</sup>(θ) + c₂ · S[π<sub>θ</sub>]</div>
+<p>三部分组成：策略损失 + 值函数损失 + 熵正则化（鼓励探索）。</p>
+
+<h3>PPO 训练伪代码</h3>
+<pre><code>for iteration = 1, 2, ...:
+    # 采样阶段
+    用 π_old 在 N 个并行环境中采集 T 步数据
+    计算 GAE advantage Â_t 和回报 R_t
+    
+    # 优化阶段（多个 epoch 复用数据）
+    for epoch = 1, ..., K:  # 通常 K=3~10
+        for each minibatch:
+            r(θ) = π_θ(a|s) / π_old(a|s)
+            L_clip = min(r·Â, clip(r, 1-ε, 1+ε)·Â)
+            L_vf = (V_θ(s) - R_t)²
+            L = -L_clip + c₁·L_vf - c₂·entropy
+            θ ← θ - α·∇L
+    
+    π_old ← π_θ</code></pre>
+</div>
+
+<div class="interview-box">
+<ul>
+<li><strong>核心公式</strong>：L<sup>CLIP</sup> = E[min(r·Â, clip(r, 1-ε, 1+ε)·Â)]，用 clip 替代 KL 约束</li>
+<li><strong>ε 的作用</strong>：控制策略更新幅度，通常 0.1~0.2</li>
+<li><strong>为什么取 min</strong>：悲观下界 — 在好动作上不过度乐观，在差动作上不过度悲观</li>
+<li><strong>多 epoch 训练</strong>：PPO 可以在同一批数据上多次更新（clip 防止策略偏离过远）</li>
+<li><strong>三部分损失</strong>：策略损失 + 值函数损失 + 熵正则</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="rlhf">
+      <div class="ch-head"><div class="num">08</div><div class="t"><h2>PPO 在 RLHF 中的应用</h2><div class="sub">Reinforcement Learning from Human Feedback（RLH…</div></div></div>
+      <div class="card">
+<h3>RLHF 的整体流程</h3>
+<p>Reinforcement Learning from Human Feedback（RLHF）使用 PPO 将 LLM 与人类偏好对齐，包含三个阶段：</p>
+<ol>
+<li><strong>SFT（Supervised Fine-Tuning）</strong>：在高质量标注数据上微调预训练模型</li>
+<li><strong>Reward Model 训练</strong>：用人类偏好数据训练一个打分模型</li>
+<li><strong>PPO 强化学习</strong>：用 Reward Model 的反馈来优化 SFT 模型</li>
+</ol>
+
+<h3>PPO 在 RLHF 中的角色对应</h3>
+<table>
+<tr><th>PPO 组件</th><th>RLHF 对应</th></tr>
+<tr><td>环境（Environment）</td><td>prompt 输入 + 用户交互</td></tr>
+<tr><td>策略（Policy / Actor）</td><td>待优化的 LLM π<sub>θ</sub></td></tr>
+<tr><td>动作（Action）</td><td>每一步生成的 token</td></tr>
+<tr><td>状态（State）</td><td>已生成的 token 序列（prompt + 已生成部分）</td></tr>
+<tr><td>奖励（Reward）</td><td>Reward Model 的打分</td></tr>
+<tr><td>Critic</td><td>值函数网络 V(s)，估计当前状态的期望回报</td></tr>
+</table>
+
+<h3>Reward Model 作为 Critic</h3>
+<p>Reward Model 本质上起到 "环境奖励" 的作用：</p>
+<ul>
+<li>输入：prompt + 模型生成的完整回复</li>
+<li>输出：一个标量分数（越高表示越符合人类偏好）</li>
+<li>这个分数作为 PPO 的奖励信号，指导策略更新</li>
+</ul>
+
+<h3>KL 惩罚防止偏离</h3>
+<p>RLHF 中 PPO 的目标函数包含一个关键的 <strong>KL 惩罚项</strong>：</p>
+<div class="formula">R<sub>total</sub>(x, y) = R<sub>RM</sub>(x, y) - β · D<sub>KL</sub>( π<sub>θ</sub>(·|x) ‖ π<sub>ref</sub>(·|x) )</div>
+<p>其中 π<sub>ref</sub> 是 SFT 模型（参考策略），作用：</p>
+<ul>
+<li><strong>防止 Reward Hacking</strong>：模型可能找到 Reward Model 的漏洞，生成得分高但质量差的回复</li>
+<li><strong>保持语言能力</strong>：确保模型不会为了高分而丢失基本的语言生成能力</li>
+<li><strong>控制偏离程度</strong>：β 控制 KL 惩罚的强度，通常需要仔细调节</li>
+</ul>
+
+<h3>RLHF + PPO 的挑战</h3>
+<ul>
+<li><strong>训练不稳定</strong>：同时训练 4 个模型（Actor、Critic、Reference、Reward），内存和计算开销大</li>
+<li><strong>Reward Model 质量</strong>：RM 的偏差会被 PPO 放大</li>
+<li><strong>超参数敏感</strong>：KL 系数 β、clip ε、学习率等需要精细调节</li>
+<li><strong>替代方案</strong>：DPO（Direct Preference Optimization）绕过 RM 和 PPO，直接从偏好数据优化</li>
+</ul>
+</div>
+
+<div class="interview-box">
+<ul>
+<li><strong>三阶段流程</strong>：SFT → Reward Model → PPO 对齐</li>
+<li><strong>KL 惩罚</strong>：防止模型偏离参考策略太远（Reward Hacking + 保持语言能力）</li>
+<li><strong>四模型系统</strong>：Actor + Critic + Reference + Reward Model，训练成本高</li>
+<li><strong>DPO 替代</strong>：跳过 RM 和 PPO，将 RLHF 转化为分类问题，更简单但可能不如 PPO 灵活</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="comparison">
+      <div class="ch-head"><div class="num">09</div><div class="t"><h2>Value-based vs Policy-based vs Actor-Critic 对比</h2></div></div>
+      <div class="card">
+<table>
+<tr><th>维度</th><th>Value-based</th><th>Policy-based</th><th>Actor-Critic</th></tr>
+<tr><td><strong>代表算法</strong></td><td>DQN, Double DQN, Dueling DQN</td><td>REINFORCE</td><td>A2C/A3C, TRPO, PPO</td></tr>
+<tr><td><strong>核心思想</strong></td><td>学习 Q(s,a)，贪心选动作</td><td>直接学习策略 π(a|s)</td><td>同时学习策略和值函数</td></tr>
+<tr><td><strong>动作空间</strong></td><td>仅离散（需枚举所有动作）</td><td>离散 + 连续</td><td>离散 + 连续</td></tr>
+<tr><td><strong>策略类型</strong></td><td>确定性（ε-greedy 探索）</td><td>随机策略</td><td>随机策略</td></tr>
+<tr><td><strong>方差</strong></td><td>低（TD 学习）</td><td>高（MC 采样）</td><td>中等（TD + 基线）</td></tr>
+<tr><td><strong>偏差</strong></td><td>有（函数逼近 + 自举）</td><td>无（无偏梯度估计）</td><td>较小（Critic 引入少量偏差）</td></tr>
+<tr><td><strong>收敛性</strong></td><td>可能不收敛（函数逼近下）</td><td>收敛到局部最优</td><td>收敛到局部最优</td></tr>
+<tr><td><strong>采样效率</strong></td><td>较高（off-policy，可用 replay）</td><td>低（on-policy）</td><td>中等（PPO 可多 epoch）</td></tr>
+<tr><td><strong>适用场景</strong></td><td>离散动作的游戏（Atari）</td><td>简单的连续控制</td><td>复杂连续控制、RLHF、机器人</td></tr>
+</table>
+
+<h3>选择建议</h3>
+<ul>
+<li><strong>离散动作、需要高采样效率</strong> → Value-based（DQN 系列）</li>
+<li><strong>连续动作空间</strong> → Actor-Critic（PPO、SAC）</li>
+<li><strong>需要理论保证和稳定性</strong> → PPO（一阶优化、简单稳定）</li>
+<li><strong>LLM 对齐</strong> → PPO + KL 惩罚（RLHF 标准方案）</li>
+</ul>
+</div>
+
+<div class="interview-box">
+<ul>
+<li><strong>三类方法本质区别</strong>：学什么 — V/Q 函数 vs 策略 vs 两者都学</li>
+<li><strong>Actor-Critic 是主流</strong>：结合了两者优势，PPO 是当前最广泛使用的算法</li>
+<li><strong>动作空间决定选择</strong>：离散 → DQN 可以，连续 → 必须 Policy-based 或 Actor-Critic</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="qa">
+      <div class="ch-head"><div class="num">10</div><div class="t"><h2>Q&amp;A</h2><div class="sub">策略梯度定理： ∇J(θ) = E[Σ t ∇log π θ (a t |s t ) · G…</div></div></div>
+      <details class="qa">
+<summary>Q1：策略梯度定理的核心公式是什么？为什么不需要知道环境模型？</summary>
+<div class="a">
+<p>策略梯度定理：<strong>∇J(θ) = E[Σ<sub>t</sub> ∇log π<sub>θ</sub>(a<sub>t</sub>|s<sub>t</sub>) · G<sub>t</sub>]</strong>。</p>
+<p>不需要环境模型是因为在对轨迹概率取 log 并求导时，环境动态 p(s'|s,a) 的部分与参数 θ 无关，求导后自然消失。我们只需对策略 π<sub>θ</sub>(a|s) 求导，而这完全由我们的神经网络定义。这就是为什么策略梯度是 <strong>model-free</strong> 方法 — 只需要采样轨迹，不需要知道环境的状态转移函数。</p>
+</div>
+</details>
+
+<details class="qa">
+<summary>Q2：为什么 Baseline 不会引入偏差？最常用的 Baseline 是什么？</summary>
+<div class="a">
+<p>数学证明：E<sub>a~π</sub>[∇log π(a|s) · b(s)] = b(s) · ∇Σ<sub>a</sub>π(a|s) = b(s) · ∇1 = <strong>0</strong>。</p>
+<p>关键是 b(s) <strong>只依赖状态不依赖动作</strong>，可以提到期望外面。而 Σπ(a|s)=1 是归一化条件，对 θ 求导恒为零。因此任何只依赖 s 的基线都不改变梯度期望，只改变方差。</p>
+<p>最常用的基线是<strong>状态值函数 V(s)</strong>，因为它是 G<sub>t</sub> 的条件期望 E[G<sub>t</sub>|s<sub>t</sub>]，使得 G<sub>t</sub> - V(s<sub>t</sub>) 的均值接近零，方差最小化。</p>
+</div>
+</details>
+
+<details class="qa">
+<summary>Q3：Actor-Critic 中 Actor 和 Critic 分别做什么？为什么要分开？</summary>
+<div class="a">
+<p><strong>Actor</strong>（策略网络 π<sub>θ</sub>）：输入状态 s，输出动作概率分布，负责 "选择动作"。</p>
+<p><strong>Critic</strong>（值网络 V<sub>w</sub>）：输入状态 s，输出该状态的价值估计，负责 "评估好坏"。</p>
+<p>分开的原因：如果只有 Actor（REINFORCE），需要用蒙特卡洛采样来估计回报，方差很高。Critic 提供了一个低方差的回报估计（通过 TD 学习），作为基线或 Advantage 的一部分来指导 Actor 更新。这样 <strong>Actor 决策更稳定</strong>，训练效率大幅提升。</p>
+<p>实践中 Actor 和 Critic 可以共享底层网络（共享特征提取），只在最后一层分叉。</p>
+</div>
+</details>
+
+<details class="qa">
+<summary>Q4：GAE 的 λ 参数如何影响偏差和方差？实践中怎么选？</summary>
+<div class="a">
+<p>GAE 通过 λ 在 TD（低方差高偏差）和 MC（高方差无偏差）之间平滑插值：</p>
+<ul>
+<li><strong>λ → 0</strong>：Advantage 退化为单步 TD 误差 δ<sub>t</sub>，方差低但高度依赖 V 的准确性（偏差大）</li>
+<li><strong>λ → 1</strong>：Advantage 退化为 MC 估计 G<sub>t</sub> - V(s<sub>t</sub>)，无偏但方差高</li>
+<li><strong>0 &lt; λ &lt; 1</strong>：折中，越大越接近 MC（更低偏差、更高方差）</li>
+</ul>
+<p>实践选择：<strong>λ = 0.95</strong> 是 PPO 的默认值和社区广泛采用的经验值。γ = 0.99, λ = 0.95 是最常见的组合。如果环境奖励信号非常稀疏，可以尝试增大 λ（如 0.97~0.99）；如果 Critic 很准确，可以适当减小 λ。</p>
+</div>
+</details>
+
+<details class="qa">
+<summary>Q5：TRPO 的 KL 约束是怎么保证策略单调改进的？</summary>
+<div class="a">
+<p>基于 Kakade & Langford 的理论结果：新策略的真实性能 J(π<sub>new</sub>) 有一个<strong>下界</strong>，即替代目标 L(π<sub>new</sub>) 减去一个与 KL 散度成正比的惩罚项。</p>
+<p>TRPO 的逻辑：只要我们在 KL ≤ δ 的约束下最大化替代目标 L，那么下界就一定不低于当前策略的性能 J(π<sub>old</sub>)。因此每次更新至少不会让性能变差（最坏情况 θ 不变，KL=0，L 不变）。</p>
+<p>实际上 TRPO 不是严格的 "单调改进"（那需要精确优化），而是 "不会大幅恶化" — 但这在 RL 中已经是非常有价值的保证。</p>
+</div>
+</details>
+
+<details class="qa">
+<summary>Q6：PPO 的 clip 机制具体是怎么工作的？为什么要取 min？</summary>
+<div class="a">
+<p>PPO 的 clip 目标：L<sup>CLIP</sup> = E[min(r·Â, clip(r, 1-ε, 1+ε)·Â)]，其中 r = π<sub>new</sub>/π<sub>old</sub>。</p>
+<p>当 Â &gt; 0（好动作）时：r 被上限在 1+ε，即使新策略大幅增加了这个动作的概率（r 很大），目标函数也不会因此继续增大。这<strong>防止贪婪地过度增大好动作的概率</strong>。</p>
+<p>当 Â &lt; 0（差动作）时：r 被下限在 1-ε，防止过度减小差动作的概率。</p>
+<p><strong>取 min 的原因</strong>：构造一个<strong>悲观下界</strong>（pessimistic bound）。不管策略怎么变，目标函数值总是取两者中较小的那个。这意味着优化器不会得到虚假的 "改进信号"，只有在安全范围内的更新才会真正改善目标。</p>
+</div>
+</details>
+
+<details class="qa">
+<summary>Q7：PPO-Clip 和 PPO-Penalty 有什么区别？为什么 PPO-Clip 更常用？</summary>
+<div class="a">
+<p><strong>PPO-Clip</strong>：用 clip(r, 1-ε, 1+ε) 直接截断概率比，隐式限制策略变化。ε 是固定超参数。</p>
+<p><strong>PPO-Penalty</strong>：将 KL 散度作为惩罚项加到目标中，自适应调节系数 β。如果 KL 太大就增大 β，太小就减小 β。</p>
+<p>PPO-Clip 更常用的原因：</p>
+<ul>
+<li><strong>更简单</strong>：不需要计算 KL 散度，不需要调节 β</li>
+<li><strong>更稳定</strong>：clip 提供了硬限制，不会因 β 不合适而失效</li>
+<li><strong>效果一样好甚至更好</strong>：原论文实验表明 clip 版本在大多数任务上表现更优</li>
+<li><strong>计算更快</strong>：clip 操作比 KL 散度计算便宜</li>
+</ul>
+</div>
+</details>
+
+<details class="qa">
+<summary>Q8：RLHF 中为什么需要 KL 惩罚？如果不加会怎样？</summary>
+<div class="a">
+<p>KL 惩罚 D<sub>KL</sub>(π<sub>θ</sub> ‖ π<sub>ref</sub>) 有三个关键作用：</p>
+<ul>
+<li><strong>防止 Reward Hacking</strong>：Reward Model 不完美，存在分布外的漏洞。没有 KL 约束，模型会学会生成 "得分高但无意义" 的文本（比如重复特定短语获得高分）</li>
+<li><strong>保持语言能力</strong>：SFT 模型已经具备良好的语言能力，KL 惩罚确保优化过程不会破坏这些能力</li>
+<li><strong>正则化效果</strong>：类似于权重正则化，防止过拟合到 Reward Model 的偏差上</li>
+</ul>
+<p>不加 KL 惩罚的后果：模型会迅速找到 RM 的漏洞，生成 RM 给高分但人类觉得很差的回复（Goodhart's Law — 当指标变成目标时，它就不再是好指标）。实践中这是非常常见的失败模式。</p>
+</div>
+</details>
+
+<details class="qa">
+<summary>Q9：PPO 和 DPO 的区别是什么？各自的优劣？</summary>
+<div class="a">
+<p><strong>PPO（RLHF 中）</strong>：SFT → 训练 RM → 用 RM 的奖励信号做 PPO 强化学习。需要 4 个模型（Actor、Critic、Reference、RM）。</p>
+<p><strong>DPO</strong>：跳过 RM 和 PPO，直接从人类偏好对 (chosen, rejected) 优化策略。将 RL 问题转化为一个简单的对比学习 / 分类损失。</p>
+<table>
+<tr><th>维度</th><th>PPO</th><th>DPO</th></tr>
+<tr><td>训练复杂度</td><td>高（4 模型，RL 训练循环）</td><td>低（类似 SFT）</td></tr>
+<tr><td>内存需求</td><td>高</td><td>中等</td></tr>
+<tr><td>调参难度</td><td>高（KL 系数、clip ε 等）</td><td>低（主要是 β 和学习率）</td></tr>
+<tr><td>在线探索</td><td>有（可以在线生成新回复）</td><td>无（依赖离线偏好数据）</td></tr>
+<tr><td>灵活性</td><td>高（可以用任意奖励函数）</td><td>较低（绑定偏好数据格式）</td></tr>
+<tr><td>大规模实践</td><td>OpenAI InstructGPT/ChatGPT</td><td>Meta Llama 系列等</td></tr>
+</table>
+</div>
+</details>
+
+<details class="qa">
+<summary>Q10：从 REINFORCE 到 PPO 的演进路线是什么？每一步解决了什么问题？</summary>
+<div class="a">
+<p>完整的演进路线和每步解决的核心问题：</p>
+<ol>
+<li><strong>REINFORCE</strong>：最基础的策略梯度，用蒙特卡洛采样 → 问题：<span class="highlight">高方差</span></li>
+<li><strong>+ Baseline</strong>：引入 V(s) 作为基线 → 解决：降低方差，不引入偏差</li>
+<li><strong>Actor-Critic</strong>：用 Critic 网络估计 V(s) 替代 MC → 解决：<span class="highlight">进一步降低方差</span>（TD 替代 MC）</li>
+<li><strong>A2C/A3C</strong>：并行采样 + Advantage → 解决：<span class="highlight">训练效率</span>（并行环境）</li>
+<li><strong>GAE</strong>：λ 平衡 TD/MC 的 Advantage 估计 → 解决：<span class="highlight">灵活的偏差-方差权衡</span></li>
+<li><strong>TRPO</strong>：KL 约束限制策略更新 → 解决：<span class="highlight">更新稳定性</span>（防止策略崩溃）</li>
+<li><strong>PPO</strong>：clip 替代 KL 约束 → 解决：<span class="highlight">TRPO 太复杂</span>（一阶优化、简单实用）</li>
+</ol>
+<p>这条路线的主线逻辑：<strong>降方差 → 提效率 → 保稳定 → 简实现</strong>。每一步都是在前一步基础上解决最突出的问题。</p>
+</div>
+</details>
+    </section>
+
+    <footer>
+      <div class="made">TECH NOTES · 强化学习 · 整理自 AI Knowledge Hub</div>
+    </footer>
+  </main>
+</div>
+
+<script>
+(function(){var bar=document.getElementById('progress');function u(){var h=document.documentElement;bar.style.width=h.scrollTop/(h.scrollHeight-h.clientHeight)*100+'%';}window.addEventListener('scroll',u,{passive:true});u();})();
+(function(){var links=document.querySelectorAll('aside.toc nav a');var secs=Array.from(document.querySelectorAll('section.chapter'));if(!secs.length)return;function u(){var y=window.scrollY+100,cur=secs[0];for(var i=0;i<secs.length;i++){if(secs[i].offsetTop<=y)cur=secs[i];}var id=cur.id;links.forEach(function(a){a.classList.toggle('active',a.getAttribute('href')==='#'+id);});}window.addEventListener('scroll',u,{passive:true});u();})();
+</script>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

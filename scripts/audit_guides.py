@@ -72,7 +72,8 @@ def audit_leftover(path: Path) -> list[str]:
 
 
 CONTENT_DIRS = ["architect", "cpp", "system", "perf-debug", "ai-infra", "bigdata",
-                 "stl", "embedded-realtime"]
+                 "stl", "embedded-realtime", "ai-native", "neural-networks",
+                 "reinforcement"]
 
 
 def main() -> None:

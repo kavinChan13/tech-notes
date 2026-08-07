@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Harness 架构 · AI 工程 — Tech Notes</title>
+<meta name="description" content="Harness Architecture — 从模型到系统：Agent 执行框架的核心设计模式">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<link rel="stylesheet" href="../assets/kh-guide.css">
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav">
+
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="ai_engineering_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 12 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>H01 · AI 工程</h2>
+    <nav>
+      <ol>
+        <li><a href="#overview" class="active">概览</a></li>
+        <li><a href="#sec-1">什么是 Harness？</a></li>
+        <li><a href="#sec-2">Three-Agent Harness Pattern（Anthropic 三代理模式）</a></li>
+        <li><a href="#sec-3">Brain / Hands / Session 架构（Claude Managed Agents, 2026.04）</a></li>
+        <li><a href="#sec-4">上下文管理策略</a></li>
+        <li><a href="#sec-5">基于文件的 Agent 间通信</a></li>
+        <li><a href="#sec-6">Hooks：墙壁而非建议（Walls Not Suggestions）</a></li>
+        <li><a href="#sec-7">决策树：何时使用 Harness？</a></li>
+        <li><a href="#sec-8">生产案例</a></li>
+        <li><a href="#sec-9">Q&amp;A</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+    <header class="hero">
+      <div class="badge">H01 · AI 工程</div>
+      <h1>Harness 架构</h1>
+      <p class="sub">Harness Architecture — 从模型到系统：Agent 执行框架的核心设计模式</p>
+      <div class="meta-row">
+        <span class="pill cyan">AI 工程</span>
+        <span class="pill green">阅读 ~12 min</span>
+        <span class="pill amber">10 章</span>
+      </div>
+    </header>
+
+    <section class="chapter" id="overview">
+      <div class="ch-head"><div class="num">00</div><div class="t"><h2>概览</h2><div class="sub">Harness 的本质是&quot;模型的底盘 + 变速箱&quot; — 模型提供原始算力（引擎），Harne…</div></div></div>
+      <div class="intuition-box">
+<p>Harness 的本质是"模型的底盘 + 变速箱" — 模型提供原始算力（引擎），Harness 决定算力能否有效转化为生产力。同一模型在不同 Harness 下表现差异可达 20%+，证明工程化层比模型选择更重要。</p>
+</div>
+    </section>
+
+    <section class="chapter" id="sec-1">
+      <div class="ch-head"><div class="num">01</div><div class="t"><h2>什么是 Harness？</h2><div class="sub">在 AI Agent 系统中， 模型（Brain） 只是&quot;大脑&quot;，而 Harness 是围绕…</div></div></div>
+      <h3>Brain vs Harness：模型不等于系统</h3>
+<p>在 AI Agent 系统中，<strong>模型（Brain）</strong>只是"大脑"，而 <strong>Harness</strong> 是围绕大脑构建的<strong>编排层 / 执行框架</strong>。类比：模型是飞行员，Harness 是整架飞机（航电系统、自动驾驶、安全检查、黑匣子）。</p>
+
+<table>
+<tr><th>维度</th><th>Brain（模型）</th><th>Harness（编排层）</th></tr>
+<tr><td>职责</td><td>推理、生成、决策</td><td>调度、状态管理、工具执行、安全约束</td></tr>
+<tr><td>决定了什么</td><td>"想"得多好</td><td>"做"得多可靠</td></tr>
+<tr><td>可替换性</td><td>换模型需重新测试</td><td>架构不变，模型可热替换</td></tr>
+<tr><td>出错时</td><td>幻觉、推理偏差</td><td>状态丢失、死循环、权限泄漏</td></tr>
+<tr><td>2026 竞争力</td><td>模型差距在缩小</td><td>Harness 工程是真正的差异化</td></tr>
+</table>
+
+<p class="highlight"><strong>2026 核心观点</strong>：模型能力在趋同（GPT-4o / Claude / Gemini 差距不大），真正决定产品质量的是 Harness 工程——上下文管理、错误恢复、工具编排、安全约束。<em>Harness engineering is the new moat.</em></p>
+
+<h3>Harness 的核心职责</h3>
+<ul>
+<li><strong>上下文构建</strong>：决定模型每次看到什么信息（system prompt + 历史 + 工具结果）</li>
+<li><strong>工具编排</strong>：调用哪些工具、按什么顺序、结果如何流转</li>
+<li><strong>状态管理</strong>：维护 session、处理中断恢复、持久化关键数据</li>
+<li><strong>安全约束</strong>：权限控制、操作审计、不可逆操作拦截</li>
+<li><strong>质量保障</strong>：输出验证、回退策略、多 Agent 评审</li>
+</ul>
+
+<div class="intuition-box">
+<p><strong>深度理解：Harness > Model 原理</strong> — 2026 年模型能力趋同后，产品差异来自编排质量、可靠性和安全性。Harness 的本质 = 把不确定的模型输出变成可靠的系统行为。类比：数据库引擎（Brain）vs 事务管理+故障恢复+查询优化器（Harness）— 引擎再快，没有事务保证就是数据灾难。</p>
+</div>
+    </section>
+
+    <section class="chapter" id="sec-2">
+      <div class="ch-head"><div class="num">02</div><div class="t"><h2>Three-Agent Harness Pattern（Anthropic 三代理模式）</h2><div class="sub">受 GAN（生成对抗网络）启发：Generator 和 Discriminator 分离</div></div></div>
+      <h3>核心思想：生成者不能评估自己的工作</h3>
+<p>受 GAN（生成对抗网络）启发：Generator 和 Discriminator 分离。Anthropic 在其 Agent 系统中采用 <strong>Planner → Generator → Evaluator</strong> 三阶段模式，每个阶段由独立的模型实例处理。</p>
+
+<table>
+<tr><th>Agent</th><th>角色</th><th>输入</th><th>输出</th></tr>
+<tr><td><strong>Planner</strong></td><td>任务分解与规划</td><td>用户请求 + 约束</td><td>结构化计划 / 子任务列表</td></tr>
+<tr><td><strong>Generator</strong></td><td>执行具体工作</td><td>单个子任务 + 工具集</td><td>代码 / 文本 / 操作序列</td></tr>
+<tr><td><strong>Evaluator</strong></td><td>质量评审与反馈</td><td>原始需求 + Generator 输出</td><td>通过 / 拒绝 + 修改建议</td></tr>
+</table>
+
+<h3>上下文隔离的关键作用</h3>
+<p>每个 Agent 拿到的是<strong>全新的上下文</strong>（context reset），而非前一个 Agent 的完整对话历史。这避免了：</p>
+<ul>
+<li><strong>锚定偏差</strong>：Evaluator 不会被 Generator 的推理链"说服"</li>
+<li><strong>上下文污染</strong>：中间步骤的错误信息不会级联传播</li>
+<li><strong>Token 膨胀</strong>：每个 Agent 只接收必要信息，降低成本</li>
+</ul>
+
+<div class="flow">
+  <div class="flow-title">Three-Agent Harness（生成-评估分离）</div>
+  <div class="flow-node accent"><div class="nlabel">Planner · 任务分解</div><div class="nsub">输出 [plan]；上下文：用户需求 + 约束条件</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Generator · 执行工作</div><div class="nsub">输出 [result]；上下文：用户需求 + plan + tools</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">Evaluator · 质量评审</div><div class="nsub">输出 [review]；上下文：用户需求 + plan + result（<strong>不看生成过程</strong>）</div></div>
+</div>
+
+<div class="intuition-box">
+<p><strong>深度理解：生成-评估分离</strong> — 生成者不能评估自己的输出，因为同一上下文中的推理链会造成确认偏差（confirmation bias），模型倾向于为自己的决策辩护。GAN 类比：Generator 和 Discriminator 必须独立训练 → 生成 Agent 和评估 Agent 必须有独立上下文。上下文重置 ≠ 信息丢失：精心设计的"交接协议"传递必要信息、过滤噪音。</p>
+</div>
+    </section>
+
+    <section class="chapter" id="sec-3">
+      <div class="ch-head"><div class="num">03</div><div class="t"><h2>Brain / Hands / Session 架构（Claude Managed Agents, 2026.04）</h2><div class="sub">Anthropic 在 2026 年 4 月发布的 Claude Managed Agent…</div></div></div>
+      <h3>三层组件分离</h3>
+<p>Anthropic 在 2026 年 4 月发布的 Claude Managed Agents 架构中，将 Agent 系统解耦为三个独立层：</p>
+
+<table>
+<tr><th>组件</th><th>职责</th><th>生命周期</th><th>失败模式</th></tr>
+<tr><td><strong>Brain</strong></td><td>Claude 模型 + Harness 逻辑（推理、决策、规划）</td><td>按需启动，stateless per call</td><td>可重试、可替换模型</td></tr>
+<tr><td><strong>Hands</strong></td><td>临时沙箱 + 工具集（代码执行、文件操作、API 调用）</td><td>Ephemeral，任务完成即销毁</td><td>崩溃不影响 Brain/Session</td></tr>
+<tr><td><strong>Session</strong></td><td>持久化事件日志（独立于上下文窗口）</td><td>Durable，跨多次交互存活</td><td>可恢复、可审计</td></tr>
+</table>
+
+<div class="flow">
+  <div class="flow-node accent"><div class="nlabel">Brain / Hands / Session</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Brain (无状态)</div><div class="nsub">Claude 模型 · Harness 逻辑 · 可热替换（降级到小模型）</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Hands (临时沙箱)</div><div class="nsub">代码执行环境 · 工具集 · 任务完成即销毁</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">Session (持久化)</div><div class="nsub">事件日志（完整历史） · 崩溃可恢复 · 独立于上下文窗口</div></div>
+</div>
+
+<h3>Session ≠ Context Window</h3>
+
+<table>
+<tr><th>属性</th><th>Session（事件日志）</th><th>Context Window（上下文窗口）</th></tr>
+<tr><td>大小</td><td>无限制（磁盘/数据库）</td><td>有限（128K–200K tokens）</td></tr>
+<tr><td>持久性</td><td>持久化，崩溃可恢复</td><td>每次 API 调用重新构建</td></tr>
+<tr><td>内容</td><td>所有事件的完整记录</td><td>精选的相关上下文子集</td></tr>
+<tr><td>用途</td><td>审计、恢复、状态同步</td><td>模型推理的输入</td></tr>
+</table>
+
+<p class="highlight"><strong>关键区分</strong>：Session（事件日志）是完整的、持久的历史记录；Context Window（上下文窗口）是每次给模型的有限输入。Session 可以有 100 万条事件，但每次调用模型只挑选最相关的内容放入 128K 的上下文窗口。</p>
+
+<div class="intuition-box">
+<p><strong>深度理解：Brain/Hands/Session 三层分离</strong> — 任何一层失败都不会拖垮其他层：沙箱崩溃不丢状态（Session 持久化），模型超时可重试（Brain 无状态）。Session ≠ Context Window：Session 是全量持久化日志（可达 GB），Context Window 是每次推理的有限输入（128K tokens）。Ephemeral Hands 的意义：每个工具执行都在干净沙箱中，避免环境污染（上次的 pip 包残留影响这次）和安全隐患。</p>
+</div>
+    </section>
+
+    <section class="chapter" id="sec-4">
+      <div class="ch-head"><div class="num">04</div><div class="t"><h2>上下文管理策略</h2><div class="sub">Agent 执行多步任务时，对话历史不断增长</div></div></div>
+      <h3>上下文膨胀问题</h3>
+<p>Agent 执行多步任务时，对话历史不断增长。第 N 步需要携带前 N-1 步的所有信息，导致 token 成本超线性增长、关键信息被噪音淹没。</p>
+
+<h3>两种核心策略</h3>
+<table>
+<tr><th>策略</th><th>做法</th><th>优势</th><th>劣势</th></tr>
+<tr><td><strong>Context Reset</strong>（上下文重置）</td><td>每个阶段/Agent 拿到全新上下文</td><td>无累积偏差、成本可控</td><td>信息传递需精心设计</td></tr>
+<tr><td><strong>Context Compaction</strong>（上下文压缩）</td><td>定期摘要/裁剪历史</td><td>保留连续性</td><td>摘要可能丢失细节</td></tr>
+</table>
+
+<h3>上下文漂移效应</h3>
+<table>
+<tr><th>步骤</th><th>累积上下文的问题</th><th>Context Reset 的解法</th></tr>
+<tr><td>Step 1</td><td>模型做了小错误假设（如误认为用户要 Python 3.8）</td><td>Planner 独立生成 plan</td></tr>
+<tr><td>Step 2</td><td>基于错误假设继续工作 → 错误被强化</td><td>Generator 只看 plan，不看推理过程</td></tr>
+<tr><td>Step 3</td><td>在错误基础上构建更多代码 → 越陷越深</td><td>Evaluator 只看原始需求 + 最终结果</td></tr>
+<tr><td>Step N</td><td>最终输出建立在层层错误假设之上</td><td>每个阶段从源头重新开始</td></tr>
+</table>
+
+<h3>Sprint Contract 模式</h3>
+<p>借鉴敏捷开发的 Sprint 概念，每次交给 Agent 的任务都有<strong>明确的完成定义（Definition of Done）</strong>：</p>
+
+<table>
+<tr><th>元素</th><th>说明</th><th>示例</th></tr>
+<tr><td>task</td><td>任务描述</td><td>"实现用户登录 API"</td></tr>
+<tr><td>done_criteria</td><td>完成标准（可验证）</td><td>"POST /api/login 接受 email+password，返回 JWT"</td></tr>
+<tr><td>constraints</td><td>技术约束</td><td>"使用 bcrypt，纯 stateless JWT"</td></tr>
+<tr><td>max_steps</td><td>最大步数</td><td>15</td></tr>
+<tr><td>timeout</td><td>超时限制</td><td>"5min"</td></tr>
+</table>
+
+<div class="intuition-box">
+<p><strong>深度理解：上下文漂移与 Sprint Contract</strong> — Context Reset vs Compaction 选择：多 Agent 协作用 Reset（避免偏差传播），单 Agent 长对话用 Compaction（保持连续性）。上下文漂移（Context Drift）= 长对话中早期错误假设被后续步骤不断强化，是单 Agent 的主要失败模式。Sprint Contract 核心：把"开放式任务"变成"有明确验收标准的合约"，让 Agent 行为可预测、可验证。</p>
+</div>
+    </section>
+
+    <section class="chapter" id="sec-5">
+      <div class="ch-head"><div class="num">05</div><div class="t"><h2>基于文件的 Agent 间通信</h2><div class="sub">在现代 Agent 系统中（特别是编码 Agent），工作区中的 约定文件 充当 Agent…</div></div></div>
+      <h3>CLAUDE.md / AGENTS.md 约定</h3>
+<p>在现代 Agent 系统中（特别是编码 Agent），工作区中的<strong>约定文件</strong>充当 Agent 间的通信协议和共享记忆：</p>
+
+<table>
+<tr><th>文件</th><th>作用</th><th>读写者</th></tr>
+<tr><td><code>CLAUDE.md</code></td><td>项目级指令：编码规范、架构约束、禁止操作</td><td>人类编写，Agent 读取</td></tr>
+<tr><td><code>AGENTS.md</code></td><td>Agent 间交接协议：任务状态、上下文摘要、待办事项</td><td>Agent 读写</td></tr>
+<tr><td><code>.cursor/rules/</code></td><td>按文件/目录的上下文规则</td><td>人类编写，Agent 读取</td></tr>
+<tr><td><code>TODO.md</code></td><td>任务追踪和进度</td><td>Agent 读写</td></tr>
+<tr><td><code>PLAN.md</code></td><td>当前执行计划</td><td>Planner 写，Generator 读</td></tr>
+</table>
+
+<h3>文件系统作为共享内存的优势</h3>
+
+<table>
+<tr><th>优势</th><th>说明</th><th>对比 API/内存</th></tr>
+<tr><td>崩溃恢复</td><td>Agent 进程崩溃 → 重启后读取文件 → 从断点继续</td><td>进程死了，状态全丢</td></tr>
+<tr><td>人类可读可编辑</td><td>开发者可以直接查看/修改 → 干预 Agent 行为</td><td>需要额外工具才能查看中间状态</td></tr>
+<tr><td>版本控制友好</td><td>git diff 清楚看到 Agent 做了什么改变</td><td>状态变更难以追踪</td></tr>
+<tr><td>跨进程/跨机器共享</td><td>多个 Agent 进程只需挂载同一文件系统</td><td>需要 IPC 或消息队列</td></tr>
+</table>
+
+<p class="highlight">核心理念：<strong>工作区（Workspace）即共享内存</strong>。Agent 不需要复杂的消息传递基础设施，文件系统本身就是最可靠的通信介质。这也是为什么 Cursor / Claude Code 等工具都重度依赖 <code>CLAUDE.md</code> 和目录约定文件。</p>
+
+<div class="intuition-box">
+<p><strong>深度理解：Workspace as Shared Memory</strong> — 文件通信 vs API 通信：文件适合异步、可恢复、人类可审计（git diff 一目了然）；API 适合低延迟、高吞吐。CLAUDE.md 是"给 Agent 的 README"：定义不变量（invariants，如"不能修改 config.yaml"），而非具体指令。崩溃恢复是硬性需求：文件状态天然支持（文件系统有 fsync），内存状态需要额外持久化（Redis/SQLite）。</p>
+</div>
+    </section>
+
+    <section class="chapter" id="sec-6">
+      <div class="ch-head"><div class="num">06</div><div class="t"><h2>Hooks：墙壁而非建议（Walls Not Suggestions）</h2><div class="sub">Prompt 中的指令（&quot;不要删除文件&quot;、&quot;代码必须通过 lint&quot;）是 建议 ——模型可以…</div></div></div>
+      <h3>Prompt 指令 vs Hook 的本质区别</h3>
+<p>Prompt 中的指令（"不要删除文件"、"代码必须通过 lint"）是<strong>建议</strong>——模型可以选择忽略。Hook 是在 Agent 执行管道中强制插入的<strong>代码检查点</strong>——无论模型"想"什么，Hook 都会执行。</p>
+
+<table>
+<tr><th>属性</th><th>Prompt 指令（建议）</th><th>Hook（墙壁）</th></tr>
+<tr><td>执行保证</td><td>模型可能忽略</td><td>100% 执行，无法绕过</td></tr>
+<tr><td>实现层</td><td>自然语言，在模型内部</td><td>代码，在模型外部</td></tr>
+<tr><td>失败处理</td><td>模型自行决定</td><td>阻断执行 / 自动修复</td></tr>
+<tr><td>可审计性</td><td>难以验证是否遵守</td><td>有明确的 pass/fail 日志</td></tr>
+<tr><td>适用场景</td><td>偏好、风格、建议</td><td>安全、格式、不变量</td></tr>
+</table>
+
+<h3>Hook 的类型与时机</h3>
+
+<table>
+<tr><th>时机</th><th>Hook 类型</th><th>作用</th></tr>
+<tr><td><strong>pre_tool_call</strong></td><td>permission_check, argument_validation, rate_limiter</td><td>在工具调用之前执行：权限检查、参数验证、速率限制</td></tr>
+<tr><td><strong>post_tool_call</strong></td><td>output_sanitizer, result_validator</td><td>在工具调用之后执行：清理敏感信息、验证结果格式</td></tr>
+<tr><td><strong>pre_commit</strong></td><td>linter, type_checker, security_scanner, test_runner</td><td>在 Agent 提交代码之前：lint、类型检查、安全扫描、测试</td></tr>
+<tr><td><strong>post_response</strong></td><td>pii_detector, format_validator</td><td>在 Agent 回复用户之前：检测隐私信息、输出格式校验</td></tr>
+</table>
+
+<div class="flow">
+  <div class="flow-node accent"><div class="nlabel">Hook 执行管道</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">用户请求</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">[pre_tool_call hooks] → 权限检查 → 参数验证 → 速率限制</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Agent 决策 → 工具调用</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">[post_tool_call hooks] → 输出清理 → 结果验证</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Agent 生成代码</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">[pre_commit hooks] → lint → 类型检查 → 安全扫描 → 测试</div><div class="nsub">↓ (任一失败则阻断) · 提交代码</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">[post_response hooks] → PII 检测 → 格式校验</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">返回用户</div></div>
+</div>
+
+<div class="intuition-box">
+<p><strong>深度理解：Walls Not Suggestions</strong> — 安全关键约束必须在代码层强制执行，不能依赖 prompt 中的自然语言指令（LLM 可能"忘记"或"创造性地绕过"规则）。类比：数据库的 CHECK CONSTRAINT 不是"建议 age > 0"，而是强制拒绝违规插入。Pre-commit Hook 是编码 Agent 最重要的质量门：lint + type check + test = 三重保障，任何一层不通过则阻止提交。</p>
+</div>
+    </section>
+
+    <section class="chapter" id="sec-7">
+      <div class="ch-head"><div class="num">07</div><div class="t"><h2>决策树：何时使用 Harness？</h2><div class="sub">经验法则 ：如果任务可以在单次 LLM 调用中高质量完成，不要用 Harness</div></div></div>
+      <table>
+<tr><th>场景</th><th>推荐方案</th><th>原因</th></tr>
+<tr><td>简单问答 / 一次性生成</td><td>单 Agent（直接调用模型）</td><td>无需编排开销</td></tr>
+<tr><td>需要工具调用的任务</td><td>单 Agent + ReAct 循环</td><td>工具循环足够，无需多 Agent</td></tr>
+<tr><td>输出质量要求高（生产级代码、文档）</td><td>Generator + Evaluator（双 Agent）</td><td>独立评审提升质量</td></tr>
+<tr><td>复杂多步任务（跨文件重构、系统迁移）</td><td>三 Agent Harness（P/G/E）</td><td>需要规划 + 执行 + 验证全流程</td></tr>
+<tr><td>长时间运行的异步任务</td><td>Managed Agent（B/H/S 架构）</td><td>需要持久化 Session、崩溃恢复</td></tr>
+<tr><td>多领域协作（前端 + 后端 + 测试）</td><td>多 Agent + 协调器</td><td>不同 Agent 有不同工具集和专长</td></tr>
+</table>
+
+<p class="highlight"><strong>经验法则</strong>：如果任务可以在单次 LLM 调用中高质量完成，不要用 Harness。Harness 的价值在于<strong>可靠性</strong>而非<strong>能力</strong>——它不会让模型变聪明，但能让系统更可靠。过度工程化的 Harness 反而增加延迟和成本。</p>
+
+<h3>Harness 设计清单</h3>
+
+<table>
+<tr><th>类别</th><th>检查项</th></tr>
+<tr><td><strong>上下文管理</strong></td><td>每个 Agent 的上下文是否最小化？<br>是否有明确的信息传递协议？<br>长对话是否有压缩/重置策略？</td></tr>
+<tr><td><strong>错误处理</strong></td><td>模型调用失败是否有重试/降级策略？<br>工具执行失败是否有回退方案？<br>是否设置了最大步数 / 超时限制？</td></tr>
+<tr><td><strong>安全约束</strong></td><td>敏感操作是否有 Hook 强制拦截？<br>工具权限是否最小化？<br>输出是否过滤了敏感信息？</td></tr>
+<tr><td><strong>可观测性</strong></td><td>每步决策是否有日志？<br>Token 消耗 / 延迟是否有监控？<br>失败 case 是否自动收集用于改进？</td></tr>
+</table>
+
+<div class="intuition-box">
+<p><strong>核心结论</strong> — 不要过度设计：简单任务用单 Agent，只在需要可靠性保障时才引入多 Agent Harness。Harness 的 ROI 体现在<strong>失败率降低</strong>（70% → 95%），而非成功率提升。生产级 Harness 四根支柱：上下文管理 + 错误处理 + 安全约束 + 可观测性。</p>
+</div>
+
+<div class="practice-grid">
+<div class="do">
+<ul>
+<li>Harness 层投入 > 模型选择投入</li>
+<li>生成者和评估者必须独立上下文</li>
+<li>Brain/Hands/Session 三层分离</li>
+<li>安全约束在代码层强制执行（Walls not suggestions）</li>
+<li>每个 Sprint 有明确验收标准（done_criteria）</li>
+</ul>
+</div>
+<div class="dont">
+<ul>
+<li>不要让生成者评估自己的输出（确认偏差）</li>
+<li>不要依赖 prompt 做安全约束（LLM 可能绕过）</li>
+<li>不要忽略上下文漂移（长对话中早期假设会被不断强化）</li>
+<li>不要在简单任务上过度设计（多 Agent 不是银弹）</li>
+<li>不要让 Session 和 Context Window 混淆（持久化 vs 有限输入）</li>
+</ul>
+</div>
+</div>
+    </section>
+
+    <section class="chapter" id="sec-8">
+      <div class="ch-head"><div class="num">08</div><div class="t"><h2>生产案例</h2><div class="sub">生产验证： Harness 架构（Agent 的&quot;脚手架&quot;）在编码 Agent 中的应用：(…</div></div></div>
+      <div class="intuition-box">
+<p><strong>生产验证：</strong>Harness 架构（Agent 的"脚手架"）在编码 Agent 中的应用：(1) 循环探测中间件 — 死循环检出率 <strong>96%</strong>，Token 浪费降 94%（月均 $3,200 → $180）；(2) 工具调用守卫 — 拦截 <strong>3,400 次</strong>越权工具调用（如 Agent 试图执行 rm -rf），零安全事故；(3) 上下文窗口管理 — 自动压缩历史对话，将有效信息浓度从 35% 提升至 <strong>78%</strong>，任务完成率提升 22%。Build to Delete 实践：随着模型能力提升（GPT-4 → GPT-5），中间件触发频率降低 75%，说明护栏可以逐步退场。核心哲学：Harness 不是替代模型能力，而是在模型不完美时提供安全网。</p>
+</div>
+    </section>
+
+    <section class="chapter" id="sec-9">
+      <div class="ch-head"><div class="num">09</div><div class="t"><h2>Q&amp;A</h2><div class="sub">Harness 是一种 架构模式 ，描述围绕模型的编排层应该怎么设计（上下文管理、多 Age…</div></div></div>
+      <details class="qa">
+<summary>Harness 和 Agent Framework（如 LangChain）有什么区别？</summary>
+<p class="answer">Harness 是一种<strong>架构模式</strong>，描述围绕模型的编排层应该怎么设计（上下文管理、多 Agent 协作、安全约束、状态持久化）。Agent Framework 是<strong>具体实现</strong>，提供构建 Harness 的工具库（LangChain/LangGraph 提供链式调用、工具绑定、图状态机等）。一个好的比喻：Harness 是建筑蓝图（设计模式），Framework 是建筑材料（钢筋水泥）。你可以用 LangGraph 实现三 Agent Harness，也可以用纯 Python 实现。关键的架构决策（用几个 Agent、上下文怎么传递、Hook 放在哪里）是 Harness 层面的，不依赖特定 Framework。</p>
+</details>
+
+<details class="qa">
+<summary>为什么说 "生成者不能评估自己的工作"？能否用同一个模型做生成和评估？</summary>
+<p class="answer">可以用同一个<strong>模型</strong>，但必须是不同的<strong>实例/上下文</strong>。问题不在于模型参数相同，而在于<strong>上下文相同</strong>。当 Generator 的推理链（"我选择方案A是因为..."）出现在 Evaluator 的上下文中时，Evaluator 会受到锚定效应（anchoring bias）影响，倾向于认同已有的推理。解法：Evaluator 只看到原始需求和最终输出，不看生成过程。这类似于代码 review 的最佳实践——reviewer 看 PR diff，而不是看作者的思考笔记。上下文隔离是关键，不是模型隔离。实际上 Anthropic 的三 Agent 模式通常用同一个 Claude 模型，只是上下文完全不同。</p>
+</details>
+
+<details class="qa">
+<summary>Brain/Hands/Session 架构中，Session 和 Context Window 有什么区别？为什么要分离？</summary>
+<p class="answer">Session 是<strong>完整的、持久化的事件日志</strong>（可以有数万条记录），存储在磁盘/数据库中，记录 Agent 所有行为的完整历史。Context Window 是<strong>每次模型调用的有限输入</strong>（128K–200K tokens），从 Session 中<strong>选择性提取</strong>相关内容构建。分离的原因：①<strong>容量</strong>：长任务的完整历史远超上下文窗口限制；②<strong>持久性</strong>：Context Window 在进程崩溃后消失，Session 持久化在磁盘上可恢复；③<strong>灵活性</strong>：不同阶段可以从同一个 Session 中提取不同的上下文子集（Planner 看全局，Generator 看局部）；④<strong>审计</strong>：Session 提供完整的行为记录，用于调试和合规审计。</p>
+</details>
+
+<details class="qa">
+<summary>什么是 "Walls Not Suggestions"？为什么 Prompt 指令不够？</summary>
+<p class="answer">"Walls Not Suggestions" 是指安全关键的约束必须在<strong>代码层</strong>（Hook）而非<strong>提示层</strong>（Prompt）实施。原因：①<strong>模型不可靠</strong>：即使 prompt 说"不要删除文件"，模型在复杂推理链中可能"忘记"这个约束，特别是上下文很长或指令冲突时；②<strong>对抗性场景</strong>：Prompt Injection 可以覆盖 prompt 中的指令，但无法绕过代码层的 Hook（Hook 在模型外部执行）；③<strong>可验证性</strong>：Prompt 遵守情况难以验证（模型内部黑箱），Hook 有明确的 pass/fail 日志。实际做法：把"偏好"放 prompt（代码风格、语气），把"不变量"放 Hook（安全扫描、lint、权限检查、测试必须通过）。</p>
+</details>
+
+<details class="qa">
+<summary>如何决定一个任务是用单 Agent 还是多 Agent Harness？</summary>
+<p class="answer">决策依据有三个维度：①<strong>任务复杂度</strong>：能否在单次 LLM 调用中高质量完成？如果是，用单 Agent；需要多步规划+执行+验证，用多 Agent。②<strong>可靠性要求</strong>：容忍偶尔出错（内部工具/草稿）→ 单 Agent；要求高可靠性（面向用户/生产级）→ 多 Agent + Evaluator。③<strong>任务持续时间</strong>：秒级完成 → 单 Agent；分钟/小时级 → 需要 Session 持久化的 Managed Agent。经验法则：从最简单的方案开始（单 Agent + ReAct），通过评估发现质量不达标的环节，再<strong>有针对性地</strong>添加 Evaluator 或 Planner。过度工程化的 Harness 增加延迟（3× LLM 调用）和成本，但如果任务的失败成本高（生产环境代码、用户数据操作），这个 overhead 是值得的。</p>
+</details>
+
+<details class="qa">
+<summary>基于文件的 Agent 间通信（CLAUDE.md / AGENTS.md）有什么优势和局限？</summary>
+<p class="answer">优势：①<strong>崩溃恢复</strong>：Agent 进程死掉后重启，读文件即可恢复状态，无需额外的持久化层；②<strong>人类可读可编辑</strong>：开发者可以直接查看和修改文件来干预 Agent 行为（git diff 查看变更）；③<strong>版本控制友好</strong>：天然适配 git 工作流，Agent 的行为变更有完整追踪；④<strong>零基础设施</strong>：不需要消息队列、数据库等额外基础设施。局限：①<strong>并发冲突</strong>：多个 Agent 同时写同一个文件可能产生竞争条件（需要文件锁或 CAS 机制）；②<strong>延迟</strong>：文件 I/O 比内存通信慢，不适合需要毫秒级响应的实时场景；③<strong>结构化弱</strong>：Markdown 文件缺乏 schema 约束，Agent 可能写出格式不一致的内容；④<strong>规模限制</strong>：数百个 Agent 共享文件系统时管理复杂度会急剧上升。适用场景：编码 Agent（Cursor / Claude Code）、异步任务、需要人类审计的场景。</p>
+</details>
+    </section>
+
+    <footer>
+      <div class="made">TECH NOTES · AI 工程 · 整理自 AI Knowledge Hub</div>
+    </footer>
+  </main>
+</div>
+
+<script>
+(function(){var bar=document.getElementById('progress');function u(){var h=document.documentElement;bar.style.width=h.scrollTop/(h.scrollHeight-h.clientHeight)*100+'%';}window.addEventListener('scroll',u,{passive:true});u();})();
+(function(){var links=document.querySelectorAll('aside.toc nav a');var secs=Array.from(document.querySelectorAll('section.chapter'));if(!secs.length)return;function u(){var y=window.scrollY+100,cur=secs[0];for(var i=0;i<secs.length;i++){if(secs[i].offsetTop<=y)cur=secs[i];}var id=cur.id;links.forEach(function(a){a.classList.toggle('active',a.getAttribute('href')==='#'+id);});}window.addEventListener('scroll',u,{passive:true});u();})();
+</script>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

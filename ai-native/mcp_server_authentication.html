@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MCP Server 生产级鉴权 · AI 工程 — Tech Notes</title>
+<meta name="description" content="MCP Authentication — 三层鉴权模型、OAuth 2.1 + PKCE 核心思想、RBAC 功能权限、数据权限隔离、字段脱敏、生产案例">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<link rel="stylesheet" href="../assets/kh-guide.css">
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav">
+
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="ai_engineering_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 8 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>A10 · AI 工程</h2>
+    <nav>
+      <ol>
+        <li><a href="#overview" class="active">概览</a></li>
+        <li><a href="#ch1">鉴权是三层问题，不是一层</a></li>
+        <li><a href="#ch2">第一层：身份认证怎么选</a></li>
+        <li><a href="#tool">第二层：功能权限 — 不同用户能调不同 Tool</a></li>
+        <li><a href="#tool-4">第三层：数据权限 — 同一个 Tool，看不同的数据</a></li>
+        <li><a href="#ch5">生产案例深度剖析</a></li>
+        <li><a href="#mcp">生产级 MCP 鉴权检查清单</a></li>
+        <li><a href="#q-a">Q&amp;A</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+    <header class="hero">
+      <div class="badge">A10 · AI 工程</div>
+      <h1>MCP Server 生产级鉴权</h1>
+      <p class="sub">MCP Authentication — 三层鉴权模型、OAuth 2.1 + PKCE 核心思想、RBAC 功能权限、数据权限隔离、字段脱敏、生产案例</p>
+      <div class="meta-row">
+        <span class="pill cyan">AI 工程</span>
+        <span class="pill green">阅读 ~8 min</span>
+        <span class="pill amber">8 章</span>
+      </div>
+    </header>
+
+    <section class="chapter" id="overview">
+      <div class="ch-head"><div class="num">00</div><div class="t"><h2>概览</h2><div class="sub">鉴权是三层问题：身份认证防外部攻击，功能权限防内部越权，数据权限防内部泄露</div></div></div>
+      <div class="intuition-box"><p>鉴权是三层问题：身份认证防外部攻击，功能权限防内部越权，数据权限防内部泄露。只做第一层的 MCP Server 都是裸奔。</p></div>
+    </section>
+
+    <section class="chapter" id="ch1">
+      <div class="ch-head"><div class="num">01</div><div class="t"><h2>鉴权是三层问题，不是一层</h2><div class="sub">大多数教程把&quot;鉴权&quot;简化成&quot;加个 API Key&quot;，这是灾难的开始</div></div></div>
+      <p>大多数教程把"鉴权"简化成"加个 API Key"，这是灾难的开始。真正的生产级鉴权必须分三层，每一层解决不同的问题：</p>
+
+<table>
+<tr><th>层次</th><th>回答的问题</th><th>典型方案</th><th>覆盖度</th></tr>
+<tr><td><strong>第一层：身份认证</strong></td><td>你是谁？</td><td>API Key / OAuth 2.1 / mTLS</td><td>大部分教程讲到</td></tr>
+<tr><td><strong>第二层：功能权限</strong></td><td>你能调哪些 Tool？</td><td>RBAC / OAuth Scope</td><td>偶尔提到</td></tr>
+<tr><td><strong>第三层：数据权限</strong></td><td>你能看哪些数据？</td><td>租户隔离 / 行级过滤 / 字段脱敏</td><td>几乎空白</td></tr>
+</table>
+
+<h3>真实翻车案例</h3>
+
+<p>这些案例说明只做第一层是远远不够的：</p>
+
+<table>
+<tr><th>翻车场景</th><th>根因</th></tr>
+<tr><td>实习生离职带走共享 API Key，数据库被爬</td><td>没有用户级身份</td></tr>
+<tr><td>客服通过 Claude 查询了高管订单记录</td><td>所有人看所有数据，无数据权限</td></tr>
+<tr><td>A 公司的 AI 查到了 B 公司的客户列表</td><td>多租户没强制注入 tenant_id</td></tr>
+</table>
+
+<p class="highlight">身份认证做好了只能防住外部攻击者，功能权限和数据权限做不好，内部员工一样能把公司数据搬空。</p>
+
+<h3>为什么是三层？</h3>
+
+<p>这不是理论推演，是实战总结。每一层都有对应的真实威胁：</p>
+
+<ul>
+<li><strong>身份认证：</strong>防外部攻击者（谁都能访问）</li>
+<li><strong>功能权限：</strong>防内部越权（客服能删数据）</li>
+<li><strong>数据权限：</strong>防内部泄露（客服能看高管数据）</li>
+</ul>
+
+<p>只做第一层的 MCP Server 都是裸奔。</p>
+    </section>
+
+    <section class="chapter" id="ch2">
+      <div class="ch-head"><div class="num">02</div><div class="t"><h2>第一层：身份认证怎么选</h2><div class="sub">2025-11-05 是鉴权分水岭——MCP 正式引入 OAuth 2</div></div></div>
+      <h3>选型三原则</h3>
+
+<ol>
+<li>本地 stdio 可以不加认证——反正只能本机调用</li>
+<li>HTTP+SSE 必须加认证——暴露端口就是暴露家门</li>
+<li>多用户场景首选 OAuth 2.1——因为需要知道"谁在调用"</li>
+</ol>
+
+<h3>不同方案对比</h3>
+
+<table>
+<tr><th>方案</th><th>适用场景</th><th>安全级别</th><th>推荐度</th></tr>
+<tr><td>无认证</td><td>本地 stdio，仅个人</td><td style="color:var(--red)">无</td><td>仅限本地</td></tr>
+<tr><td>静态 API Key</td><td>小团队快速上线</td><td style="color:var(--orange)">低</td><td>过渡方案</td></tr>
+<tr><td>动态 API Key + 轮换</td><td>中型团队</td><td style="color:var(--green)">中</td><td>推荐</td></tr>
+<tr><td><strong>OAuth 2.1（MCP 标准）</strong></td><td>企业级，多用户</td><td style="color:var(--green)">高</td><td>生产首选</td></tr>
+<tr><td>mTLS</td><td>零信任架构</td><td style="color:var(--green)">最高</td><td>高安全场景</td></tr>
+</table>
+
+<h3>OAuth 2.1：MCP 2025-11-05 官方标准</h3>
+
+<p>2025-11-05 是鉴权分水岭——MCP 正式引入 OAuth 2.1 + PKCE（强制，非可选）。这是 MCP 协议层面的重大升级。</p>
+
+<h3>核心思想：OAuth 2.1 + PKCE 流程</h3>
+
+<div class="flow">
+  <div class="flow-title">OAuth 2.1 + PKCE 认证流程</div>
+  <div class="flow-node accent"><div class="nlabel">① 授权请求</div><div class="nsub">MCP Client（Claude） → Authorization Server（你的 IdP）</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">② 返回授权码 + PKCE</div><div class="nsub">Authorization Server → MCP Client</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">③ 授权码换 Access Token</div><div class="nsub">MCP Client → Authorization Server</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">④ 下发 Access Token</div><div class="nsub">MCP Server 凭 Token 提供服务；Server 暴露 /.well-known/oauth-authorization-server，Client 自动发现配置</div></div>
+</div>
+
+<p><strong>为什么是 PKCE（Proof Key for Code Exchange）？</strong>因为 MCP Client 通常是桌面应用或浏览器，无法安全存储 client_secret。PKCE 用动态生成的 code_verifier 和 code_challenge 替代 client_secret，即使授权码被拦截也无法换取 Token。</p>
+
+<h3>Discovery 端点：自动发现认证配置</h3>
+
+<p>MCP 标准要求 Server 暴露 <code>/.well-known/oauth-authorization-server</code> 端点，返回 OAuth 配置信息（issuer、authorization_endpoint、token_endpoint、支持的 scopes 等）。Client 启动时自动获取配置，不需要用户手动填写。</p>
+
+<p>这个设计的价值在于：降低接入门槛，减少配置错误。Claude Code / CodeBuddy 等 Client 可以自动发现认证配置。</p>
+
+<h3>JWT 里要带什么？</h3>
+
+<p>JWT 是 OAuth 2.1 的 Access Token 标准格式。关键是要带上 roles 和 tenant_id 这两个字段——它们是功能权限和数据权限的基础。</p>
+
+<ul>
+<li><code>sub</code>：用户 ID（身份认证）</li>
+<li><code>roles</code>：角色列表（功能权限）</li>
+<li><code>tenant_id</code>：租户 ID（数据权限）</li>
+<li><code>scope</code>：授权范围（OAuth 标准）</li>
+</ul>
+
+<p>这些字段在 JWT 验证后注入到请求上下文，供后续权限检查使用。</p>
+
+<div class="highlight">
+<strong>OAuth 2.1 的核心价值：</strong>知道"谁在调用"，这是功能权限和数据权限的前提。没有用户级身份，后续两层都是空中楼阁。
+</div>
+    </section>
+
+    <section class="chapter" id="tool">
+      <div class="ch-head"><div class="num">03</div><div class="t"><h2>第二层：功能权限 — 不同用户能调不同 Tool</h2><div class="sub">RBAC 的核心是&quot;角色 → Tool 映射&quot;</div></div></div>
+      <h3>核心思想：RBAC（Role-Based Access Control）</h3>
+
+<p>RBAC 的核心是"角色 → Tool 映射"。每个角色有一组允许的 Tool 列表，用户通过角色获得权限。</p>
+
+<div class="arch-diagram">
+RBAC 模型:
+
+用户 → 角色 → Tool 列表
+
+viewer:  [query_database, search_documents]
+user:    [query_database, search_documents, create_record, update_record]
+admin:   [query_database, search_documents, create_record, 
+          update_record, delete_record, export_data, manage_users]</div>
+
+<h3>权限检查必须在 Tool 执行前</h3>
+
+<p>这是最容易犯的错误——先执行业务逻辑，再检查权限。正确的做法是：权限检查失败立刻返回，不执行任何业务逻辑。</p>
+
+<p>为什么？因为执行后再回滚成本高、风险大。特别是写操作，一旦执行就无法完全撤销（比如发了邮件就收不回来）。</p>
+
+<h3>高级技巧：动态 Tool 列表</h3>
+
+<p>比"展示后拦截"更优雅的方案：权限不足的 Tool 根本不展示给 AI。</p>
+
+<p><strong>实现思路：</strong>根据用户角色动态注册 Tool。viewer 只看到只读 Tool，user 看到写操作 Tool，admin 看到管理 Tool。</p>
+
+<p><strong>为什么更好？</strong></p>
+<ul>
+<li>AI 看到的 Tool 清单 = 能用的清单，选择更准确</li>
+<li>减少 AI 的困惑（为什么展示了但调不了？）</li>
+<li>安全审计更干净（不会出现大量权限拒绝日志）</li>
+</ul>
+
+<h3>权限不足时的错误信息</h3>
+
+<p>必须加 "Do not retry"，否则 AI 看到 403 会自动换参数重试，陷入死循环烧 Token。</p>
+
+<p>好的错误信息示例："<strong>Permission denied: You don't have access to 'delete_record'. Do not retry. Please contact admin for access.</strong>"</p>
+
+<p class="highlight">错误信息是 AI 行为的指挥棒。差的错误信息让 AI 死循环，好的错误信息让 AI 优雅降级。</p>
+    </section>
+
+    <section class="chapter" id="tool-4">
+      <div class="ch-head"><div class="num">04</div><div class="t"><h2>第三层：数据权限 — 同一个 Tool，看不同的数据</h2><div class="sub">核心原则： 永远不要信任 AI 传来的参数</div></div></div>
+      <h3>三种数据权限模型</h3>
+
+<table>
+<tr><th>模型</th><th>做什么</th><th>典型场景</th></tr>
+<tr><td>租户隔离</td><td>不同租户数据互不可见</td><td>SaaS 多租户</td></tr>
+<tr><td>行级过滤</td><td>同表不同用户看不同行</td><td>组织内权限分级</td></tr>
+<tr><td>字段脱敏</td><td>同行数据不同人看不同字段</td><td>敏感数据保护</td></tr>
+</table>
+
+<h3>行级过滤：强制注入过滤条件</h3>
+
+<p><strong>核心原则：</strong>永远不要信任 AI 传来的参数。AI 可能被 Prompt 注入诱导构造越权查询，所以过滤条件必须在服务端强制注入。</p>
+
+<p><strong>实现思路：</strong>在数据库查询前，根据用户身份强制拼接到 WHERE 条件里：</p>
+
+<ul>
+<li>多租户场景：无论传什么参数，<code>tenant_id</code> 永远是自己的</li>
+<li>组织内场景：普通用户只能看自己的数据，admin 可以看所有</li>
+<li>特殊规则：某些表有额外限制（如 salary_records 只有 HR 能看）</li>
+</ul>
+
+<p>为什么不在前端做？因为前端（AI）不可信。Prompt 注入可以诱导 AI 构造恶意查询，只有服务端强制注入才能防住。</p>
+
+<h3>字段脱敏：按角色返回不同字段</h3>
+
+<p><strong>核心思想：</strong>同一行数据，不同角色看到不同字段。比如 users 表：</p>
+
+<table>
+<tr><th>角色</th><th>可见字段</th><th>不可见字段</th></tr>
+<tr><td>admin</td><td>id, name, email, phone, salary, ssn</td><td>无</td></tr>
+<tr><td>hr</td><td>id, name, email, phone, salary</td><td>ssn</td></tr>
+<tr><td>user</td><td>id, name, email</td><td>phone, salary, ssn</td></tr>
+<tr><td>viewer</td><td>id, name</td><td>email, phone, salary, ssn</td></tr>
+</table>
+
+<p><strong>实现思路：</strong>配置表级字段可见性规则，查询结果返回前过滤字段。</p>
+
+<h3>双重保护：MCP 层 + 数据库层</h3>
+
+<p>生产级要做双重保护——MCP 层脱敏 + 数据库层也加字段级权限。为什么？因为有人可能绕过 MCP 直连数据库，MCP 层脱敏就失效了。</p>
+
+<p>数据库层的字段级权限可以通过 PostgreSQL 的 Row-Level Security (RLS) 或列级权限实现。</p>
+
+<div class="highlight">
+<strong>数据权限的核心原则：</strong>AI 传来的参数永远不可信。过滤条件必须服务端强制注入，不能依赖前端（AI）传参。这与 SQL 注入防护的思路完全一致——永远不要信任外部输入。
+</div>
+    </section>
+
+    <section class="chapter" id="ch5">
+      <div class="ch-head"><div class="num">05</div><div class="t"><h2>生产案例深度剖析</h2><div class="sub">Linear 用 OAuth Scope 而非角色控制 Tool 权限</div></div></div>
+      <h3>案例一：Linear — Scope 驱动的细粒度权限</h3>
+
+<p>Linear 用 OAuth Scope 而非角色控制 Tool 权限。这是更细粒度的控制方式：</p>
+
+<ul>
+<li><code>linear:read</code> → 只读 Tool（查 Issue、查 Project）</li>
+<li><code>linear:write</code> → 写操作 Tool（创建 Issue、更新状态）</li>
+<li><code>linear:admin</code> → 管理 Tool（删除、归档、成员管理）</li>
+</ul>
+
+<p><strong>核心价值：</strong>最小权限默认，用户可随时撤销，全量审计。用户授权时可以精确控制 AI 能做什么。</p>
+
+<h3>案例二：500 人金融科技公司 — LDAP 三层映射</h3>
+
+<p>这是一个真实的金融科技公司案例，把 LDAP 组映射到 MCP 角色：</p>
+
+<table>
+<tr><th>LDAP 组</th><th>MCP 角色</th><th>可用 Tool</th></tr>
+<tr><td>cn=developers</td><td>user</td><td>查询、创建、更新</td></tr>
+<tr><td>cn=data-analysts</td><td>analyst</td><td>查询、导出（脱敏数据）</td></tr>
+<tr><td>cn=finance</td><td>finance</td><td>查询财务数据（含敏感字段）</td></tr>
+<tr><td>cn=it-admins</td><td>admin</td><td>全部 Tool</td></tr>
+<tr><td>cn=compliance</td><td>auditor</td><td>只读 + 审计日志查询</td></tr>
+</table>
+
+<p><strong>数据权限精细度：</strong></p>
+
+<ul>
+<li>开发者只能查询自己负责的项目数据</li>
+<li>数据分析师查询用户数据时，手机号/邮箱自动脱敏为 138****8888</li>
+<li>财务可以看完整薪资，但查询会触发审计告警</li>
+<li>所有人都无法查询 ssn 字段——Gateway 层永久黑名单</li>
+</ul>
+
+<p><strong>上线 6 个月效果：</strong>安全审计通过率 62%→98%，AI 操作数据泄露 0 起，开发者信任度 43%→81%。</p>
+
+<p><strong>启示：</strong>三层鉴权是金融级合规的基础。只做身份认证，审计永远过不了。</p>
+
+<h3>案例三：独立开发者的最小可行方案</h3>
+
+<p>不是所有团队都需要 OAuth 2.1。对于独立开发者或小团队，最小可行方案是：</p>
+
+<ul>
+<li>API Key 格式：<code>mcp_&lt;userId&gt;_&lt;signature&gt;</code></li>
+<li>签名验证：用 HMAC 验证签名正确性，防篡改</li>
+<li>按订阅档位限流：free 10 次/分钟，pro 100 次/分钟，enterprise 1000 次/分钟</li>
+</ul>
+
+<p><strong>核心价值：</strong>1 天上线，不需要 OAuth 服务器。用户量 &lt; 1000 用这个方案快速验证，&gt; 1000 再迁移 OAuth 2.1。</p>
+
+<p class="highlight">不要过度设计。OAuth 2.1 是企业级方案，小团队先用 API Key 跑起来，验证价值后再升级。</p>
+    </section>
+
+    <section class="chapter" id="mcp">
+      <div class="ch-head"><div class="num">06</div><div class="t"><h2>生产级 MCP 鉴权检查清单</h2></div></div>
+      <h3>认证层（5 项）</h3>
+<ul>
+<li>生产环境禁止无认证访问（stdio 除外）</li>
+<li>API Key 放环境变量，严禁硬编码</li>
+<li>强制 HTTPS，禁止 HTTP 传 Token</li>
+<li>Token 过期时间 ≤ 1 小时，带刷新机制</li>
+<li>暴露 <code>/.well-known/oauth-authorization-server</code> Discovery 端点</li>
+</ul>
+
+<h3>功能权限层（4 项）</h3>
+<ul>
+<li>默认无权限，显式授权（最小权限原则）</li>
+<li>DELETE/DROP 级危险操作需要额外 Scope 或角色</li>
+<li>权限检查在 Tool 执行前，不是执行后</li>
+<li>错误信息加 Do not retry，防 AI 死循环</li>
+</ul>
+
+<h3>数据权限层（4 项）</h3>
+<ul>
+<li>多租户场景强制注入 tenant_id 过滤条件</li>
+<li>敏感字段（手机/邮箱/SSN）默认脱敏</li>
+<li>MCP 层和数据库层双重字段权限（防绕过）</li>
+<li>大批量数据导出需额外审批</li>
+</ul>
+
+<h3>审计层（4 项）</h3>
+<ul>
+<li>所有 Tool 调用写结构化日志（用户 ID、参数摘要、时间）</li>
+<li>写操作和危险操作单独审计日志</li>
+<li>审计日志写入后只读（不可篡改）</li>
+<li>定期审查 AI 的操作记录</li>
+</ul>
+
+<div class="practice-grid">
+<div class="do">
+<ul>
+<li>三层鉴权全做：身份认证 + 功能权限 + 数据权限</li>
+<li>数据权限在服务端强制注入</li>
+<li>JWT 中携带最小信息（user_id, role）</li>
+<li>敏感操作增加审计日志</li>
+</ul>
+</div>
+<div class="dont">
+<ul>
+<li>只做身份认证就说"做了鉴权"（裸奔）</li>
+<li>信任 AI 传来的过滤参数</li>
+<li>把完整用户信息塞进 JWT（过大）</li>
+<li>忽略数据权限（最常见的安全漏洞）</li>
+</ul>
+</div>
+</div>
+    </section>
+
+    <section class="chapter" id="q-a">
+      <div class="ch-head"><div class="num">07</div><div class="t"><h2>Q&amp;A</h2></div></div>
+      <details class="qa">
+<summary>MCP Server 鉴权为什么是三层问题？</summary>
+<div class="a">三层缺一不可：(1) 身份认证——你是谁？API Key/OAuth 2.1 解决；(2) 功能权限——你能调哪些 Tool？RBAC/OAuth Scope 解决；(3) 数据权限——你能看哪些数据？租户隔离/行级过滤/字段脱敏解决。只做第一层只能防外部攻击者，功能权限和数据权限做不好，内部员工一样能搬空数据。</div>
+</details>
+
+<details class="qa">
+<summary>为什么数据权限必须服务端强制注入？</summary>
+<div class="a">AI 传来的参数永远不可信。AI 可能被 Prompt 注入诱导构造越权查询（如让 AI 查"所有用户的订单"），所以 tenant_id、user_id 这些过滤条件必须在服务端强制拼到 WHERE 里，不在前端。同时要做 MCP 层 + 数据库层双重保护，防止有人绕过 MCP 直连数据库。</div>
+</details>
+
+<details class="qa">
+<summary>MCP 2025-11-05 的 OAuth 2.1 规范有什么关键变化？</summary>
+<div class="a">2025-11-05 是鉴权分水岭：正式引入 OAuth 2.1 + PKCE（强制，非可选），定义了 Discovery 端点（/.well-known/oauth-authorization-server）。Claude Code / CodeBuddy 等 Client 可以自动发现认证配置，不需要用户手动填。JWT 里要带 roles 和 tenant_id，这两个字段是功能权限和数据权限的基础。</div>
+</details>
+
+<details class="qa">
+<summary>什么时候用 OAuth 2.1，什么时候用 API Key？</summary>
+<div class="a">OAuth 2.1 是企业级方案，适合多用户、需要细粒度权限控制的场景。API Key 适合独立开发者或小团队快速验证。判断标准：用户量 &lt; 1000 先用 API Key，&gt; 1000 再迁移 OAuth 2.1。不要过度设计，OAuth 2.1 的接入成本高（需要 IdP、JWT 验证等），小团队先用简单方案跑起来。</div>
+</details>
+
+<details class="qa">
+<summary>Q5：MCP Server 的 Token 刷新机制怎么设计？刷新失败怎么办？</summary>
+<div class="a">OAuth 2.1 的 Token 生命周期通常 1 小时（Access Token）+ 30 天（Refresh Token）。刷新流程：(1) Client 检测到 Access Token 过期（401 响应）；(2) 用 Refresh Token 向 IdP 请求新 Access Token；(3) 如果 Refresh Token 也过期，引导用户重新登录。刷新失败处理：(1) 网络超时 → 指数退避重试（最多 3 次）；(2) Refresh Token 被撤销 → 强制重新认证；(3) IdP 不可用 → 降级为只读模式（不允许写操作）。生产建议：在 Token 过期前 5 分钟主动刷新（而非等 401），避免用户请求中断。</div>
+</details>
+    </section>
+
+    <footer>
+      <div class="made">TECH NOTES · AI 工程 · 整理自 AI Knowledge Hub</div>
+    </footer>
+  </main>
+</div>
+
+<script>
+(function(){var bar=document.getElementById('progress');function u(){var h=document.documentElement;bar.style.width=h.scrollTop/(h.scrollHeight-h.clientHeight)*100+'%';}window.addEventListener('scroll',u,{passive:true});u();})();
+(function(){var links=document.querySelectorAll('aside.toc nav a');var secs=Array.from(document.querySelectorAll('section.chapter'));if(!secs.length)return;function u(){var y=window.scrollY+100,cur=secs[0];for(var i=0;i<secs.length;i++){if(secs[i].offsetTop<=y)cur=secs[i];}var id=cur.id;links.forEach(function(a){a.classList.toggle('active',a.getAttribute('href')==='#'+id);});}window.addEventListener('scroll',u,{passive:true});u();})();
+</script>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,692 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MoE 混合专家 · Transformer — Tech Notes</title>
+<meta name="description" content="Mixture of Experts — 条件计算实现高效扩展">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<link rel="stylesheet" href="../assets/kh-guide.css">
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav">
+
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="ai_engineering_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 13 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>T06 · Transformer</h2>
+    <nav>
+      <ol>
+        <li><a href="#s1" class="active">MoE 核心思想</a></li>
+        <li><a href="#s2">MoE 层结构</a></li>
+        <li><a href="#s3">路由策略 (Routing)</a></li>
+        <li><a href="#s4">负载均衡 (Load Balancing)</a></li>
+        <li><a href="#s5">Switch Transformer</a></li>
+        <li><a href="#s6">Mixtral (Mistral MoE)</a></li>
+        <li><a href="#s7">DeepSeek-MoE</a></li>
+        <li><a href="#s8">训练挑战</a></li>
+        <li><a href="#s9">推理挑战</a></li>
+        <li><a href="#s10">MoE vs Dense 对比</a></li>
+        <li><a href="#qa">📝 Q&amp;A</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+    <header class="hero">
+      <div class="badge">T06 · Transformer</div>
+      <h1>MoE 混合专家</h1>
+      <p class="sub">Mixture of Experts — 条件计算实现高效扩展</p>
+      <div class="meta-row">
+        <span class="pill cyan">Transformer</span>
+        <span class="pill green">阅读 ~13 min</span>
+        <span class="pill amber">11 章</span>
+      </div>
+    </header>
+
+    <section class="chapter" id="s1">
+      <div class="ch-head"><div class="num">01</div><div class="t"><h2>MoE 核心思想</h2><div class="sub">MoE 的核心洞察： 不是所有参数都需要参与每个 Token 的计算</div></div></div>
+      <h3>条件计算 (Conditional Computation)</h3>
+<p><span class="term">MoE</span> 的核心洞察：<strong>不是所有参数都需要参与每个 Token 的计算</strong>。模型可以拥有巨量参数，但对每个输入只激活其中一小部分 <span class="term">Experts</span>。</p>
+
+<ul>
+  <li><strong>总参数量 (Total Parameters)</strong>：模型包含的所有可学习参数数量</li>
+  <li><strong>激活参数量 (Active Parameters)</strong>：处理单个 Token 时实际参与计算的参数数量</li>
+  <li><strong>目标</strong>：用更少的计算（FLOPS）获得更大模型的能力</li>
+</ul>
+
+<div class="formula">
+总参数量 ≫ 激活参数量<br>
+例：Mixtral 8x7B → 总参数 46.7B，激活参数 12.9B（约 28%）
+</div>
+
+<p>传统 Dense 模型中，每个 Token 都会经过所有参数。MoE 通过<strong>稀疏激活</strong>打破了这个约束：</p>
+<ul>
+  <li>增加参数量 → 增加模型容量/知识存储能力</li>
+  <li>保持计算量不变 → 推理速度与小模型相当</li>
+  <li>获得大模型的性能 → 因为总参数量足够大</li>
+</ul>
+
+<div class="tip-box">
+  <ul>
+    <li>MoE 的核心价值：解耦「模型容量」和「计算成本」</li>
+    <li>Dense 模型：参数量 ≈ 计算量（线性关系）</li>
+    <li>MoE 模型：参数量 ≫ 计算量（稀疏激活）</li>
+    <li>关键数字：通常只有 10%~30% 的参数被激活</li>
+  </ul>
+</div>
+
+<div class="intuition-box">
+  <p>MoE 就像一家拥有上百位专科医生的大医院——每位患者（Token）进门后，由分诊台（Router）只指派 1~2 位最相关的医生来诊治，其余医生同时服务其他患者。医院的「总知识量」极大，但每位患者的「诊疗成本」却很低。</p>
+</div>
+    </section>
+
+    <section class="chapter" id="s2">
+      <div class="ch-head"><div class="num">02</div><div class="t"><h2>MoE 层结构</h2><div class="sub">在标准 Transformer 中，每个 Block 包含 Self-Attention +…</div></div></div>
+      <h3>替换 FFN 层</h3>
+<p>在标准 Transformer 中，每个 Block 包含 Self-Attention + FFN。MoE 架构将其中的 <strong>FFN 层替换为 MoE 层</strong>（注意：Attention 层保持不变）。</p>
+
+<h3>MoE 层组成</h3>
+<ul>
+  <li><strong><span class="term">Router</span>（门控网络）</strong>：决定每个 Token 分配给哪些 Expert</li>
+  <li><strong>N 个 Expert FFN</strong>：每个 Expert 是一个独立的 FFN（结构相同，参数不同）</li>
+  <li>每个 Token 通过 Router 选择 <strong>Top-K 个 Expert</strong> 进行计算</li>
+</ul>
+
+<div class="flow">
+  <div class="flow-title">MoE 层：Router 选专家 → Top-K 加权求和</div>
+  <div class="flow-node accent"><div class="nlabel">Input Token x</div></div>
+  <div class="flow-arrow" data-label="Router 门控"></div>
+  <div class="flow-node"><div class="nlabel">Router</div><div class="nsub">gate scores：g(x) = Softmax(W_r · x)</div></div>
+  <div class="flow-arrow" data-label="选择 Top-K"></div>
+  <div class="flow-node"><div class="nlabel">N 个 Expert FFN</div>
+    <div class="kvmap"><span class="q">E1</span><span class="q">E2</span><span>E3</span><span>…</span><span>EN</span></div>
+    <div class="nsub">仅激活权重最高的 K 个（稀疏）</div>
+  </div>
+  <div class="flow-arrow" data-label="加权求和"></div>
+  <div class="flow-node good"><div class="nlabel">Output y</div></div>
+</div>
+
+<h3>MoE 层公式</h3>
+<div class="formula">
+y = Σᵢ∈TopK g_i(x) · E_i(x)<br><br>
+其中：<br>
+  g(x) = Softmax(W_r · x)  — Router 输出门控权重<br>
+  TopK = argtopk(g(x), K)  — 选择权重最大的 K 个 Expert<br>
+  E_i(x) — 第 i 个 Expert FFN 的输出<br>
+  g_i(x) — 归一化后的门控权重（仅保留 Top-K，其余置零）
+</div>
+
+<div class="tip-box">
+  <ul>
+    <li>MoE 只替换 FFN，不替换 Attention</li>
+    <li>每个 Expert 的结构完全相同（和原始 FFN 一样），只是参数不同</li>
+    <li>Router 通常是一个简单的线性层</li>
+    <li>Top-K 选择使得大部分 Expert 不参与计算 → 稀疏性</li>
+  </ul>
+</div>
+    </section>
+
+    <section class="chapter" id="s3">
+      <div class="ch-head"><div class="num">03</div><div class="t"><h2>路由策略 (Routing)</h2><div class="sub">最常见的路由策略</div></div></div>
+      <h3>Top-K Routing</h3>
+<p>最常见的路由策略。对每个 Token，Router 计算所有 Expert 的分数，选取分数最高的 K 个：</p>
+<ul>
+  <li><strong>K=1</strong>：每个 Token 只发给 1 个 Expert（Switch Transformer）</li>
+  <li><strong>K=2</strong>：每个 Token 发给 2 个 Expert（GShard, Mixtral）</li>
+  <li>K 越大 → 计算量越大，但表示能力更强</li>
+</ul>
+
+<h3>Token Choice vs Expert Choice</h3>
+<table>
+  <tr><th>策略</th><th>Token Choice</th><th>Expert Choice</th></tr>
+  <tr><td>决策方</td><td>Token 选择 Expert</td><td>Expert 选择 Token</td></tr>
+  <tr><td>方式</td><td>每个 Token 挑 Top-K 个 Expert</td><td>每个 Expert 挑 Top-K 个 Token</td></tr>
+  <tr><td>负载均衡</td><td>可能不均衡</td><td>天然均衡</td></tr>
+  <tr><td>Token 丢弃</td><td>可能（容量溢出时）</td><td>无</td></tr>
+  <tr><td>代表模型</td><td>Switch Transformer, Mixtral</td><td>Expert Choice (Zhou et al. 2022)</td></tr>
+</table>
+
+<h3>Router 的实现</h3>
+<pre><code># Router 实现伪代码
+class Router(nn.Module):
+    def __init__(self, d_model, num_experts):
+        self.gate = nn.Linear(d_model, num_experts, bias=False)
+
+    def forward(self, x):
+        # x: [batch, seq_len, d_model]
+        logits = self.gate(x)           # [batch, seq_len, num_experts]
+        scores = F.softmax(logits, dim=-1)
+        topk_scores, topk_indices = scores.topk(K, dim=-1)
+        # 归一化 Top-K scores
+        topk_scores = topk_scores / topk_scores.sum(dim=-1, keepdim=True)
+        return topk_scores, topk_indices</code></pre>
+
+<h3>路由的可微性</h3>
+<p>Top-K 选择操作本身是不可微的（argmax），但实践中通过以下方式实现梯度流动：</p>
+<ul>
+  <li>Softmax 输出的门控权重 g_i(x) 是可微的</li>
+  <li>最终输出 y = Σ g_i · E_i(x) 的梯度可以回传给 Router 和被选中的 Expert</li>
+  <li>未被选中的 Expert 不会收到梯度（这是训练不稳定的来源之一）</li>
+</ul>
+
+<div class="tip-box">
+  <ul>
+    <li>K=1 计算最快但可能欠拟合；K=2 是最常用的折中</li>
+    <li>Expert Choice 天然解决负载均衡，但实现复杂度更高</li>
+    <li>Router 的可微性：梯度只流向被选中的 Expert</li>
+    <li>面试常问：为什么不用更大的 K？→ 计算量线性增长，收益递减</li>
+  </ul>
+</div>
+    </section>
+
+    <section class="chapter" id="s4">
+      <div class="ch-head"><div class="num">04</div><div class="t"><h2>负载均衡 (Load Balancing)</h2><div class="sub">训练过程中容易出现「马太效应」：</div></div></div>
+      <h3>负载不均衡问题</h3>
+<p>训练过程中容易出现「马太效应」：</p>
+<ul>
+  <li>某些 Expert 被频繁选中 → 获得更多梯度更新 → 变得更强 → 更容易被选中</li>
+  <li>其他 Expert 很少被选中 → 参数几乎不更新 → 逐渐退化</li>
+  <li>极端情况：所有 Token 只路由到 1-2 个 Expert → <strong>Expert 坍塌</strong></li>
+</ul>
+
+<h3>辅助损失 (Auxiliary Loss)</h3>
+<p>在主损失之外添加负载均衡损失，鼓励 Token 均匀分配到各 Expert：</p>
+
+<div class="formula">
+L_balance = α · N · Σᵢ (fᵢ · pᵢ)<br><br>
+其中：<br>
+  N = Expert 数量<br>
+  fᵢ = 分配到 Expert i 的 Token 比例（实际负载）<br>
+  pᵢ = Router 分配给 Expert i 的平均概率<br>
+  α = 辅助损失权重（通常 0.01~0.1）<br><br>
+理想均匀分布时：fᵢ = pᵢ = 1/N，此时 L_balance 最小
+</div>
+
+<h3>Expert Capacity（容量因子）</h3>
+<p>限制每个 Expert 最多处理多少 Token：</p>
+<div class="formula">
+Expert Capacity = (tokens_per_batch / num_experts) × capacity_factor<br><br>
+capacity_factor 通常为 1.0~1.5<br>
+超出容量的 Token 会被丢弃（通过 residual connection 保留原始表示）
+</div>
+
+<h3>Batch Priority Routing</h3>
+<p>对于超出容量的情况，按 Router 分数排序，优先处理高分 Token：</p>
+<ul>
+  <li>计算所有 Token 对目标 Expert 的 Router 分数</li>
+  <li>按分数从高到低排序</li>
+  <li>容量内的 Token 正常处理，超出的按优先级丢弃</li>
+</ul>
+
+<div class="tip-box">
+  <ul>
+    <li>辅助损失是 MoE 训练的标配，几乎所有论文都使用</li>
+    <li>α 太大 → 强制均匀但损害性能；α 太小 → 均衡效果差</li>
+    <li>容量因子 > 1 允许一定程度的不均衡（flexibility）</li>
+    <li>面试关键：能解释「为什么会不均衡」以及「如何解决」</li>
+  </ul>
+</div>
+    </section>
+
+    <section class="chapter" id="s5">
+      <div class="ch-head"><div class="num">05</div><div class="t"><h2>Switch Transformer</h2><div class="sub">Google 2022 Switch Transformer 是 MoE 的里程碑工作，大幅…</div></div></div>
+      <p><span class="tag">Google 2022</span> Switch Transformer 是 MoE 的里程碑工作，大幅简化了 MoE 的设计。</p>
+
+<h3>核心创新：Top-1 路由</h3>
+<ul>
+  <li>每个 Token 只路由到 <strong>1 个 Expert</strong>（K=1）</li>
+  <li>相比之前的 Top-2（GShard），计算量直接减半</li>
+  <li>实验证明：Top-1 在相同计算预算下表现更好</li>
+</ul>
+
+<h3>为什么 Top-1 就够了？</h3>
+<ul>
+  <li>减少了通信开销（只需将 Token 发给 1 个 Expert）</li>
+  <li>在相同 FLOPS 预算下，可以使用更多 Expert → 更大模型容量</li>
+  <li>实验结果：Top-1 + 更多 Expert > Top-2 + 更少 Expert</li>
+  <li>简单路由 + 大规模 Expert 是更好的 scaling 策略</li>
+</ul>
+
+<h3>简化的负载均衡损失</h3>
+<div class="formula">
+L_aux = α · N · Σᵢ₌₁ᴺ (fᵢ · Pᵢ)<br><br>
+fᵢ = 实际分配到 Expert i 的 Token 比例<br>
+Pᵢ = Router 给 Expert i 的平均概率（所有 Token 上取平均）<br>
+α = 0.01（默认值）
+</div>
+
+<h3>关键结果</h3>
+<table>
+  <tr><th>模型</th><th>总参数</th><th>激活参数</th><th>Expert 数</th><th>相对 T5 加速</th></tr>
+  <tr><td>Switch-Base</td><td>7.4B</td><td>~220M</td><td>128</td><td>7x</td></tr>
+  <tr><td>Switch-Large</td><td>26B</td><td>~780M</td><td>128</td><td>7x</td></tr>
+  <tr><td>Switch-XXL</td><td>395B</td><td>~3B</td><td>128</td><td>4x</td></tr>
+</table>
+
+<div class="tip-box">
+  <ul>
+    <li>Switch Transformer 证明了「简单路由 + 大规模」的有效性</li>
+    <li>Top-1 不是「退步」，而是在计算预算约束下的最优选择</li>
+    <li>128 个 Expert 是常见配置，但每个 Token 只用 1 个</li>
+    <li>面试必知：Switch Transformer vs GShard 的关键区别</li>
+  </ul>
+</div>
+    </section>
+
+    <section class="chapter" id="s6">
+      <div class="ch-head"><div class="num">06</div><div class="t"><h2>Mixtral (Mistral MoE)</h2><div class="sub">Mistral AI 2023 Mixtral 8x7B 是开源 MoE 的代表作，展示了…</div></div></div>
+      <p><span class="tag">Mistral AI 2023</span> Mixtral 8x7B 是开源 MoE 的代表作，展示了 MoE 在实际部署中的巨大潜力。</p>
+
+<h3>架构设计</h3>
+<ul>
+  <li><strong>8 个 Expert</strong>，每个 Token 选 <strong>2 个</strong>（Top-2）</li>
+  <li>每个 Expert 的 FFN 大小与 Mistral 7B 相同</li>
+  <li>总参数量：<strong>46.7B</strong></li>
+  <li>激活参数量：<strong>12.9B</strong>（约 28%）</li>
+  <li>推理速度与 12.9B Dense 模型相当</li>
+</ul>
+
+<h3>与 Mistral 7B 的关系</h3>
+<table>
+  <tr><th>对比维度</th><th>Mistral 7B</th><th>Mixtral 8x7B</th></tr>
+  <tr><td>总参数</td><td>7.3B</td><td>46.7B</td></tr>
+  <tr><td>激活参数</td><td>7.3B（全部）</td><td>12.9B</td></tr>
+  <tr><td>FFN 结构</td><td>1 个 FFN</td><td>8 个 Expert FFN（选 2）</td></tr>
+  <tr><td>Attention</td><td>GQA</td><td>GQA（相同）</td></tr>
+  <tr><td>推理 FLOPS</td><td>~7.3B 参数计算</td><td>~12.9B 参数计算</td></tr>
+  <tr><td>性能</td><td>优秀</td><td>匹配/超越 LLaMA 2 70B</td></tr>
+</table>
+
+<h3>性能亮点</h3>
+<ul>
+  <li>以 12.9B 激活参数的计算量，达到 70B Dense 模型的性能</li>
+  <li>在大多数 benchmark 上超越 LLaMA 2 70B</li>
+  <li>推理速度是 LLaMA 2 70B 的 ~6x</li>
+  <li>证明了 MoE 在「推理效率」方面的巨大优势</li>
+</ul>
+
+<div class="tip-box">
+  <ul>
+    <li>Mixtral 的关键卖点：70B 的性能，13B 的推理速度</li>
+    <li>46.7B ≠ 8×7B，因为 Attention 层是共享的，只有 FFN 是多份</li>
+    <li>Top-2 路由：每个 Token 激活 2/8 = 25% 的 Expert 参数</li>
+    <li>知识要点：理解「总参数」和「激活参数」的区别对推理的影响</li>
+  </ul>
+</div>
+    </section>
+
+    <section class="chapter" id="s7">
+      <div class="ch-head"><div class="num">07</div><div class="t"><h2>DeepSeek-MoE</h2><div class="sub">DeepSeek 2024 DeepSeek-MoE 系列提出了细粒度 Expert 设计…</div></div></div>
+      <p><span class="tag">DeepSeek 2024</span> DeepSeek-MoE 系列提出了细粒度 Expert 设计，推动了 MoE 架构的进一步演进。</p>
+
+<h3>细粒度 Expert（Fine-grained Experts）</h3>
+<p>核心思想：与其用少量大 Expert，不如用<strong>更多更小的 Expert</strong>。</p>
+<ul>
+  <li>传统 MoE：8 个大 Expert（如 Mixtral）</li>
+  <li>DeepSeek-MoE：64 个小 Expert（每个 Expert 更小）</li>
+  <li>更细粒度 → 路由更灵活 → Expert 专业化程度更高</li>
+  <li>类比：8 个「全科医生」vs 64 个「专科医生」</li>
+</ul>
+
+<h3>共享 Expert + 路由 Expert</h3>
+<p>DeepSeek-MoE 的另一创新：</p>
+<ul>
+  <li><strong>共享 Expert (Shared Experts)</strong>：所有 Token 都会经过，捕获通用知识</li>
+  <li><strong>路由 Expert (Routed Experts)</strong>：通过 Router 选择，捕获专业知识</li>
+  <li>最终输出 = 共享 Expert 输出 + 路由 Expert 加权输出</li>
+</ul>
+
+<div class="formula">
+y = Σⱼ₌₁ˢ E_shared_j(x) + Σᵢ∈TopK g_i(x) · E_routed_i(x)<br><br>
+s = 共享 Expert 数量（如 2）<br>
+TopK 从路由 Expert 中选择（如从 64 个中选 6 个）
+</div>
+
+<h3>DeepSeek-V2/V3 的 MoE 设计</h3>
+<table>
+  <tr><th>特性</th><th>DeepSeek-V2</th><th>DeepSeek-V3</th></tr>
+  <tr><td>总参数</td><td>236B</td><td>671B</td></tr>
+  <tr><td>激活参数</td><td>21B</td><td>37B</td></tr>
+  <tr><td>路由 Expert 数</td><td>160</td><td>256</td></tr>
+  <tr><td>共享 Expert 数</td><td>2</td><td>1</td></tr>
+  <tr><td>Top-K</td><td>6</td><td>8</td></tr>
+  <tr><td>Expert 粒度</td><td>细粒度</td><td>细粒度</td></tr>
+  <tr><td>负载均衡</td><td>辅助损失</td><td>无辅助损失（动态偏置）</td></tr>
+</table>
+
+<h3>DeepSeek-V3 的无辅助损失均衡</h3>
+<p>DeepSeek-V3 提出了不使用辅助损失的负载均衡方法：</p>
+<ul>
+  <li>为每个 Expert 维护一个动态偏置项 (bias)</li>
+  <li>负载过高的 Expert → 降低偏置 → 减少被选中的概率</li>
+  <li>负载过低的 Expert → 提高偏置 → 增加被选中的概率</li>
+  <li>避免了辅助损失对主损失的干扰</li>
+</ul>
+
+<div class="tip-box">
+  <ul>
+    <li>细粒度 Expert 是 DeepSeek 的核心创新：更多更小 → 更灵活的组合</li>
+    <li>共享 Expert 解决了「通用知识」需要所有 Token 都学到的问题</li>
+    <li>DeepSeek-V3 无辅助损失均衡是重要创新，避免了 α 调参问题</li>
+    <li>面试必知：对比 Mixtral（少大 Expert）vs DeepSeek（多小 Expert）的设计哲学</li>
+  </ul>
+</div>
+    </section>
+
+    <section class="chapter" id="s8">
+      <div class="ch-head"><div class="num">08</div><div class="t"><h2>训练挑战</h2><div class="sub">MoE 训练需要专门的并行策略：</div></div></div>
+      <h3>Expert 并行 (Expert Parallelism)</h3>
+<p>MoE 训练需要专门的并行策略：</p>
+<ul>
+  <li><strong>数据并行</strong>：每个 GPU 持有完整模型，处理不同数据</li>
+  <li><strong>Expert 并行</strong>：不同 Expert 分布在不同 GPU 上</li>
+  <li>通常与数据并行/张量并行结合使用</li>
+</ul>
+
+<pre><code>Expert Parallelism 示意：
+GPU 0: Attention + Expert 1, 2
+GPU 1: Attention + Expert 3, 4
+GPU 2: Attention + Expert 5, 6
+GPU 3: Attention + Expert 7, 8
+
+每个 Token 需要被发送到对应 Expert 所在的 GPU → All-to-All 通信</code></pre>
+
+<h3>All-to-All 通信开销</h3>
+<p>Expert 并行的核心瓶颈：</p>
+<ul>
+  <li>每个 Token 计算完 Router 分数后，需要发送到目标 Expert 所在的 GPU</li>
+  <li>这是一个 <strong>All-to-All</strong> 通信操作（每个 GPU 都要向所有其他 GPU 发送数据）</li>
+  <li>通信量与 batch_size × hidden_dim 成正比</li>
+  <li>是 MoE 训练效率的主要瓶颈</li>
+</ul>
+
+<h3>训练不稳定性</h3>
+<ul>
+  <li>Router 的学习不稳定：早期训练阶段，Router 随机分配导致 Expert 学到相似表示</li>
+  <li>损失尖峰 (Loss Spikes)：MoE 训练中更容易出现突发的 loss 飙升</li>
+  <li>解决方案：Router z-loss（限制 Router logits 的大小）、降低学习率</li>
+</ul>
+
+<h3>Expert 坍塌问题</h3>
+<p>最严重的训练问题之一：</p>
+<ul>
+  <li><strong>表现</strong>：训练后只有少数 Expert 被使用，其余 Expert 的参数接近随机初始化</li>
+  <li><strong>原因</strong>：正反馈循环（强者恒强，弱者恒弱）</li>
+  <li><strong>检测</strong>：监控每个 Expert 的使用频率分布</li>
+  <li><strong>缓解</strong>：辅助损失、Expert Dropout、定期重置低使用率 Expert</li>
+</ul>
+
+<div class="tip-box">
+  <ul>
+    <li>Expert 并行是 MoE 特有的并行策略，理解 All-to-All 通信是关键</li>
+    <li>训练不稳定是 MoE 的已知问题，Switch Transformer 论文详细讨论了 loss spikes</li>
+    <li>Expert 坍塌 = 模型退化为只有少数 Expert 的「假 MoE」</li>
+    <li>面试时能解释「为什么 MoE 比 Dense 更难训练」</li>
+  </ul>
+</div>
+    </section>
+
+    <section class="chapter" id="s9">
+      <div class="ch-head"><div class="num">09</div><div class="t"><h2>推理挑战</h2><div class="sub">MoE 推理的最大挑战： 所有 Expert 都需要加载到内存中 ，即使每次只使用其中一小部…</div></div></div>
+      <h3>内存需求</h3>
+<p>MoE 推理的最大挑战：<strong>所有 Expert 都需要加载到内存中</strong>，即使每次只使用其中一小部分。</p>
+<ul>
+  <li>Mixtral 8x7B：需要加载全部 46.7B 参数（~93GB FP16）</li>
+  <li>对比：13B Dense 模型只需 ~26GB FP16</li>
+  <li>内存需求 ≈ 总参数量，而非激活参数量</li>
+</ul>
+
+<h3>Expert Offloading</h3>
+<p>将不活跃的 Expert 放到 CPU 内存或磁盘，需要时再加载：</p>
+<ul>
+  <li>GPU 内存只保留当前活跃的 Expert</li>
+  <li>根据 Router 预测，提前预取 (prefetch) 即将使用的 Expert</li>
+  <li>代价：增加延迟（PCIe/NVLink 传输时间）</li>
+  <li>适合内存受限场景（消费级 GPU）</li>
+</ul>
+
+<h3>与 Dense 模型的推理速度对比</h3>
+<table>
+  <tr><th>指标</th><th>MoE 模型</th><th>同性能 Dense 模型</th><th>同激活参数 Dense 模型</th></tr>
+  <tr><td>内存占用</td><td>高（全部参数）</td><td>高（全部参数=激活参数）</td><td>低</td></tr>
+  <tr><td>计算 FLOPS</td><td>低</td><td>高</td><td>相同</td></tr>
+  <tr><td>首 Token 延迟</td><td>中</td><td>高</td><td>低</td></tr>
+  <tr><td>吞吐量</td><td>高</td><td>低</td><td>中</td></tr>
+  <tr><td>Batch 推理效率</td><td>可能有 load imbalance</td><td>稳定</td><td>稳定</td></tr>
+</table>
+
+<div class="warn-box">
+  MoE 推理的常见误区：「激活参数少 = 推理一定快」。实际上，内存带宽瓶颈、All-to-All 通信、Expert 负载不均衡都可能影响实际推理速度。MoE 在高吞吐场景（如 serving）优势更明显。
+</div>
+
+<div class="tip-box">
+  <ul>
+    <li>MoE 推理「计算便宜但内存贵」→ memory-bound 而非 compute-bound</li>
+    <li>Expert Offloading 是资源受限时的妥协方案，会增加延迟</li>
+    <li>Batch 推理时 MoE 优势更大（因为不同 Token 可能路由到不同 Expert）</li>
+    <li>面试必知：MoE 推理的瓶颈是内存而非计算</li>
+  </ul>
+</div>
+    </section>
+
+    <section class="chapter" id="s10">
+      <div class="ch-head"><div class="num">10</div><div class="t"><h2>MoE vs Dense 对比</h2></div></div>
+      <table>
+  <tr><th>对比维度</th><th>MoE 模型</th><th>Dense 模型</th></tr>
+  <tr><td>参数效率</td><td>高（大容量小计算）</td><td>低（容量=计算）</td></tr>
+  <tr><td>训练 FLOPS</td><td>低（同性能下）</td><td>高</td></tr>
+  <tr><td>训练稳定性</td><td>较差（需要额外技巧）</td><td>较好</td></tr>
+  <tr><td>推理计算量</td><td>低</td><td>高（同性能下）</td></tr>
+  <tr><td>推理内存</td><td>高（全部参数加载）</td><td>中（参数=计算量）</td></tr>
+  <tr><td>推理延迟</td><td>通信开销增加延迟</td><td>稳定可预测</td></tr>
+  <tr><td>Scaling 效率</td><td>更好（亚线性 compute scaling）</td><td>线性</td></tr>
+  <tr><td>实现复杂度</td><td>高（路由、均衡、并行）</td><td>低</td></tr>
+  <tr><td>部署复杂度</td><td>高（需要更多内存/GPU）</td><td>相对简单</td></tr>
+  <tr><td>适用场景</td><td>大规模预训练、高吞吐推理</td><td>资源受限、低延迟</td></tr>
+</table>
+
+<h3>何时选择 MoE？</h3>
+<ul>
+  <li>✅ 需要大模型性能但计算预算有限</li>
+  <li>✅ 高吞吐推理场景（serving 大量请求）</li>
+  <li>✅ 有充足 GPU 内存（或可以做模型并行）</li>
+  <li>✅ 愿意接受更复杂的训练流程</li>
+</ul>
+
+<h3>何时选择 Dense？</h3>
+<ul>
+  <li>✅ GPU 内存有限（如单卡部署）</li>
+  <li>✅ 需要极低延迟（如实时对话）</li>
+  <li>✅ 训练资源有限，需要稳定的训练</li>
+  <li>✅ 模型蒸馏/量化部署场景</li>
+</ul>
+
+<div class="tip-box">
+  <ul>
+    <li>MoE 的核心 trade-off：用内存换计算效率</li>
+    <li>行业趋势：越来越多顶级模型采用 MoE（GPT-4 被推测为 MoE）</li>
+    <li>MoE 不是万能的 → 需要根据具体场景权衡</li>
+    <li>面试终极问题：如果让你设计一个新的 LLM，你会选 MoE 还是 Dense？为什么？</li>
+  </ul>
+</div>
+    </section>
+
+    <section class="chapter" id="qa">
+      <div class="ch-head"><div class="num">11</div><div class="t"><h2>📝 Q&amp;A</h2><div class="sub">核心思想 ：条件计算（Conditional Computation）</div></div></div>
+      <details class="qa">
+  <summary>Q1: MoE 的核心思想是什么？它解决了什么问题？</summary>
+  <div class="a">
+    <p><strong>核心思想</strong>：条件计算（Conditional Computation）。模型拥有大量参数（大容量），但每个 Token 只激活其中一小部分参数进行计算。</p>
+    <p><strong>解决的问题</strong>：传统 Dense 模型中，模型容量（参数量）和计算成本严格绑定。想要更好的性能就必须增加参数量，同时计算成本线性增长。MoE 解耦了这两者：</p>
+    <ul>
+      <li>总参数量决定模型容量/知识存储</li>
+      <li>激活参数量决定实际计算成本</li>
+      <li>结果：用 13B 的计算获得 70B 的性能</li>
+    </ul>
+  </div>
+</details>
+
+<details class="qa">
+  <summary>Q2: MoE 层的结构是什么？它替换了 Transformer 中的哪个组件？</summary>
+  <div class="a">
+    <p>MoE 层替换 Transformer Block 中的 <strong>FFN 层</strong>（Attention 层不变）。</p>
+    <p>MoE 层由两部分组成：</p>
+    <ul>
+      <li><strong>Router（门控网络）</strong>：一个线性层 + Softmax，输入 Token 表示，输出对各 Expert 的分配权重</li>
+      <li><strong>N 个 Expert FFN</strong>：每个 Expert 结构相同（和原始 FFN 一样），参数独立</li>
+    </ul>
+    <p>计算流程：Token → Router 计算分数 → 选 Top-K Expert → 加权求和输出 y = Σ g_i(x) · E_i(x)</p>
+  </div>
+</details>
+
+<details class="qa">
+  <summary>Q3: 什么是负载均衡问题？如何解决？</summary>
+  <div class="a">
+    <p><strong>问题</strong>：训练中某些 Expert 被过度使用（获得更多梯度 → 变得更强 → 更被选中），其他 Expert 闲置退化，导致 Expert 坍塌。</p>
+    <p><strong>解决方案</strong>：</p>
+    <ul>
+      <li><strong>辅助损失</strong>：L_balance = α · N · Σ(fᵢ · pᵢ)，鼓励均匀分配</li>
+      <li><strong>Expert Capacity</strong>：限制每个 Expert 最多处理的 Token 数</li>
+      <li><strong>Expert Choice</strong>：让 Expert 选择 Token（天然均衡）</li>
+      <li><strong>动态偏置</strong>（DeepSeek-V3）：无辅助损失的自适应均衡</li>
+    </ul>
+  </div>
+</details>
+
+<details class="qa">
+  <summary>Q4: Switch Transformer 的主要创新是什么？为什么 Top-1 就够了？</summary>
+  <div class="a">
+    <p><strong>主要创新</strong>：将路由简化为 Top-1（每个 Token 只发给 1 个 Expert），相比之前的 Top-2 计算量减半。</p>
+    <p><strong>为什么 Top-1 够了</strong>：</p>
+    <ul>
+      <li>在固定计算预算下，Top-1 允许使用更多 Expert → 模型容量更大</li>
+      <li>实验证明：Top-1 + 128 Expert > Top-2 + 64 Expert</li>
+      <li>减少了 All-to-All 通信（只需发送到 1 个目标 GPU）</li>
+      <li>核心洞察：对于 MoE，增加 Expert 数量比增加每个 Token 使用的 Expert 数更有效</li>
+    </ul>
+  </div>
+</details>
+
+<details class="qa">
+  <summary>Q5: Mixtral 8x7B 的参数量为什么是 46.7B 而不是 56B (8×7B)？</summary>
+  <div class="a">
+    <p>因为 <strong>Attention 层是共享的</strong>，只有 FFN 层是多份：</p>
+    <ul>
+      <li>每个 Transformer Block = Attention + FFN</li>
+      <li>MoE 只将 FFN 复制为 8 份，Attention 保持 1 份</li>
+      <li>总参数 = Attention 参数 + 8 × FFN 参数 + Embedding 参数</li>
+      <li>7B 模型中 FFN 约占 2/3 参数 → 8 × (2/3 × 7B) + 1/3 × 7B ≈ 39B + 2.3B + 其他 ≈ 46.7B</li>
+    </ul>
+    <p>激活参数 12.9B = Attention 参数 + 2 × 单个 Expert FFN 参数（Top-2 选 2 个）</p>
+  </div>
+</details>
+
+<details class="qa">
+  <summary>Q6: DeepSeek-MoE 的「细粒度 Expert」和「共享 Expert」有什么优势？</summary>
+  <div class="a">
+    <p><strong>细粒度 Expert</strong>（更多更小的 Expert）：</p>
+    <ul>
+      <li>更灵活的组合：64 个小 Expert 选 6 个 → C(64,6) 种组合 vs 8 个大 Expert 选 2 → C(8,2) = 28 种</li>
+      <li>每个 Expert 更专业化：小 Expert 可以专注于更细分的知识领域</li>
+      <li>路由更精准：细粒度选择更容易匹配 Token 的需求</li>
+    </ul>
+    <p><strong>共享 Expert</strong>：</p>
+    <ul>
+      <li>捕获所有 Token 都需要的通用知识（如语法、常识）</li>
+      <li>减轻路由 Expert 的负担：路由 Expert 可以专注于专业知识</li>
+      <li>提供训练稳定性：即使路由有问题，共享 Expert 保证基础能力</li>
+    </ul>
+  </div>
+</details>
+
+<details class="qa">
+  <summary>Q7: MoE 训练中的 Expert 坍塌是什么？如何检测和解决？</summary>
+  <div class="a">
+    <p><strong>Expert 坍塌</strong>：训练后只有少数 Expert 被有效使用，其余 Expert 参数接近随机初始化，形成「假 MoE」。</p>
+    <p><strong>原因</strong>：马太效应正反馈循环 — 被选中的 Expert 获得更多梯度更新 → 变得更强 → 更容易被选中 → ...</p>
+    <p><strong>检测方法</strong>：</p>
+    <ul>
+      <li>监控每个 Expert 的使用频率分布（应接近均匀）</li>
+      <li>计算 Expert 使用的熵（越高越均匀）</li>
+      <li>观察验证 loss 是否开始停滞</li>
+    </ul>
+    <p><strong>解决方案</strong>：辅助损失、Expert Dropout（随机禁用热门 Expert）、定期重置低使用率 Expert、Router z-loss。</p>
+  </div>
+</details>
+
+<details class="qa">
+  <summary>Q8: MoE 推理为什么「计算便宜但内存贵」？</summary>
+  <div class="a">
+    <p><strong>计算便宜</strong>：每个 Token 只激活 Top-K 个 Expert（通常占总 Expert 的 12%~25%），FLOPS 远小于同参数量的 Dense 模型。</p>
+    <p><strong>内存贵</strong>：推理时无法预知哪些 Expert 会被需要，所以<strong>所有 Expert 必须常驻内存</strong>。</p>
+    <ul>
+      <li>例如 Mixtral 46.7B：即使每次只用 12.9B 参数的计算量，内存仍需容纳全部 46.7B</li>
+      <li>相比之下，12.9B Dense 模型只需约一半内存就能达到相同计算量</li>
+    </ul>
+    <p><strong>实际影响</strong>：MoE 推理通常是 memory-bandwidth-bound 而非 compute-bound，特别是在小 batch size 时。大 batch 推理（serving 场景）时 MoE 优势更明显。</p>
+  </div>
+</details>
+
+<details class="qa">
+  <summary>Q9: Expert Parallelism 中的 All-to-All 通信是什么？为什么是瓶颈？</summary>
+  <div class="a">
+    <p><strong>All-to-All 通信</strong>：在 Expert 并行中，不同 Expert 分布在不同 GPU 上。每个 Token 需要被发送到其目标 Expert 所在的 GPU，这导致所有 GPU 都需要相互发送数据。</p>
+    <p><strong>流程</strong>：</p>
+    <ul>
+      <li>所有 GPU 并行计算 Router → 确定每个 Token 的目标 Expert</li>
+      <li>All-to-All 通信：Token 分发到目标 GPU（dispatch）</li>
+      <li>各 GPU 上的 Expert 并行处理收到的 Token</li>
+      <li>All-to-All 通信：结果发回原 GPU（combine）</li>
+    </ul>
+    <p><strong>为什么是瓶颈</strong>：通信量 = O(batch_size × seq_len × hidden_dim)，与数据规模线性增长；跨节点通信比计算慢几个数量级；负载不均衡会导致部分 GPU 空等。</p>
+  </div>
+</details>
+
+<details class="qa">
+  <summary>Q10: 如果让你设计一个新的大语言模型，你会选择 MoE 还是 Dense？如何决策？</summary>
+  <div class="a">
+    <p>这是一个开放性问题，需要根据具体约束条件回答。关键决策因素：</p>
+    <table>
+      <tr><th>选择 MoE 当</th><th>选择 Dense 当</th></tr>
+      <tr><td>目标性能要求高（如 GPT-4 级别）</td><td>部署环境内存有限</td></tr>
+      <tr><td>有充足的 GPU 集群（训练+推理）</td><td>需要单卡/少卡部署</td></tr>
+      <tr><td>高吞吐推理是核心需求</td><td>低延迟是核心需求</td></tr>
+      <tr><td>训练计算预算有限但想要大模型性能</td><td>需要简单可靠的训练流程</td></tr>
+      <tr><td>团队有 MoE 训练经验</td><td>需要方便地做蒸馏/量化</td></tr>
+    </table>
+    <p><strong>推荐回答思路</strong>：先明确约束条件（性能目标、计算预算、部署环境），然后分析 trade-off，最后给出结论并说明理由。展示你理解 MoE 不是银弹，需要权衡利弊。</p>
+  </div>
+</details>
+    </section>
+
+    <footer>
+      <div class="made">TECH NOTES · Transformer · 整理自 AI Knowledge Hub</div>
+    </footer>
+  </main>
+</div>
+
+<script>
+(function(){var bar=document.getElementById('progress');function u(){var h=document.documentElement;bar.style.width=h.scrollTop/(h.scrollHeight-h.clientHeight)*100+'%';}window.addEventListener('scroll',u,{passive:true});u();})();
+(function(){var links=document.querySelectorAll('aside.toc nav a');var secs=Array.from(document.querySelectorAll('section.chapter'));if(!secs.length)return;function u(){var y=window.scrollY+100,cur=secs[0];for(var i=0;i<secs.length;i++){if(secs[i].offsetTop<=y)cur=secs[i];}var id=cur.id;links.forEach(function(a){a.classList.toggle('active',a.getAttribute('href')==='#'+id);});}window.addEventListener('scroll',u,{passive:true});u();})();
+</script>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

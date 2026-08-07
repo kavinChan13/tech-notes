@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>高并发架构设计 · AI 工程 — Tech Notes</title>
+<meta name="description" content="流量分层 / 多级缓存 / 限流熔断 / 异步削峰 / 分布式锁 / 数据库优化">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<link rel="stylesheet" href="../assets/kh-guide.css">
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav">
+
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="ai_engineering_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 12 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>E21 · AI 工程</h2>
+    <nav>
+      <ol>
+        <li><a href="#overview" class="active">概览</a></li>
+        <li><a href="#ch1">流量分层与多级缓存</a></li>
+        <li><a href="#ch2">限流算法深度对比</a></li>
+        <li><a href="#ch3">熔断与降级策略</a></li>
+        <li><a href="#ch4">异步削峰与消息队列</a></li>
+        <li><a href="#ch5">分布式锁与并发控制</a></li>
+        <li><a href="#ch6">高并发数据库优化</a></li>
+        <li><a href="#q-a">Q&amp;A</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+    <header class="hero">
+      <div class="badge">E21 · AI 工程</div>
+      <h1>高并发架构设计</h1>
+      <p class="sub">流量分层 / 多级缓存 / 限流熔断 / 异步削峰 / 分布式锁 / 数据库优化</p>
+      <div class="meta-row">
+        <span class="pill cyan">AI 工程</span>
+        <span class="pill green">阅读 ~12 min</span>
+        <span class="pill amber">8 章</span>
+      </div>
+    </header>
+
+    <section class="chapter" id="overview">
+      <div class="ch-head"><div class="num">00</div><div class="t"><h2>概览</h2><div class="sub">高并发架构的核心思想：不是让每台服务器扛更多请求，而是让尽量多的请求在&quot;上层&quot;就被处理掉——…</div></div></div>
+      <div class="intuition-box">
+<p>高并发架构的核心思想：不是让每台服务器扛更多请求，而是让尽量多的请求在"上层"就被处理掉——缓存挡住 80%，限流挡住 10%，异步削平峰值，真正到达数据库的只有不到 10%。六层策略叠加，才能从 5,000 QPS 安全扩展到 500,000 QPS。</p>
+</div>
+    </section>
+
+    <section class="chapter" id="ch1">
+      <div class="ch-head"><div class="num">01</div><div class="t"><h2>流量分层与多级缓存</h2><div class="sub">高并发系统的第一道防线是 多级缓存 ，将请求逐层过滤，只有少量请求到达数据库</div></div></div>
+      <p>高并发系统的第一道防线是<strong>多级缓存</strong>，将请求逐层过滤，只有少量请求到达数据库。流量分层的本质是"用空间换时间"——在不同层级部署不同特性的缓存，逐级降低后端压力。</p>
+
+<div class="arch-diagram">┌─────────────────────────────────────────────────────────────────┐
+│                    多级缓存架构                                    │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  请求入口（100% 流量）                                           │
+│      │                                                          │
+│      ▼                                                          │
+│  ┌──────────────────┐                                           │
+│  │ L0: CDN / 接入层  │  静态资源直接返回，拦截 30%+ 请求          │
+│  └──────┬───────────┘                                           │
+│         ▼ 70%                                                   │
+│  ┌──────────────────┐                                           │
+│  │ L1: 本地缓存      │  Caffeine/Guava，命中率 60-70%，<1ms    │
+│  │ (进程内)          │  适合高频读低频写的热点数据                │
+│  └──────┬───────────┘                                           │
+│         ▼ 21%                                                   │
+│  ┌──────────────────┐                                           │
+│  │ L2: 分布式缓存    │  Redis Cluster，命中率 80-90%，1-5ms     │
+│  │ (Redis)           │  主缓存层，水平扩展                       │
+│  └──────┬───────────┘                                           │
+│         ▼ 2-4%                                                  │
+│  ┌──────────────────┐                                           │
+│  │ L3: 数据库        │  MySQL/PostgreSQL，10-100ms              │
+│  │ (最终数据源)      │  只承受极少请求                           │
+│  └──────────────────┘                                           │
+│                                                                 │
+│  最终到达 DB 的请求仅占总请求的 2-4%                              │
+└─────────────────────────────────────────────────────────────────┘</div>
+
+<h3>各级缓存详细对比</h3>
+
+<table>
+<tr><th>层级</th><th>缓存位置</th><th>命中率</th><th>延迟</th><th>适用场景</th><th>局限性</th></tr>
+<tr><td><strong>L0 CDN</strong></td><td>边缘节点</td><td>90%+</td><td>&lt;10ms</td><td>静态资源、API 响应缓存</td><td>动态内容不适用</td></tr>
+<tr><td><strong>L1 本地</strong></td><td>应用进程内（Caffeine）</td><td>60-70%</td><td>&lt;1ms</td><td>高频读、低频写的热点数据</td><td>多节点一致性差</td></tr>
+<tr><td><strong>L2 分布式</strong></td><td>Redis Cluster</td><td>80-90%</td><td>1-5ms</td><td>大部分业务数据</td><td>网络开销、宕机风险</td></tr>
+<tr><td><strong>L3 DB</strong></td><td>MySQL / PostgreSQL</td><td>100%</td><td>10-100ms</td><td>最终数据源</td><td>不可过载</td></tr>
+</table>
+
+<div class="intuition-box">
+<p>L1 本地缓存适合"读多写少"的热点数据（如商品基本信息、配置字典），延迟极低但存在多节点不一致问题——数据变更后，其他节点的本地缓存可能还在用旧值。解决方案：设短 TTL（30 秒）+ 数据变更时通过 Redis Pub/Sub 广播清除。强一致性场景（如库存扣减）不应使用本地缓存，直接走 Redis + DB。</p>
+</div>
+
+<div class="highlight">
+<strong>生产案例：</strong>某电商系统在促销期间 QPS 从 5,000 飙升到 50,000。多级缓存效果：L0 CDN 拦截 35%（静态资源），L1 Caffeine 拦截剩余流量的 65%，L2 Redis 拦截再剩余的 85%。最终到达数据库的 QPS 仅 2,500（总流量的 5%），P99 延迟从 800ms 降至 45ms。
+</div>
+
+<h3>缓存一致性策略</h3>
+
+<table>
+<tr><th>策略</th><th>原理</th><th>一致性</th><th>复杂度</th><th>适用场景</th></tr>
+<tr><td><strong>Cache Aside</strong></td><td>先更新 DB，再删缓存</td><td>最终一致</td><td>⭐ 低</td><td>大部分业务（推荐默认）</td></tr>
+<tr><td><strong>Read/Write Through</strong></td><td>应用只和缓存交互，缓存同步 DB</td><td>强一致</td><td>⭐⭐⭐ 高</td><td>缓存层提供事务支持</td></tr>
+<tr><td><strong>Write Behind</strong></td><td>异步批量写 DB</td><td>弱一致</td><td>⭐⭐ 中</td><td>高写入、允许数据丢失</td></tr>
+</table>
+    </section>
+
+    <section class="chapter" id="ch2">
+      <div class="ch-head"><div class="num">02</div><div class="t"><h2>限流算法深度对比</h2><div class="sub">限流是高并发系统的&quot;入口闸门&quot;——控制进入系统的请求速率，防止系统被瞬时流量冲垮</div></div></div>
+      <p>限流是高并发系统的"入口闸门"——控制进入系统的请求速率，防止系统被瞬时流量冲垮。四种主流限流算法各有适用场景，选择错误的算法可能导致用户体验恶化或系统保护失效。</p>
+
+<div class="arch-diagram">┌─────────────────────────────────────────────────────────────────┐
+│                    四种限流算法对比                                 │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  ① 固定窗口        ┌────────┐                                   │
+│  每秒最多 N 个      │████████│  ← 窗口内计数，跨窗口重置         │
+│  问题: 窗口边界突发 │        │                                    │
+│                     └────────┘                                   │
+│                                                                 │
+│  ② 滑动窗口        ┌──┐┌──┐┌──┐┌──┐                            │
+│  过去 T 秒最多 N 个 │██││██││  ││  │  ← 滑动子窗口求和          │
+│  更平滑             └──┘└──┘└──┘└──┘                            │
+│                                                                 │
+│  ③ 令牌桶          ┌────────┐                                   │
+│  固定速率生成令牌   │ 🔵🔵🔵 │  ← 桶满则丢弃，请求需消耗令牌    │
+│  允许突发           │ 🔵🔵   │  ← 突发时可一次消耗多个令牌       │
+│                     └────────┘                                   │
+│                                                                 │
+│  ④ 漏桶            ┌────────┐                                   │
+│  固定速率处理请求   │  💧💧  │  ← 多余请求排队或丢弃             │
+│  输出恒定           │  💧    │  ← 无论进入多快，出口速率不变     │
+│                     └────────┘                                   │
+└─────────────────────────────────────────────────────────────────┘</div>
+
+<h3>四种算法详细对比</h3>
+
+<table>
+<tr><th>算法</th><th>原理</th><th>优点</th><th>缺点</th><th>适用场景</th><th>实现复杂度</th></tr>
+<tr><td><strong>固定窗口</strong></td><td>每秒/每分钟最多 N 个请求</td><td>实现最简单，内存 O(1)</td><td>窗口边界突发（0.9 秒 + 1.1 秒 = 2N 请求）</td><td>粗粒度限流、非关键路径</td><td>⭐</td></tr>
+<tr><td><strong>滑动窗口</strong></td><td>过去 T 秒内最多 N 个请求</td><td>平滑限流，无边界突发</td><td>内存消耗 O(子窗口数)，精度越高越费内存</td><td>API 网关、严格限流</td><td>⭐⭐</td></tr>
+<tr><td><strong>令牌桶</strong></td><td>固定速率 r 生成令牌，请求需消耗令牌</td><td>允许突发流量（桶满时可 burst）</td><td>突发量不可控（桶容量需精心设计）</td><td>Web 服务、用户体验优先（推荐）</td><td>⭐⭐</td></tr>
+<tr><td><strong>漏桶</strong></td><td>固定速率处理请求，多余排队或丢弃</td><td>输出速率绝对恒定</td><td>无法应对突发（峰值请求被丢弃）</td><td>下游保护（如 DB 写入限速）</td><td>⭐⭐</td></tr>
+</table>
+
+<div class="highlight">
+<strong>生产案例：</strong>某支付网关使用令牌桶限流（1000 token/s，桶容量 5000）。正常流量 800 QPS 平稳运行。双十一零点突发 12,000 QPS，桶内存量 5000 个 token 瞬间消耗（允许 5 秒 burst），同时以 1000/s 速率补充。峰值过后流量回归正常。对比固定窗口方案（1000/s 硬限），令牌桶在突发期间的用户体验好 6 倍（拒绝率从 92% 降至 58%），同时下游系统未被冲击（桶容量限制保护了后端）。
+</div>
+
+<h3>分布式限流实现方案</h3>
+
+<table>
+<tr><th>方案</th><th>实现方式</th><th>优点</th><th>缺点</th></tr>
+<tr><td><strong>Redis + Lua</strong></td><td>INCR + EXPIRE 原子操作</td><td>实现简单，性能好</td><td>Redis 单点风险</td></tr>
+<tr><td><strong>Redisson</strong></td><td>RRateLimiter（令牌桶）</td><td>开箱即用，支持集群</td><td>依赖 Redisson 框架</td></tr>
+<tr><td><strong>网关层限流</strong></td><td>Nginx limit_req / Sentinel</td><td>无需改应用代码</td><td>限流粒度粗（按 IP）</td></tr>
+<tr><td><strong>本地 + 远程二级</strong></td><td>本地令牌桶粗限 + Redis 精限</td><td>兼顾性能和精度</td><td>实现复杂</td></tr>
+</table>
+    </section>
+
+    <section class="chapter" id="ch3">
+      <div class="ch-head"><div class="num">03</div><div class="t"><h2>熔断与降级策略</h2><div class="sub">熔断 （Circuit Breaker）是系统自我保护的最后一道防线——当下游服务故障时，自…</div></div></div>
+      <p><span class="term">熔断</span>（Circuit Breaker）是系统自我保护的最后一道防线——当下游服务故障时，自动切断请求，防止级联故障把整个系统拖垮。熔断器的核心思想来自电路保险丝：电流异常时自动断开，保护整个电路不被烧毁。</p>
+
+<div class="intuition-box">
+<p>限流是"控制进入的人数"（入口保护），熔断是"发现厨房着火就关门不让进"（出口保护）。没有熔断的系统，一个下游服务超时就会导致上游所有线程被阻塞等待，最终线程池耗尽，整个服务不可用——这就是级联故障（Cascading Failure）。</p>
+</div>
+
+<div class="arch-diagram">┌───────────────────────────────────────────────────────────────┐
+│                    熔断器三态状态机                              │
+├───────────────────────────────────────────────────────────────┤
+│                                                               │
+│   ┌──────────┐    失败率>阈值     ┌──────────┐               │
+│   │  Closed   │─────────────────▶│   Open    │               │
+│   │  (正常)   │                   │  (熔断)   │               │
+│   │ 放行请求  │◀─────────────────│ 快速失败  │               │
+│   └──────────┘   探测成功          └────┬─────┘               │
+│        ▲                               │                      │
+│        │                               │ 超时后                │
+│        │         探测成功              ▼                      │
+│        └─────────────────────── ┌──────────────┐              │
+│                                 │  Half-Open   │              │
+│                                 │  (探测)      │              │
+│                                 │ 放行 1-3 个  │              │
+│                                 │ 探测失败     │              │
+│                                 │ → 回到 Open  │              │
+│                                 └──────────────┘              │
+│                                                               │
+│   触发条件: 最近 N 次请求中失败率 > 阈值（如 50%）             │
+│   Open 超时: 30 秒后自动进入 Half-Open                         │
+│   Half-Open: 放行 1-3 个请求探测下游是否恢复                    │
+└───────────────────────────────────────────────────────────────┘</div>
+
+<h3>熔断参数配置</h3>
+
+<table>
+<tr><th>参数</th><th>推荐值</th><th>调优依据</th></tr>
+<tr><td><strong>失败率阈值</strong></td><td>50%</td><td>太低会误熔断，太高保护不及时</td></tr>
+<tr><td><strong>统计窗口</strong></td><td>最近 20 次请求</td><td>太小波动大，太大反应慢</td></tr>
+<tr><td><strong>Open 超时</strong></td><td>30 秒</td><td>太短下游没恢复，太长影响可用性</td></tr>
+<tr><td><strong>Half-Open 探测数</strong></td><td>1-3 个</td><td>太多会给下游增加压力</td></tr>
+<tr><td><strong>慢调用阈值</strong></td><td>P99 &gt; 3 秒</td><td>超时也算失败，防止线程堆积</td></tr>
+</table>
+
+<h3>降级策略</h3>
+
+<p>熔断触发后，需要降级策略来保证用户体验不完全中断。<span class="term">降级</span>（Degradation）是在系统压力过大或依赖故障时，主动牺牲部分功能来保证核心服务可用。</p>
+
+<table>
+<tr><th>降级策略</th><th>做法</th><th>用户体验</th><th>适用场景</th></tr>
+<tr><td><strong>返回默认值</strong></td><td>使用预设的默认响应</td><td>看到默认内容</td><td>推荐列表、评论数</td></tr>
+<tr><td><strong>返回缓存数据</strong></td><td>使用上次成功的缓存结果</td><td>看到稍旧的数据</td><td>搜索结果、排行榜</td></tr>
+<tr><td><strong>功能裁剪</strong></td><td>关闭非核心功能，保障核心链路</td><td>部分功能不可用</td><td>大促时关闭评价功能</td></tr>
+<tr><td><strong>排队等待</strong></td><td>请求入队，异步处理</td><td>看到"排队中"</td><td>秒杀下单</td></tr>
+</table>
+
+<div class="highlight">
+<strong>生产案例：</strong>某电商平台在促销期间，下游评价服务因高负载 P99 延迟飙升至 8 秒。熔断器在检测到 50% 请求超时后自动进入 Open 状态，商品详情页降级为"不显示评价"（返回默认值），核心购买流程不受影响。故障持续 15 分钟后，熔断器进入 Half-Open 探测成功，自动恢复。整个过程用户感知：评价区域短暂显示"加载中"后消失，购买完全不受影响。
+</div>
+    </section>
+
+    <section class="chapter" id="ch4">
+      <div class="ch-head"><div class="num">04</div><div class="t"><h2>异步削峰与消息队列</h2><div class="sub">高并发写场景（如秒杀下单、日志收集）的核心策略是 异步化 ：用户请求先写入消息队列立即返回&quot;…</div></div></div>
+      <p>高并发写场景（如秒杀下单、日志收集）的核心策略是<strong>异步化</strong>：用户请求先写入消息队列立即返回"排队中"，后台消费者按自身能力匀速处理。这样瞬时 10 万 QPS 被削平为持续 1,000 QPS 的稳定处理。</p>
+
+<div class="arch-diagram">┌───────────────────────────────────────────────────────────────┐
+│                    异步削峰架构                                  │
+├───────────────────────────────────────────────────────────────┤
+│                                                               │
+│  用户请求（峰值 100,000 QPS）                                  │
+│      │                                                        │
+│      ▼                                                        │
+│  ┌────────────────────┐                                       │
+│  │ 接入层：快速应答     │  → 立即返回"排队中，预计 30 秒"       │
+│  │ (写入 MQ + 返回)    │                                       │
+│  └──────┬─────────────┘                                       │
+│         │                                                     │
+│         ▼                                                     │
+│  ┌────────────────────┐                                       │
+│  │ 消息队列             │  Kafka / RocketMQ                   │
+│  │ (削峰缓冲区)         │  堆积能力: 百万级消息                │
+│  │                      │  持久化: 磁盘顺序写                 │
+│  └──────┬─────────────┘                                       │
+│         │                                                     │
+│         ▼                                                     │
+│  ┌────────────────────┐                                       │
+│  │ 消费者集群           │  按自身能力匀速消费                   │
+│  │ (1,000 QPS)         │  自动扩容: 积压 > 阈值时加实例       │
+│  └──────┬─────────────┘                                       │
+│         │                                                     │
+│         ▼                                                     │
+│  ┌────────────────────┐                                       │
+│  │ 数据库写入           │  匀速写入，不承受峰值冲击             │
+│  │ + 通知用户"完成"     │  WebSocket / 轮询推送结果            │
+│  └────────────────────┘                                       │
+└───────────────────────────────────────────────────────────────┘</div>
+
+<div class="intuition-box">
+<p>消息队列的核心价值是"时间换空间"——把瞬时的处理压力分散到一段时间内匀速消化。就像餐厅高峰期，服务员记下所有订单（写入队列）后告诉客人"请稍等"，后厨按自己的节奏一道一道做（匀速消费），而不是 100 个客人同时冲进厨房催菜。</p>
+</div>
+
+<h3>消息队列选型对比</h3>
+
+<table>
+<tr><th>特性</th><th>Kafka</th><th>RocketMQ</th><th>RabbitMQ</th></tr>
+<tr><td><strong>吞吐量</strong></td><td>百万级/s</td><td>十万级/s</td><td>万级/s</td></tr>
+<tr><td><strong>延迟</strong></td><td>ms 级</td><td>ms 级</td><td>μs 级</td></tr>
+<tr><td><strong>消息可靠性</strong></td><td>副本机制</td><td>事务消息</td><td>镜像队列</td></tr>
+<tr><td><strong>事务消息</strong></td><td>需自实现</td><td>原生支持</td><td>不支持</td></tr>
+<tr><td><strong>适用场景</strong></td><td>日志、大数据管道</td><td>电商交易、金融</td><td>即时通信、IoT</td></tr>
+</table>
+
+<div class="highlight">
+<strong>生产案例：</strong>某电商秒杀活动，零点瞬间 10 万用户同时下单。直接同步处理：DB 瞬间收到 10 万 QPS 写入，连接池 200 个连接全部阻塞，95% 请求超时失败。异步削峰后：用户点击"立即抢购" → 写入 RocketMQ → 返回"抢购中"（&lt; 50ms）；消费者集群以 2,000 QPS 匀速处理下单逻辑；约 50 秒后全部订单处理完毕。用户体验：点击后 1-2 秒收到"抢购成功"通知，全程无超时。
+</div>
+
+<div class="practice-grid">
+<div class="do">
+<ul>
+<li>消息持久化 + 至少一次投递保证</li>
+<li>消费者支持幂等处理（同一消息多次消费结果一致）</li>
+<li>设置消息 TTL 防止无限堆积</li>
+<li>监控队列积压量，超阈值自动扩容消费者</li>
+<li>死信队列处理消费失败的消息</li>
+</ul>
+</div>
+<div class="dont">
+<ul>
+<li>消费者不做幂等（网络抖动导致重复消费）</li>
+<li>不监控队列积压（积压过多可能导致磁盘满）</li>
+<li>消息体过大（应存引用而非完整数据）</li>
+<li>忽略消费延迟（延迟过高说明消费能力不足）</li>
+<li>使用消息队列做实时性要求极高的场景</li>
+</ul>
+</div>
+</div>
+    </section>
+
+    <section class="chapter" id="ch5">
+      <div class="ch-head"><div class="num">05</div><div class="t"><h2>分布式锁与并发控制</h2><div class="sub">在高并发场景下，多个服务实例同时操作共享资源时，需要 分布式锁 （Distributed L…</div></div></div>
+      <p>在高并发场景下，多个服务实例同时操作共享资源时，需要<span class="term">分布式锁</span>（Distributed Lock）来保证同一时刻只有一个实例能执行临界区代码。与单机锁的区别在于：分布式锁需要跨进程、跨节点协调。</p>
+
+<div class="intuition-box">
+<p>分布式锁的核心挑战是 CAP 定理的取舍——你不可能同时获得强一致性、高可用性和分区容错性。Redis 锁（RedLock）偏向 AP（高可用 + 分区容错），ZooKeeper 锁偏向 CP（强一致 + 分区容错）。选哪种取决于"宁可重复执行"还是"宁可等待"。</p>
+</div>
+
+<h3>三种分布式锁方案对比</h3>
+
+<table>
+<tr><th>方案</th><th>实现方式</th><th>一致性</th><th>性能</th><th>适用场景</th></tr>
+<tr><td><strong>Redis SETNX</strong></td><td>SET key value NX EX timeout</td><td>最终一致（主从切换可能丢锁）</td><td>⭐⭐⭐ 高（ms 级）</td><td>大部分业务（推荐）</td></tr>
+<tr><td><strong>RedLock</strong></td><td>5 个 Redis 节点多数派投票</td><td>较强一致</td><td>⭐⭐ 中（网络往返 × 5）</td><td>高价值操作（如库存扣减）</td></tr>
+<tr><td><strong>ZooKeeper</strong></td><td>临时有序节点 + Watch 机制</td><td>强一致（ZAB 协议）</td><td>⭐ 低（写入需多数派确认）</td><td>对一致性要求极高</td></tr>
+</table>
+
+<div class="arch-diagram">┌───────────────────────────────────────────────────────────────┐
+│               Redis 分布式锁使用流程                            │
+├───────────────────────────────────────────────────────────────┤
+│                                                               │
+│  实例 A                    Redis                  实例 B       │
+│     │                        │                       │        │
+│     │── SET lock NX EX 30 ──▶│                       │        │
+│     │◀── OK (获得锁) ────────│                       │        │
+│     │                        │◀── SET lock NX EX 30 ─│        │
+│     │   [执行临界区代码]      │── FAIL (锁已存在) ──▶│        │
+│     │                        │                       │ 等待/重试│
+│     │── DEL lock ───────────▶│                       │        │
+│     │◀── OK (释放锁) ────────│                       │        │
+│     │                        │◀── SET lock NX EX 30 ─│        │
+│     │                        │── OK (获得锁) ──────▶│        │
+│                                                               │
+│  关键约束:                                                     │
+│  ① 必须设过期时间（防死锁）                                     │
+│  ② 释放锁时验证 value（防误删别人的锁）                         │
+│  ③ 使用 Lua 脚本保证 DEL 原子性                                │
+│  ④ 看门狗机制续期（防业务没执行完锁就过期）                     │
+└───────────────────────────────────────────────────────────────┘</div>
+
+<div class="highlight">
+<strong>生产案例：</strong>某电商库存扣减场景，Redis SETNX 锁 + Lua 脚本实现。秒杀期间 5,000 个请求同时抢购 100 件库存，分布式锁保证同一时刻只有一个请求执行库存检查和扣减。最终 100 个请求成功，4,900 个请求在 50ms 内获得"库存不足"响应。对比无锁方案（直接 DECR）可能出现的超卖问题，分布式锁方案库存精确为 0，无超卖。
+</div>
+    </section>
+
+    <section class="chapter" id="ch6">
+      <div class="ch-head"><div class="num">06</div><div class="t"><h2>高并发数据库优化</h2><div class="sub">数据库是高并发系统中最脆弱的环节——前面所有策略（缓存、限流、异步）的目的都是尽量不让请求到…</div></div></div>
+      <p>数据库是高并发系统中最脆弱的环节——前面所有策略（缓存、限流、异步）的目的都是尽量不让请求到达数据库。但当请求必须到达数据库时（如写操作、缓存未命中），需要从多个层面优化数据库的承受能力。</p>
+
+<div class="arch-diagram">┌───────────────────────────────────────────────────────────────┐
+│               高并发数据库优化四层策略                           │
+├───────────────────────────────────────────────────────────────┤
+│                                                               │
+│  第一层: 读写分离                                              │
+│  ┌──────┐  写   ┌──────┐                                     │
+│  │ 应用  │─────▶│ 主库  │                                     │
+│  │       │ 读   │ (写)  │                                     │
+│  │       │─────▶├──────┤                                     │
+│  └──────┘      │ 从库  │  ← 主从复制，读压力分散到多个从库      │
+│                │ (读)  │                                     │
+│                └──────┘                                      │
+│                                                               │
+│  第二层: 分库分表（Sharding）                                   │
+│  用户表按 user_id % 16 分到 16 个库                            │
+│  订单表按 user_id % 32 分到 32 个表                            │
+│  效果: 单库 QPS 从 50,000 降至 1,563                           │
+│                                                               │
+│  第三层: 连接池优化                                             │
+│  最大连接数 = CPU 核数 × 2 + 磁盘数（PostgreSQL 经验公式）      │
+│  连接超时 3s，空闲回收 60s                                     │
+│                                                               │
+│  第四层: 慢查询优化                                             │
+│  添加复合索引、避免全表扫描、EXPLAIN 分析                       │
+│  目标: 单表查询 < 10ms，JOIN 查询 < 50ms                    │
+└───────────────────────────────────────────────────────────────┘</div>
+
+<h3>分库分表策略对比</h3>
+
+<table>
+<tr><th>策略</th><th>分片键选择</th><th>优点</th><th>缺点</th><th>适用场景</th></tr>
+<tr><td><strong>Hash 分片</strong></td><td>user_id % N</td><td>数据分布均匀</td><td>扩容需数据迁移</td><td>用户数据（推荐）</td></tr>
+<tr><td><strong>范围分片</strong></td><td>时间范围 / ID 范围</td><td>扩容方便（新增分片）</td><td>数据倾斜（热点时间段数据多）</td><td>日志、订单</td></tr>
+<tr><td><strong>一致性哈希</strong></td><td>virtual node 映射</td><td>扩缩容只需迁移少量数据</td><td>实现复杂</td><td>大规模分布式存储</td></tr>
+</table>
+
+<div class="highlight">
+<strong>生产案例：</strong>某社交平台用户表突破 5 亿条记录，单表查询 P99 超过 500ms。分库分表方案：按 user_id % 64 分到 64 个库，每个库 8 张表（共 512 个分片）。效果：单表数据量从 5 亿降至约 100 万，查询 P99 从 500ms 降至 8ms。跨分片查询（如"搜索用户名"）走 Elasticsearch 辅助索引，结果中只带 user_id，再回查对应分片获取完整数据。
+</div>
+
+<div class="practice-grid">
+<div class="do">
+<ul>
+<li>多级缓存挡住 95% 读请求</li>
+<li>令牌桶限流 + 熔断保护下游</li>
+<li>写请求异步化削峰</li>
+<li>读写分离 + 合理的分库分表</li>
+<li>连接池大小 = CPU 核数 × 2 + 磁盘数</li>
+<li>监控各层 QPS、延迟和队列积压</li>
+</ul>
+</div>
+<div class="dont">
+<ul>
+<li>只有单级缓存（命中率不够高）</li>
+<li>不限流不设熔断（故障时级联崩溃）</li>
+<li>同步处理所有写请求（瞬时压垮 DB）</li>
+<li>不分库分表扛大数据量（单表超 500 万就该考虑）</li>
+<li>连接池设太大（反而降低性能）</li>
+<li>忽略缓存与数据库的一致性</li>
+</ul>
+</div>
+</div>
+    </section>
+
+    <section class="chapter" id="q-a">
+      <div class="ch-head"><div class="num">07</div><div class="t"><h2>Q&amp;A</h2></div></div>
+      <details class="qa">
+<summary>本地缓存和分布式缓存的数据不一致怎么处理？</summary>
+<div class="a">两种策略：一是设置短过期时间（如本地缓存 30 秒过期，分布式缓存 5 分钟过期），用时间换一致性；二是数据变更时通过 Redis Pub/Sub 或消息队列广播通知所有节点清除本地缓存，实现准实时一致。强一致性场景（如库存扣减、余额变更）不应使用本地缓存，直接走分布式缓存 + 数据库。一个实用建议：本地缓存只用于"变化频率低 + 读取频率极高 + 容忍短暂不一致"的数据，如系统配置、商品分类等。</div>
+</details>
+
+<details class="qa">
+<summary>令牌桶和滑动窗口限流怎么选？</summary>
+<div class="a">如果需要允许短时突发（如 API 调用允许偶尔 burst），用令牌桶——用户体验更好，不会因为一秒内多发了一个请求就被拒绝。如果需要严格平滑限流（如保护下游数据库不被突发冲垮），用滑动窗口。大多数 Web 服务推荐令牌桶（对用户友好），大多数基础设施保护推荐滑动窗口（对系统安全）。实际生产中两者可以组合使用：网关层用令牌桶做粗限流，服务层用滑动窗口做精限流。</div>
+</details>
+
+<details class="qa">
+<summary>熔断器的 Half-Open 状态怎么探测？具体参数怎么设？</summary>
+<div class="a">熔断器进入 Open 状态后，设定一个探测间隔（推荐 30 秒）。间隔到达后切换到 Half-Open，放行 1-3 个请求探测下游。如果探测成功，切换到 Closed 恢复正常；如果探测失败，回到 Open 继续等待下一个探测间隔。Hystrix 和 Sentinel 等框架都内置了这个机制。关键参数：探测间隔 30s（太短下游没恢复，太长影响可用性）、探测请求数 1-3（太多给下游增加压力）、失败率阈值 50%（基于最近 20 次请求的统计窗口）。</div>
+</details>
+
+<details class="qa">
+<summary>消息队列积压了怎么办？</summary>
+<div class="a">三种处理方式：一是扩容消费者（增加消费者实例数），最直接的解法；二是降级非核心消息（如日志消息暂时丢弃，优先处理订单消息），通过消息优先级实现；三是设置消息 TTL（超时未处理的消息自动丢弃或转入死信队列）。监控队列积压量是关键指标——积压 > 10,000 条应触发告警。长期方案：分析消费慢的根因（是消费者能力不足，还是消息处理逻辑太重），考虑消费者并行化（单实例多线程消费）或异步化处理。</div>
+</details>
+
+<details class="qa">
+<summary>分布式锁用 Redis 还是 ZooKeeper？</summary>
+<div class="a">取决于对一致性的要求。Redis SETNX 适合大部分业务场景（性能好，ms 级延迟），但在 Redis 主从切换的极端情况下可能丢锁（主节点写入后还没来得及复制到从节点就挂了）。ZooKeeper 基于 ZAB 协议保证强一致性，不会出现丢锁，但性能较低（每次操作需要多数派确认，延迟 10-50ms）。实用建议：库存扣减等高价值操作用 RedLock（5 节点多数派）；一般业务用 Redis SETNX + 看门狗续期；对一致性要求极高的金融场景用 ZooKeeper。</div>
+</details>
+
+<details class="qa">
+<summary>什么时候该分库分表？分片键怎么选？</summary>
+<div class="a">分库分表的触发条件：单表数据量 > 500 万行，或单表 QPS > 5,000，或单库磁盘使用率 > 70%。分片键选择原则：①选择查询条件中最常用的字段（如用户系统选 user_id）；②保证数据分布均匀（避免热点分片）；③尽量减少跨分片查询。典型方案：用户系统按 user_id % N 分片，订单系统按 user_id 分片（保证同一用户的订单在同一个分片），商品系统按 product_id 分片。跨分片查询（如搜索、统计）走 Elasticsearch 或专门的聚合库。</div>
+</details>
+
+<details class="qa">
+<summary>高并发下如何设计缓存预热方案？</summary>
+<div class="a">缓存预热是防止"冷启动"导致缓存雪崩的关键措施。三种预热方案：①服务启动时主动加载热点数据——通过离线分析前一天的访问日志，识别 Top 10,000 热点 key，启动时批量加载到 Redis；②定时刷新——每 N 分钟检查热点数据是否即将过期，提前异步刷新（避免过期瞬间的击穿）；③渐进式预热——新实例启动时不立即接入全量流量，先接入 10% 流量让缓存逐步填充，10 分钟后升至 100%。生产建议：大促前 30 分钟执行全量预热，日常每 4 小时刷新一次热点数据。</div>
+</details>
+    </section>
+
+    <footer>
+      <div class="made">TECH NOTES · AI 工程 · 整理自 AI Knowledge Hub</div>
+    </footer>
+  </main>
+</div>
+
+<script>
+(function(){var bar=document.getElementById('progress');function u(){var h=document.documentElement;bar.style.width=h.scrollTop/(h.scrollHeight-h.clientHeight)*100+'%';}window.addEventListener('scroll',u,{passive:true});u();})();
+(function(){var links=document.querySelectorAll('aside.toc nav a');var secs=Array.from(document.querySelectorAll('section.chapter'));if(!secs.length)return;function u(){var y=window.scrollY+100,cur=secs[0];for(var i=0;i<secs.length;i++){if(secs[i].offsetTop<=y)cur=secs[i];}var id=cur.id;links.forEach(function(a){a.classList.toggle('active',a.getAttribute('href')==='#'+id);});}window.addEventListener('scroll',u,{passive:true});u();})();
+</script>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

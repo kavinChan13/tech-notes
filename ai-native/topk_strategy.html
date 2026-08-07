@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RAG 系统 TopK 设置策略 · AI 工程 — Tech Notes</title>
+<meta name="description" content="TopK Strategy — 召回率·噪声·成本三平衡 / Chunk大小绑定 / Reranker协同 / 动态调参">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<link rel="stylesheet" href="../assets/kh-guide.css">
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav">
+
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="ai_engineering_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 10 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>G25 · AI 工程</h2>
+    <nav>
+      <ol>
+        <li><a href="#overview" class="active">概览</a></li>
+        <li><a href="#topk">TopK 定义与常见误区</a></li>
+        <li><a href="#ch2">五大核心原则</a></li>
+        <li><a href="#ch3">生产环境配置方案</a></li>
+        <li><a href="#rrf">多路召回与 RRF 融合</a></li>
+        <li><a href="#topk-5">TopK 调优实战方法</a></li>
+        <li><a href="#ch6">优化优先级与常见陷阱</a></li>
+        <li><a href="#ch7">常见问题</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+    <header class="hero">
+      <div class="badge">G25 · AI 工程</div>
+      <h1>RAG 系统 TopK 设置策略</h1>
+      <p class="sub">TopK Strategy — 召回率·噪声·成本三平衡 / Chunk大小绑定 / Reranker协同 / 动态调参</p>
+      <div class="meta-row">
+        <span class="pill cyan">AI 工程</span>
+        <span class="pill green">阅读 ~10 min</span>
+        <span class="pill amber">8 章</span>
+      </div>
+    </header>
+
+    <section class="chapter" id="overview">
+      <div class="ch-head"><div class="num">00</div><div class="t"><h2>概览</h2><div class="sub">TopK 的本质是一道&quot;数量闸门&quot;——决定了从知识库中捞出多少候选片段供后续筛选</div></div></div>
+      <div class="flow">
+  <div class="flow-title">TopK 在 RAG 流水线中的位置与作用</div>
+  <div class="flow-node accent"><div class="nlabel">Query → Embedding → 向量库 ANN 检索 → TopK = N</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">粗召回候选池（N 条）</div><div class="nsub">TopK 越大 → 池越大（高召回）；越小 → 池越精（低噪声）</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Reranker 精排</div><div class="nsub">Cross-encoder 评分：粗召回 30 → 精排 Top 3–8</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">LLM 上下文注入</div><div class="nsub">精选 3–8 条 → 生成回答</div></div>
+</div>
+
+<div class="intuition-box">
+<p>TopK 的本质是一道"数量闸门"——决定了从知识库中捞出多少候选片段供后续筛选。设太大，噪声淹没信号且 token 成本飙升；设太小，关键信息被漏掉导致幻觉。没有"万能 TopK"，但有"场景化最优区间"。</p>
+</div>
+    </section>
+
+    <section class="chapter" id="topk">
+      <div class="ch-head"><div class="num">01</div><div class="t"><h2>TopK 定义与常见误区</h2><div class="sub">TopK 不是一个可以&quot;拍脑袋&quot;决定的超参数——它直接决定了 LLM 看到的上下文质量和数量…</div></div></div>
+      <div class="intuition-box">
+<p>TopK 不是一个可以"拍脑袋"决定的超参数——它直接决定了 LLM 看到的上下文质量和数量，是 RAG 系统中"检索质量"与"生成成本"的关键平衡点。</p>
+</div>
+
+<h3>1.1 什么是 TopK</h3>
+<p><span class="term">TopK</span> 是 RAG 系统从向量知识库中召回的候选片段（chunk）数量。当用户发起查询时，系统将 query 向量化后在向量库中执行 <span class="term">ANN（近似最近邻）</span> 检索，返回相似度最高的 K 个文档片段。这些片段经过可选的 Reranker 精排后，注入 LLM 上下文辅助生成回答。</p>
+
+<h3>1.2 三大常见误区</h3>
+
+<table>
+<tr><th>误区</th><th>表面逻辑</th><th>实际问题</th><th>正确理解</th></tr>
+<tr><td>TopK 越大越好</td><td>"召回越多越不会漏"</td><td>噪声片段涌入，LLM 被干扰；Token 成本线性增长，10K chunks 可能吃掉 50K+ tokens</td><td>召回存在边际递减，Top10→20 的新增召回率通常 <5%</td></tr>
+<tr><td>TopK 越小越精准</td><td>"只取最相关的几条"</td><td>向量检索不是完美的，Top-1 不一定是最相关的；语义相似 ≠ 信息完整</td><td>至少保留冗余量供 Reranker 筛选，粗召回应是最终输入的 3-5 倍</td></tr>
+<tr><td>所有场景用同一个 TopK</td><td>"统一配置简单"</td><td>事实查询和文档总结对信息量的需求差 3-5 倍</td><td>按问题类型动态调整：事实型 3-5，总结型 8-15</td></tr>
+</table>
+
+<div class="highlight">
+<strong>核心认知：</strong>TopK 调参的收益远低于文档解析和 Chunk 切分的质量。优化优先级应该是：文档解析质量 > Chunk 切分策略 > Metadata 标注 > Embedding 模型选型 > TopK 调参。在垃圾数据上调 TopK 毫无意义。
+</div>
+    </section>
+
+    <section class="chapter" id="ch2">
+      <div class="ch-head"><div class="num">02</div><div class="t"><h2>五大核心原则</h2><div class="sub">TopK 不是一个孤立参数，它与 Chunk 大小、Reranker、知识库质量形成了紧密的…</div></div></div>
+      <div class="intuition-box">
+<p>TopK 不是一个孤立参数，它与 Chunk 大小、Reranker、知识库质量形成了紧密的耦合关系。理解这五条原则，才能在生产中快速定位"检索效果不好是 TopK 的问题还是别的环节的问题"。</p>
+</div>
+
+<h3>2.1 原则一：动态调整</h3>
+<p>不同类型的问题对信息量的需求差异巨大。<span class="term">事实型查询</span>（"Python 3.12 的新特性有哪些"）只需 3-5 条精准片段；<span class="term">总结型任务</span>（"总结本季度销售报告"）需要 8-15 条以覆盖全局；<span class="term">复杂推理</span>则需要分阶段检索，每阶段 5-8 条。</p>
+
+<table>
+<tr><th>问题类型</th><th>推荐 TopK</th><th>信息需求特征</th><th>典型场景</th></tr>
+<tr><td>事实型（Factual）</td><td>3-5</td><td>答案集中在 1-2 个 chunk 中</td><td>产品参数查询、API 用法、FAQ</td></tr>
+<tr><td>对比型（Comparison）</td><td>5-8</td><td>需覆盖 2-3 个对象的描述</td><td>"A 和 B 的区别是什么"</td></tr>
+<tr><td>总结型（Summary）</td><td>8-15</td><td>信息分散在多个 chunk 中</td><td>"总结本周工作进展"</td></tr>
+<tr><td>复杂推理（Complex）</td><td>分阶段 5-8</td><td>多跳推理，每跳需独立检索</td><td>"分析该客户流失原因并给出建议"</td></tr>
+</table>
+
+<h3>2.2 原则二：Chunk 大小绑定</h3>
+
+<div class="formula">
+输入 Token 量 ≈ TopK × 单 Chunk 长度（tokens）
+</div>
+
+<p><span class="term">Chunk 大小</span>与 TopK 的乘积直接决定了 LLM 输入端的 token 消耗。当 Chunk=1000 tokens 时，TopK=10 意味着约 10,000 tokens 的检索上下文——这对于 128K 窗口的模型看似不多，但加上 system prompt 和对话历史，很容易逼近有效注意力窗口。实测显示，当检索上下文超过 8K tokens 时，多数 LLM 出现 <span class="term">"中间遗忘"（Lost in the Middle）</span>现象。</p>
+
+<table>
+<tr><th>Chunk 大小</th><th>TopK=5</th><th>TopK=10</th><th>TopK=20</th><th>适用场景</th></tr>
+<tr><td>200 tokens</td><td>1,000 ✅</td><td>2,000 ✅</td><td>4,000 ✅</td><td>FAQ、精确问答</td></tr>
+<tr><td>500 tokens</td><td>2,500 ✅</td><td>5,000 ✅</td><td>10,000 ⚠️</td><td>通用 RAG（推荐）</td></tr>
+<tr><td>1,000 tokens</td><td>5,000 ✅</td><td>10,000 ⚠️</td><td>20,000 ❌</td><td>长文档（需配合 Reranker）</td></tr>
+<tr><td>2,000 tokens</td><td>10,000 ⚠️</td><td>20,000 ❌</td><td>40,000 ❌</td><td>极少使用，需拆分</td></tr>
+</table>
+
+<h3>2.3 原则三：问题类型影响</h3>
+<p>生产环境中，可以通过 <span class="term">Query Classifier</span>（问题分类器）自动识别问题类型并动态设置 TopK。一个轻量 LLM（如 GPT-4o-mini）或微调的分类模型即可实现，延迟增加 <100ms。</p>
+
+<div class="arch-diagram">┌──── 动态 TopK 调度架构 ────┐
+│                             │
+│  Query ──→ Query Classifier │
+│             │               │
+│     ┌───────┼───────┐       │
+│     ▼       ▼       ▼       │
+│  事实型   总结型   推理型    │
+│  TopK=5  TopK=12  TopK=8   │
+│     │       │       │       │
+│     ▼       ▼       ▼       │
+│  向量检索  向量检索  多轮检索 │
+│     │       │       │       │
+│     └───────┼───────┘       │
+│             ▼               │
+│       Reranker 精排         │
+│             ▼               │
+│     LLM 生成（精选 3-8 条）  │
+└─────────────────────────────┘</div>
+
+<h3>2.4 原则四：Reranker 协同</h3>
+<p>有无 <span class="term">Reranker</span> 时，TopK 的设置策略截然不同。没有 Reranker 时应保守设置（5-10），因为所有召回的 chunk 都会直接进入 LLM；有 Reranker 时可以大胆粗召回（30-50），由 Reranker 精排后只保留 3-8 条。</p>
+
+<table>
+<tr><th>架构模式</th><th>粗召回 TopK</th><th>Reranker 输出</th><th>LLM 输入</th><th>延迟影响</th></tr>
+<tr><td>无 Reranker（直连）</td><td>5-10</td><td>—</td><td>5-10 条</td><td>基线</td></tr>
+<tr><td>有 Reranker（两阶段）</td><td>20-50</td><td>3-8 条</td><td>3-8 条</td><td>+30-50ms</td></tr>
+<tr><td>多路召回 + Reranker</td><td>每路 10-20</td><td>3-8 条</td><td>3-8 条</td><td>+40-80ms</td></tr>
+</table>
+
+<div class="highlight">
+<strong>Reranker 的本质作用：</strong>将"粗召回的大量候选"精排为"少量高质量结果"。这使得 TopK 的角色从"最终输出数量"变为"候选池大小"——候选池越大，Reranker 越有筛选空间，但延迟也越高。生产环境的甜蜜点通常是粗召回 30-50 条，Reranker 精排后输出 3-8 条。
+</div>
+
+<h3>2.5 原则五：知识库质量</h3>
+<p>知识库的质量直接决定了 TopK 的"安全区间"。高质量知识库（经过清洗、去重、结构化标注）中，TopK=5 就能获得很好的召回；低质量知识库（含大量噪声、重复、过时内容）则需要 TopK=10-20 才能"对冲"噪声。</p>
+
+<table>
+<tr><th>知识库质量</th><th>信号特征</th><th>推荐 TopK</th><th>优化策略</th></tr>
+<tr><td>高质量（精品库）</td><td>Top-1 命中率 >85%，无重复 chunk</td><td>3-5</td><td>保持当前质量，定期更新</td></tr>
+<tr><td>中等质量</td><td>Top-1 命中率 60-85%，有少量重复</td><td>5-10</td><td>增加 metadata 标注、去重</td></tr>
+<tr><td>低质量（原始库）</td><td>Top-1 命中率 <60%，大量噪声</td><td>10-20</td><td>优先清洗文档、优化 chunk 切分</td></tr>
+</table>
+    </section>
+
+    <section class="chapter" id="ch3">
+      <div class="ch-head"><div class="num">03</div><div class="t"><h2>生产环境配置方案</h2><div class="sub">生产环境的 TopK 配置不是&quot;一个数字&quot;，而是一个三层漏斗：向量检索粗召回 → 多路融合…</div></div></div>
+      <div class="intuition-box">
+<p>生产环境的 TopK 配置不是"一个数字"，而是一个三层漏斗：向量检索粗召回 → 多路融合 → Reranker 精排。每一层的 TopK 独立配置，最终输入 LLM 的是经过层层筛选的精选片段。</p>
+</div>
+
+<h3>3.1 标准三层漏斗配置</h3>
+
+<div class="flow">
+  <div class="flow-title">生产级 TopK 三层漏斗</div>
+  <div class="flow-node accent"><div class="nlabel">Layer 1 · 向量检索（粗召回）</div><div class="nsub">Dense TopK ≈ 10–20 · Sparse/BM25 TopK ≈ 10–20 · Graph TopK ≈ 5–10（可选）</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Layer 2 · RRF / 加权融合</div><div class="nsub">融合后候选池 ≈ 20–50 条 · 去重 + Metadata 过滤</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Layer 3 · Reranker 精排</div><div class="nsub">Cross-encoder 评分 · 精选 3–8 条 · 相似度阈值过滤（score ≥ 0.7）</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">最终 LLM 输入：3–8 条精选 chunk</div><div class="nsub">Token 消耗 ≈ 1,500–4,000 tokens</div></div>
+</div>
+
+<h3>3.2 各环节推荐值速查</h3>
+<table>
+<tr><th>环节</th><th>推荐 TopK</th><th>说明</th><th>调优信号</th></tr>
+<tr><td>Dense 向量检索</td><td>10-20</td><td>语义检索主力，覆盖语义相似文档</td><td>Recall@K 不再显著提升时停止增大</td></tr>
+<tr><td>Sparse BM25 检索</td><td>10-20</td><td>关键词精确匹配，补充专有名词</td><td>专有名词命中率</td></tr>
+<tr><td>多路召回融合（RRF）</td><td>合并后 20-50</td><td>去重后的候选池</td><td>候选池中去重率 >30% 说明两路互补性好</td></tr>
+<tr><td>Reranker 精排输出</td><td>3-8</td><td>Cross-encoder 重排后的精选结果</td><td>Precision@K > 85% 为佳</td></tr>
+<tr><td>LLM 最终输入</td><td>3-8 条</td><td>注入上下文的 chunk 数</td><td>总 token < 4K 为宜</td></tr>
+</table>
+
+<h3>3.3 成本预估公式</h3>
+<div class="formula">
+单次查询 Token 成本 ≈ (TopK_final × Chunk_tokens + Query_tokens + System_tokens) × 单价
+</div>
+<p>以 GPT-4o（$2.5/M input tokens）为例：TopK=5, Chunk=500 tokens, Query+System=500 tokens → 输入约 3,000 tokens → 单次成本约 $0.0075。若 TopK=20, Chunk=1000 → 输入约 20,500 tokens → 单次成本约 $0.051，是前者的 6.8 倍。日均 10 万次查询时，月成本差异约 $1,300。</p>
+
+<div class="practice-grid">
+<div class="do">
+<ul>
+<li>先用小 TopK（5）验证效果，逐步增大观察 Recall 变化</li>
+<li>Chunk 大小和 TopK 联合调优，控制乘积在 2000-5000 tokens</li>
+<li>有 Reranker 时粗召回可以激进（30-50），精排输出保守（3-8）</li>
+<li>按问题类型动态设置 TopK，用 Query Classifier 分流</li>
+<li>监控 Top-1 命中率，低于 60% 优先优化数据质量</li>
+</ul>
+</div>
+<div class="dont">
+<ul>
+<li>不要所有场景固定 TopK=10 然后不管</li>
+<li>不要 Chunk=2000 + TopK=20，输入 40K token 直接过载</li>
+<li>不要在没有评估集的情况下调 TopK——无指标即无优化</li>
+<li>不要忽略 Reranker——它是 TopK 效果翻倍的关键</li>
+<li>不要在低质量知识库上调大 TopK 期望改善效果</li>
+</ul>
+</div>
+</div>
+    </section>
+
+    <section class="chapter" id="rrf">
+      <div class="ch-head"><div class="num">04</div><div class="t"><h2>多路召回与 RRF 融合</h2><div class="sub">单一检索方法存在盲区：向量检索擅长语义相似但漏掉精确关键词，BM25 擅长关键词匹配但不懂同…</div></div></div>
+      <div class="intuition-box">
+<p>单一检索方法存在盲区：向量检索擅长语义相似但漏掉精确关键词，BM25 擅长关键词匹配但不懂同义词。多路召回让每种方法各取所长，再用 RRF 融合排序——这是生产 RAG 的标配。</p>
+</div>
+
+<h3>4.1 多路召回架构</h3>
+<p>生产环境的多路召回通常包含 2-3 路：<span class="term">Dense Retrieval</span>（语义向量检索）、<span class="term">Sparse Retrieval</span>（BM25 关键词检索）、可选的 <span class="term">Graph Retrieval</span>（知识图谱检索）。每路独立返回 TopK 条结果，然后通过 <span class="term">RRF（Reciprocal Rank Fusion）</span> 算法融合。</p>
+
+<div class="formula">
+RRF_score(d) = Σ 1 / (k + rank_i(d))，其中 k=60（常数）
+</div>
+
+<p>RRF 的优势在于不需要对不同检索路的分数做归一化（BM25 分数和余弦相似度的量纲完全不同），只利用排名信息即可融合。实测混合检索 Recall@10 比单一方法提升 10-15%。</p>
+
+<h3>4.2 各路 TopK 配置建议</h3>
+<table>
+<tr><th>检索路</th><th>每路 TopK</th><th>优势场景</th><th>劣势场景</th></tr>
+<tr><td>Dense 向量检索</td><td>10-20</td><td>语义相似、同义词、口语化查询</td><td>精确术语、产品编号</td></tr>
+<tr><td>Sparse BM25</td><td>10-20</td><td>专有名词、错误码、API 名称</td><td>语义 paraphrase、多语言</td></tr>
+<tr><td>Graph 知识图谱</td><td>5-10</td><td>实体关系、多跳推理</td><td>纯文本描述、非结构化内容</td></tr>
+</table>
+    </section>
+
+    <section class="chapter" id="topk-5">
+      <div class="ch-head"><div class="num">05</div><div class="t"><h2>TopK 调优实战方法</h2><div class="sub">调 TopK 不是&quot;试几个数字看哪个好&quot;——需要建立评估集、定义指标、画曲线、找肘部</div></div></div>
+      <div class="intuition-box">
+<p>调 TopK 不是"试几个数字看哪个好"——需要建立评估集、定义指标、画曲线、找肘部。系统化的调优方法能在 2-3 小时内找到最优 TopK，而盲目试数可能花几周还找不到根因。</p>
+</div>
+
+<h3>5.1 评估集构建</h3>
+<p>准备 50-200 条标准 query，每条标注"应命中的文档 ID 列表"。评估集应覆盖所有问题类型（事实型/对比型/总结型/推理型），且包含边界案例（模糊查询、跨文档查询、无答案查询）。</p>
+
+<h3>5.2 核心评估指标</h3>
+<table>
+<tr><th>指标</th><th>公式/含义</th><th>目标值</th><th>信号</th></tr>
+<tr><td>Recall@K</td><td>TopK 中命中的相关文档 / 全部相关文档</td><td>>90%</td><td>Recall@K 不再随 K 增大显著提升 → K 够了</td></tr>
+<tr><td>Precision@K</td><td>TopK 中相关文档 / K</td><td>>70%</td><td>Precision 下降过快 → K 太大</td></tr>
+<tr><td>MRR</td><td>第一个命中结果的排名倒数的均值</td><td>>0.7</td><td>MRR 低 → Top-1 不准，需优化 Embedding</td></tr>
+<tr><td>NDCG@K</td><td>考虑排序位置的相关性得分</td><td>>0.8</td><td>NDCG 高但 Recall 低 → 排序好但覆盖不足</td></tr>
+<tr><td>延迟 P50/P99</td><td>端到端检索延迟</td><td>P50<200ms, P99<500ms</td><td>P99 超标 → TopK 过大或索引需优化</td></tr>
+</table>
+
+<h3>5.3 调优步骤</h3>
+<ol>
+<li>固定 Chunk=500、Reranker=开启，TopK 从 3 开始，每次 ×2（3→5→10→20→40）</li>
+<li>每个 TopK 值跑评估集，记录 Recall@K、Precision@K、延迟</li>
+<li>画 Recall-K 曲线，找"肘部"（边际收益递减点）</li>
+<li>在肘部附近选 TopK，验证总 token 消耗是否在预算内</li>
+<li>最后微调 Reranker 的输出数量（通常 3-8）</li>
+</ol>
+
+<div class="highlight">
+<strong>优化优先级法则：</strong>当 Recall@10 < 60% 时，不要急着调大 TopK——先检查文档解析质量（PDF 解析是否丢失表格/标题）、Chunk 切分是否合理（是否把完整语义切断了）、Metadata 标注是否充分。据生产经验，优化 Chunk 切分带来的 Recall 提升（15-30%）远大于调大 TopK（5-10%）。
+</div>
+
+<h3>5.4 调优决策树</h3>
+<div class="arch-diagram">┌─────────── TopK 调优决策树 ───────────┐
+│                                        │
+│  Recall@10 < 60%?                      │
+│  ├─ YES → 先优化数据质量               │
+│  │         ├─ 检查文档解析              │
+│  │         ├─ 优化 Chunk 切分           │
+│  │         └─ 补充 Metadata 标注        │
+│  │                                      │
+│  └─ NO → Recall 随 K 增大仍在提升?      │
+│           ├─ YES → 增大 TopK 到肘部     │
+│           │         同时检查 Token 成本  │
+│           │                             │
+│           └─ NO → Recall 已饱和         │
+│                    ├─ Precision 高?      │
+│                    │  YES → 可减小 TopK  │
+│                    │  NO  → 加 Reranker  │
+│                    └─ 延迟超标?          │
+│                       YES → 减小 TopK    │
+│                       NO  → 当前值最优   │
+└────────────────────────────────────────┘</div>
+    </section>
+
+    <section class="chapter" id="ch6">
+      <div class="ch-head"><div class="num">06</div><div class="t"><h2>优化优先级与常见陷阱</h2><div class="sub">RAG 系统优化有一条铁律：&quot;垃圾进垃圾出&quot;</div></div></div>
+      <div class="intuition-box">
+<p>RAG 系统优化有一条铁律："垃圾进垃圾出"。在 TopK 上花一天时间调参，不如在文档解析和 Chunk 切分上花两小时——前者的提升上限约 10%，后者可达 30%+。</p>
+</div>
+
+<h3>6.1 优化优先级金字塔</h3>
+<table>
+<tr><th>优先级</th><th>优化环节</th><th>预期提升</th><th>投入成本</th><th>说明</th></tr>
+<tr><td>🥇 P0</td><td>文档解析质量</td><td>+15-30% Recall</td><td>高</td><td>PDF/Word 解析丢失表格、标题、层级结构</td></tr>
+<tr><td>🥈 P1</td><td>Chunk 切分策略</td><td>+10-25% Recall</td><td>中</td><td>语义切分 vs 固定长度，overlap 设置</td></tr>
+<tr><td>🥉 P2</td><td>Metadata 标注</td><td>+5-15% Precision</td><td>低</td><td>标签、分类、时间等过滤条件</td></tr>
+<tr><td>P3</td><td>Embedding 模型选型</td><td>+5-15% Recall</td><td>中</td><td>领域专用模型 vs 通用模型</td></tr>
+<tr><td>P4</td><td>TopK 调参</td><td>+3-10% Recall</td><td>低</td><td>在上述优化完成后的微调</td></tr>
+</table>
+
+<h3>6.2 生产环境常见陷阱</h3>
+<table>
+<tr><th>陷阱</th><th>现象</th><th>根因</th><th>解法</th></tr>
+<tr><td>TopK 与 Chunk 不匹配</td><td>LLM 回答"上下文太长无法处理"</td><td>TopK×Chunk > 模型有效窗口</td><td>控制乘积在 5000 tokens 内</td></tr>
+<tr><td>Reranker 未开时 TopK 过小</td><td>大量漏召回，用户抱怨"找不到"</td><td>向量检索不完美，Top-5 不够</td><td>无 Reranker 时 TopK 至少 8-10</td></tr>
+<tr><td>所有场景统一 TopK</td><td>事实问答延迟高，总结回答质量差</td><td>需求差异被忽略</td><td>Query Classifier 动态分流</td></tr>
+<tr><td>知识库过期未更新</td><td>检索到过时信息，LLM 给出错误答案</td><td>TopK 再大也救不了过期数据</td><td>建立知识库更新机制和 TTL</td></tr>
+</table>
+    </section>
+
+    <section class="chapter" id="ch7">
+      <div class="ch-head"><div class="num">07</div><div class="t"><h2>常见问题</h2></div></div>
+      <details class="qa">
+<summary>TopK 设成 100 会不会效果更好？反正大模型窗口够大。</summary>
+<div class="a">不会。虽然现代 LLM 窗口已达 128K 甚至 1M tokens，但存在两个瓶颈：（1）"中间遗忘"（Lost in the Middle）——LLM 对上下文中间位置的信息注意力显著下降，实测 Top-100 中 rank 50-80 的信息利用率 <15%；（2）成本线性增长——TopK=100, Chunk=500 → 50K tokens 输入，单次成本是 TopK=10 的 10 倍。正确做法是粗召回 30-50 + Reranker 精排到 5-8 条，既保证召回又控制输入量。</div>
+</details>
+
+<details class="qa">
+<summary>没有 Reranker 时 TopK 应该设多少？</summary>
+<div class="a">建议 8-12。没有 Reranker 意味着向量检索的结果直接作为 LLM 输入，此时 TopK 既是"候选池大小"也是"最终输出数量"。设太小（3-5）容易漏掉相关内容——向量检索的 Top-1 命中率通常只有 60-80%；设太大（20+）噪声过多干扰 LLM。8-12 是一个平衡点：提供足够的冗余量同时不至于噪声过载。如果场景允许，强烈建议加上 Reranker，效果提升通常 >15%。</div>
+</details>
+
+<details class="qa">
+<summary>如何判断当前 TopK 是否需要调整？</summary>
+<div class="a">三个关键信号：（1）Recall@K 曲线——如果 Recall@10 和 Recall@20 差距 >5%，说明 TopK=10 不够，应增大；如果差距 <2%，说明可以减小。（2）LLM 回答质量日志——如果用户频繁反馈"信息不全"，可能是 TopK 太小；如果反馈"回答混乱/不聚焦"，可能是 TopK 太大噪声过多。（3）Token 成本监控——如果检索上下文占总输入的 80% 以上，应减小 TopK 或 Chunk 大小。</div>
+</details>
+
+<details class="qa">
+<summary>多路召回时，每路的 TopK 应该怎么分配？</summary>
+<div class="a">推荐 Dense 路 15-20、BM25 路 10-15、Graph 路（如有）5-10。Dense 路是语义检索主力，分配最多配额；BM25 补充精确关键词匹配，配额适中；Graph 路处理实体关系和多跳推理，通常返回数量较少。三路合并后通过 RRF 融合排序，候选池约 20-50 条（去重后），再送 Reranker 精排。如果两路去重率 <20%，说明两路结果高度重叠，可以适当减少其中一路的 TopK。</div>
+</details>
+
+<details class="qa">
+<summary>Chunk 大小和 TopK 应该先调哪个？</summary>
+<div class="a">先定 Chunk 大小，再调 TopK。Chunk 大小取决于文档特性和信息密度——FAQ 类短文本用 200-300 tokens，技术文档用 400-600 tokens，长报告用 800-1000 tokens。Chunk 确定后，用"Chunk×TopK = 目标输入量"反推 TopK 的合理范围。例如 Chunk=500, 目标输入 3000 tokens → TopK=6。然后在此范围内用评估集微调。不建议同时调两个参数——变量太多难以归因。</div>
+</details>
+
+<details class="qa">
+<summary>TopK 调优和相似度阈值是什么关系？两者需要配合吗？</summary>
+<div class="a">需要配合，且推荐"先 TopK 再阈值"的顺序。流程是：先取 TopK=20 条候选（保证数量可控），再用相似度阈值（如 score>=0.7）过滤低质量结果。如果先阈值再 TopK，当阈值很低时可能返回上百条结果，浪费 LLM 上下文。两者的角色不同：TopK 控制"候选池上限"，阈值控制"质量下限"。生产环境推荐 TopK=15-20 + 阈值=0.65-0.75 + Reranker 三层组合。</div>
+</details>
+
+<details class="qa">
+<summary>不同 Embedding 模型对 TopK 的选择有影响吗？</summary>
+<div class="a">有显著影响。不同模型的向量分布和相似度分数范围不同：bge-large-zh 的相关文档对通常在 0.75-0.95 之间，Top-5 命中率可达 80%+；而 text-embedding-ada-002 的分布更分散，Top-5 命中率可能只有 65%。这意味着前者可以用较小的 TopK（5-8），后者需要更大的 TopK（10-15）来补偿。每次更换 Embedding 模型后，都应重新跑评估集确定最优 TopK。</div>
+</details>
+    </section>
+
+    <footer>
+      <div class="made">TECH NOTES · AI 工程 · 整理自 AI Knowledge Hub</div>
+    </footer>
+  </main>
+</div>
+
+<script>
+(function(){var bar=document.getElementById('progress');function u(){var h=document.documentElement;bar.style.width=h.scrollTop/(h.scrollHeight-h.clientHeight)*100+'%';}window.addEventListener('scroll',u,{passive:true});u();})();
+(function(){var links=document.querySelectorAll('aside.toc nav a');var secs=Array.from(document.querySelectorAll('section.chapter'));if(!secs.length)return;function u(){var y=window.scrollY+100,cur=secs[0];for(var i=0;i<secs.length;i++){if(secs[i].offsetTop<=y)cur=secs[i];}var id=cur.id;links.forEach(function(a){a.classList.toggle('active',a.getAttribute('href')==='#'+id);});}window.addEventListener('scroll',u,{passive:true});u();})();
+</script>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

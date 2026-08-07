@@ -1,0 +1,517 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent 灰度发布系统设计 · AI 工程 — Tech Notes</title>
+<meta name="description" content="Canary Release System — 三大本质差异 / 四层架构 / 粘性路由 / 渐进放量 5%→100%">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<link rel="stylesheet" href="../assets/kh-guide.css">
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav">
+
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="ai_engineering_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 16 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>A36 · AI 工程</h2>
+    <nav>
+      <ol>
+        <li><a href="#overview" class="active">概览</a></li>
+        <li><a href="#agent-vs">Agent 灰度 vs 传统微服务灰度：三大本质差异</a></li>
+        <li><a href="#ch2">四层架构：版本注册 → 质量评估 → 自动决策 → 可观测面板</a></li>
+        <li><a href="#ch3">第一层：版本注册与路由——四要素版本化与三种路由策略</a></li>
+        <li><a href="#ch4">第二层：质量评估体系——三维指标与全链路追踪</a></li>
+        <li><a href="#ch5">第三层：自动化决策——渐进放量与自动回滚</a></li>
+        <li><a href="#ch6">第四层：可观测面板与蓝绿 / 灰度选择策略</a></li>
+        <li><a href="#agent">生产实践：Agent 灰度发布的工程落地</a></li>
+        <li><a href="#q-a">Q&amp;A</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+    <header class="hero">
+      <div class="badge">A36 · AI 工程</div>
+      <h1>Agent 灰度发布系统设计</h1>
+      <p class="sub">Canary Release System — 三大本质差异 / 四层架构 / 粘性路由 / 渐进放量 5%→100%</p>
+      <div class="meta-row">
+        <span class="pill cyan">AI 工程</span>
+        <span class="pill green">阅读 ~16 min</span>
+        <span class="pill amber">9 章</span>
+      </div>
+    </header>
+
+    <section class="chapter" id="overview">
+      <div class="ch-head"><div class="num">00</div><div class="t"><h2>概览</h2><div class="sub">Agent 灰度发布的核心矛盾：传统软件灰度看的是&quot;崩没崩&quot;（HTTP 5xx、延迟飙升）…</div></div></div>
+      <div class="intuition-box">
+<p>Agent 灰度发布的核心矛盾：传统软件灰度看的是"崩没崩"（HTTP 5xx、延迟飙升），但 Agent 系统的退化是"静默的"——一个幻觉率上升的 LLM 返回的依然是 HTTP 200，所有基础设施指标一片翠绿，用户感知到的却是"回答变差了"。灰度系统必须从"监控管道健康"升级到"监控管道里流的东西的质量"。</p>
+</div>
+    </section>
+
+    <section class="chapter" id="agent-vs">
+      <div class="ch-head"><div class="num">01</div><div class="t"><h2>Agent 灰度 vs 传统微服务灰度：三大本质差异</h2><div class="sub">Agent 系统的灰度发布不能照搬微服务的那套——评估维度从&quot;活没活着&quot;扩展到&quot;活干得好不好…</div></div></div>
+      <div class="intuition-box">
+<p>Agent 系统的灰度发布不能照搬微服务的那套——评估维度从"活没活着"扩展到"活干得好不好"，路由策略从"无状态随机分"变成"有状态粘性绑"，监控目标从"报警响应"变成"静默退化检测"。这三个维度的差异决定了整个灰度系统的设计方向。</p>
+</div>
+
+<h3>1.1 差异总览</h3>
+<table>
+<tr><th>维度</th><th>传统微服务灰度</th><th>Agent 系统灰度</th><th>差异本质</th></tr>
+<tr><td><strong>评估维度</strong></td><td>错误率、延迟、吞吐量</td><td>准确性、完整度、人工兜底比例 + 传统指标</td><td>从"活没活着"到"活干得好不好"</td></tr>
+<tr><td><strong>路由策略</strong></td><td>无状态随机分流</td><td><span class="term">粘性路由</span>：同用户同链路固定版本</td><td>从"每个请求独立"到"每个会话绑定"</td></tr>
+<tr><td><strong>监控目标</strong></td><td>崩溃、超时、5xx 异常</td><td><span class="term">静默退化</span>：指标全绿但质量下降</td><td>从"看得见的问题"到"看不见的问题"</td></tr>
+<tr><td><strong>版本粒度</strong></td><td>一个二进制 + 一个 commit</td><td>模型 + 提示词 + 工具 + 工作流四要素</td><td>从"单一制品"到"行为指纹"</td></tr>
+<tr><td><strong>回滚速度</strong></td><td>秒级（切换镜像）</td><td>分钟级（需重新加载模型权重到 GPU）</td><td>从"切开关"到"热切换"</td></tr>
+</table>
+
+<h3>1.2 差异一：评估维度增加</h3>
+<p>传统微服务的灰度监控只需要回答一个问题："服务还活着吗？"——错误率没飙升、延迟没恶化、吞吐量没下降，就可以继续放量。Agent 系统的灰度监控需要同时回答三个问题：结果对不对（<span class="term">准确性</span>）、任务做完了吗（<span class="term">完整度</span>）、多少任务需要人来兜底（<span class="term">人工兜底比例</span>）。一个幻觉率从 3% 升到 8% 的 Agent，HTTP 层面一切正常，但用户体验已经严重恶化。</p>
+
+<h3>1.3 差异二：粘性路由</h3>
+<p>在传统微服务灰度中，请求是无状态的——同一个用户的前后两个请求可能分别路由到新旧版本，不会造成任何问题（因为服务不持有状态）。但 Agent 系统的核心特征是<span class="term">多步决策</span>——一个用户会话可能包含 10-20 步连续的 Agent 动作。如果第 1-5 步是旧版 Agent 做的，第 6 步突然切到新版 Agent，新版的上下文、记忆、工具调用链全部断裂，用户会感到"Agent 突然变笨了"。因此必须实现粘性路由：同一个用户在同一个会话（甚至同一天）中始终路由到同一个 Agent 版本。</p>
+
+<h3>1.4 差异三：静默退化</h3>
+<p>传统软件的退化是"响亮的"——进程崩溃、内存泄漏、连接池打满，监控系统立即报警。Agent 系统的退化是"安静的"——模型输出质量下降、工具选择准确率降低、推理链变长但结论变差，所有这些变化都不会触发任何基础设施层面的告警。根据 GrowthBook 2026 年的分析，这种"HTTP 200 但结果变差"的静默退化是 AI 系统灰度发布面临的最大风险——传统 canary 监控面板上一片绿色，但用户已经在投诉了。</p>
+
+<div class="highlight">
+<p>生产数据佐证：某客服 Agent 在提示词更新后，HTTP 错误率保持 0.1% 不变，但任务完成度从 87% 下降到 74%、人工兜底比例从 8% 飙升到 22%。如果只看传统灰度指标（错误率 + P99 延迟），这次变更会被判定为"安全"并全量上线。</p>
+</div>
+    </section>
+
+    <section class="chapter" id="ch2">
+      <div class="ch-head"><div class="num">02</div><div class="t"><h2>四层架构：版本注册 → 质量评估 → 自动决策 → 可观测面板</h2><div class="sub">Agent 灰度发布系统的四层架构是一个从&quot;版本管理&quot;到&quot;自动决策&quot;的完整闭环：第一层解决&quot;…</div></div></div>
+      <div class="intuition-box">
+<p>Agent 灰度发布系统的四层架构是一个从"版本管理"到"自动决策"的完整闭环：第一层解决"有哪些版本、流量怎么分"，第二层解决"新版本到底好不好"，第三层解决"什么时候放量、什么时候回滚"，第四层解决"人怎么看全局"。四层协同才能让每次 Agent 版本迭代都有数据支撑、有自动保护、有全局视野。</p>
+</div>
+
+<div class="arch-diagram">┌─────────────────────────────────────────────────────────────────────┐
+│                    Agent 灰度发布系统 · 四层架构                       │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│  ┌───────────────────────────────────────────────────────────────┐  │
+│  │ 第四层：可观测面板 (Observability Dashboard)                    │  │
+│  │   实时大盘 │ 版本对比 │ 指标趋势 │ 回滚历史 │ 告警面板           │  │
+│  └────────────────────────────┬──────────────────────────────────┘  │
+│                               │ 人机交互                             │
+│  ┌────────────────────────────▼──────────────────────────────────┐  │
+│  │ 第三层：自动化决策引擎 (Auto Decision Engine)                   │  │
+│  │   渐进放量 5%→20%→50%→100%                                     │  │
+│  │   自动回滚：准确度降 >5% 或 工具失败率翻倍                        │  │
+│  │   Promotion Gate：所有闸门通过才升级                              │  │
+│  └────────────────────────────┬──────────────────────────────────┘  │
+│                               │ 决策依据                             │
+│  ┌────────────────────────────▼──────────────────────────────────┐  │
+│  │ 第二层：质量评估体系 (Quality Evaluation)                       │  │
+│  │   全链路 Trace ID │ 运行指标 │ 质量指标 │ 业务指标               │  │
+│  │   LLM-as-Judge 自动评分 │ 人工抽检 │ A/B 统计检验               │  │
+│  └────────────────────────────┬──────────────────────────────────┘  │
+│                               │ 评估对象                             │
+│  ┌────────────────────────────▼──────────────────────────────────┐  │
+│  │ 第一层：版本注册与路由 (Version Registry & Routing)              │  │
+│  │   四要素版本：模型 + 提示词 + 工具 + 工作流                       │  │
+│  │   路由策略：固定比例 / Hash粘性 / 场景定向                       │  │
+│  └───────────────────────────────────────────────────────────────┘  │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘</div>
+
+<h3>各层职责与数据流</h3>
+<table>
+<tr><th>层级</th><th>核心职责</th><th>输入</th><th>输出</th><th>关键技术</th></tr>
+<tr><td>第一层：版本注册与路由</td><td>管理 Agent 版本、分配流量</td><td>用户请求</td><td>路由到指定版本</td><td>版本注册表、一致性哈希、Feature Flag</td></tr>
+<tr><td>第二层：质量评估</td><td>多维度度量版本质量</td><td>全链路 Trace</td><td>质量评分报告</td><td>LLM-as-Judge、Golden Set、统计检验</td></tr>
+<tr><td>第三层：自动决策</td><td>放量 / 暂停 / 回滚</td><td>质量评分 + 指标</td><td>路由权重变更指令</td><td>状态机、闸门规则、自动回滚策略</td></tr>
+<tr><td>第四层：可观测面板</td><td>全局可视化 + 人工干预</td><td>所有层数据</td><td>仪表盘 + 告警</td><td>Grafana/Prometheus、实时流计算</td></tr>
+</table>
+    </section>
+
+    <section class="chapter" id="ch3">
+      <div class="ch-head"><div class="num">03</div><div class="t"><h2>第一层：版本注册与路由——四要素版本化与三种路由策略</h2><div class="sub">Agent 的版本不是一份二进制文件，而是五个维度的&quot;行为指纹&quot;——模型版本、提示词版本、工…</div></div></div>
+      <div class="intuition-box">
+<p>Agent 的版本不是一份二进制文件，而是五个维度的"行为指纹"——模型版本、提示词版本、工具契约版本、配置策略版本、记忆数据版本。任何一个维度的变化都可能改变 Agent 的线上行为。版本注册中心必须将这五个维度一起冻结，才能做到"回滚到某个版本"时行为真正一致。</p>
+</div>
+
+<h3>3.1 Agent 版本的四要素模型</h3>
+<p>传统服务版本 = 一份二进制 + 一个 Git commit。Agent 版本 = 一个<span class="term">行为指纹（Behavior Fingerprint）</span>，由四个核心要素共同决定：</p>
+
+<table>
+<tr><th>要素</th><th>影响面</th><th>版本化方式</th><th>变更频率</th><th>回滚成本</th></tr>
+<tr><td><strong>模型版本</strong></td><td>能力上限、推理风格、输出格式</td><td>模型 Tag（如 <code>claude-opus-4@2026-07</code>）</td><td>低（季度级）</td><td>高（需重新加载权重）</td></tr>
+<tr><td><strong>提示词版本</strong></td><td>行为、语气、指令遵循度</td><td>Git + 内容哈希</td><td>高（每周甚至每天）</td><td>低（秒级切换）</td></tr>
+<tr><td><strong>工具版本</strong></td><td>可调用动作集合、参数契约</td><td>MCP Server 版本 + Tool Schema Hash</td><td>中（月度级）</td><td>中（需重启连接）</td></tr>
+<tr><td><strong>工作流版本</strong></td><td>任务编排、步骤顺序、分支逻辑</td><td>Config as Code（YAML in Git）</td><td>中（双周级）</td><td>低（配置热更新）</td></tr>
+</table>
+
+<p>每次发布新版本时，系统会对这四个要素取一个<span class="term">联合快照</span>，生成唯一版本号。行为指纹通过对 Golden Set 跑一遍固定种子推理，把成功率/延迟/成本聚合成一个 hash 来生成——比人工写的 changelog 更可信。</p>
+
+<h3>3.2 三种路由策略</h3>
+
+<div class="arch-diagram">┌──────────────────────────────────────────────────────────────────┐
+│                   路由决策引擎 (Router)                            │
+├──────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  用户请求 ───┬──▶ [策略A] 固定比例路由                              │
+│              │     随机分配，95% → v2.3(stable)                    │
+│              │             5%  → v2.4(canary)                     │
+│              │     适用：无状态短任务                                │
+│              │                                                    │
+│              ├──▶ [策略B] Hash 粘性路由                             │
+│              │     hash(user_id) % 100 → bucket                   │
+│              │     bucket < 5 → v2.4(canary)                      │
+│              │     bucket >= 5 → v2.3(stable)                     │
+│              │     同一用户始终路由到同一版本                          │
+│              │     适用：多轮对话、长链路任务                          │
+│              │                                                    │
+│              └──▶ [策略C] 场景定向路由                               │
+│                    根据请求特征路由：                                 │
+│                    内部测试用户 → 强制 canary                        │
+│                    VIP 客户 → 强制 stable                           │
+│                    特定场景（如代码生成）→ canary                     │
+│                    适用：精细化控制、灰度验证                         │
+│                                                                  │
+└──────────────────────────────────────────────────────────────────┘</div>
+
+<table>
+<tr><th>路由策略</th><th>实现方式</th><th>优点</th><th>缺点</th><th>适用场景</th></tr>
+<tr><td><strong>固定比例</strong></td><td>随机数 &lt; 阈值则路由到 canary</td><td>实现简单、流量均匀</td><td>同一用户可能命中不同版本</td><td>无状态短任务（单次问答）</td></tr>
+<tr><td><strong>Hash 粘性</strong></td><td>hash(user_id) 确定桶号</td><td>用户维度一致性好</td><td>某些 hash 分布不均匀</td><td>多轮对话、会话级任务</td></tr>
+<tr><td><strong>场景定向</strong></td><td>规则引擎匹配请求特征</td><td>精确控制、风险隔离</td><td>规则维护成本高</td><td>VIP 保护、定向验证</td></tr>
+</table>
+
+<div class="highlight">
+<p>粘性路由的实现细节：Hash 函数选择 MD5 或 MurmurHash 对 user_id 取模。agent-canary 开源框架（2026）的实现是 <code>hash_val = int(md5(request_id).hexdigest(), 16) % 100</code>，当 bucket &lt; canary_pct 时路由到 canary 版本。当 canary_pct 从 5% 提升到 20% 时，原来命中 0-4 的用户仍在 canary 中，新增 5-19 的用户加入——保证了灰度扩量时用户的版本一致性。</p>
+</div>
+    </section>
+
+    <section class="chapter" id="ch4">
+      <div class="ch-head"><div class="num">04</div><div class="t"><h2>第二层：质量评估体系——三维指标与全链路追踪</h2><div class="sub">质量评估是灰度系统的&quot;眼睛&quot;——没有准确的质量度量，自动决策就是盲人开车</div></div></div>
+      <div class="intuition-box">
+<p>质量评估是灰度系统的"眼睛"——没有准确的质量度量，自动决策就是盲人开车。Agent 的质量评估必须覆盖三个维度：运行指标（系统层面还活着吗）、质量指标（输出好不好）、业务指标（用户满意吗）。三者缺一不可：运行指标全绿但质量下降是静默退化，质量好但成本暴涨是静默破产，成本低但用户不买账是方向错误。</p>
+</div>
+
+<h3>4.1 全链路 Trace ID 设计</h3>
+<p>Agent 的一次任务执行可能涉及 10-20 步工具调用、3-5 次 LLM 推理、多次外部 API 交互。为了在灰度对比中做到"苹果比苹果"，必须为每次任务执行分配全局唯一的<span class="term">Trace ID</span>，串联整条执行链路。Trace 数据需要记录：每一步的输入输出、工具调用参数和返回值、LLM 的 token 消耗、各步骤的延迟、最终结果和中间状态。</p>
+
+<div class="arch-diagram">┌──────────────────────────────────────────────────────────────────┐
+│              全链路 Trace 数据模型                                  │
+├──────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  Trace ID: tr_20260722_user123_task456                            │
+│  ├── 元信息                                                       │
+│  │   ├── agent_version: v2.4-canary                               │
+│  │   ├── model: claude-opus-4@2026-07                             │
+│  │   ├── prompt_hash: sha256:8f3a...                               │
+│  │   └── routing_strategy: hash_sticky                            │
+│  │                                                                │
+│  ├── Step 1: 意图识别                                              │
+│  │   ├── input_tokens: 1,240                                      │
+│  │   ├── output_tokens: 85                                        │
+│  │   ├── latency_ms: 320                                          │
+│  │   └── result: "code_generation"                                │
+│  │                                                                │
+│  ├── Step 2: 代码生成                                              │
+│  │   ├── tool: code_interpreter                                   │
+│  │   ├── input_tokens: 2,100                                      │
+│  │   ├── output_tokens: 450                                       │
+│  │   ├── latency_ms: 1,850                                        │
+│  │   └── result: success (compile passed)                         │
+│  │                                                                │
+│  ├── Step 3: 结果验证                                              │
+│  │   ├── tool: test_runner                                        │
+│  │   ├── latency_ms: 620                                          │
+│  │   └── result: 3/3 tests passed                                 │
+│  │                                                                │
+│  └── 汇总                                                         │
+│      ├── total_tokens: 3,875                                      │
+│      ├── total_cost_usd: 0.042                                    │
+│      ├── total_latency_ms: 2,790                                  │
+│      ├── steps: 3                                                 │
+│      └── task_success: true                                       │
+│                                                                  │
+└──────────────────────────────────────────────────────────────────┘</div>
+
+<h3>4.2 三维指标体系</h3>
+<table>
+<tr><th>维度</th><th>指标名称</th><th>计算方式</th><th>健康阈值</th><th>回滚阈值</th></tr>
+<tr><td rowspan="3"><strong>运行指标</strong></td><td>P99 延迟</td><td>99 分位端到端耗时</td><td>&lt; 10s</td><td>&gt; 15s</td></tr>
+<tr><td>工具调用成功率</td><td>成功调用 / 总调用</td><td>&gt; 98%</td><td>&lt; 95%（翻倍失败率）</td></tr>
+<tr><td>错误率</td><td>HTTP 5xx / 总请求</td><td>&lt; 1%</td><td>&gt; 3%</td></tr>
+<tr><td rowspan="3"><strong>质量指标</strong></td><td>任务成功率</td><td>通过验证的任务 / 总任务</td><td>&gt; 85%</td><td>较基线下降 &gt; 5%</td></tr>
+<tr><td>工具选择准确率</td><td>正确工具 / 总工具调用</td><td>&gt; 92%</td><td>较基线下降 &gt; 8%</td></tr>
+<tr><td>幻觉率</td><td>含事实错误的输出 / 总输出</td><td>&lt; 3%</td><td>&gt; 6%</td></tr>
+<tr><td rowspan="3"><strong>业务指标</strong></td><td>人工兜底比例</td><td>需人工介入的任务 / 总任务</td><td>&lt; 10%</td><td>&gt; 20%</td></tr>
+<tr><td>用户满意度</td><td>评分 / 反馈统计</td><td>&gt; 4.2/5</td><td>&lt; 3.8/5</td></tr>
+<tr><td>单任务成本</td><td>总 token 成本 / 任务数</td><td>&lt; $0.05</td><td>&gt; $0.08（+60%）</td></tr>
+</table>
+
+<h3>4.3 质量评估的三种方法</h3>
+<table>
+<tr><th>方法</th><th>机制</th><th>成本</th><th>可靠性</th><th>适用阶段</th></tr>
+<tr><td><strong>LLM-as-Judge</strong></td><td>用小模型（如 GPT-4o-mini）对新旧版输出打分对比</td><td>低（约 $0.001/次评估）</td><td>中（与人工一致性 ~80%）</td><td>影子模式 + 灰度早期</td></tr>
+<tr><td><strong>Golden Set 回归</strong></td><td>在标准测试集上跑固定种子推理，对比成功率</td><td>中（需维护测试集）</td><td>高（确定性结果）</td><td>发布前门禁</td></tr>
+<tr><td><strong>人工抽检</strong></td><td>标注团队对随机采样进行评估</td><td>高（人力成本）</td><td>最高（金标准）</td><td>全量前终审</td></tr>
+</table>
+
+<div class="highlight">
+<p>LLM-as-Judge 的成本陷阱：影子模式意味着新版 Agent 要并行调用一遍真实 LLM，等于"双倍 token 烧钱"。2026 年的趋势是用小流量 replay（录真实流量后离线重放）+ LLM-as-Judge 自动评分替代全量并行影子，把影子成本压到原来的 1/10。金丝雀在 Agent 场景的"成功"定义也从错误率升级为"任务成功率 + 成本/任务"双闸门。</p>
+</div>
+    </section>
+
+    <section class="chapter" id="ch5">
+      <div class="ch-head"><div class="num">05</div><div class="t"><h2>第三层：自动化决策——渐进放量与自动回滚</h2><div class="sub">自动化决策是灰度系统的&quot;大脑&quot;——它根据质量评估的数据，自动决定是继续放量、暂停观察还是立即…</div></div></div>
+      <div class="intuition-box">
+<p>自动化决策是灰度系统的"大脑"——它根据质量评估的数据，自动决定是继续放量、暂停观察还是立即回滚。核心原则是"用小流量 + 强观测把不确定性关进可控笼子"。渐进放量不是简单的"等一会儿再加点流量"，而是一个有明确闸门条件、最小样本量要求和自动回滚触发的状态机。</p>
+</div>
+
+<h3>5.1 渐进放量五阶段</h3>
+
+<div class="arch-diagram">┌──────────────────────────────────────────────────────────────────┐
+│              渐进放量状态机 (Progressive Rollout FSM)               │
+├──────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  [影子模式]  0% 用户流量，并行执行、不生效                           │
+│      │                                                           │
+│      │ 闸门：Policy 模拟通过 + 无 Critical Schema 违规              │
+│      ▼                                                           │
+│  [Canary 5%]  ─── 浸泡 ≥ 1h ───▶ 闸门检查                        │
+│      │                                   │                       │
+│      │ 通过                               │ 失败                   │
+│      ▼                                   ▼                       │
+│  [Canary 20%] ─── 浸泡 ≥ 4h ───▶ 闸门检查    [自动回滚]           │
+│      │                                   │                       │
+│      │ 通过                               │ 失败                   │
+│      ▼                                   ▼                       │
+│  [Canary 50%] ─── 浸泡 ≥ 6h ───▶ 闸门检查    [自动回滚]           │
+│      │                                   │                       │
+│      │ 通过                               │ 失败                   │
+│      ▼                                   ▼                       │
+│  [全量 100%]                              [自动回滚]               │
+│                                                                  │
+│  ┌────────────────────────────────────────────┐                   │
+│  │ 回滚触发条件（任一满足即触发）：               │                   │
+│  │ ① 任务成功率较基线下降 > 5%                   │                   │
+│  │ ② 工具调用失败率翻倍（> 2x baseline）          │                   │
+│  │ ③ P99 延迟超过基线 2 倍                       │                   │
+│  │ ④ 单任务成本超过基线 60%                      │                   │
+│  │ ⑤ 人工兜底比例超过 20%                       │                   │
+│  └────────────────────────────────────────────┘                   │
+│                                                                  │
+└──────────────────────────────────────────────────────────────────┘</div>
+
+<h3>5.2 各阶段闸门条件</h3>
+<table>
+<tr><th>阶段</th><th>流量比例</th><th>最小浸泡时间</th><th>最小样本量</th><th>晋升闸门</th><th>回滚触发</th></tr>
+<tr><td>影子模式</td><td>0%（并行不生效）</td><td>30 min</td><td>100 请求</td><td>Policy 模拟通过、无 Critical 违规</td><td>任何安全拒绝激增</td></tr>
+<tr><td>Canary Stage 1</td><td>5%</td><td>1 h</td><td>50 数据点</td><td>评分 ≥ 95 或人工确认</td><td>错误率 delta &gt; 2x 基线</td></tr>
+<tr><td>Canary Stage 2</td><td>20%</td><td>4 h</td><td>200 数据点</td><td>延迟稳定 + 策略拒绝率在阈值内</td><td>持续过载或成本超标</td></tr>
+<tr><td>Canary Stage 3</td><td>50%</td><td>6 h</td><td>500 数据点</td><td>所有质量指标无退化</td><td>任何关键指标下降 &gt; 5%</td></tr>
+<tr><td>全量发布</td><td>100%</td><td>完整业务周期</td><td>—</td><td>无 Critical 事故</td><td>严重退化立即回滚</td></tr>
+</table>
+
+<h3>5.3 自动回滚的三个层级</h3>
+<table>
+<tr><th>回滚层级</th><th>速度</th><th>影响范围</th><th>适用场景</th><th>实现方式</th></tr>
+<tr><td><strong>配置回滚</strong>（Feature Flag）</td><td>秒级</td><td>仅行为变更</td><td>默认首选、提示词/策略问题</td><td>Feature Flag 开关切换</td></tr>
+<tr><td><strong>版本回滚</strong>（切 Deployment）</td><td>分钟级</td><td>全栈回退</td><td>配置修不了时</td><td>K8s Rollback / 版本路由权重归零</td></tr>
+<tr><td><strong>数据回滚</strong></td><td>小时级</td><td>记忆/语料</td><td>极慎用，可能丢用户数据</td><td>向量库 Snapshot 恢复</td></tr>
+</table>
+
+<div class="highlight">
+<p>生产环境建议：Agent 生产的默认回滚手段必须是"配置/Flag 秒级切换"，因为版本回滚要重新拉起 LLM 调用链（加载模型权重到 GPU 可能需要 3-5 分钟），数据回滚有损。自动回滚触发的"闸门"不能只看错误率，必须叠加"成本/任务"与"P99 延迟"——否则可能出现"错误率正常但 token 烧爆"的静默破产。</p>
+</div>
+    </section>
+
+    <section class="chapter" id="ch6">
+      <div class="ch-head"><div class="num">06</div><div class="t"><h2>第四层：可观测面板与蓝绿 / 灰度选择策略</h2><div class="sub">可观测面板是灰度系统的&quot;驾驶舱&quot;——它让运维和决策者在任何时候都能回答三个问题：当前哪个版本…</div></div></div>
+      <div class="intuition-box">
+<p>可观测面板是灰度系统的"驾驶舱"——它让运维和决策者在任何时候都能回答三个问题：当前哪个版本在服务多少用户？新版本比旧版本好还是差？系统是否正在自动放量或回滚？没有好的可观测面板，灰度发布就变成了"闭着眼睛开车"。</p>
+</div>
+
+<h3>6.1 可观测面板核心视图</h3>
+<table>
+<tr><th>视图</th><th>展示内容</th><th>刷新频率</th><th>告警规则</th></tr>
+<tr><td><strong>流量分布</strong></td><td>各版本当前流量占比、路由命中分布</td><td>实时（5s）</td><td>流量偏移超过设定 ±2%</td></tr>
+<tr><td><strong>质量对比</strong></td><td>新旧版本的任务成功率、幻觉率、工具准确率</td><td>分钟级</td><td>新版成功率低于旧版 5%</td></tr>
+<tr><td><strong>成本趋势</strong></td><td>单任务 token 消耗、日均成本变化</td><td>小时级</td><td>成本较基线上涨 60%</td></tr>
+<tr><td><strong>回滚历史</strong></td><td>历次发布 / 回滚的时间线、触发原因</td><td>事件触发</td><td>—</td></tr>
+<tr><td><strong>告警大盘</strong></td><td>当前活跃告警数量、类型、影响范围</td><td>实时</td><td>任意 Critical 告警</td></tr>
+</table>
+
+<h3>6.2 蓝绿部署 vs 灰度发布：如何选择</h3>
+<p><span class="term">蓝绿部署（Blue-Green Deployment）</span>和<span class="term">灰度发布（Canary Release）</span>是两种主流的发布策略，它们在风险控制粒度、资源消耗和适用场景上有本质区别：</p>
+
+<table>
+<tr><th>维度</th><th>蓝绿部署</th><th>灰度发布</th><th>选择建议</th></tr>
+<tr><td><strong>流量切换</strong></td><td>全量一刀切（0% → 100%）</td><td>渐进式（5% → 20% → 50% → 100%）</td><td>高风险变更选灰度</td></tr>
+<tr><td><strong>资源需求</strong></td><td>需要两套完整环境</td><td>共用环境、仅版本路由不同</td><td>资源受限选灰度</td></tr>
+<tr><td><strong>回滚速度</strong></td><td>秒级（切换流量指向）</td><td>秒级（路由权重归零）</td><td>都很快，蓝绿略快</td></tr>
+<tr><td><strong>风险暴露</strong></td><td>全量用户同时受影响</td><td>只有小比例用户受影响</td><td>用户体验优先选灰度</td></tr>
+<tr><td><strong>验证方式</strong></td><td>上线后全量验证</td><td>小流量验证后逐步扩大</td><td>不确定性高选灰度</td></tr>
+<tr><td><strong>适用变更类型</strong></td><td>基础设施变更、确定性改动</td><td>提示词变更、模型升级、行为变更</td><td>Agent 几乎都选灰度</td></tr>
+</table>
+
+<div class="flow">
+  <div class="flow-node accent"><div class="nlabel">蓝绿部署 vs 灰度发布 · 流量对比</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">蓝绿部署：</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">时间</div><div class="nsub">旧版(蓝) ████████████████████░░░░░░░░░░░░░ · 新版(绿) ░░░░░░░░░░░░░░░░░░░░█████████████ · ↑ 一刀切</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">灰度发布：</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">时间</div><div class="nsub">旧版 ████████████████████████░░░░░░░░░ · 新版 ░░░░░█░░░░░░████░░░░░░░░░████████ · 5% 20% 50% 100%</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">影子 + 灰度：</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">时间</div><div class="nsub">影子模式 ▓▓▓▓░░░░░░░░░░░░░░░░░░░░░░░░░░░░ · 旧版 ████████████████████████░░░░░░░░░ · 新版 ░░░░░░░░░░█░░░░░░████░░░░░░░░████ · (影子) 5% 20% 50% 100%</div></div>
+</div>
+
+<div class="highlight">
+<p>Agent 场景几乎都应该选择灰度发布而非蓝绿部署。原因：Agent 的行为是非确定性的，同样的提示词在不同输入下可能表现迥异。蓝绿部署的"全量一刀切"意味着一旦发现新版在某些场景下表现差，100% 的用户都已经受影响了。灰度发布的渐进式放量让问题在小范围内暴露，把爆炸半径控制在 5% 而不是 100%。</p>
+</div>
+    </section>
+
+    <section class="chapter" id="agent">
+      <div class="ch-head"><div class="num">07</div><div class="t"><h2>生产实践：Agent 灰度发布的工程落地</h2><div class="sub">理论再好，落地才是关键</div></div></div>
+      <div class="intuition-box">
+<p>理论再好，落地才是关键。Agent 灰度发布的工程实践涉及发布流水线设计、Config as Code 管理、最小样本量计算、以及团队常见的反模式规避。以下实践来自多个生产级 Agent 系统的经验总结。</p>
+</div>
+
+<h3>7.1 Agent 专属发布流水线</h3>
+<p>传统 CI/CD 流水线的最后一步是"部署"，但 Agent 的流水线在部署之后还有"评估门禁"——这是 Agent 独有的环节。一条完整的 Agent 发布流水线包含以下阶段：</p>
+
+<table>
+<tr><th>阶段</th><th>动作</th><th>通过条件</th><th>Agent 特有</th></tr>
+<tr><td>提示词静态检查</td><td>检查占位符、越权指令、格式合规</td><td>0 个 Critical 问题</td><td>✅</td></tr>
+<tr><td>单元测试</td><td>工具调用 Mock 测试</td><td>100% 通过</td><td>❌</td></tr>
+<tr><td>集成测试</td><td>端到端工具链测试</td><td>核心路径全通过</td><td>❌</td></tr>
+<tr><td>Golden Set 评估</td><td>在标准测试集上跑推理</td><td>任务成功率 ≥ 95%、工具准确率 ≥ 98%、单任务成本 ≤ $0.05</td><td>✅</td></tr>
+<tr><td>影子部署</td><td>并行执行、不生效、LLM-as-Judge 对比</td><td>新版评分不低于旧版</td><td>✅</td></tr>
+<tr><td>灰度放量</td><td>5% → 20% → 50% → 100%</td><td>各阶段闸门通过</td><td>✅</td></tr>
+</table>
+
+<h3>7.2 最小样本量与浸泡时间</h3>
+<p>灰度阶段最容易犯的错误是"时间太短、样本太少"——5% 的流量跑了 10 分钟，看到没有报错就急着升到 20%。但 Agent 的非确定性意味着你需要足够的样本量才能达到统计显著性。经验法则：</p>
+
+<table>
+<tr><th>指标</th><th>最小样本量</th><th>计算依据</th><th>常见错误</th></tr>
+<tr><td>任务成功率</td><td>≥ 50 个任务</td><td>检测 5% 退化、α=0.05、power=0.8</td><td>10 个任务就判定"没问题"</td></tr>
+<tr><td>工具调用准确率</td><td>≥ 200 次调用</td><td>检测 3% 退化、稀有事件需更多样本</td><td>只看成功路径忽略失败路径</td></tr>
+<tr><td>用户满意度</td><td>≥ 100 次反馈</td><td>方差大、需更多样本收敛</td><td>早期反馈有样本偏差</td></tr>
+<tr><td>长尾问题</td><td>≥ 1000 请求</td><td>&lt;1% 频率的问题需大样本暴露</td><td>以为 5% 灰度就够了</td></tr>
+</table>
+
+<div class="practice-grid">
+<div class="do">
+<ul>
+<li>所有灰度开关、路由权重、SLO 阈值都进 Git（Config as Code）</li>
+<li>每个版本生成行为指纹（Golden Set + 固定种子推理）</li>
+<li>自动回滚触发器必须包含成本闸门（防静默破产）</li>
+<li>粘性路由按 user_id 哈希，保证会话一致性</li>
+<li>灰度扩量时保持原有灰度用户的版本不变</li>
+<li>影子模式用离线重放而非全量并行（成本降 10 倍）</li>
+</ul>
+</div>
+<div class="dont">
+<ul>
+<li>不要只看错误率判断灰度成败（静默退化看不见）</li>
+<li>不要在灰度阶段跳过最小浸泡时间</li>
+<li>不要用无状态随机路由做多轮对话的灰度</li>
+<li>不要在 VIP 客户上首先灰度（用场景定向保护）</li>
+<li>不要跳过 Golden Set 评估直接上影子模式</li>
+<li>不要同时灰度多个版本（变量混淆无法归因）</li>
+</ul>
+</div>
+</div>
+
+<h3>7.3 生产案例：客服 Agent 的灰度发布</h3>
+<p>某电商平台的客服 Agent 在升级提示词版本时，采用以下灰度发布流程：</p>
+
+<ol>
+<li><strong>发布前</strong>：在 Golden Set（300 条标准问题）上跑评估，新版任务成功率 93%（旧版 91%），工具准确率 97%（旧版 96%），单任务成本 $0.038（旧版 $0.035）。评估通过。</li>
+<li><strong>影子模式</strong>：30 分钟内并行处理 240 个真实请求，LLM-as-Judge 对比评分：新版 4.3/5、旧版 4.1/5。通过。</li>
+<li><strong>Canary 5%</strong>：Hash 粘性路由，约 1200 用户/天进入新版。浸泡 2 小时后检查：任务成功率 92.5%（旧版 91.2%）、人工兜底比例 7%（旧版 9%）、P99 延迟 6.2s（旧版 5.8s）。通过。</li>
+<li><strong>Canary 20%</strong>：扩量到 4800 用户/天。浸泡 6 小时，发现长尾场景（退款争议）的成功率从 78% 降到 71%，触发局部告警。团队调整提示词中的退款话术后重新灰度。</li>
+<li><strong>全量上线</strong>：修复后重新走灰度流程，50% 浸泡 12 小时无告警后全量发布。上线后一周监控：人工兜底比例从 9% 降到 6%，每月节省约 320 小时人工。</li>
+</ol>
+    </section>
+
+    <section class="chapter" id="q-a">
+      <div class="ch-head"><div class="num">08</div><div class="t"><h2>Q&amp;A</h2><div class="sub">A36 · Agent 灰度发布系统设计 | AI Knowledge Base</div></div></div>
+      <details class="qa">
+<summary>Agent 灰度发布为什么不能只看错误率和延迟？</summary>
+<div class="a">因为 Agent 系统最危险的退化是"静默退化"——一个幻觉率上升的 LLM 返回的依然是 HTTP 200，所有基础设施指标一片翠绿。生产案例中，某 Agent 在提示词更新后错误率保持 0.1% 不变，但任务完成度从 87% 降到 74%、人工兜底比例从 8% 飙升到 22%。只看传统灰度指标，这次变更会被判定为"安全"。Agent 灰度必须叠加质量指标（任务成功率、幻觉率、工具选择准确率）和业务指标（人工兜底比例、用户满意度、单任务成本），才能捕捉到这些"活着但变差了"的退化。</div>
+</details>
+
+<details class="qa">
+<summary>粘性路由在灰度扩量时如何保证用户不跳版本？</summary>
+<div class="a">粘性路由通过 hash(user_id) % 100 确定用户的桶号。当 canary_pct 从 5% 提升到 20% 时，桶号 0-4 的用户原本就在 canary 中、保持不变，新增桶号 5-19 的用户加入 canary。关键是 hash 函数的稳定性——只要 user_id 不变，桶号就永远不变。这保证了灰度扩量时"老用户不跳版本、新用户按比例加入"的一致性。如果需要缩容（从 20% 降回 5%），桶号 5-19 的用户会被切回 stable，但他们在新版中产生的会话状态需要考虑迁移或丢弃。</div>
+</details>
+
+<details class="qa">
+<summary>影子模式的成本问题如何解决？</summary>
+<div class="a">影子模式意味着新版 Agent 要并行调用一遍真实 LLM，等于"双倍 token 烧钱"——一个日均处理 10000 个请求的 Agent，影子模式的额外成本可能是每天 $500-$2000。2026 年的主流做法是用"小流量离线重放"替代全量并行影子：录制真实流量（用户输入 + 上下文），在离线环境中用新版 Agent 重放，然后用 LLM-as-Judge 自动评分对比。这种方式把影子成本压到原来的 1/10（只重放 10% 的流量），同时保留了行为验证的能力。</div>
+</details>
+
+<details class="qa">
+<summary>蓝绿部署在什么情况下比灰度发布更合适？</summary>
+<div class="a">蓝绿部署在三种情况下更合适：①基础设施层变更（如更换推理引擎、升级 GPU 驱动），这类变更是确定性的，不存在"静默退化"问题，一刀切反而更干净；②资源充足且需要最快回滚速度的场景，蓝绿的两套环境独立运行，回滚只需要切换流量指向（毫秒级）；③变更范围明确且已经过充分测试（如修复一个已知 bug），不需要渐进验证。但对于 Agent 最常见的变更类型——提示词调整、模型升级、工具变更——灰度发布几乎总是更好的选择，因为这些变更的影响是非确定性的。</div>
+</details>
+
+<details class="qa">
+<summary>自动回滚的闸门阈值应该如何设定？</summary>
+<div class="a">闸门阈值应该基于历史基线而非绝对数值。推荐做法：收集旧版至少 7 天的运行数据作为基线，闸门设为"较基线退化 X%"而非"低于绝对值 Y"。具体数值建议：任务成功率下降 &gt;5% 触发回滚（行业经验值，能捕捉到用户可感知的退化）、工具调用失败率翻倍（从 2% 到 4% 就意味着工具链出了问题）、P99 延迟超过基线 2 倍（用户容忍度上限）、单任务成本超过基线 60%（防止"效果好但烧钱"的静默破产）。关键是不能只设一个闸门——多维闸门的组合才能覆盖 Agent 的各种退化模式。</div>
+</details>
+
+<details class="qa">
+<summary>如何同时灰度提示词变更和模型升级？</summary>
+<div class="a">核心原则：不要同时灰度多个变量。如果同时变更提示词和模型，当质量退化时无法归因——到底是提示词的问题还是模型的问题？正确做法是分步灰度：先固定模型版本、只灰度提示词变更，验证通过后固定新提示词、再灰度新模型。每一步都有独立的闸门和回滚点。如果时间紧迫必须并行，至少要做到"正交灰度"——用不同的用户分组分别测试两个变更（A 组测提示词、B 组测模型、C 组测组合），确保可以独立归因。</div>
+</details>
+
+<details class="qa">
+<summary>灰度发布系统的版本注册中心应该怎么设计？</summary>
+<div class="a">版本注册中心需要存储 Agent 版本的"四要素联合快照"——模型 Tag、提示词内容哈希、工具 Schema 哈希、工作流配置哈希——以及由此生成的行为指纹。实现上推荐使用"配置即代码"（Config as Code）模式：所有灰度开关、路由权重、SLO 阈值都以 YAML 形式存储在 Git 中，每次发布等于一次 PR，可回放、可审计。版本注册表可以用 etcd 或 Redis 实现热读取（路由决策需要毫秒级响应），同时用 Git 作为持久存储和变更审计的来源。关键设计点：版本号必须与四要素的联合哈希绑定，单独修改任何一个要素都应该生成新版本号。</div>
+</details>
+
+<details class="qa">
+<summary>Agent 灰度中的"行为指纹"是什么？怎么生成？</summary>
+<div class="a">行为指纹（Behavior Fingerprint）是对 Agent 版本行为的客观量化签名，比人工写的 changelog 更可靠。生成方式：在 Golden Set（标准测试集）上用固定随机种子跑一遍推理，收集任务成功率、平均延迟、平均 token 消耗、工具调用分布等指标，将这些数值拼接后取 SHA-256 哈希。两个版本号不同但行为指纹相同的 Agent 在统计意义上行为一致（可能是仅改了注释）。行为指纹的价值在于：灰度对比时可以直接对比新旧版本的指纹差异，快速发现"这个版本和上个版本到底哪里不一样"。</div>
+</details>
+
+
+
+<div class="footer">
+<p>A36 · Agent 灰度发布系统设计 | AI Knowledge Base</p>
+</div>
+    </section>
+
+    <footer>
+      <div class="made">TECH NOTES · AI 工程 · 整理自 AI Knowledge Hub</div>
+    </footer>
+  </main>
+</div>
+
+<script>
+(function(){var bar=document.getElementById('progress');function u(){var h=document.documentElement;bar.style.width=h.scrollTop/(h.scrollHeight-h.clientHeight)*100+'%';}window.addEventListener('scroll',u,{passive:true});u();})();
+(function(){var links=document.querySelectorAll('aside.toc nav a');var secs=Array.from(document.querySelectorAll('section.chapter'));if(!secs.length)return;function u(){var y=window.scrollY+100,cur=secs[0];for(var i=0;i<secs.length;i++){if(secs[i].offsetTop<=y)cur=secs[i];}var id=cur.id;links.forEach(function(a){a.classList.toggle('active',a.getAttribute('href')==='#'+id);});}window.addEventListener('scroll',u,{passive:true});u();})();
+</script>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RAG 相似度阈值设置指南 · AI 工程 — Tech Notes</title>
+<meta name="description" content="分数计算原理 / 经验值参考 / 动态调参策略 / 业务场景适配 / Rerank 协同">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<link rel="stylesheet" href="../assets/kh-guide.css">
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav">
+
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="ai_engineering_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 7 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>G13 · AI 工程</h2>
+    <nav>
+      <ol>
+        <li><a href="#overview" class="active">概览</a></li>
+        <li><a href="#ch1">相似度分数的计算原理</a></li>
+        <li><a href="#ch2">阈值经验值参考（归一化余弦相似度）</a></li>
+        <li><a href="#ch3">动态调参策略</a></li>
+        <li><a href="#ch4">业务场景适配</a></li>
+        <li><a href="#ch5">阈值兜底策略：检索为空时怎么办</a></li>
+        <li><a href="#q-a">Q&amp;A</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+    <header class="hero">
+      <div class="badge">G13 · AI 工程</div>
+      <h1>RAG 相似度阈值设置指南</h1>
+      <p class="sub">分数计算原理 / 经验值参考 / 动态调参策略 / 业务场景适配 / Rerank 协同</p>
+      <div class="meta-row">
+        <span class="pill cyan">AI 工程</span>
+        <span class="pill green">阅读 ~7 min</span>
+        <span class="pill amber">7 章</span>
+      </div>
+    </header>
+
+    <section class="chapter" id="overview">
+      <div class="ch-head"><div class="num">00</div><div class="t"><h2>概览</h2><div class="sub">相似度阈值的本质是一道&quot;质量门禁&quot;——高于阈值的文档进入 LLM 上下文，低于阈值的被丢弃</div></div></div>
+      <div class="arch-diagram">┌─────────── 相似度阈值在 RAG 流水线中的位置 ───────────┐
+│                                                       │
+│  Query ──→ Embedding ──→ 向量库 ANN 检索 ──→ Top-K    │
+│                                              │        │
+│                                              ▼        │
+│                                   ┌─────────────────┐ │
+│                                   │ 阈值过滤 (门禁)   │ │
+│                                   │ score >= θ ?     │ │
+│                                   │  ┌───┐   ┌───┐  │ │
+│                                   │  │ ≥θ │   │ <θ │  │ │
+│                                   │  │通过│   │丢弃│  │ │
+│                                   │  └─┬─┘   └───┘  │ │
+│                                   └────┼────────────┘ │
+│                                        ▼              │
+│                                ┌──────────────────┐   │
+│                                │ Rerank 重排序     │   │
+│                                │ Cross-encoder 评分│   │
+│                                └───────┬──────────┘   │
+│                                        ▼              │
+│                                最终 Top-N 输出给 LLM  │
+└───────────────────────────────────────────────────────┘</div>
+
+<div class="intuition-box">
+<p>相似度阈值的本质是一道"质量门禁"——高于阈值的文档进入 LLM 上下文，低于阈值的被丢弃。设得太高会漏掉相关内容（低召回），设得太低会引入噪声（低精度）。没有"万能阈值"，但有"安全起点"和"调优路径"。</p>
+</div>
+    </section>
+
+    <section class="chapter" id="ch1">
+      <div class="ch-head"><div class="num">01</div><div class="t"><h2>相似度分数的计算原理</h2><div class="sub">讨论阈值之前必须先确认&quot;这个分数是怎么算出来的&quot;——不同度量方式的分值范围和方向完全不同，不…</div></div></div>
+      <div class="intuition-box">
+<p>讨论阈值之前必须先确认"这个分数是怎么算出来的"——不同度量方式的分值范围和方向完全不同，不确认度量就设阈值等于闭眼开枪。</p>
+</div>
+
+<h3>1.1 三种主流度量方式</h3>
+
+<table>
+<tr><th>度量方式</th><th>公式特征</th><th>分值范围</th><th>方向</th><th>常见默认库</th></tr>
+<tr><td><strong>余弦相似度</strong>（Cosine）</td><td>两向量夹角余弦值，不受模长影响</td><td>[-1, 1]，归一化后 [0, 1]</td><td>越大越相似</td><td>多数向量库默认</td></tr>
+<tr><td><strong>点积</strong>（Dot Product）</td><td>向量内积，受模长影响</td><td>无固定范围</td><td>越大越相似</td><td>部分模型使用</td></tr>
+<tr><td><strong>L2 距离</strong>（欧氏距离）</td><td>向量间直线距离</td><td>[0, +∞)</td><td><strong>越小越相似</strong></td><td>Faiss 默认</td></tr>
+</table>
+
+<p><strong>关键原理：</strong><span class="term">余弦相似度</span>只衡量两个向量的"方向"是否一致，不受向量模长影响——这意味着即使两个文档长度差异很大，只要语义方向一致，余弦相似度仍然高。<span class="term">点积</span>同时考虑方向和模长，长文档（模长大）的点积可能天然偏高。<span class="term">L2 距离</span>的方向与前两者相反——距离越小越相似，设阈值时应设为上限而非下限。</p>
+
+<div class="highlight">
+<strong>关键前提：</strong>讨论阈值时必须先确认两件事：① 向量库使用的是哪种度量方式；② 是否做了归一化。同样的 0.7 在余弦相似度下表示"比较相似"，在点积下可能含义完全不同（取决于向量模长），在 L2 下方向还是反的。大多数 RAG 框架（LangChain、LlamaIndex）默认使用归一化后的余弦相似度，分值范围 [0, 1]。本文后续讨论均基于此默认值。
+</div>
+    </section>
+
+    <section class="chapter" id="ch2">
+      <div class="ch-head"><div class="num">02</div><div class="t"><h2>阈值经验值参考（归一化余弦相似度）</h2><div class="sub">没有&quot;万能阈值&quot;，但有&quot;安全起点&quot;</div></div></div>
+      <div class="intuition-box">
+<p>没有"万能阈值"，但有"安全起点"。大多数场景从 0.7 开始调，再根据业务反馈微调。以下经验值基于归一化余弦相似度——如果你的向量库使用其他度量，不能直接套用。</p>
+</div>
+
+<h3>2.1 阈值区间与效果对照</h3>
+
+<div class="arch-diagram">相似度分数轴 (归一化余弦, 0→1)
+  │
+  │  0.0       0.50      0.70      0.85      1.0
+  │  ├─────────┼─────────┼─────────┼─────────┤
+  │  │ 无过滤  │ 高召回   │ 平衡区间 │ 极高精度 │
+  │  │ (调试用) │ 噪声较多 │ (大多数  │ 极低召回 │
+  │  │         │          │  系统)   │          │
+  │  └─────────┴──────────┴─────────┴──────────┘
+  │            ↑           ↑         ↑
+  │        创意/研究    通用问答   法律/医疗
+  │        0.50-0.65   0.70-0.80  0.85-0.90</div>
+
+<table>
+<tr><th>阈值区间</th><th>效果特征</th><th>精度/召回</th><th>适用场景</th></tr>
+<tr><td><strong>0.85+</strong></td><td>极高精度，极低召回</td><td>精度 95%+ / 召回 30-50%</td><td>法律合规、医疗诊断——宁可不说也不能说错</td></tr>
+<tr><td><strong>0.70-0.85</strong></td><td>精度与召回平衡</td><td>精度 80-90% / 召回 60-80%</td><td>通用知识问答、技术文档检索——大多数 RAG 系统默认区间</td></tr>
+<tr><td><strong>0.50-0.70</strong></td><td>高召回，噪声较多</td><td>精度 50-70% / 召回 85%+</td><td>创意写作辅助、开放式问题探索——宁可多看也不漏</td></tr>
+<tr><td><strong>&lt;0.50</strong></td><td>几乎无过滤</td><td>精度 <50% / 召回 ~100%</td><td>仅用于调试和数据分析，不适合生产</td></tr>
+</table>
+
+<h3>2.2 阈值对 Precision-Recall 的影响</h3>
+
+<p>阈值和精度/召回之间存在经典的 trade-off：阈值升高 → 只有高相似度文档通过 → 精度升高但召回下降（漏掉相关内容）；阈值降低 → 更多文档通过 → 召回升高但精度下降（引入噪声）。最优阈值通常是 <span class="term">F1 分数</span>（精度和召回的调和平均值）最高的点。</p>
+
+<div class="highlight">
+<strong>生产案例：</strong>某电商客服系统最初设阈值 0.65，用户满意度 72%，"答非所问"率高（精度不够）。调高到 0.80 后满意度升至 85%，但"答非所问"率从 3% 升至 8%（因为很多问题检索不到结果，触发了兜底话术——阈值太高导致召回不足）。最终采用动态策略：FAQ 类问题 0.82，投诉类问题 0.68，满意度稳定在 89%（+17pp）。
+</div>
+    </section>
+
+    <section class="chapter" id="ch3">
+      <div class="ch-head"><div class="num">03</div><div class="t"><h2>动态调参策略</h2><div class="sub">固定阈值在单一场景下可能足够，但真实的 RAG 系统面对多种 query 类型</div></div></div>
+      <div class="intuition-box">
+<p>固定阈值在单一场景下可能足够，但真实的 RAG 系统面对多种 query 类型。动态调参的核心思想：根据 query 的复杂度和意图，自适应调整阈值——事实类问题严选，开放类问题宽选。</p>
+</div>
+
+<h3>3.1 策略一：按 Query 类型分级</h3>
+
+<table>
+<tr><th>Query 类型</th><th>示例</th><th>推荐阈值</th><th>原因</th></tr>
+<tr><td><strong>事实类</strong></td><td>"Python 的 GIL 是什么？"</td><td>0.80</td><td>有明确答案，需要精准匹配</td></tr>
+<tr><td><strong>流程类</strong></td><td>"如何部署 Kubernetes 集群？"</td><td>0.72</td><td>需要多步文档，适度宽选</td></tr>
+<tr><td><strong>开放类</strong></td><td>"如何设计一个好的 API？"</td><td>0.60</td><td>没有标准答案，需要广泛参考</td></tr>
+<tr><td><strong>探索类</strong></td><td>"有哪些前沿的 AI 应用方向？"</td><td>0.55</td><td>发散性搜索，宁可多召回</td></tr>
+</table>
+
+<h3>3.2 策略二：Top-K + 阈值双控</h3>
+
+<p>先按相似度排序取 Top-K（如 K=10），再在 Top-K 中用阈值过滤。这样即使阈值设得低，也不会返回大量低质量结果——Top-K 限制了数量上限，阈值保证了质量底线。这是生产环境中最常用的策略。</p>
+
+<p><strong>为什么先 Top-K 再阈值？</strong>如果先阈值过滤再 Top-K，当阈值很低时可能返回成百上千个结果，不仅浪费 LLM 的上下文窗口，还增加生成延迟。先 Top-K 再阈值确保最终输入 LLM 的文档数量可控。</p>
+
+<h3>3.3 策略三：基于用户反馈的自适应</h3>
+
+<p>收集用户反馈（点赞/点踩），统计不同阈值下的用户满意度曲线。定期（如每周）根据反馈数据微调阈值。这是一种"越用越准"的策略，但需要足够多的用户交互数据才有统计意义。建议在系统上线初期用固定阈值，积累 1000+ 次交互后开启自适应。</p>
+
+<div class="highlight">
+<strong>核心结论：</strong>生产环境推荐"Top-K + 阈值双控"作为基础策略，再叠加 Query 类型分级。具体参数：默认 Top-10 + 阈值 0.70，事实类问题自动切换到 Top-5 + 阈值 0.80，开放类问题切换到 Top-20 + 阈值 0.55。这套组合在多数场景下 F1 分数提升 10-15%。
+</div>
+    </section>
+
+    <section class="chapter" id="ch4">
+      <div class="ch-head"><div class="num">04</div><div class="t"><h2>业务场景适配</h2><div class="sub">不同业务对&quot;说错&quot;和&quot;不说&quot;的容忍度差异巨大</div></div></div>
+      <div class="intuition-box">
+<p>不同业务对"说错"和"不说"的容忍度差异巨大。阈值设置应反映业务优先级——法律/医疗场景宁可不说也不能说错（高阈值），研究辅助宁可多看也不能漏（低阈值）。</p>
+</div>
+
+<h3>4.1 各业务场景阈值配置表</h3>
+
+<table>
+<tr><th>业务场景</th><th>核心诉求</th><th>推荐阈值</th><th>配套策略</th><th>错误容忍方向</th></tr>
+<tr><td>客服 FAQ</td><td>精准回答，不能误导</td><td>0.80-0.85</td><td>高阈值 + 兜底话术</td><td>宁可不答也不能答错</td></tr>
+<tr><td>技术文档搜索</td><td>找到相关文档即可</td><td>0.70-0.75</td><td>中阈值 + Rerank</td><td>精度和召回平衡</td></tr>
+<tr><td>研究助手</td><td>尽可能多召回参考资料</td><td>0.55-0.65</td><td>低阈值 + Top-20</td><td>宁可多看也不漏</td></tr>
+<tr><td>法律/医疗</td><td>零容错，必须有据可依</td><td>0.85-0.90</td><td>高阈值 + 人工审核</td><td>宁可不答也不能答错</td></tr>
+<tr><td>代码搜索</td><td>找到功能相关代码</td><td>0.70-0.80</td><td>中阈值 + AST 验证</td><td>精度优先</td></tr>
+<tr><td>创意写作</td><td>广泛参考灵感</td><td>0.50-0.60</td><td>低阈值 + Top-15</td><td>宁可多召回</td></tr>
+</table>
+
+<h3>4.2 Rerank 与阈值的协同</h3>
+
+<p>推荐的完整过滤链路：<strong>向量检索 Top-K → Rerank 重排序 → 阈值过滤 → 最终 Top-N</strong>。Rerank 模型（如 Cohere Rerank、bge-reranker）对检索结果做二次排序，分数比向量相似度更准确。在 Rerank 之后再设阈值，可以更精准地过滤低质量结果。如果先阈值过滤再 Rerank，可能把"向量分数低但语义实际相关"的文档提前丢弃。</p>
+
+<table>
+<tr><th>过滤顺序</th><th>优点</th><th>缺点</th><th>推荐场景</th></tr>
+<tr><td><strong>先阈值后 Rerank</strong></td><td>减少 Rerank 的计算量</td><td>可能丢弃"向量分低但实际相关"的文档</td><td>性能敏感场景</td></tr>
+<tr><td><strong>先 Rerank 后阈值</strong> ✅</td><td>阈值过滤更准确（基于更准的 Rerank 分数）</td><td>Rerank 计算量略大</td><td>质量敏感场景（推荐）</td></tr>
+</table>
+
+<div class="practice-grid">
+<div class="do">
+<ul>
+<li>从 0.7 起步，根据业务反馈微调（±0.05 步进）</li>
+<li>用 Top-K + 阈值双控，避免极端情况（空结果或噪声泛滥）</li>
+<li>按 query 类型设置不同阈值（事实类高、开放类低）</li>
+<li>先 Rerank 后阈值过滤，利用更准确的 Rerank 分数</li>
+<li>定期用标准测试集评估 Precision@K 和 Recall@K</li>
+</ul>
+</div>
+<div class="dont">
+<ul>
+<li>不确认度量方式就设阈值（L2 和余弦方向相反）</li>
+<li>全场景使用同一个固定阈值（不同 query 类型需要不同阈值）</li>
+<li>阈值设太高导致检索结果为空且无兜底逻辑</li>
+<li>先阈值过滤再 Rerank（可能丢弃实际相关的文档）</li>
+<li>忽略向量库是否做了归一化（非归一化的分数范围不同）</li>
+</ul>
+</div>
+</div>
+    </section>
+
+    <section class="chapter" id="ch5">
+      <div class="ch-head"><div class="num">05</div><div class="t"><h2>阈值兜底策略：检索为空时怎么办</h2><div class="sub">阈值设得再合理，也难免出现检索结果为空的情况（query 与知识库内容不相关）</div></div></div>
+      <div class="intuition-box">
+<p>阈值设得再合理，也难免出现检索结果为空的情况（query 与知识库内容不相关）。此时必须有兜底策略——否则用户会看到一个空白回复，体验极差。</p>
+</div>
+
+<h3>5.1 三级降级策略</h3>
+
+<table>
+<tr><th>级别</th><th>触发条件</th><th>处理方式</th><th>效果</th></tr>
+<tr><td><strong>L1：降低阈值重试</strong></td><td>高阈值下检索结果为空</td><td>自动降低阈值（如 0.80 → 0.65）重试一次</td><td>召回约 60% 的"漏网"结果</td></tr>
+<tr><td><strong>L2：放宽到 LLM WIK</strong></td><td>降低阈值后仍为空</td><td>不传 context，让 LLM 用自身知识回答，标注"基于通用知识"</td><td>保证用户不会看到空白</td></tr>
+<tr><td><strong>L3：预设兜底话术</strong></td><td>LLM 也无法回答</td><td>返回预设话术："抱歉，暂未找到相关信息，建议咨询 XX"</td><td>最后的保底方案</td></tr>
+</table>
+
+<div class="highlight">
+<strong>生产案例：</strong>某法律咨询 RAG 系统分析 3 个月的检索日志发现：15% 的请求因阈值 0.88 过高导致首次检索为空，其中 9% 通过 L1 降级（降到 0.75）成功检索到结果，5% 通过 L2 由 LLM 回答（标注"非专业法律意见"），仅 1% 触发 L3 兜底话术。三级降级使系统的"无回复率"从 15% 降到 1%。
+</div>
+    </section>
+
+    <section class="chapter" id="q-a">
+      <div class="ch-head"><div class="num">06</div><div class="t"><h2>Q&amp;A</h2></div></div>
+      <details class="qa">
+<summary>为什么不同向量库的相似度分数不能直接比较？</summary>
+<div class="a">因为不同库使用的度量方式不同：余弦相似度范围是 [0,1]（归一化后），值越大越相似；L2 距离范围是 [0,+∞)，值越小越相似；点积没有固定范围，受向量模长影响。同样是 0.7，在余弦下表示"比较相似"，在点积下可能含义完全不同（取决于向量是否归一化）。必须先确认度量方式和是否归一化，再设定阈值。如果不确定，可以做一个简单实验：用几个已知相关的文档对计算分数，观察分布范围。</div>
+</details>
+
+<details class="qa">
+<summary>阈值设太高导致检索结果为空怎么办？</summary>
+<div class="a">三级降级策略：L1 — 自动降低阈值重试（如从 0.80 降到 0.65），可召回约 60% 的"漏网"结果；L2 — 仍为空则不传 context，让 LLM 用自身知识回答，明确标注"基于通用知识，建议验证"；L3 — LLM 也无法回答时返回预设兜底话术。生产环境建议三级结合。另外，可以记录"检索为空"的 query 日志，分析是否知识库覆盖不足，作为知识库扩展的依据。</div>
+</details>
+
+<details class="qa">
+<summary>Top-K 和阈值应该先过滤哪个？为什么？</summary>
+<div class="a">推荐先 Top-K 再阈值。先按相似度排序取 Top-K（如 K=10），再在 Top-K 中用阈值过滤掉低于标准的结果。原因：如果先阈值过滤再 Top-K，当阈值很低时可能返回成百上千个结果，不仅浪费 LLM 的上下文窗口（增加 token 成本和延迟），还可能引入大量低质量噪声。先 Top-K 确保数量可控（最多 K 个），再阈值确保质量达标。</div>
+</details>
+
+<details class="qa">
+<summary>如何评估当前阈值是否合理？有具体的评估方法吗？</summary>
+<div class="a">标准评估方法：准备一个包含 50-100 个标准 query 的测试集，每个 query 标注了"应该命中的文档"。然后分别计算不同阈值下的 Precision@K（前 K 个结果中正确的比例）和 Recall@K（应该命中的文档中实际命中的比例）。选择 F1 分数最高的阈值作为最优值。进阶方法：画出 Precision-Recall 曲线，找到曲线上的"肘部"（边际收益递减点）。同时持续监控线上用户反馈数据（点赞/点踩），每周回顾是否需要微调。</div>
+</details>
+
+<details class="qa">
+<summary>Rerank 模型和阈值过滤的顺序应该怎么安排？</summary>
+<div class="a">推荐顺序：向量检索 Top-K → Rerank 重排序 → 阈值过滤。原因：Rerank 模型（如 Cohere Rerank、bge-reranker）对检索结果做二次排序，分数比向量相似度更准确——它能发现"向量分数低但语义实际相关"的文档。在 Rerank 之后再设阈值，可以更精准地过滤真正的低质量结果。如果先阈值过滤再 Rerank，可能把一些"向量分数低但语义实际相关"的文档提前丢弃，导致 Rerank 无法挽救。</div>
+</details>
+
+<details class="qa">
+<summary>不同的 Embedding 模型对阈值选择有多大影响？</summary>
+<div class="a">影响很大。不同模型即使都输出归一化余弦相似度，分数的分布也可能差异显著。例如 <code>bge-large-zh</code> 的相关文档对通常在 0.75-0.95 之间，而 <code>text-embedding-ada-002</code> 可能在 0.65-0.88 之间。这意味着"0.7" 在 bge 下可能过滤掉太多结果，在 ada-002 下则刚好。建议每次更换 Embedding 模型后重新跑评估测试集，重新确定最优阈值——不能直接沿用旧模型的阈值。</div>
+</details>
+    </section>
+
+    <footer>
+      <div class="made">TECH NOTES · AI 工程 · 整理自 AI Knowledge Hub</div>
+    </footer>
+  </main>
+</div>
+
+<script>
+(function(){var bar=document.getElementById('progress');function u(){var h=document.documentElement;bar.style.width=h.scrollTop/(h.scrollHeight-h.clientHeight)*100+'%';}window.addEventListener('scroll',u,{passive:true});u();})();
+(function(){var links=document.querySelectorAll('aside.toc nav a');var secs=Array.from(document.querySelectorAll('section.chapter'));if(!secs.length)return;function u(){var y=window.scrollY+100,cur=secs[0];for(var i=0;i<secs.length;i++){if(secs[i].offsetTop<=y)cur=secs[i];}var id=cur.id;links.forEach(function(a){a.classList.toggle('active',a.getAttribute('href')==='#'+id);});}window.addEventListener('scroll',u,{passive:true});u();})();
+</script>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

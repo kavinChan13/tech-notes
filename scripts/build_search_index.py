@@ -51,6 +51,8 @@ CATEGORY = {
     "perf-debug": "性能 / 调试",
     "pm": "产品管理",
     "ai-templates": "AI 模板",
+    "neural-networks": "神经网络",
+    "reinforcement": "强化学习",
 }
 
 SCRIPT_RE = re.compile(r"<script\b[\s\S]*?</script>", re.I)
@@ -111,6 +113,11 @@ def build_sections(body: str) -> list[dict]:
 
 def should_skip(path: Path) -> bool:
     name = path.name
+    # skip hidden / ignored working dirs (e.g. .private staging, .cache, .git)
+    if any(part.startswith(".") for part in path.relative_to(ROOT).parts[:-1]):
+        return True
+    if "node_modules" in path.parts:
+        return True
     return (
         name == "index.html"
         or name.endswith("_directory.html")

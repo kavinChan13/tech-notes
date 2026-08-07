@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RAG 知识库更新机制 · AI 工程 — Tech Notes</title>
+<meta name="description" content="Knowledge Base Update — 先删后增 / 内容哈希 / 灰度更新 / 变化感知">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<link rel="stylesheet" href="../assets/kh-guide.css">
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav">
+
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="ai_engineering_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 12 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>G20 · AI 工程</h2>
+    <nav>
+      <ol>
+        <li><a href="#overview" class="active">概览</a></li>
+        <li><a href="#ch1">更新问题的本质与核心挑战</a></li>
+        <li><a href="#ch2">先删后增：生产级更新核心流程</a></li>
+        <li><a href="#ch3">变化感知机制：内容哈希与元数据追踪</a></li>
+        <li><a href="#vs">触发机制：轮询 vs 事件驱动</a></li>
+        <li><a href="#ch5">特殊场景：删除、重建与灰度更新</a></li>
+        <li><a href="#chunk-embedding-pipeline">Chunk 级增量更新与实时 Embedding Pipeline</a></li>
+        <li><a href="#q-a">Q&amp;A</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+    <header class="hero">
+      <div class="badge">G20 · AI 工程</div>
+      <h1>RAG 知识库更新机制</h1>
+      <p class="sub">Knowledge Base Update — 先删后增 / 内容哈希 / 灰度更新 / 变化感知</p>
+      <div class="meta-row">
+        <span class="pill cyan">AI 工程</span>
+        <span class="pill green">阅读 ~12 min</span>
+        <span class="pill amber">8 章</span>
+      </div>
+    </header>
+
+    <section class="chapter" id="overview">
+      <div class="ch-head"><div class="num">00</div><div class="t"><h2>概览</h2><div class="sub">知识库更新的核心挑战不是&quot;怎么写入新数据&quot;，而是&quot;如何确保旧数据被彻底清理、新数据被可靠写入…</div></div></div>
+      <div class="intuition-box"><p>知识库更新的核心挑战不是"怎么写入新数据"，而是"如何确保旧数据被彻底清理、新数据被可靠写入，且整个过程可回滚"。</p></div>
+    </section>
+
+    <section class="chapter" id="ch1">
+      <div class="ch-head"><div class="num">01</div><div class="t"><h2>更新问题的本质与核心挑战</h2><div class="sub">文档更新会导致 chunk 边界和数量发生变化，这使得&quot;局部更新&quot;变得极其困难</div></div></div>
+      <p>文档更新会导致 <span class="term">chunk</span> 边界和数量发生变化，这使得"局部更新"变得极其困难。假设原始文档被切割为 5 个 chunk（C1-C5），更新后的文档内容变化可能导致同样的内容被重新切割为 6 个 chunk（C1'-C6'），原第 3 个 chunk 的内容可能横跨新版本的第 3、4 个 chunk。</p>
+
+<div class="arch-diagram">原始文档 (v1)
+  ┌─────┬─────┬─────┬─────┬─────┐
+  │ C1  │ C2  │ C3  │ C4  │ C5  │  → 向量库中 5 个向量
+  └─────┴─────┴─────┴─────┴─────┘
+
+更新后文档 (v2) — 内容增删导致 chunk 边界漂移:
+  ┌──────┬──────┬──────┬──────┬──────┬──────┐
+  │ C1'  │ C2'  │ C3'  │ C4'  │ C5'  │ C6'  │  → 6 个向量
+  └──────┴──────┴──────┴──────┴──────┴──────┘
+
+问题: C3 的内容现在分散在 C3' 和 C4' 中
+      直接"更新 C3"无法解决这个问题</div>
+
+<h3>三种更新操作</h3>
+<table>
+<tr><th>操作类型</th><th>触发条件</th><th>复杂度</th><th>风险等级</th></tr>
+<tr><td>文档新增</td><td>全新文档入库</td><td>低 — 切割 + 向量化 + 插入</td><td>低</td></tr>
+<tr><td>文档修改</td><td>已有文档内容变更</td><td>高 — 需识别旧 chunk 并清理</td><td>高</td></tr>
+<tr><td>文档删除</td><td>文档从知识库移除</td><td>中 — 需定位所有关联 chunk</td><td>极高（僵尸 chunk 风险）</td></tr>
+</table>
+
+<div class="highlight">
+<p>生产级 RAG 系统的更新原则：不是更新单个 chunk，而是确保"变化感知 → 旧数据清理 → 新数据写入"的完整流程可靠性。任何环节的遗漏都会导致检索结果中出现过时或矛盾的信息。</p>
+</div>
+
+<div class="intuition-box"><p>把"更新 chunk"的思维转换为"替换整个文档的所有 chunk"——先删后增是保证一致性的唯一可靠方式。</p></div>
+
+<h3>为什么不能"就地更新"单个 chunk？</h3>
+<p>直觉上似乎可以只更新内容变化的 chunk，但这种方式存在严重的边界漂移问题：</p>
+<ul>
+<li><strong>边界不对齐</strong> — 修改了文档开头的一段话，可能导致后续所有 chunk 的边界都向后偏移一个句子</li>
+<li><strong>新增/删除段落</strong> — 在文档中间插入一段内容，导致该位置之后的所有 chunk 边界全部变化</li>
+<li><strong>切分策略变化</strong> — 即使是同一段内容，在不同上下文中可能被切割到不同的 chunk 中</li>
+</ul>
+<p>这些边界漂移问题使得"逐 chunk 对比并更新"的逻辑极其复杂，且容易出现遗漏——这正是先删后增方案被广泛采用的根本原因。</p>
+    </section>
+
+    <section class="chapter" id="ch2">
+      <div class="ch-head"><div class="num">02</div><div class="t"><h2>先删后增：生产级更新核心流程</h2><div class="sub">先删后增 （Delete-then-Insert）是生产级 RAG 系统的标准更新模式</div></div></div>
+      <p><span class="term">先删后增</span>（Delete-then-Insert）是生产级 RAG 系统的标准更新模式。核心思想是：当检测到文档变化后，不尝试逐 chunk 比较和更新，而是先删除旧文档关联的所有 chunk，再重新切割新文档并写入。</p>
+
+<div class="flow">
+  <div class="flow-node accent"><div class="nlabel">文档变化检测</div><div class="nsub">(内容哈希对比)</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">确认变化</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Step 1: 删除旧数据</div><div class="nsub">DELETE FROM vectors · WHERE source_doc_id = &#x27;doc_01&#x27;</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Step 2: 重新切割新文档</div><div class="nsub">new_chunks = split(new_doc)</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Step 3: 生成 embedding</div><div class="nsub">vectors = embed(new_chunks)</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Step 4: 写入向量库</div><div class="nsub">INSERT vectors + metadata</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">Step 5: 验证一致性</div><div class="nsub">检查 chunk 数量 / 元数据完整性</div></div>
+</div>
+
+<h3>先删后增的优势</h3>
+<ul>
+<li><strong>避免新旧内容混杂</strong>——不会出现旧 chunk 和新 chunk 同时存在于向量库中的情况</li>
+<li><strong>chunk 边界自动对齐</strong>——新文档按最新策略切割，无需与旧 chunk 逐一对应</li>
+<li><strong>实现简单</strong>——相比逐 chunk 对比（chunk 级增量更新），先删后增的代码复杂度低一个数量级</li>
+</ul>
+
+<h3>先删后增的代价</h3>
+<ul>
+<li>重新向量化整个文档——即使只改了一句话，也需要重新计算所有 chunk 的 embedding</li>
+<li>短暂的数据空窗期——删除旧 chunk 到写入新 chunk 之间存在检索不可用的窗口</li>
+<li>embedding API 调用成本——大规模文档更新时成本线性增长</li>
+</ul>
+
+<pre><code># 先删后增的核心代码逻辑
+def update_document(doc_id: str, new_content: str):
+    # Step 1: 删除旧 chunk
+    vector_store.delete(filter={"source_doc_id": doc_id})
+    
+    # Step 2: 切割新文档
+    new_chunks = text_splitter.split(new_content)
+    
+    # Step 3: 向量化 + 写入
+    for i, chunk in enumerate(new_chunks):
+        embedding = embed_model.embed(chunk)
+        vector_store.upsert(
+            id=f"{doc_id}_chunk_{i}",
+            vector=embedding,
+            metadata={"source_doc_id": doc_id, "chunk_index": i}
+        )</code></pre>
+
+<table>
+<tr><th>更新策略</th><th>一致性保证</th><th>计算成本</th><th>实现复杂度</th><th>推荐场景</th></tr>
+<tr><td>全量重建</td><td>最高</td><td>极高（全部文档）</td><td>低</td><td>初始化 / 更换模型</td></tr>
+<tr><td>先删后增（文档级）</td><td>高</td><td>中（仅变化文档）</td><td>低</td><td>通用生产系统</td></tr>
+<tr><td>逐 chunk 增量更新</td><td>中</td><td>低（仅变化 chunk）</td><td>高</td><td>超大文档 / 高频更新</td></tr>
+</table>
+
+<div class="intuition-box"><p>先删后增用"稍高的计算成本"换取"绝对的数据一致性"——在绝大多数生产场景中，这是一笔划算的交易。</p></div>
+    </section>
+
+    <section class="chapter" id="ch3">
+      <div class="ch-head"><div class="num">03</div><div class="t"><h2>变化感知机制：内容哈希与元数据追踪</h2><div class="sub">在决定&quot;是否要更新&quot;之前，系统需要先知道&quot;哪些文档发生了变化&quot;</div></div></div>
+      <p>在决定"是否要更新"之前，系统需要先知道"哪些文档发生了变化"。<span class="term">变化感知</span>机制负责检测文档的新增、修改和删除。</p>
+
+<h3>内容哈希（Content Hash）</h3>
+<p><span class="term">内容哈希</span>是变化感知的核心手段：对文档内容计算哈希值（如 MD5、SHA-256），将哈希值持久化存储，后续通过对比哈希值判断文档是否被修改。</p>
+
+<pre><code>import hashlib
+
+def compute_content_hash(content: str) -> str:
+    return hashlib.sha256(
+        content.encode('utf-8')
+    ).hexdigest()
+
+# 首次入库时记录
+registry["doc_01"] = {
+    "content_hash": "a3f2b8c...",
+    "chunk_ids": ["doc_01_chunk_0", "doc_01_chunk_1", ...],
+    "ingested_at": "2026-01-15T10:30:00"
+}</code></pre>
+
+<div class="arch-diagram">文档注册表 (Document Registry)
+┌──────────┬──────────────┬──────────────────┬───────────┐
+│ doc_id   │ content_hash │ chunk_ids        │ ingested  │
+├──────────┼──────────────┼──────────────────┼───────────┤
+│ doc_01   │ a3f2b8c...   │ [c0,c1,c2,c3,c4]│ 2026-01-15│
+│ doc_02   │ 7d4e9a1...   │ [c0,c1,c2]      │ 2026-01-16│
+│ doc_03   │ b1c5f3e...   │ [c0,c1]         │ 2026-01-17│
+└──────────┴──────────────┴──────────────────┴───────────┘
+
+更新检测流程:
+  new_hash = hash(new_content)
+  if new_hash != registry[doc_id].content_hash:
+      → 触发先删后增流程
+      → 更新 registry 中的 content_hash</div>
+
+<h3>性能优化：多级过滤</h3>
+<p>对于大规模知识库（数万篇文档），逐一计算哈希值的成本较高。生产系统通常采用多级过滤策略：</p>
+<ol>
+<li><strong>第一级：文件系统元数据过滤</strong> — 对比 <code>last_modified</code> 时间戳，仅对修改时间变化的文档计算哈希</li>
+<li><strong>第二级：文件大小预筛</strong> — 文件大小未变化且修改时间未变化的文档直接跳过</li>
+<li><strong>第三级：内容哈希精确对比</strong> — 对通过前两级过滤的文档计算哈希并对比</li>
+</ol>
+
+<table>
+<tr><th>过滤层级</th><th>检测方式</th><th>速度</th><th>准确度</th><th>成本</th></tr>
+<tr><td>第一级</td><td>last_modified 时间戳</td><td>极快</td><td>中（可能误报）</td><td>几乎为零</td></tr>
+<tr><td>第二级</td><td>文件大小</td><td>极快</td><td>中</td><td>几乎为零</td></tr>
+<tr><td>第三级</td><td>内容哈希</td><td>较慢</td><td>精确</td><td>需读取全文</td></tr>
+</table>
+
+<h3>ID 设计规范</h3>
+<p>为了精准定位和删除文档关联的所有 chunk，ID 设计需要包含文档溯源信息：</p>
+<ul>
+<li><strong>方案一</strong>：chunk ID 包含文档 ID — 如 <code>product_manual_chunk_001</code>，通过前缀匹配即可定位所有关联 chunk</li>
+<li><strong>方案二</strong>：元数据中存储来源文档 ID — 在 chunk 的 metadata 中设置 <code>source_doc_id</code> 字段，通过向量库的 filter 功能查询</li>
+</ul>
+
+<div class="highlight">
+<p>推荐使用方案二（元数据存储），因为大多数向量数据库（Pinecone、Milvus、Qdrant）都支持基于 metadata filter 的高效删除操作，且 ID 命名可以更灵活。</p>
+</div>
+
+<div class="intuition-box"><p>变化感知机制是更新系统的"触发器"——它决定了哪些文档需要重新处理，直接影响更新效率和计算成本。</p></div>
+    </section>
+
+    <section class="chapter" id="vs">
+      <div class="ch-head"><div class="num">04</div><div class="t"><h2>触发机制：轮询 vs 事件驱动</h2><div class="sub">知识库更新需要一个触发机制来感知外部数据变化</div></div></div>
+      <p>知识库更新需要一个触发机制来感知外部数据变化。两种主流方案各有适用场景：</p>
+
+<h3>定时轮询（Polling）</h3>
+<p>按固定间隔（如每 5 分钟、每小时、每天）扫描文档源，检测变化并触发更新。</p>
+<ul>
+<li>实现简单：一个定时任务 + 变化检测逻辑</li>
+<li>延迟可控：更新延迟 = 轮询间隔，如每 5 分钟轮询则最大延迟 5 分钟</li>
+<li>资源可预测：CPU 和网络开销固定在轮询时间点</li>
+<li>适用场景：内部知识库、低频更新（文档变化频率 < 每小时 10 次）</li>
+</ul>
+
+<h3>事件驱动（Event-Driven）</h3>
+<p>通过 <span class="term">Webhook</span> 或消息队列（Kafka/RabbitMQ）实时接收文档变化事件，立即触发更新。</p>
+<ul>
+<li>实时性高：文档变化后毫秒级触发更新</li>
+<li>资源高效：无变化时不消耗计算资源</li>
+<li>架构复杂度高：需要集成事件源、消息队列、消费者</li>
+<li>适用场景：客服知识库、实时性要求高的场景、文档变化频率高的系统</li>
+</ul>
+
+<div class="arch-diagram">┌────────────────────────────────────────────────────┐
+│                  事件驱动更新架构                      │
+├────────────────────────────────────────────────────┤
+│                                                      │
+│  文档源          消息队列          更新消费者           │
+│  ┌──────┐       ┌──────┐        ┌──────────────┐   │
+│  │Wiki  │──CDC──│      │        │ 变化检测      │   │
+│  │编辑  │       │Kafka │───────→│ (哈希对比)    │   │
+│  └──────┘       │Topic │        └──────┬───────┘   │
+│  ┌──────┐       │      │               │           │
+│  │Jira  │──CDC──│      │        ┌──────▼───────┐   │
+│  │更新  │       └──────┘        │ 先删后增      │   │
+│  └──────┘                       │ 流程执行      │   │
+│  ┌──────┐                       └──────┬───────┘   │
+│  │Conflu│──Webhook──→                  │           │
+│  │ence  │                      ┌──────▼───────┐   │
+│  └──────┘                       │ 一致性验证    │   │
+│                                 └──────────────┘   │
+│                                                      │
+└────────────────────────────────────────────────────┘</div>
+
+<table>
+<tr><th>维度</th><th>定时轮询</th><th>事件驱动</th></tr>
+<tr><td>更新延迟</td><td>轮询间隔（分钟-小时）</td><td>毫秒-秒级</td></tr>
+<tr><td>实现复杂度</td><td>低（定时任务即可）</td><td>高（需消息队列 + CDC）</td></tr>
+<tr><td>资源消耗</td><td>固定频率消耗</td><td>按需消耗</td></tr>
+<tr><td>可靠性</td><td>高（简单即稳定）</td><td>中（需保证消息不丢失）</td></tr>
+<tr><td>适用文档规模</td><td>中小规模（< 10K 文档）</td><td>大规模（10K+ 文档）</td></tr>
+</table>
+
+<div class="intuition-box"><p>选择触发机制的核心考量：更新频率和实时性需求。低频率用轮询（简单可靠），高频率用事件驱动（高效实时）。</p></div>
+    </section>
+
+    <section class="chapter" id="ch5">
+      <div class="ch-head"><div class="num">05</div><div class="t"><h2>特殊场景：删除、重建与灰度更新</h2><div class="sub">文档删除时必须同步清理向量库中的关联 chunk，否则会产生 僵尸 chunk ——已被删除…</div></div></div>
+      <h3>文档删除与僵尸 Chunk 清理</h3>
+<p>文档删除时必须同步清理向量库中的关联 chunk，否则会产生 <span class="term">僵尸 chunk</span>——已被删除的文档的内容仍然作为 chunk 存在于向量库中，继续参与检索和生成。</p>
+
+<div class="highlight">
+<p>僵尸 chunk 是 RAG 系统中最危险的"静默错误"：系统不会报错，但会基于过时的信息给出错误的回答。在金融合规和医疗领域，一条僵尸 chunk 可能导致严重的法律或安全风险。</p>
+</div>
+
+<pre><code># 文档删除的安全清理流程
+def delete_document(doc_id: str):
+    # 1. 查询关联 chunk 数量（审计用）
+    count = vector_store.count(
+        filter={"source_doc_id": doc_id}
+    )
+    
+    # 2. 删除所有关联 chunk
+    vector_store.delete(
+        filter={"source_doc_id": doc_id}
+    )
+    
+    # 3. 从注册表中移除
+    registry.remove(doc_id)
+    
+    # 4. 验证删除完成
+    assert vector_store.count(
+        filter={"source_doc_id": doc_id}
+    ) == 0</code></pre>
+
+<h3>全量重建</h3>
+<p>全量重建是指清空向量库后重新处理所有文档。虽然成本最高，但在以下场景中是必要的：</p>
+<ul>
+<li>更换 <span class="term">embedding 模型</span> — 不同模型的向量空间不兼容，必须全量重新向量化</li>
+<li>更换 chunk 切分策略 — 如从固定长度切割切换到语义边界切割</li>
+<li>知识库规模较小（几十篇文档）— 全量重建的成本可以忽略</li>
+<li>数据一致性出现严重问题 — 需要"干净重启"</li>
+</ul>
+
+<h3>灰度更新（Blue-Green Deployment for RAG）</h3>
+<p><span class="term">灰度更新</span>借鉴了软件发布中的蓝绿部署思想：同时保留新旧两个版本的知识库，通过验证后再切换线上流量。</p>
+
+<div class="flow">
+  <div class="flow-title">灰度更新流程（永远保留"后悔药"）</div>
+  <div class="flow-node accent"><div class="nlabel">Phase 1 · 并行写入</div><div class="nsub">v_old（活跃，线上检索） ∥ v_new（验证中，离线测试）</div></div>
+  <div class="flow-arrow" data-label="验证通过 → 切换流量"></div>
+  <div class="flow-node"><div class="nlabel">Phase 2 · 流量切换</div><div class="nsub">v_new（活跃，线上检索）· v_old（待删除，保留 7 天可秒级回滚）</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">Phase 3 · 清理旧版本</div><div class="nsub">确认稳定后删除 version=old 的所有 chunk</div></div>
+</div>
+
+<p>灰度更新的实施要点：</p>
+<table>
+<tr><th>阶段</th><th>操作</th><th>持续时间</th><th>回滚能力</th></tr>
+<tr><td>并行写入</td><td>新文档同时写入新旧两个版本</td><td>视验证周期</td><td>直接丢弃 v_new</td></tr>
+<tr><td>质量验证</td><td>在 v_new 上运行测试 query，对比回答质量</td><td>通常 3-7 天</td><td>不切换即回滚</td></tr>
+<tr><td>流量切换</td><td>将线上检索路由切换到 v_new</td><td>瞬间（路由变更）</td><td>路由回切到 v_old</td></tr>
+<tr><td>旧版清理</td><td>确认稳定后删除 v_old 数据</td><td>切换后 7-30 天</td><td>清理前可随时回切</td></tr>
+</table>
+
+<div class="intuition-box"><p>灰度更新的核心理念：永远保留"后悔药"——在确认新版本质量达标之前，旧版本始终保持可用，确保任何异常都能秒级回滚。</p></div>
+    </section>
+
+    <section class="chapter" id="chunk-embedding-pipeline">
+      <div class="ch-head"><div class="num">06</div><div class="t"><h2>Chunk 级增量更新与实时 Embedding Pipeline</h2><div class="sub">对于超大文档（如技术手册、法律条文），文档级先删后增的成本较高</div></div></div>
+      <h3>Chunk 级增量更新</h3>
+<p>对于超大文档（如技术手册、法律条文），文档级先删后增的成本较高。<span class="term">Chunk 级增量更新</span>通过对比每个 chunk 的哈希指纹，仅更新发生变化的 chunk。</p>
+
+<div class="flow">
+  <div class="flow-title">Chunk 级增量更新原理</div>
+  <div class="flow-node accent"><div class="nlabel">当前 chunk 指纹: {C1:h001, C2:h002, C3:h003, C4:h004, C5:h005}</div><div class="nsub">新版 chunk 指纹: {C1:h001, C2:h999, C3:h003, C5:h005, C6:h006}</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">跳过 更新 跳过 保留 新增</div><div class="nsub">(未变) (内容变) (未变) (未变) (新chunk) · 旧版独有: C4 → 删除 · 新版独有: C6 → 新增 · 哈希变化: C2 → 更新 · 哈希相同: C1, C3, C5 → 跳过</div></div>
+</div>
+
+<p>LangChain 的 Index API 和 LlamaIndex 的 DocumentStore 都内置了 chunk 级增量更新能力，通过 Record Manager 组件跟踪每个 chunk 的源文档 ID、哈希指纹和时间戳。</p>
+
+<h3>实时 Embedding Pipeline</h3>
+<p>对于高频更新的场景（如客服知识库、实时文档协作），需要构建流式 embedding pipeline：</p>
+<ul>
+<li>使用 <span class="term">CDC</span>（Change Data Capture）捕获文档源的行级变化</li>
+<li>通过消息队列（Kafka/Confluent）将变化事件流式传输</li>
+<li>流式处理引擎（如 Apache Flink）实时执行切割、embedding 生成和向量库 upsert</li>
+<li>上下文同步延迟从小时级降至毫秒级</li>
+</ul>
+
+<table>
+<tr><th>更新方式</th><th>延迟</th><th>成本</th><th>适用文档规模</th><th>典型场景</th></tr>
+<tr><td>全量重建</td><td>小时级</td><td>极高</td><td>不限</td><td>模型迁移</td></tr>
+<tr><td>文档级先删后增</td><td>分钟级</td><td>中</td><td>中小</td><td>通用生产</td></tr>
+<tr><td>Chunk 级增量</td><td>分钟级</td><td>低</td><td>大型文档</td><td>技术手册</td></tr>
+<tr><td>实时 Pipeline</td><td>毫秒-秒级</td><td>中高（基础设施）</td><td>大规模</td><td>客服/协作</td></tr>
+</table>
+
+<div class="practice-grid">
+<div class="do">
+<ul>
+<li>维护文档 ID、内容哈希、chunk 关系的三元组元数据</li>
+<li>严格执行先删后增流程，确保数据一致性</li>
+<li>对高风险场景（金融、医疗）实施灰度更新</li>
+<li>设置更新后的自动化验证（chunk 数量检查、抽样检索测试）</li>
+<li>记录完整的更新审计日志（谁更新了什么、何时、影响了多少 chunk）</li>
+</ul>
+</div>
+<div class="dont">
+<ul>
+<li>不要尝试"就地更新"单个 chunk——边界漂移问题会导致新旧内容混杂</li>
+<li>不要在删除文档时忘记清理向量库——僵尸 chunk 是静默的定时炸弹</li>
+<li>不要在更换 embedding 模型后只做增量更新——必须全量重建</li>
+<li>不要忽略更新过程中的数据空窗期——生产系统需要灰度策略或双写</li>
+<li>不要假设"删除成功了"——每次删除后必须验证 count == 0</li>
+</ul>
+</div>
+</div>
+
+<div class="intuition-box"><p>RAG 知识库更新的最高原则：宁可多花一次 embedding 的计算成本，也不要让新旧数据混杂——数据一致性的价值远大于节省的那点计算费用。</p></div>
+
+<h3>更新监控与告警体系</h3>
+<p>生产级更新系统需要完善的监控，确保更新过程的每个环节可观测、可告警：</p>
+
+<table>
+<tr><th>监控指标</th><th>正常范围</th><th>告警阈值</th><th>说明</th></tr>
+<tr><td>更新延迟</td><td>&lt; 轮询间隔</td><td>&gt; 2 × 间隔</td><td>更新管道可能卡住</td></tr>
+<tr><td>chunk 数量变化率</td><td>±20%</td><td>&gt; ±50%</td><td>切割策略可能异常</td></tr>
+<tr><td>embedding 失败率</td><td>&lt; 1%</td><td>&gt; 5%</td><td>API 故障或内容格式问题</td></tr>
+<tr><td>删除后残留 chunk</td><td>0</td><td>&gt; 0</td><td>删除未成功，存在僵尸 chunk</td></tr>
+<tr><td>哈希对比命中率</td><td>视更新频率</td><td>突然归零或飙升</td><td>哈希计算逻辑可能异常</td></tr>
+</table>
+
+<pre><code># 更新流程的关键监控埋点
+def update_with_monitoring(doc_id: str, new_content: str):
+    metrics.increment("update.triggered")
+    
+    old_hash = registry.get_hash(doc_id)
+    new_hash = compute_content_hash(new_content)
+    
+    if old_hash == new_hash:
+        metrics.increment("update.skipped_no_change")
+        return
+    
+    metrics.increment("update.change_detected")
+    old_count = vector_store.count(filter={"source_doc_id": doc_id})
+    
+    vector_store.delete(filter={"source_doc_id": doc_id})
+    new_chunks = splitter.split(new_content)
+    vector_store.upsert_batch(new_chunks)
+    
+    new_count = vector_store.count(filter={"source_doc_id": doc_id})
+    metrics.gauge("update.chunk_count_delta", new_count - old_count)</code></pre>
+
+<div class="highlight">
+<p>监控的核心原则：每次更新都应产生可追踪的指标——触发次数、跳过次数、删除 chunk 数、新增 chunk 数、耗时。当这些指标出现异常波动时，系统应自动告警并暂停后续更新，直到人工排查确认。</p>
+</div>
+    </section>
+
+    <section class="chapter" id="q-a">
+      <div class="ch-head"><div class="num">07</div><div class="t"><h2>Q&amp;A</h2></div></div>
+      <details class="qa">
+<summary>先删后增过程中的"数据空窗期"如何处理？</summary>
+<div class="a">有三种策略消除空窗期：(1) 双写策略——先将新 chunk 写入向量库（使用临时 version=new 标签），等写入完成后删除旧 chunk（version=old），最后将新 chunk 标签改为 active；(2) 事务性操作——部分向量库（如 Qdrant、Milvus）支持批量操作，可以在一个事务中同时执行删除和插入；(3) 灰度切换——维护两个独立的 collection，切换时只需修改检索路由，实现零停机更新。推荐策略 (3)，它在可靠性和实现复杂度之间取得了最佳平衡。</div>
+</details>
+
+<details class="qa">
+<summary>内容哈希应该对整个文档还是每个 chunk 计算？</summary>
+<div class="a">两个层级都需要：(1) 文档级哈希用于快速判断"文档是否有变化"——如果文档哈希未变则直接跳过，避免不必要的切割和向量化；(2) Chunk 级哈希用于 chunk 级增量更新——精确识别哪些 chunk 内容发生了变化。实践中推荐先用文档级哈希做粗筛，仅对变化的文档进一步做 chunk 级对比。这样可以在大规模知识库中显著降低更新开销，因为大部分文档在两次更新之间并未变化。</div>
+</details>
+
+<details class="qa">
+<summary>更换 embedding 模型后，能否只做增量更新？</summary>
+<div class="a">不能。不同 embedding 模型的向量空间完全不同——例如 OpenAI text-embedding-3-small 生成 1536 维向量，text-embedding-3-large 生成 3072 维向量，维度不兼容；即使维度相同，不同模型的语义编码方式也不同，导致新旧向量在同一个索引中无法正确比较相似度。正确做法是全量重建：清空向量库 → 用新模型重新向量化所有文档 → 写入新向量。对于大规模知识库，可以分批执行全量重建（如每次处理 1000 篇文档），配合灰度切换策略逐步迁移。</div>
+</details>
+
+<details class="qa">
+<summary>向量数据库中的 soft delete 和 hard delete 有什么区别？该用哪种？</summary>
+<div class="a">Soft delete 将向量标记为"已删除"但不立即释放存储空间，检索时自动过滤。Hard delete 立即移除向量和索引节点。区别在于：(1) Soft delete 速度快但占空间——适合高频更新场景，删除的向量会在后台 compaction 时清理；(2) Hard delete 释放空间但有延迟——修改索引结构（如 HNSW 图）需要时间。推荐策略：日常更新使用 soft delete（速度快，不影响检索性能），定期维护任务中执行 compaction 回收空间（如每天凌晨低峰期）。</div>
+</details>
+
+<details class="qa">
+<summary>灰度更新中如何验证新版本的质量？</summary>
+<div class="a">验证流程包含三个层面：(1) 基础验证——检查新版本的 chunk 数量、文档覆盖率、元数据完整性是否符合预期；(2) 检索验证——在预定义的测试 query 集上对比新旧版本的 recall@k、MRR 等指标，确保新版本不低于旧版本；(3) 端到端验证——模拟真实用户查询，对比新旧版本生成的回答质量（可使用 LLM 自动评分或人工抽检）。建议至少运行 3-7 天的验证期，覆盖业务的各种查询模式后再切换流量。</div>
+</details>
+
+<details class="qa">
+<summary>如何防止并发更新导致的数据不一致？</summary>
+<div class="a">并发更新的核心风险是"两个更新进程同时操作同一文档"导致 chunk 重复或丢失。解决方案：(1) 分布式锁——在更新文档前获取以 doc_id 为 key 的分布式锁（如 Redis SETNX），确保同一文档同一时间只有一个更新进程；(2) 版本号机制——每个文档维护递增版本号，更新时带上版本号，后到的更新如果发现版本号已被更新则自动重试或放弃；(3) 事件排序——在消息队列中使用 doc_id 作为 partition key，确保同一文档的事件按顺序消费。推荐组合使用方案 (1) + (3)。</div>
+</details>
+
+<details class="qa">
+<summary>CDC 实时管道适用于什么规模的系统？小团队有必要上吗？</summary>
+<div class="a">CDC 实时管道的投入产出比取决于更新频率和实时性需求。建议：(1) 文档更新 < 每天 100 次 → 用定时轮询足够，无需 CDC；(2) 文档更新 100-1000 次/天 → 用事件驱动（Webhook + 消息队列），不一定需要完整 CDC；(3) 文档更新 > 1000 次/天或要求秒级延迟 → 部署完整 CDC 管道（如 Debezium + Kafka + Flink）。小团队如果文档量在几百篇、更新频率低于每天几十次，完全可以用定时轮询 + 先删后增搞定，无需过度工程化。</div>
+</details>
+    </section>
+
+    <footer>
+      <div class="made">TECH NOTES · AI 工程 · 整理自 AI Knowledge Hub</div>
+    </footer>
+  </main>
+</div>
+
+<script>
+(function(){var bar=document.getElementById('progress');function u(){var h=document.documentElement;bar.style.width=h.scrollTop/(h.scrollHeight-h.clientHeight)*100+'%';}window.addEventListener('scroll',u,{passive:true});u();})();
+(function(){var links=document.querySelectorAll('aside.toc nav a');var secs=Array.from(document.querySelectorAll('section.chapter'));if(!secs.length)return;function u(){var y=window.scrollY+100,cur=secs[0];for(var i=0;i<secs.length;i++){if(secs[i].offsetTop<=y)cur=secs[i];}var id=cur.id;links.forEach(function(a){a.classList.toggle('active',a.getAttribute('href')==='#'+id);});}window.addEventListener('scroll',u,{passive:true});u();})();
+</script>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

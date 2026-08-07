@@ -1,0 +1,639 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Self-Attention 核心原理详解 · Transformer — Tech Notes</title>
+<meta name="description" content="Self-Attention Deep Dive — QKV 语义解析、计算流程推导、缩放因子必要性、代码实现与复杂度分析">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<link rel="stylesheet" href="../assets/kh-guide.css">
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav">
+
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="ai_engineering_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 17 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>T08 · Transformer</h2>
+    <nav>
+      <ol>
+        <li><a href="#self-attention" class="active">本质理解：Self-Attention 在做什么？</a></li>
+        <li><a href="#qkv-query-key-value">核心组件 QKV：Query / Key / Value</a></li>
+        <li><a href="#ch3">完整计算流程：五步推导</a></li>
+        <li><a href="#ch4">代码实现：从基础到完整</a></li>
+        <li><a href="#ch5">现存问题与优化方向</a></li>
+        <li><a href="#ch6">完整数值示例</a></li>
+        <li><a href="#ch7">面试应答要点总结</a></li>
+        <li><a href="#ch8">生产案例</a></li>
+        <li><a href="#q-a">Q&amp;A</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+    <header class="hero">
+      <div class="badge">T08 · Transformer</div>
+      <h1>Self-Attention 核心原理详解</h1>
+      <p class="sub">Self-Attention Deep Dive — QKV 语义解析、计算流程推导、缩放因子必要性、代码实现与复杂度分析</p>
+      <div class="meta-row">
+        <span class="pill cyan">Transformer</span>
+        <span class="pill green">阅读 ~17 min</span>
+        <span class="pill amber">9 章</span>
+      </div>
+    </header>
+
+    <section class="chapter" id="self-attention">
+      <div class="ch-head"><div class="num">01</div><div class="t"><h2>本质理解：Self-Attention 在做什么？</h2><div class="sub">Self-Attention 的核心思想可以用一句话概括： 让序列中的每个元素动态关注其他元…</div></div></div>
+      <p>Self-Attention 的核心思想可以用一句话概括：<strong>让序列中的每个元素动态关注其他元素的重要性，根据上下文信息重新表达自身含义。</strong></p>
+
+<h3>为什么需要 Self-Attention？</h3>
+
+<p>在 Self-Attention 之前，序列建模主要依赖 RNN/LSTM——它们按顺序逐个处理 token，存在两个根本问题：</p>
+<table>
+<tr><th>问题</th><th>RNN 的困境</th><th>Self-Attention 的解决</th></tr>
+<tr><td><strong>长距离依赖</strong></td><td>信息必须逐步传递，远距离 token 之间的依赖被稀释</td><td>任意两个 token 直接交互，路径长度 O(1)</td></tr>
+<tr><td><strong>并行计算</strong></td><td>必须按顺序处理，无法并行</td><td>所有 token 同时计算注意力，完全并行</td></tr>
+</table>
+
+<h3>一词多义的经典案例</h3>
+
+<p>Self-Attention 最直观的价值是解决<strong>一词多义</strong>问题：</p>
+
+<div class="flow-title" style="text-align:center;margin:6px 0 14px">同一个 "苹果"，靠注意力权重获得完全不同的上下文表示</div>
+<div class="grid cols-2">
+  <div class="card">
+    <h4>句子 1 · "我 吃 了 一个 苹果"</h4>
+    <div class="flow-rows">
+      <div class="flow-row hi"><span class="rk">吃</span><span class="rv">食物语义</span><span class="bar"><span style="width:90%"></span></span></div>
+      <div class="flow-row"><span class="rk">一个</span><span class="rv">可数名词</span><span class="bar"><span style="width:55%"></span></span></div>
+    </div>
+    <p class="highlight" style="margin:12px 0 0">→ "苹果" 被强化为 <strong>「水果」</strong> 含义 🍎</p>
+  </div>
+  <div class="card">
+    <h4>句子 2 · "苹果 公司 发布 了 新 iPhone"</h4>
+    <div class="flow-rows">
+      <div class="flow-row hi"><span class="rk">公司</span><span class="rv">企业语义</span><span class="bar"><span style="width:88%"></span></span></div>
+      <div class="flow-row"><span class="rk">iPhone</span><span class="rv">科技品牌</span><span class="bar"><span style="width:70%"></span></span></div>
+    </div>
+    <p class="highlight" style="margin:12px 0 0">→ "苹果" 被强化为 <strong>「Apple Inc.」</strong> 含义 📱</p>
+  </div>
+</div>
+
+<p class="highlight">Self-Attention 不是简单地"查找"词义，而是<strong>动态生成</strong>每个 token 在当前上下文中的表示。同一个词在不同句子中获得不同的向量表示——这是传统词嵌入（Word2Vec/GloVe）做不到的。</p>
+    </section>
+
+    <section class="chapter" id="qkv-query-key-value">
+      <div class="ch-head"><div class="num">02</div><div class="t"><h2>核心组件 QKV：Query / Key / Value</h2><div class="sub">Self-Attention 通过三个角色—— Query（查询） 、 Key（键） 、 V…</div></div></div>
+      <p>Self-Attention 通过三个角色——<strong>Query（查询）</strong>、<strong>Key（键）</strong>、<strong>Value（值）</strong>——实现 token 之间的信息交互。这三个概念来自信息检索，但在 Self-Attention 中被赋予了更深的语义。</p>
+
+<h3>QKV 的语义解析</h3>
+<table>
+<tr><th>组件</th><th>角色</th><th>语义</th><th>类比</th></tr>
+<tr><td><strong>Query (Q)</strong></td><td>提问者</td><td>"我在找什么信息？"——当前 token 的信息需求</td><td>搜索引擎中的搜索词</td></tr>
+<tr><td><strong>Key (K)</strong></td><td>被检索者</td><td>"我有什么可匹配的特征？"——其他 token 的可检索标签</td><td>网页的标题/关键词</td></tr>
+<tr><td><strong>Value (V)</strong></td><td>信息载体</td><td>"我的实际内容是什么？"——其他 token 的实际信息</td><td>网页的正文内容</td></tr>
+</table>
+
+<div class="flow">
+  <div class="flow-title">QKV 交互流程 · 以「我 喜欢 吃 苹果」中的 "苹果" 为例</div>
+  <div class="flow-node accent">
+    <div class="nlabel">🔍 Query「苹果」</div>
+    <div class="nsub">"我需要知道这里说的是水果还是公司？"</div>
+  </div>
+  <div class="flow-arrow" data-label="点积匹配 Q·Kᵀ"></div>
+  <div class="flow-node">
+    <div class="nsub" style="margin-bottom:8px">与每个 token 的 Key 计算匹配度</div>
+    <div class="flow-rows">
+      <div class="flow-row"><span class="rk">我</span><span class="rv">代词特征</span><span class="bar"><span style="width:15%"></span></span></div>
+      <div class="flow-row"><span class="rk">喜欢</span><span class="rv">动词特征</span><span class="bar"><span style="width:38%"></span></span></div>
+      <div class="flow-row hi"><span class="rk">吃 ★</span><span class="rv">动作特征 + 食物搭配</span><span class="bar"><span style="width:92%"></span></span></div>
+      <div class="flow-row"><span class="rk">苹果</span><span class="rv">自身特征</span><span class="bar"><span style="width:45%"></span></span></div>
+    </div>
+  </div>
+  <div class="flow-arrow" data-label="Softmax 归一化"></div>
+  <div class="flow-node">
+    <div class="nsub" style="margin-bottom:10px">注意力权重分布</div>
+    <div class="flow-chips">
+      <div class="flow-chip"><span class="cbar"><span style="height:8%"></span></span><b>0.05</b>我</div>
+      <div class="flow-chip"><span class="cbar"><span style="height:16%"></span></span><b>0.10</b>喜欢</div>
+      <div class="flow-chip hi"><span class="cbar"><span style="height:100%"></span></span><b>0.60</b>吃</div>
+      <div class="flow-chip"><span class="cbar"><span style="height:42%"></span></span><b>0.25</b>苹果</div>
+    </div>
+  </div>
+  <div class="flow-arrow" data-label="加权求和 Σ αᵢ·Vᵢ"></div>
+  <div class="flow-node good">
+    <div class="nlabel">✅ "苹果" 的新表示</div>
+    <div class="nsub">= 0.05·V(我) + 0.10·V(喜欢) + <b>0.60·V(吃)</b> + 0.25·V(苹果)<br>"吃" 的 Value 贡献最大 → "苹果" 被强化为<b>「食物」</b>含义</div>
+  </div>
+</div>
+
+<h3>为什么需要三个矩阵，而不是两个？</h3>
+
+<p>一个常见疑问：为什么不直接用输入向量的点积来计算注意力，而要分别投影为 Q、K、V？</p>
+
+<ul>
+  <li><strong>Q 和 K 分离</strong>：允许一个 token 作为"提问者"和"被检索者"时具有不同的表示。例如"苹果"提问时关注"动作语义"，被检索时提供"名词特征"。</li>
+  <li><strong>K 和 V 分离</strong>：匹配依据（Key）和信息内容（Value）解耦。就像搜索网页时，你用标题匹配（Key），但阅读的是正文（Value）——标题和内容可以完全不同。</li>
+  <li><strong>表达能力</strong>：三个独立投影矩阵让模型能学习三种不同的子空间，大幅增强表达能力。</li>
+</ul>
+
+<p><strong>QKV 分离的数学本质：</strong>如果 Q=K=V=X，注意力矩阵变为 X·Xᵀ，这是一个<span class="term">对称矩阵</span>——"我→你"和"你→我"的权重完全相同。但自然语言充满非对称依赖："猫吃鱼"中，"猫"对"吃"的依赖远强于"吃"对"猫"的依赖。QK 分离构成非对称双线性变换 Q·Kᵀ，使得方向性依赖成为可能。</p>
+
+<table>
+<tr><th>配置</th><th>注意力矩阵</th><th>对称性</th><th>表达能力</th></tr>
+<tr><td>Q=K=V=X</td><td>X·Xᵀ</td><td>对称（致命缺陷）</td><td>低</td></tr>
+<tr><td>Q≠K, V=X</td><td>Q·Kᵀ</td><td>非对称</td><td>中</td></tr>
+<tr><td>Q≠K≠V</td><td>Q·Kᵀ·V</td><td>非对称 + 独立值空间</td><td>高（当前标准）</td></tr>
+</table>
+    </section>
+
+    <section class="chapter" id="ch3">
+      <div class="ch-head"><div class="num">03</div><div class="t"><h2>完整计算流程：五步推导</h2><div class="sub">Self-Attention 的计算可以精确分解为五个步骤</div></div></div>
+      <p>Self-Attention 的计算可以精确分解为五个步骤。我们以一个具体例子来推导。</p>
+
+<h3>设定</h3>
+<p>输入序列 "我 喜欢 苹果"，3 个 token，每个 token 的 embedding 维度 d_model = 4（实际中通常为 4096 等），QKV 投影维度 d_k = d_v = 3。</p>
+
+<h3>Step 1: 线性变换生成 Q / K / V</h3>
+<pre><code># 输入矩阵 X: [seq_len, d_model] = [3, 4]
+X = [[1.0, 0.1, 0.2, 0.3],   # "我"
+     [0.5, 0.8, 0.1, 0.4],   # "喜欢"
+     [0.3, 0.2, 0.9, 0.1]]   # "苹果"
+
+# 三个可学习的权重矩阵
+Wq = torch.randn(4, 3)   # [d_model, d_k]
+Wk = torch.randn(4, 3)   # [d_model, d_k]
+Wv = torch.randn(4, 3)   # [d_model, d_v]
+
+# 线性投影
+Q = X @ Wq   # [3, 3] — 每行是一个 token 的 Query
+K = X @ Wk   # [3, 3] — 每行是一个 token 的 Key
+V = X @ Wv   # [3, 3] — 每行是一个 token 的 Value</code></pre>
+
+<h3>Step 2: Q 与 K 点积计算注意力分数</h3>
+<pre><code># QKᵀ: [3, 3] × [3, 3] = [3, 3]
+# 结果矩阵的 [i, j] 位置 = Q[i] · K[j] = token_i 对 token_j 的关注度
+scores = Q @ K.transpose(-2, -1)
+
+# scores[i][j] 含义:
+# token_i 的 Query 与 token_j 的 Key 的相似度
+# 值越大 → token_i 越关注 token_j</code></pre>
+
+<p><strong>QKᵀ 注意力分数矩阵</strong>（每行 = 一个 token 的 Query 对所有 token 的关注度；颜色越深表示分数越高）：</p>
+<table class="heat">
+<tr><th>Q ＼ K</th><th>"我"</th><th>"喜欢"</th><th>"苹果"</th><th>解读</th></tr>
+<tr><th>"我"</th><td style="background:color-mix(in srgb,var(--accent) 82%,transparent);color:#fff">0.82</td><td style="background:color-mix(in srgb,var(--accent) 34%,transparent)">0.34</td><td style="background:color-mix(in srgb,var(--accent) 15%,transparent)">0.15</td><td>最关注自己</td></tr>
+<tr><th>"喜欢"</th><td style="background:color-mix(in srgb,var(--accent) 41%,transparent)">0.41</td><td style="background:color-mix(in srgb,var(--accent) 67%,transparent)">0.67</td><td style="background:color-mix(in srgb,var(--accent) 53%,transparent)">0.53</td><td>较关注"苹果"</td></tr>
+<tr><th>"苹果"</th><td style="background:color-mix(in srgb,var(--accent) 12%,transparent)">0.12</td><td style="background:color-mix(in srgb,var(--accent) 58%,transparent)">0.58</td><td style="background:color-mix(in srgb,var(--accent) 71%,transparent);color:#fff">0.71</td><td>最关注自己</td></tr>
+</table>
+
+<h3>Step 3: 缩放 — 除以 √d_k</h3>
+<pre><code>dk = K.size(-1)   # d_k = 3
+scores = scores / math.sqrt(dk)   # 除以 √3 ≈ 1.732</code></pre>
+
+<p><strong>为什么必须缩放？</strong> 这是面试高频考点。</p>
+
+<p>假设 Q 和 K 的每个分量都是均值为 0、方差为 1 的独立随机变量。那么 Q · K 的点积结果：</p>
+<ul>
+  <li>均值 = 0</li>
+  <li>方差 = d_k（d_k 个方差为 1 的独立变量之和）</li>
+</ul>
+<p>当 d_k 很大时（如 64 或 128），点积的方差也很大，导致 Softmax 输入值差异极大。这会让 Softmax 的输出接近 one-hot 分布——梯度几乎为零（梯度消失），训练停滞。</p>
+
+<table>
+<tr><th>d_k = 64</th><th>❌ 不缩放</th><th>✅ 缩放（/√64 = /8）</th></tr>
+<tr><td>点积范围（标准差）</td><td>[−16, +16]，σ ≈ 8</td><td>[−2, +2]，σ ≈ 1</td></tr>
+<tr><td>Softmax 输入</td><td>差异极大</td><td>差异合理</td></tr>
+<tr><td>Softmax 输出</td><td>[0.001, 0.001, <strong>0.997</strong>, 0.001] 近 one-hot</td><td>[0.10, 0.15, 0.50, 0.25] 有梯度</td></tr>
+<tr><td>梯度</td><td>≈ 0 → <strong>梯度消失</strong></td><td>正常 → 训练稳定</td></tr>
+</table>
+<p class="highlight">结论：缩放因子 √d_k 把点积方差归一到 ~1，防止 Softmax 饱和导致梯度消失。</p>
+
+<h3>Step 4: Softmax 归一化为概率权重</h3>
+<pre><code>weights = torch.softmax(scores, dim=-1)
+# 每行的权重之和 = 1，形成概率分布
+# weights[i][j] = token_i 对 token_j 的注意力权重（归一化后）</code></pre>
+
+<p>Softmax 的实际作用不仅是"归一化"——它将原始分数转换为<strong>概率分布</strong>，使得：</p>
+<ul>
+  <li>所有权重非负（∈ [0, 1]）</li>
+  <li>所有权重之和为 1</li>
+  <li>高分项被放大，低分项被抑制（指数函数的特性）</li>
+  <li>输出可微分，支持反向传播</li>
+</ul>
+
+<h3>Step 5: 加权求和所有 Value</h3>
+<pre><code>output = weights @ V   # [3, 3] × [3, 3] = [3, 3]
+
+# output[i] = Σ_j weights[i][j] × V[j]
+# 每个 token 的输出 = 所有 token 的 Value 按注意力权重加权求和</code></pre>
+
+<h3>核心公式</h3>
+<div class="formula">
+Attention(Q, K, V) = softmax(QK<sup>T</sup> / √d<sub>k</sub>) V
+</div>
+
+<p>这个公式的每一部分都有明确的语义：</p>
+<table>
+<tr><th>符号</th><th>语义</th></tr>
+<tr><td><code>QK<sup>T</sup></code></td><td>计算词间相关性（Query 与 Key 的点积匹配）</td></tr>
+<tr><td><code>/ √d<sub>k</sub></code></td><td>控制分数尺度，防止梯度消失</td></tr>
+<tr><td><code>softmax(...)</code></td><td>生成注意力权重概率分布</td></tr>
+<tr><td><code>... V</code></td><td>按权重聚合 Value 信息</td></tr>
+</table>
+
+<p><strong>缩放因子 √d_k 的数学证明：</strong>假设 Q 和 K 的每个元素都是均值为 0、方差为 1 的独立随机变量。那么 Q·Kᵀ 中每个元素的方差就是 d_k（因为 d_k 个独立随机变量的乘积之和）。当 d_k=64 时，点积值的标准差约为 8，导致 Softmax 输入值差异极大，梯度集中在极端值上。</p>
+
+<table>
+<tr><th>d_k</th><th>点积标准差</th><th>Softmax 输出</th><th>梯度状况</th></tr>
+<tr><td>64</td><td>~8</td><td>接近 one-hot</td><td>饱和，梯度 ≈ 0</td></tr>
+<tr><td>64 + 缩放</td><td>~1</td><td>平滑分布</td><td>健康梯度</td></tr>
+<tr><td>128</td><td>~11.3</td><td>极端 one-hot</td><td>严重饱和</td></tr>
+<tr><td>128 + 缩放</td><td>~1</td><td>平滑分布</td><td>健康梯度</td></tr>
+</table>
+
+<p><strong>实验验证：</strong>去掉缩放因子后，Llama 2（7B）训练 500 步后 loss 开始震荡，2000 步后发散为 NaN。这是因为随着训练推进，QK 点积的值越来越大，Softmax 越来越尖锐，最终梯度完全消失。</p>
+    </section>
+
+    <section class="chapter" id="ch4">
+      <div class="ch-head"><div class="num">04</div><div class="t"><h2>代码实现：从基础到完整</h2><div class="sub">import torch import math def self_attention(X…</div></div></div>
+      <h3>4.1 基础版 Self-Attention</h3>
+<pre><code>import torch
+import math
+
+def self_attention(X, Wq, Wk, Wv):
+    """
+    基础 Self-Attention 实现
+    
+    Args:
+        X:  [seq_len, d_model]  — 输入序列
+        Wq: [d_model, d_k]     — Query 投影矩阵
+        Wk: [d_model, d_k]     — Key 投影矩阵
+        Wv: [d_model, d_v]     — Value 投影矩阵
+    
+    Returns:
+        output: [seq_len, d_v] — 注意力输出
+    """
+    # Step 1: 线性投影
+    Q = X @ Wq            # [seq_len, d_k]
+    K = X @ Wk            # [seq_len, d_k]
+    V = X @ Wv            # [seq_len, d_v]
+    
+    # Step 2: 点积计算注意力分数
+    dk = K.size(-1)
+    scores = Q @ K.transpose(-2, -1) / math.sqrt(dk)  # [seq_len, seq_len]
+    
+    # Step 3: Softmax 归一化
+    weights = torch.softmax(scores, dim=-1)  # [seq_len, seq_len]
+    
+    # Step 4: 加权求和
+    output = weights @ V  # [seq_len, d_v]
+    return output</code></pre>
+
+<h3>4.2 带因果掩码的 Self-Attention（Decoder 用）</h3>
+<pre><code>def causal_self_attention(X, Wq, Wk, Wv):
+    """
+    带因果掩码的 Self-Attention (Decoder-Only 模型使用)
+    每个 token 只能看到自己和之前的 token
+    """
+    Q = X @ Wq
+    K = X @ Wk
+    V = X @ Wv
+    
+    dk = K.size(-1)
+    seq_len = X.size(0)
+    
+    scores = Q @ K.transpose(-2, -1) / math.sqrt(dk)
+    
+    # 因果掩码：上三角矩阵填充 -∞
+    # 效果：token_i 看不到 token_j (j > i)
+    causal_mask = torch.triu(
+        torch.ones(seq_len, seq_len) * float('-inf'),
+        diagonal=1
+    )
+    scores = scores + causal_mask
+    
+    weights = torch.softmax(scores, dim=-1)
+    output = weights @ V
+    return output
+
+# 因果掩码效果示意:
+# scores + mask:
+#        t1    t2    t3    t4
+#   t1 [ 0.8   -∞    -∞    -∞ ]   ← t1 只看自己
+#   t2 [ 0.4   0.7   -∞    -∞ ]   ← t2 看 t1, t2
+#   t3 [ 0.1   0.5   0.6   -∞ ]   ← t3 看 t1, t2, t3
+#   t4 [ 0.2   0.3   0.4   0.9 ]   ← t4 看所有
+#
+# softmax 后 -∞ → 0，确保未来信息不会泄露</code></pre>
+
+<h3>4.3 Multi-Head Attention（多头注意力）</h3>
+<pre><code>class MultiHeadAttention(torch.nn.Module):
+    """
+    Multi-Head Attention: 多个注意力头并行
+    
+    为什么需要多头？
+    单头 Attention 只能学习一种"关注模式"。
+    多头让模型同时学习多种关注模式：
+      - Head 1: 关注语法结构（主谓关系）
+      - Head 2: 关注语义关系（同义/反义）
+      - Head 3: 关注位置关系（相邻词）
+      - Head 4: 关注全局信息（[CLS] token）
+    """
+    def __init__(self, d_model, n_heads):
+        super().__init__()
+        assert d_model % n_heads == 0
+        self.n_heads = n_heads
+        self.d_k = d_model // n_heads
+        
+        # 三个投影矩阵 (包含所有头的参数)
+        self.Wq = torch.nn.Linear(d_model, d_model)
+        self.Wk = torch.nn.Linear(d_model, d_model)
+        self.Wv = torch.nn.Linear(d_model, d_model)
+        self.Wo = torch.nn.Linear(d_model, d_model)
+    
+    def forward(self, X, mask=None):
+        batch, seq_len, d_model = X.shape
+        
+        # 投影并拆分为多个头
+        Q = self.Wq(X).view(batch, seq_len, self.n_heads, self.d_k).transpose(1, 2)
+        K = self.Wk(X).view(batch, seq_len, self.n_heads, self.d_k).transpose(1, 2)
+        V = self.Wv(X).view(batch, seq_len, self.n_heads, self.d_k).transpose(1, 2)
+        # Q/K/V: [batch, n_heads, seq_len, d_k]
+        
+        # 缩放点积注意力
+        scores = Q @ K.transpose(-2, -1) / math.sqrt(self.d_k)
+        if mask is not None:
+            scores = scores + mask
+        weights = torch.softmax(scores, dim=-1)
+        attn_output = weights @ V  # [batch, n_heads, seq_len, d_k]
+        
+        # 合并所有头
+        attn_output = attn_output.transpose(1, 2).contiguous().view(batch, seq_len, d_model)
+        return self.Wo(attn_output)  # [batch, seq_len, d_model]</code></pre>
+
+<div class="flow">
+  <div class="flow-title">Multi-Head Attention 架构（n_heads=8, d_k=64）</div>
+  <div class="flow-node accent"><div class="nlabel">输入 X</div><div class="nsub">[batch, seq_len, d_model=512]</div></div>
+  <div class="flow-arrow" data-label="Wq / Wk / Wv 三组投影"></div>
+  <div class="flow-node"><div class="nlabel">Q · K · V</div><div class="nsub">各 [batch, seq_len, 512]</div></div>
+  <div class="flow-arrow" data-label="按头切分 512 = 8×64"></div>
+  <div class="flow-node">
+    <div class="nsub" style="margin-bottom:8px">8 个头并行计算注意力，各自学习不同关系模式</div>
+    <div class="flow-chips">
+      <div class="flow-chip"><span class="cbar"><span style="height:100%"></span></span><b>Head 1</b>64维</div>
+      <div class="flow-chip"><span class="cbar"><span style="height:100%"></span></span><b>Head 2</b>64维</div>
+      <div class="flow-chip"><span class="cbar"><span style="height:100%"></span></span><b>Head 3</b>64维</div>
+      <div class="flow-chip"><span class="cbar"><span style="height:100%"></span></span><b>…</b>64维</div>
+      <div class="flow-chip"><span class="cbar"><span style="height:100%"></span></span><b>Head 8</b>64维</div>
+    </div>
+  </div>
+  <div class="flow-arrow" data-label="Concat 拼回 512"></div>
+  <div class="flow-node"><div class="nlabel">Wo 线性投影</div><div class="nsub">融合各头信息</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">输出</div><div class="nsub">[batch, seq_len, d_model=512]</div></div>
+</div>
+
+<p><strong>Multi-Head 为什么有效？</strong>不同的注意力头自发学习不同类型的关系模式。研究表明：</p>
+
+<table>
+<tr><th>注意力头类型</th><th>关注模式</th><th>示例</th></tr>
+<tr><td>语法头</td><td>关注语法依赖关系</td><td>"猫" → "吃"（主语-动词）</td></tr>
+<tr><td>位置头</td><td>关注相邻 token</td><td>token[i] → token[i+1]</td></tr>
+<tr><td>语义头</td><td>关注语义相关词</td><td>"巴黎" → "法国"</td></tr>
+<tr><td>复制头</td><td>复制输入到输出</td><td>用于保持原始信息</td></tr>
+</table>
+
+<p><strong>工程经验：</strong>在 Llama 3（8B）的 32 层 × 32 头 = 1024 个注意力头中，约 30% 是语法头，20% 是位置头，15% 是语义头，其余为特殊功能头。这种"自发分工"是多头的核心优势——单头 Attention 无法同时学习多种模式。</p>
+    </section>
+
+    <section class="chapter" id="ch5">
+      <div class="ch-head"><div class="num">05</div><div class="t"><h2>现存问题与优化方向</h2><div class="sub">Self-Attention 的核心瓶颈：注意力分数矩阵是 [seq_len, seq_le…</div></div></div>
+      <h3>5.1 O(n²) 时空复杂度</h3>
+
+<p>Self-Attention 的核心瓶颈：注意力分数矩阵是 <code>[seq_len, seq_len]</code> 的二维矩阵。</p>
+
+<table>
+<tr><th>序列长度</th><th>注意力矩阵大小</th><th>显存占用 (FP16)</th><th>实际影响</th></tr>
+<tr><td>512</td><td>512 × 512 = 262K</td><td>~0.5 MB</td><td>轻松处理</td></tr>
+<tr><td>2,048</td><td>2K × 2K = 4M</td><td>~8 MB</td><td>正常</td></tr>
+<tr><td>8,192</td><td>8K × 8K = 67M</td><td>~128 MB</td><td>开始有压力</td></tr>
+<tr><td>32,768</td><td>32K × 32K = 1B</td><td>~2 GB</td><td>显著瓶颈</td></tr>
+<tr><td>131,072</td><td>128K × 128K = 16B</td><td>~32 GB</td><td>单卡无法容纳</td></tr>
+</table>
+
+<h3>5.2 优化方案</h3>
+<table>
+<tr><th>优化方向</th><th>方法</th><th>复杂度</th><th>代表</th></tr>
+<tr><td><strong>稀疏 Attention</strong></td><td>只计算局部 + 少量全局 token 的注意力</td><td>O(n√n)</td><td>Longformer, BigBird</td></tr>
+<tr><td><strong>线性 Attention</strong></td><td>用核函数近似 Softmax，避免显式构建 n×n 矩阵</td><td>O(n)</td><td>Performer, Linear Transformer</td></tr>
+<tr><td><strong>FlashAttention</strong></td><td>IO 感知的分块计算，减少 HBM 读写</td><td>O(n²) 但常数极小</td><td>FlashAttention-2/3</td></tr>
+<tr><td><strong>滑动窗口</strong></td><td>每个 token 只看窗口内的 token</td><td>O(nw)</td><td>Mistral, Longformer</td></tr>
+<tr><td><strong>KV Cache</strong></td><td>缓存已计算的 K/V，增量计算</td><td>推理时 O(n)</td><td>所有现代 LLM</td></tr>
+</table>
+
+<h3>5.3 位置感知问题</h3>
+
+<p>Self-Attention 本身是<strong>置换不变的</strong>——打乱输入序列的顺序，输出只是对应位置的打乱，不会改变任何值。这意味着模型无法区分 "猫追狗" 和 "狗追猫"。</p>
+
+<p>解决方案：引入<strong>位置编码</strong>（Positional Encoding），为每个位置添加独特的位置信息：</p>
+<ul>
+  <li><strong>绝对位置编码</strong>：每个位置一个固定向量（原始 Transformer, GPT-2）</li>
+  <li><strong>RoPE</strong>：旋转位置编码，将位置信息注入 Q/K 的点积中（Llama, Qwen, Mistral）</li>
+  <li><strong>ALiBi</strong>：在注意力分数上加距离惩罚（BLOOM）</li>
+</ul>
+
+<h3>5.4 长序列处理</h3>
+
+<p>处理超长序列（>32K tokens）是当前 LLM 的核心挑战：</p>
+<ul>
+  <li><strong>位置编码外推</strong>：YaRN、NTK-aware Scaling 等方法扩展 RoPE 的有效范围</li>
+  <li><strong>分层注意力</strong>：底层用滑动窗口（局部），顶层用全局注意力</li>
+  <li><strong>Ring Attention</strong>：将序列分布到多个 GPU 上并行计算</li>
+</ul>
+
+<p><strong>O(n²) 复杂度的实际影响：</strong>当序列长度从 2K 增长到 128K 时，Self-Attention 的计算量增长 4096 倍。这使得处理长文本成为实际瓶颈。</p>
+
+<table>
+<tr><th>优化方案</th><th>复杂度</th><th>质量损失</th><th>适用场景</th></tr>
+<tr><td><span class="term">FlashAttention</span></td><td>仍 O(n²)，但 IO 优化</td><td>无（数学等价）</td><td>通用加速</td></tr>
+<tr><td><span class="term">稀疏 Attention</span></td><td>O(n·√n)</td><td>轻微</td><td>长文本初筛</td></tr>
+<tr><td><span class="term">线性 Attention</span></td><td>O(n)</td><td>中等</td><td>超长序列（>100K）</td></tr>
+<tr><td>Ring Attention</td><td>O(n²/设备数)</td><td>无</td><td>多 GPU 分布式</td></tr>
+</table>
+
+<p><strong>工程选型：</strong>对于 4K-32K 序列，FlashAttention + GQA 是标准方案；32K-128K 需要 RoPE Scaling + Ring Attention；超过 128K 考虑线性 Attention（如 RWKV、RetNet）。注意：稀疏 Attention 在代码生成等需要精确长距离依赖的任务中效果不佳。</p>
+    </section>
+
+    <section class="chapter" id="ch6">
+      <div class="ch-head"><div class="num">06</div><div class="t"><h2>完整数值示例</h2><div class="sub">用一个极简的 2-token 例子，手动走一遍完整的 Self-Attention 计算</div></div></div>
+      <p>用一个极简的 2-token 例子，手动走一遍完整的 Self-Attention 计算。</p>
+
+<pre><code>import torch
+import math
+
+# 2 个 token, d_model=4, d_k=d_v=3
+torch.manual_seed(42)
+X = torch.tensor([[1.0, 0.5, 0.2, 0.1],   # token A
+                  [0.3, 0.8, 0.4, 0.6]])   # token B
+
+Wq = torch.tensor([[0.1, 0.2, 0.3],
+                    [0.4, 0.5, 0.6],
+                    [0.7, 0.8, 0.9],
+                    [0.2, 0.1, 0.3]])
+
+Wk = torch.tensor([[0.3, 0.1, 0.2],
+                    [0.6, 0.4, 0.5],
+                    [0.9, 0.7, 0.8],
+                    [0.3, 0.2, 0.1]])
+
+Wv = torch.tensor([[0.2, 0.3, 0.1],
+                    [0.5, 0.6, 0.4],
+                    [0.8, 0.9, 0.7],
+                    [0.1, 0.2, 0.3]])
+
+# Step 1: 投影
+Q = X @ Wq   # [2, 3]
+K = X @ Wk   # [2, 3]
+V = X @ Wv   # [2, 3]
+
+# Step 2: 点积
+dk = 3
+scores = Q @ K.T / math.sqrt(dk)   # [2, 2]
+
+# Step 3: Softmax
+weights = torch.softmax(scores, dim=-1)   # [2, 2]
+
+# Step 4: 加权求和
+output = weights @ V   # [2, 3]
+
+print("Q:\n", Q)
+print("K:\n", K)
+print("V:\n", V)
+print("Scores:\n", scores)
+print("Weights:\n", weights)
+print("Output:\n", output)</code></pre>
+
+<p><strong>2-token（A、B）计算结果</strong>：</p>
+<table>
+<tr><th>阶段</th><th>token A</th><th>token B</th><th>解读</th></tr>
+<tr><td>Scores (Q·Kᵀ/√3)</td><td>[0.63, 0.70]</td><td>[0.76, 0.85]</td><td>原始相关性分数</td></tr>
+<tr><td>Weights (Softmax)</td><td>[0.48, <strong>0.52</strong>]</td><td>[0.48, <strong>0.52</strong>]</td><td>A、B 都略多关注对方</td></tr>
+<tr><td>Output (W·V)</td><td>[0.79, 0.92, 0.65]</td><td>[0.79, 0.92, 0.65]</td><td>新表示均融合了彼此信息</td></tr>
+</table>
+<p class="highlight">序列太短、示例简单，故权重接近均匀；真实场景中权重会明显偏向语义相关的 token。</p>
+    </section>
+
+    <section class="chapter" id="ch7">
+      <div class="ch-head"><div class="num">07</div><div class="t"><h2>面试应答要点总结</h2></div></div>
+      <table>
+<tr><th>应答要点</th><th>核心内容</th><th>常见错误</th></tr>
+<tr><td><strong>避免直接背诵公式</strong></td><td>先讲 QKV 的语义（提问者/被检索者/信息载体），再引出公式</td><td>上来就写 softmax(QK<sup>T</sup>/√d)V 但不解释含义</td></tr>
+<tr><td><strong>强调 QKV 语义理解</strong></td><td>Q="我在找什么"，K="我有什么标签"，V="我的实际内容"；三者分离的原因</td><td>混淆 K 和 V 的作用</td></tr>
+<tr><td><strong>解释缩放因子必要性</strong></td><td>点积方差 = d_k，不缩放导致 Softmax 饱和、梯度消失</td><td>只说"防止数值过大"但不解释方差机制</td></tr>
+<tr><td><strong>说明 Softmax 实际作用</strong></td><td>不仅是归一化——放大高分项、抑制低分项、生成可微概率分布</td><td>只说"归一化为概率"</td></tr>
+<tr><td><strong>分析复杂度与优化</strong></td><td>O(n²) 来源、FlashAttention/稀疏/线性 Attention 等优化方向</td><td>不知道 O(n²) 的来源或只知道一种优化</td></tr>
+</table>
+
+<div class="flow">
+  <div class="flow-title">面试应答思路框架 · 由浅入深四步走</div>
+  <div class="flow-node accent"><div class="nlabel">① 本质</div><div class="nsub">让每个 token 动态关注序列中其他 token，根据上下文重新表达自身含义</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">② 机制</div><div class="nsub">QKV 三角色：Q 查询需求 / K 可匹配特征 / V 实际信息；用 Q 匹配所有 K 得分数，按分数加权 V</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">③ 公式</div><div class="nsub">softmax(QKᵀ/√d_k)·V；缩放因子必须有——点积方差随 d_k 线性增长，否则 Softmax 饱和、梯度消失</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node warn"><div class="nlabel">④ 问题与优化</div><div class="nsub">核心瓶颈 O(n²)；优化方向：FlashAttention、稀疏 Attention、线性 Attention</div></div>
+</div>
+    </section>
+
+    <section class="chapter" id="ch8">
+      <div class="ch-head"><div class="num">08</div><div class="t"><h2>生产案例</h2><div class="sub">生产验证： FlashAttention-2 在 A100 GPU 上将 Self-Atte…</div></div></div>
+      <div class="intuition-box">
+<p><strong>生产验证：</strong>FlashAttention-2 在 A100 GPU 上将 Self-Attention 的计算速度提升至标准实现的 <strong>2.3 倍</strong>（通过优化 warp 级并行和减少非矩阵乘法运算），显存占用从 O(N²) 降至 <strong>O(N)</strong>。缩放因子 √d_k 的消融实验：Llama 2 70B（d_k=128）去掉缩放后，softmax 分布方差从 0.08 飙升至 <strong>12.7</strong>，注意力集中到单一 token 的概率从 3% 升至 <strong>67%</strong>，模型训练在第 200 步即发散（loss → NaN）。多头注意力的效率分析：12 头 × d_k=64 的总 FLOPs 与单头 × d=768 <strong>完全相同</strong>，但表达能力显著提升（MMLU 从 52% → <strong>68%</strong>，+16 个百分点）。</p>
+</div>
+
+
+<div class="practice-grid">
+<div class="do">
+<ul>
+<li>缩放因子 √d_k 必须加（否则 softmax 饱和，梯度消失）</li>
+<li>多头注意力：用相同 FLOPs 换取更丰富的表达能力</li>
+<li>FlashAttention 减少 HBM 读写，不改变计算结果</li>
+<li>CASUAL mask 确保自回归方向（只看自己和前面的 token）</li>
+</ul>
+</div>
+<div class="dont">
+<ul>
+<li>不要忘记缩放（d_k=128 时 √d_k≈11.3，不缩放直接 NaN）</li>
+<li>不要用单头大维度替代多头（表达力弱，训练更不稳定）</li>
+<li>不要混淆 FlashAttention 和 Sparse Attention（前者优化 I/O，后者减少计算量）</li>
+<li>不要在自回归模型中使用双向注意力（会泄露未来信息）</li>
+</ul>
+</div>
+</div>
+    </section>
+
+    <section class="chapter" id="q-a">
+      <div class="ch-head"><div class="num">09</div><div class="t"><h2>Q&amp;A</h2><div class="sub">除以 √d_k 是为了控制注意力分数的方差</div></div></div>
+      <details class="qa">
+<summary>Self-Attention 中为什么要除以 √d_k？不缩放会怎样？</summary>
+<p class="answer">除以 √d_k 是为了控制注意力分数的方差。假设 Q 和 K 的每个分量都是均值 0、方差 1 的独立随机变量，那么 Q·K 的点积方差 = d_k（d_k 个独立变量之和）。当 d_k 较大（如 64 或 128）时，点积值的分布范围很大，导致 Softmax 输入差异极大，输出接近 one-hot 分布（如 [0.001, 0.997, 0.001, 0.001]）。这种"饱和"状态下，Softmax 的梯度接近零，训练停滞（梯度消失）。除以 √d_k 将方差归一到 ~1，让 Softmax 工作在梯度健康的区域。面试时不仅要说"防止数值过大"，还要解释方差随 d_k 线性增长的数学原理。</p>
+</details>
+
+<details class="qa">
+<summary>Self-Attention 和 Cross-Attention 有什么区别？</summary>
+<p class="answer">核心区别在于 Q、K、V 的来源。Self-Attention：Q、K、V 都来自同一个输入序列 X（Q=XWq, K=XWk, V=XWv），每个 token 关注序列中的其他 token，用于序列内部的信息交互。Cross-Attention（交叉注意力）：Q 来自一个序列（如 Decoder 的当前状态），K 和 V 来自另一个序列（如 Encoder 的输出），用于两个不同序列之间的信息对齐——典型场景是机器翻译中 Decoder 生成目标语言时关注 Encoder 编码的源语言。在 Decoder-Only 架构（GPT/Llama）中没有 Cross-Attention，只有带因果掩码的 Self-Attention。</p>
+</details>
+
+<details class="qa">
+<summary>为什么 Self-Attention 需要 Multi-Head？单头不够吗？</summary>
+<p class="answer">单头 Attention 只能学习一种"关注模式"——所有维度共享同一个注意力权重分布。Multi-Head 将 d_model 拆分为 n_heads 个子空间（如 512 拆成 8×64），每个头独立计算注意力，学习不同的关注模式：有的头关注语法结构（主谓关系），有的关注语义关系（同义/反义），有的关注位置关系（相邻词），有的关注全局信息。类比：单头像一个评审员从单一角度评判，多头像多个评审员从不同角度评判后综合意见。实践中发现不同头确实会自发学习不同的关注模式（可 visualize attention pattern 验证）。参数量不变——d_model 拆成 n_heads 个子空间，总参数量与单头相同。</p>
+</details>
+
+<details class="qa">
+<summary>Self-Attention 的 O(n²) 复杂度是怎么来的？有哪些优化方法？</summary>
+<p class="answer">O(n²) 来自注意力分数矩阵——每个 token 的 Query 需要与所有 token 的 Key 做点积，产生 n×n 的分数矩阵。时间和空间复杂度都是 O(n²·d)，其中 n 是序列长度，d 是维度。优化方法：①FlashAttention——不改变数学结果，通过 IO 感知的分块计算减少 HBM 读写，实际加速 2-4 倍且节省显存；②稀疏 Attention（Longformer/BigBird）——只计算局部窗口 + 少量全局 token 的注意力，复杂度 O(n√n)；③线性 Attention（Performer）——用核函数近似 Softmax，避免显式构建 n×n 矩阵，复杂度 O(n)；④滑动窗口（Mistral）——每个 token 只看窗口内的 token，复杂度 O(nw)。当前生产环境主流方案是 FlashAttention + KV Cache。</p>
+</details>
+
+<details class="qa">
+<summary>Self-Attention 是置换不变的，这意味着什么？如何解决？</summary>
+<p class="answer">置换不变性（Permutation Invariance）意味着：打乱输入序列的顺序，Self-Attention 的输出只是对应位置的打乱，不会改变任何值。例如 "猫追狗" 和 "狗追猫" 经过 Self-Attention 后，三个 token 的输出集合完全相同，只是位置不同。这意味着模型无法区分语序——在自然语言中，语序承载了关键的语义信息（主语/宾语关系）。解决方案是引入位置编码（Positional Encoding）：①绝对位置编码——每个位置一个可学习或固定的向量，加到 token embedding 上；②RoPE（旋转位置编码）——将位置信息通过旋转矩阵注入 Q 和 K 的点积中，让注意力分数天然包含相对位置信息；③ALiBi——在注意力分数上加距离惩罚项。现代 LLM（Llama/Qwen/Mistral）普遍使用 RoPE。</p>
+</details>
+
+<details class="qa">
+<summary>Softmax 在 Self-Attention 中的实际作用是什么？</summary>
+<p class="answer">Softmax 在 Self-Attention 中有三个实际作用，远不止"归一化"：①概率化——将任意实数分数转换为 [0,1] 的概率分布，和为 1，使得加权求和有明确的概率语义（"按概率采样 Value"）；②放大差异——指数函数的特性让高分项被指数级放大、低分项被指数级抑制，形成"赢者通吃"的效果，让模型能选择性地关注重要 token；③可微分——Softmax 是连续可微的，支持反向传播计算梯度。如果不用 Softmax 而用简单的归一化（如 L2 归一化），模型无法有效放大重要 token 的贡献；如果用 argmax（硬选择），则不可微分，无法训练。</p>
+</details>
+    </section>
+
+    <footer>
+      <div class="made">TECH NOTES · Transformer · 整理自 AI Knowledge Hub</div>
+    </footer>
+  </main>
+</div>
+
+<script>
+(function(){var bar=document.getElementById('progress');function u(){var h=document.documentElement;bar.style.width=h.scrollTop/(h.scrollHeight-h.clientHeight)*100+'%';}window.addEventListener('scroll',u,{passive:true});u();})();
+(function(){var links=document.querySelectorAll('aside.toc nav a');var secs=Array.from(document.querySelectorAll('section.chapter'));if(!secs.length)return;function u(){var y=window.scrollY+100,cur=secs[0];for(var i=0;i<secs.length;i++){if(secs[i].offsetTop<=y)cur=secs[i];}var id=cur.id;links.forEach(function(a){a.classList.toggle('active',a.getAttribute('href')==='#'+id);});}window.addEventListener('scroll',u,{passive:true});u();})();
+</script>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>生产级 Agent Loop 工程 · AI 工程 — Tech Notes</title>
+<meta name="description" content="从 while loop 到三层架构：持久执行、成本优化、自我进化">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<link rel="stylesheet" href="../assets/kh-guide.css">
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav">
+
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="ai_engineering_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 11 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>L02 · AI 工程</h2>
+    <nav>
+      <ol>
+        <li><a href="#sec-1" class="active">核心问题：循环在哪里运行？</a></li>
+        <li><a href="#sec-2">Agent Loop 三层架构</a></li>
+        <li><a href="#sec-3">持久执行（Durable Execution）</a></li>
+        <li><a href="#sec-4">模型路由：降低 60-80% 成本</a></li>
+        <li><a href="#sec-5">构建自己 Skill 的 Agent</a></li>
+        <li><a href="#sec-6">可观察性：信任层</a></li>
+        <li><a href="#sec-7">部署模式与并发控制</a></li>
+        <li><a href="#sec-8">Agent Loop 的测试与验证</a></li>
+        <li><a href="#sec-9">常见 Loop 失败及如何避免</a></li>
+        <li><a href="#sec-10">Do / Don&#x27;t</a></li>
+        <li><a href="#sec-11">常见问题 Q&amp;A</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+    <header class="hero">
+      <div class="badge">L02 · AI 工程</div>
+      <h1>生产级 Agent Loop 工程</h1>
+      <p class="sub">从 while loop 到三层架构：持久执行、成本优化、自我进化</p>
+      <div class="meta-row">
+        <span class="pill cyan">AI 工程</span>
+        <span class="pill green">阅读 ~11 min</span>
+        <span class="pill amber">11 章</span>
+      </div>
+    </header>
+
+    <section class="chapter" id="sec-1">
+      <div class="ch-head"><div class="num">01</div><div class="t"><h2>核心问题：循环在哪里运行？</h2><div class="sub">所有人都在问&quot;什么是 Loop</div></div></div>
+      <p>所有人都在问"什么是 Loop？"，但没人问"什么在运行 Loop？"</p>
+
+<p>单 Agent、单会话的 <code>/loop</code> 和 <code>/goal</code> 模式可以工作。但进入生产环境后，问题完全不同：</p>
+
+<table>
+<tr><th>生产需求</th><th>终端 while loop</th><th>持久编排引擎</th></tr>
+<tr><td>Loop 监督其他 Loop</td><td>❌ 无编排能力</td><td>✅ 嵌套调度</td></tr>
+<tr><td>按计划运行（非人类触发）</td><td>❌ 需手动启动</td><td>✅ cron/事件触发</td></tr>
+<tr><td>进程重启后存活</td><td>❌ 状态丢失</td><td>✅ 从检查点继续</td></tr>
+<tr><td>生成子 Agent 并等待</td><td>❌ 无持久等待</td><td>✅ 异步等待数小时</td></tr>
+<tr><td>事后可观察</td><td>❌ 黑盒</td><td>✅ 完整 trace</td></tr>
+</table>
+
+<div class="intuition-box">
+<strong>这不是提示词问题，而是基础设施问题。</strong>终端里的 <code>while True</code> 无法提供这些能力。VM 或沙箱上的长运行进程也不行。
+</div>
+
+<h3>生产环境的噩梦场景</h3>
+<p>想象你在服务器上运行 Agent Loop。进程死亡或重启——部署、OOM、Spot 实例回收。Loop 重启了，但：</p>
+<ul>
+<li>之前在做什么？进行到哪一步了？</li>
+<li>是否已经发送了那条 Slack 消息？是否已经调用了子 Agent？</li>
+<li>你不知道。它重新开始。重新获取已有数据，重新调用 LLM 做已有决策</li>
+<li>你醒来时看到三条相同的 Slack 消息和困惑的团队</li>
+</ul>
+
+<div class="warn-box">
+<strong>修复方案不是"更好的错误处理"</strong>——而是一个执行模型，其中每一步都被检查点化，每个决策都被持久化，恢复意味着从最后成功的步骤继续。
+</div>
+    </section>
+
+    <section class="chapter" id="sec-2">
+      <div class="ch-head"><div class="num">02</div><div class="t"><h2>Agent Loop 三层架构</h2><div class="sub">Van Horn 的核心主张： Agent 不是 LLM + 工具，而是 Loop + Sk…</div></div></div>
+      <p>Van Horn 的核心主张：<strong>Agent 不是 LLM + 工具，而是 Loop + Skill + 编排。</strong></p>
+
+<div class="flow">
+  <div class="flow-title">Agent Loop 三层架构（自上而下）</div>
+  <div class="flow-node accent"><div class="nlabel">Layer 3 · Orchestrator 编排器</div><div class="nsub">调度 cron · 执行 steps · 管理重试 · 强制并发限制 · 存储运行历史 · 热部署不中断</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Layer 2 · Skill 技能</div><div class="nsub">持久工作流 · 多步骤可重试可组合 · 独立可部署 · 内置容错 · 复利增长</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">Layer 1 · Loop 循环</div><div class="nsub">cron + 决策器 · 按计划或触发运行 · 评估状态 · 决定下一步 · 调用 Skill</div></div>
+</div>
+
+<h3>三层详细对比</h3>
+<table>
+<tr><th>维度</th><th>Layer 1: Loop</th><th>Layer 2: Skill</th><th>Layer 3: Orchestrator</th></tr>
+<tr><td><strong>角色</strong></td><td>决策循环</td><td>持久工作流</td><td>运行时引擎</td></tr>
+<tr><td><strong>触发方式</strong></td><td>cron / 事件</td><td>被 Loop 或事件调用</td><td>管理一切调度</td></tr>
+<tr><td><strong>状态管理</strong></td><td>评估当前状态</td><td>step 级检查点</td><td>存储所有运行历史</td></tr>
+<tr><td><strong>容错</strong></td><td>失败后下次周期重试</td><td>step 级重试 + onFailure</td><td>全局重试策略</td></tr>
+<tr><td><strong>部署</strong></td><td>随 Agent 部署</td><td>独立可部署</td><td>热部署不中断</td></tr>
+<tr><td><strong>类比</strong></td><td>定时巡检员</td><td>专业维修队</td><td>物业管理系统</td></tr>
+</table>
+
+<h3>Layer 1: Loop 的实际工作模式</h3>
+<p>以基础设施健康检查为例：</p>
+
+<pre><code><div class="node">每 30 分钟触发</code></pre>
+<div class="arrow">→</div>
+<div class="node">获取服务指标</div>
+<div class="arrow">→</div>
+<div class="node">LLM 评估健康</div>
+<div class="arrow">→</div>
+<div class="node">正常 → 结束</div>
+</div>
+<pre><code><div class="node" style="border-color:var(--red)">降级/危急</code></pre>
+<div class="arrow">→</div>
+<div class="node">调用分类 Skill</div>
+<div class="arrow">→</div>
+<div class="node">Slack 通知团队</div>
+<div class="arrow">→</div>
+<div class="node">记录到运行历史</div>
+</div>
+
+<div class="intuition-box">
+<strong>关键洞见：</strong>如果进程在步骤之间重启，已完成的步骤不会重新执行。这就是 Loop——不是 LLM，而是围绕 LLM 的循环。
+</div>
+
+<h3>Layer 2: Skill 的复利效应</h3>
+<p>Skill 不是提示词，而是持久工作流。多步骤、可重试、可组合、独立可部署。系统学习的每个新 Skill 都让每个 Loop 更强大。</p>
+
+<table>
+<tr><th>Skill 特性</th><th>说明</th><th>与传统函数对比</th></tr>
+<tr><td>持久性</td><td>step 级检查点，失败后从断点继续</td><td>传统函数需从头重试</td></tr>
+<tr><td>可组合</td><td>多个 Skill 可链式调用</td><td>函数嵌套无状态管理</td></tr>
+<tr><td>独立部署</td><td>每个 Skill 可单独更新</td><td>单体部署影响全局</td></tr>
+<tr><td>容错</td><td>内置重试 + 失败钩子</td><td>需手动实现 try-catch</td></tr>
+<tr><td>可观察</td><td>每个 step 有完整 trace</td><td>需额外添加日志</td></tr>
+</table>
+
+<h3>Layer 3: 编排器——没人谈论但最基础的层</h3>
+<table>
+<tr><th>编排器职责</th><th>具体实现</th></tr>
+<tr><td>调度 cron</td><td>按 cron 表达式定时触发函数</td></tr>
+<tr><td>执行 steps</td><td>按顺序执行每个 step.run()，持久化输入输出</td></tr>
+<tr><td>管理重试</td><td>step 级重试策略，指数退避</td></tr>
+<tr><td>强制并发限制</td><td>流控制（限制、键、节流、去重）</td></tr>
+<tr><td>存储运行历史</td><td>每次运行、每个 step 的完整 trace</td></tr>
+<tr><td>热部署</td><td>新函数注册不中断运行中的工作流</td></tr>
+</table>
+
+<div class="intuition-box">
+<strong>大多数人把 Agent 看作"LLM + 工具"。</strong>Agent Loop 架构将其重新定义为"Loop + Skill + 编排"。LLM + 工具在 Loop 内部。LLM 和工具可以交换或调整，而架构保持不变。编排使架构成为可能。
+</div>
+    </section>
+
+    <section class="chapter" id="sec-3">
+      <div class="ch-head"><div class="num">03</div><div class="t"><h2>持久执行（Durable Execution）</h2><div class="sub">Van Horn 说： &quot;无法在重启中存活的 Loop 不是 Loop</div></div></div>
+      <p>Van Horn 说：<strong>"无法在重启中存活的 Loop 不是 Loop。"</strong></p>
+
+<h3>故障分类与处理策略</h3>
+<table>
+<tr><th>故障类型</th><th>典型场景</th><th>处理方式</th><th>结果</th></tr>
+<tr><td><strong>瞬时故障</strong></td><td>API 超时、网络抖动、临时限流</td><td>step 级自动重试（指数退避）</td><td>透明恢复，无感</td></tr>
+<tr><td><strong>不可恢复故障</strong></td><td>API 密钥过期、服务宕机 30min</td><td>onFailure 钩子通知 + 下次周期重试</td><td>人工介入或自动恢复</td></tr>
+<tr><td><strong>数据故障</strong></td><td>输入数据格式错误、缺失字段</td><td>step 内验证 + 跳过或降级</td><td>记录异常，继续执行</td></tr>
+<tr><td><strong>模型故障</strong></td><td>LLM 返回格式异常、拒绝回答</td><td>fallback 模型 + 重试</td><td>切换模型继续</td></tr>
+</table>
+
+<h3>Step 级检查点的成本效益</h3>
+<table>
+<tr><th>场景</th><th>无检查点（从头重试）</th><th>有检查点（从断点继续）</th></tr>
+<tr><td>5 个 step，第 4 步失败</td><td>重跑 1-4 步（含 3 次 LLM 调用）</td><td>只重跑第 4 步</td></tr>
+<tr><td>单次 LLM 调用成本</td><td>$0.50（重复 3 次 = $1.50 浪费）</td><td>$0（已检查点化）</td></tr>
+<tr><td>30 个 Agent 同时运行</td><td>$45/天 浪费</td><td>接近 $0 浪费</td></tr>
+<tr><td>月度成本影响</td><td>~$1,350 额外支出</td><td>~$0 额外支出</td></tr>
+</table>
+
+<div class="intuition-box">
+<strong>Step 级检查点不只是正确性特性，它是省钱器。</strong>LLM 调用可以被检查点化，当乘以系统中的 10 个或 30 个 Agent 时，成本差异是戏剧性的。
+</div>
+
+<h3>持久性对比：提示模式 vs 基础设施原语</h3>
+<table>
+<tr><th>维度</th><th>提示模式 Loop</th><th>基础设施原语 Loop</th></tr>
+<tr><td>存活重启</td><td>❌ 丢失状态</td><td>✅ 从最后 step 继续</td></tr>
+<tr><td>并发控制</td><td>❌ 竞争条件</td><td>✅ 流控制（限制、键、节流、去重）</td></tr>
+<tr><td>可观察性</td><td>❌ 黑盒</td><td>✅ 每次运行、每个 step 的完整 trace</td></tr>
+<tr><td>成本</td><td>❌ 从头重试燃烧 Token</td><td>✅ 检查点化 LLM 调用</td></tr>
+<tr><td>部署</td><td>❌ 中断运行中工作流</td><td>✅ 热部署新函数</td></tr>
+<tr><td>错误恢复</td><td>❌ 手动重启</td><td>✅ 自动重试 + 失败钩子</td></tr>
+<tr><td>审计</td><td>❌ 无记录</td><td>✅ 完整运行历史</td></tr>
+</table>
+    </section>
+
+    <section class="chapter" id="sec-4">
+      <div class="ch-head"><div class="num">04</div><div class="t"><h2>模型路由：降低 60-80% 成本</h2><div class="sub">Agent Loop 是 Token 密集型的</div></div></div>
+      <p>Agent Loop 是 Token 密集型的。一个每日 PR 审查 Loop 生成 5 个子 Agent，每个读取 50K Token 上下文，在前端模型定价下花费真金白银。</p>
+
+<p><strong>核心策略：将每个步骤路由到合适的模型层级。</strong></p>
+
+<h3>三层模型路由</h3>
+<table>
+<tr><th>Loop 步骤</th><th>模型层级</th><th>代表模型</th><th>每 1M Token 成本</th><th>适用任务</th></tr>
+<tr><td>文件扫描和分类</td><td>Nano</td><td>GPT-5.4-nano、Gemini Flash</td><td>$0.10 ~ $0.30</td><td>简单分类、格式检测</td></tr>
+<tr><td>总结和起草</td><td>中端</td><td>Sonnet 4.6、GPT-5.4</td><td>$1 ~ $3</td><td>摘要生成、代码起草</td></tr>
+<tr><td>最终审查和决策</td><td>前端</td><td>Opus 4.8、GPT-5.5</td><td>$10 ~ $15</td><td>复杂推理、架构决策</td></tr>
+</table>
+
+<h3>路由策略配置</h3>
+<table>
+<tr><th>匹配模式</th><th>目标模型</th><th>关键词</th></tr>
+<tr><td>轻量任务</td><td>google/gemini-2.5-flash</td><td>classify, scan, filter, detect, count</td></tr>
+<tr><td>中等任务</td><td>anthropic/claude-sonnet-4.6</td><td>draft, summarize, write, explain</td></tr>
+<tr><td>重度任务</td><td>anthropic/claude-opus-4.8</td><td>review, decide, architect, analyze</td></tr>
+<tr><td>Fallback</td><td>sonnet-4.6 → gpt-5.4</td><td>自动降级</td></tr>
+</table>
+
+<h3>成本优化组合策略</h3>
+<table>
+<tr><th>策略</th><th>节省比例</th><th>实现方式</th></tr>
+<tr><td>模型路由</td><td>60-70%</td><td>轻任务走 Nano，重任务走前端</td></tr>
+<tr><td>提示缓存</td><td>40-90% 输入 Token</td><td>重复系统提示和工具定义跨迭代缓存</td></tr>
+<tr><td>路由 + 缓存组合</td><td>80-90%</td><td>每天 $50 的 Loop 降至 $8-12/天</td></tr>
+<tr><td>step 级检查点</td><td>避免重复 LLM 调用</td><td>失败后从断点继续，不从头重试</td></tr>
+</table>
+
+<div class="intuition-box">
+<strong>成本计算：</strong>一个在前端定价下每天花费 $50 的 Loop，通过路由和缓存结合降至 $8 到 $12/天。乘以 30 个 Agent，每月节省超过 $30,000。
+</div>
+    </section>
+
+    <section class="chapter" id="sec-5">
+      <div class="ch-head"><div class="num">05</div><div class="t"><h2>构建自己 Skill 的 Agent</h2><div class="sub">系统不是静态的——它被设计为自我进化和扩展</div></div></div>
+      <p>系统不是静态的——它被设计为自我进化和扩展。Agent 不只在 Loop 内运行，它创作新 Loop 并在编排引擎中注册它们。</p>
+
+<pre><code><div class="node">人类表达需求</code></pre>
+<div class="arrow">→</div>
+<div class="node">Agent 编写 Skill</div>
+<div class="arrow">→</div>
+<div class="node">Agent 部署 Skill</div>
+<div class="arrow">→</div>
+<div class="node">Skill 自主运行</div>
+<div class="arrow">→</div>
+<div class="node">Agent 基于信号迭代</div>
+</div>
+
+<h3>自我进化的 5 个阶段</h3>
+<table>
+<tr><th>阶段</th><th>行为</th><th>具体示例</th></tr>
+<tr><td><strong>1. 需求触发</strong></td><td>人类表达痛点</td><td>"服务在夜间持续出现延迟峰值，直到早上才有人注意到"</td></tr>
+<tr><td><strong>2. 编写 Skill</strong></td><td>Agent 生成多步骤函数</td><td>健康检查 Loop（每 30 分钟）+ 事件分类 Skill（根因分析）</td></tr>
+<tr><td><strong>3. 部署 Skill</strong></td><td>sidecar 进程自动注册</td><td>无需部署管道，无需 PR，立即可用</td></tr>
+<tr><td><strong>4. 自主运行</strong></td><td>引擎按计划触发</td><td>每 30 分钟健康检查，有问题自动调用分类 Skill</td></tr>
+<tr><td><strong>5. 迭代优化</strong></td><td>审查 Loop 评估性能</td><td>每周五分析成功率、误报率，提议阈值调整</td></tr>
+</table>
+
+<h3>审查 Loop 的评估维度</h3>
+<table>
+<tr><th>评估指标</th><th>数据来源</th><th>决策方向</th></tr>
+<tr><td>成功率</td><td>编排器运行历史</td><td>低于阈值 → 优化提示词或工具调用</td></tr>
+<tr><td>误报率</td><td>团队反馈标记</td><td>过高 → 调整分类阈值</td></tr>
+<tr><td>团队响应率</td><td>Slack 消息 vs 实际操作</td><td>过低 → 优化告警格式和严重性分级</td></tr>
+<tr><td>平均处理时间</td><td>step 执行时间统计</td><td>过长 → 拆分 Skill 或优化模型路由</td></tr>
+</table>
+
+<div class="intuition-box">
+<strong>Agent 不只是执行任务，它在为自己构建基础设施。</strong>每个 Skill 超越创建它的对话而持续存在。杀死 Agent 进程并重启它——Skill 继续运行。交换底层模型——Skill 继续运行。Agent 是短暂的，它的输出是持久的。
+</div>
+
+<h3>Skill 复利 vs 传统自动化</h3>
+<table>
+<tr><th>维度</th><th>传统自动化脚本</th><th>Agent 生成的 Skill</th></tr>
+<tr><td>创建方式</td><td>人类编写</td><td>Agent 自动生成</td></tr>
+<tr><td>迭代频率</td><td>季度评审</td><td>每周自动审查</td></tr>
+<tr><td>扩展性</td><td>需人工添加新功能</td><td>Agent 按需创作新 Skill</td></tr>
+<tr><td>生命周期</td><td>与代码库绑定</td><td>独立于 Agent 进程</td></tr>
+<tr><td>知识积累</td><td>依赖文档</td><td>运行历史自动沉淀</td></tr>
+</table>
+    </section>
+
+    <section class="chapter" id="sec-6">
+      <div class="ch-head"><div class="num">06</div><div class="t"><h2>可观察性：信任层</h2><div class="sub">当编写代码的东西不是人类时，可观察性不是锦上添花——它是信任层</div></div></div>
+      <p>当编写代码的东西不是人类时，可观察性不是锦上添花——它是信任层。</p>
+
+<h3>可观察性的四个层次</h3>
+<table>
+<tr><th>层次</th><th>内容</th><th>用途</th></tr>
+<tr><td><strong>运行级</strong></td><td>每次运行的状态、耗时、触发原因</td><td>整体健康监控</td></tr>
+<tr><td><strong>Step 级</strong></td><td>每个 step 的输入、输出、重试次数</td><td>故障定位和调试</td></tr>
+<tr><td><strong>模型级</strong></td><td>LLM 调用详情：模型、Token 数、延迟</td><td>成本优化</td></tr>
+<tr><td><strong>业务级</strong></td><td>Skill 成功率、误报率、团队响应率</td><td>迭代决策</td></tr>
+</table>
+
+<h3>开发者的日常工作流</h3>
+<table>
+<tr><th>时间</th><th>动作</th><th>目的</th></tr>
+<tr><td>每天早上</td><td>检查运行仪表板</td><td>查看夜间 Skill 运行情况</td></tr>
+<tr><td>发现异常时</td><td>读取具体 step trace</td><td>定位故障根因</td></tr>
+<tr><td>Skill 行为异常</td><td>读取代码、编辑或删除</td><td>人工干预</td></tr>
+<tr><td>周五审查</td><td>查看 Agent 审查 Loop 报告</td><td>确认迭代建议</td></tr>
+</table>
+
+<div class="intuition-box">
+<strong>这不是事后添加的仪表板，它是持久执行固有的。</strong>每个 <code>step.run()</code> 都是检查点，每个检查点都是可观察的。编排引擎存储每次运行、每个 step、每个输入、每个输出、每次重试。
+</div>
+
+<h3>信任建立路径</h3>
+<pre><code><div class="node">完整 trace 可见</code></pre>
+<div class="arrow">→</div>
+<div class="node">故障可定位</div>
+<div class="arrow">→</div>
+<div class="node">修复可验证</div>
+<div class="arrow">→</div>
+<div class="node">信心逐步建立</div>
+<div class="arrow">→</div>
+<div class="node">扩大自主范围</div>
+</div>
+    </section>
+
+    <section class="chapter" id="sec-7">
+      <div class="ch-head"><div class="num">07</div><div class="t"><h2>部署模式与并发控制</h2></div></div>
+      <h3>四种部署模式</h3>
+<table>
+<tr><th>模式</th><th>适用场景</th><th>特点</th><th>风险</th></tr>
+<tr><td><strong>单实例</strong></td><td>开发/测试</td><td>简单，无并发问题</td><td>单点故障</td></tr>
+<tr><td><strong>主备切换</strong></td><td>生产环境（低风险）</td><td>主实例失败时备接管</td><td>切换延迟</td></tr>
+<tr><td><strong>多实例 + 去重</strong></td><td>高可用场景</td><td>多实例运行，编排器去重</td><td>资源浪费</td></tr>
+<tr><td><strong>分区调度</strong></td><td>大规模（30+ Agent）</td><td>按资源/团队分区，独立调度</td><td>跨区协调复杂</td></tr>
+</table>
+
+<h3>并发控制策略</h3>
+<table>
+<tr><th>策略</th><th>机制</th><th>解决的问题</th></tr>
+<tr><td><strong>限流（Throttle）</strong></td><td>限制同时运行的实例数</td><td>防止资源耗尽</td></tr>
+<tr><td><strong>键锁定（Key Lock）</strong></td><td>同一资源的 Loop 互斥执行</td><td>防止竞争条件</td></tr>
+<tr><td><strong>去重（Debounce）</strong></td><td>短时间内重复触发只执行一次</td><td>防止重复执行</td></tr>
+<tr><td><strong>优先级队列</strong></td><td>关键 Loop 优先执行</td><td>资源竞争时的优先级保障</td></tr>
+</table>
+
+<div class="warn-box">
+<strong>并发是生产环境最容易被忽视的问题。</strong>如果两个 Loop 同时操作同一资源（如同时修改同一文件、同时发送同一通知），结果是不可预测的。必须在编排层强制并发控制。
+</div>
+    </section>
+
+    <section class="chapter" id="sec-8">
+      <div class="ch-head"><div class="num">08</div><div class="t"><h2>Agent Loop 的测试与验证</h2><div class="sub">Agent Loop 不同于传统软件——LLM 输出是非确定性的</div></div></div>
+      <p>Agent Loop 不同于传统软件——LLM 输出是非确定性的。测试策略需要适应这一特性。</p>
+
+<h3>测试金字塔</h3>
+<table>
+<tr><th>层次</th><th>测试对象</th><th>方法</th><th>频率</th></tr>
+<tr><td><strong>Step 级</strong></td><td>单个工具调用、数据获取</td><td>Mock LLM 响应，验证输入输出格式</td><td>每次部署</td></tr>
+<tr><td><strong>Skill 级</strong></td><td>完整工作流</td><td>固定输入 + 黄金标准输出对比</td><td>每次 Skill 更新</td></tr>
+<tr><td><strong>Loop 级</strong></td><td>决策逻辑</td><td>模拟多种状态输入，验证决策路径</td><td>每周</td></tr>
+<tr><td><strong>端到端</strong></td><td>完整系统</td><td>沙箱环境运行，人工审查结果</td><td>每月</td></tr>
+<tr><td><strong>回归</strong></td><td>历史失败案例</td><td>回放历史输入，验证不再失败</td><td>持续</td></tr>
+</table>
+
+<h3>验证策略：Maker-Checker 模式</h3>
+<table>
+<tr><th>环节</th><th>Maker（生成者）</th><th>Checker（验证者）</th></tr>
+<tr><td>代码生成</td><td>Agent 编写代码</td><td>静态分析 + 测试套件</td></tr>
+<tr><td>决策输出</td><td>主 Agent 做决策</td><td>第二个 Agent 审查决策</td></tr>
+<tr><td>数据修改</td><td>Agent 修改数据</td><td>diff 审查 + 回滚机制</td></tr>
+<tr><td>外部通信</td><td>Agent 起草消息</td><td>模板验证 + 敏感词过滤</td></tr>
+</table>
+
+<div class="intuition-box">
+<strong>核心原则：</strong>Agent 生成的东西应该经过独立验证才能生效。越关键的操作（外部通信、数据修改），验证越严格。人类审查是最后的信任锚点。
+</div>
+    </section>
+
+    <section class="chapter" id="sec-9">
+      <div class="ch-head"><div class="num">09</div><div class="t"><h2>常见 Loop 失败及如何避免</h2></div></div>
+      <table>
+<tr><th>失败类型</th><th>问题</th><th>修复方案</th><th>预防措施</th></tr>
+<tr><td><strong>Token 失控</strong></td><td>没有 <code>max_iterations</code> 的 Goal Loop 可能在一小时内烧掉 $500</td><td>始终设置上限，从 50 次开始</td><td>成本告警 + 自动熔断</td></tr>
+<tr><td><strong>上下文腐烂</strong></td><td>长期运行的 Loop 不断追加上下文，质量下降</td><td>每次迭代用子 Agent（新鲜上下文）</td><td>定期压缩 + 质量监控</td></tr>
+<tr><td><strong>过度自信的终止</strong></td><td>Agent 在只检查了一半时声明"完成"</td><td>添加验证步骤或硬条件</td><td>独立 Checker Agent 审查</td></tr>
+<tr><td><strong>状态遗忘</strong></td><td>Loop 忘记已处理的内容</td><td>每次迭代后写入检查点</td><td>外部状态存储 + 去重</td></tr>
+<tr><td><strong>级联失败</strong></td><td>一个 Skill 失败导致 Loop 崩溃</td><td>onFailure 钩子 + 降级策略</td><td>超时 + 熔断器模式</td></tr>
+<tr><td><strong>资源泄漏</strong></td><td>Loop 创建临时文件/连接但不清理</td><td>step 级清理钩子</td><td>资源池 + 自动回收</td></tr>
+</table>
+
+<div class="warn-box">
+<strong>Gateway 层的重要性：</strong>Loop 比聊天机器人多 10x 到 100x 的 API 调用。故障转移很重要（提供商宕机不应让 Loop 崩溃）、成本跟踪必不可少（按 Loop/子 Agent/模型分解）、缓存复利（重复提示跨迭代缓存节省 40-90%）、速率限制消失（Gateway 跨提供商分发请求）。
+</div>
+    </section>
+
+    <section class="chapter" id="sec-10">
+      <div class="ch-head"><div class="num">10</div><div class="t"><h2>Do / Don&#x27;t</h2></div></div>
+      <div class="practice-grid">
+<div class="do">
+<ul>
+<li>使用 step 级检查点持久化每个决策</li>
+<li>将步骤路由到合适的模型层级（60-80% 降本）</li>
+<li>添加提示缓存减少重复 Token 成本</li>
+<li>让 Agent 构建自己的 Skill（复利增长）</li>
+<li>提供完整 trace 直到 step 级（信任层）</li>
+<li>使用 onFailure 钩子处理不可恢复错误</li>
+<li>设置并发控制防止竞争条件</li>
+<li>实施审查 Loop 让 Agent 迭代自己的 Skill</li>
+<li>Maker-Checker 模式验证关键操作</li>
+<li>建立分层测试策略（Step → Skill → Loop → E2E）</li>
+</ul>
+</div>
+<div class="dont">
+<ul>
+<li>在终端用 while True 运行生产 Loop</li>
+<li>让所有步骤使用同一前端模型</li>
+<li>忽视瞬时错误的成本（LLM 调用昂贵）</li>
+<li>假设 Agent 编写的代码总是正确</li>
+<li>将可观察性视为事后添加</li>
+<li>从 step 中间重试整个工作流</li>
+<li>让多个 Loop 同时操作同一资源</li>
+<li>部署新函数时中断运行中工作流</li>
+<li>忽视 Gateway 层的故障转移和限流</li>
+<li>跳过 Agent Loop 的端到端测试</li>
+</ul>
+</div>
+</div>
+    </section>
+
+    <section class="chapter" id="sec-11">
+      <div class="ch-head"><div class="num">11</div><div class="t"><h2>常见问题 Q&amp;A</h2><div class="sub">消息队列解决的是&quot;消息传递&quot;问题——确保消息不丢失</div></div></div>
+      <div class="qa-item">
+<div class="q">Q1：持久执行和传统消息队列（如 Kafka）有什么区别？</div>
+<div class="a">
+<p>消息队列解决的是"消息传递"问题——确保消息不丢失。持久执行解决的是"执行状态"问题——确保多步骤工作流在任意中断后能从断点继续。</p>
+<p>关键区别：消息队列不知道你的业务逻辑执行到哪一步了。持久编排引擎知道每个 step 的状态，能精确恢复。消息队列是传输层，持久执行是执行层。</p>
+</div>
+</div>
+
+<div class="qa-item">
+<div class="q">Q2：Agent 自己编写的 Skill 出错了怎么办？会不会造成连锁故障？</div>
+<div class="a">
+<p>三层防护：① Skill 有独立的重试和 onFailure 钩子，单个 Skill 失败不会影响其他 Skill；② 编排器提供并发控制和熔断机制，防止级联故障；③ 开发者可以随时读取、编辑、删除任何 Skill。</p>
+<p>核心原则：Agent 创作了 Skill，但人类拥有它。Agent 和它的 Skill 仍然是你应该照料的花园。</p>
+</div>
+</div>
+
+<div class="qa-item">
+<div class="q">Q3：模型路由会不会影响输出质量？轻量模型能胜任分类任务吗？</div>
+<div class="a">
+<p>模型路由的关键是"任务匹配"，不是"降级"。分类、扫描、过滤等任务不需要强推理能力，用 Nano 模型（如 Gemini Flash）的准确率与前端模型差异很小（通常 &lt;2%），但成本低 50-100 倍。</p>
+<p>建议：先用前端模型建立基准准确率，然后逐步测试轻量模型。当准确率差异 &lt;3% 时切换到轻量模型。保留 fallback 到前端模型的能力。</p>
+</div>
+</div>
+
+<div class="qa-item">
+<div class="q">Q4：什么规模的系统才需要三层架构？小项目用 while loop 够了吗？</div>
+<div class="a">
+<p>判断标准不是项目大小，而是"失败代价"：</p>
+<ul>
+<li><strong>while loop 足够：</strong>开发/测试阶段、内部工具、失败后手动重启成本可接受</li>
+<li><strong>需要持久编排：</strong>生产环境面向客户、失败导致数据不一致或重复操作、多个 Loop 并行运行、需要审计和合规</li>
+</ul>
+<p>一个实用建议：先用 while loop 验证逻辑，确认价值后再迁移到持久编排。迁移成本不高——step.run() 包装现有逻辑即可。</p>
+</div>
+</div>
+
+<div class="qa-item">
+<div class="q">Q5：自我进化的 Agent 会不会写出低质量的 Skill 并不断累积？</div>
+<div class="a">
+<p>会的，如果没有审查机制。这就是为什么需要"审查 Loop"——一个定期运行的 cron 函数，分析每个 Skill 的成功率、误报率、团队响应率，并提议优化或淘汰。</p>
+<p>类比软件工程中的"技术债务管理"：Agent 生成的 Skill 也会产生技术债务，审查 Loop 就是自动化的债务管理工具。人类仍然有最终决定权。</p>
+</div>
+</div>
+
+<div class="qa-item">
+<div class="q">Q6：如何评估一个 Agent Loop 系统的健康度？</div>
+<div class="a">
+<p>四个核心指标：</p>
+<ul>
+<li><strong>可靠性：</strong>Skill 成功率（目标 &gt;95%）、平均恢复时间（MTTR）</li>
+<li><strong>效率：</strong>每 Loop 平均 Token 消耗、模型路由命中率（轻任务走 Nano 的比例）</li>
+<li><strong>价值：</strong>Skill 被团队实际采纳的比例、误报率（目标 &lt;10%）</li>
+<li><strong>进化：</strong>新增 Skill 数量、审查 Loop 提议的采纳率</li>
+</ul>
+</div>
+</div>
+
+<div class="qa-item">
+<div class="q">Q7：提示缓存（Prompt Caching）具体怎么实现？</div>
+<div class="a">
+<p>大多数 LLM 提供商（Claude、GPT、Gemini）现在支持提示缓存。原理：如果请求的前缀（系统提示 + 工具定义）与之前的请求相同，提供商会复用已计算的 KV cache，输入 Token 成本降低 90%。</p>
+<p>在 Agent Loop 中，系统提示和工具定义通常不变，只有用户消息变化。通过保持前缀稳定，每次迭代的输入 Token 成本大幅降低。Gateway 层（如 Requesty、LiteLLM）可以自动管理缓存。</p>
+</div>
+</div>
+
+
+
+
+<div class="source-link">
+<p><strong>参考来源：</strong></p>
+<p>1. <a href="https://www.inngest.com/blog/agent-loop-architecture" target="_blank">The Agent Loop Architecture（Inngest）- Dan Farrelly</a></p>
+<p>2. <a href="https://www.requesty.ai/blog/loop-engineering-how-to-build-ai-agent-loops-that-run-themselves" target="_blank">Loop Engineering: How to Build AI Agent Loops That Run Themselves（Requesty）</a></p>
+</div>
+    </section>
+
+    <footer>
+      <div class="made">TECH NOTES · AI 工程 · 整理自 AI Knowledge Hub</div>
+    </footer>
+  </main>
+</div>
+
+<script>
+(function(){var bar=document.getElementById('progress');function u(){var h=document.documentElement;bar.style.width=h.scrollTop/(h.scrollHeight-h.clientHeight)*100+'%';}window.addEventListener('scroll',u,{passive:true});u();})();
+(function(){var links=document.querySelectorAll('aside.toc nav a');var secs=Array.from(document.querySelectorAll('section.chapter'));if(!secs.length)return;function u(){var y=window.scrollY+100,cur=secs[0];for(var i=0;i<secs.length;i++){if(secs[i].offsetTop<=y)cur=secs[i];}var id=cur.id;links.forEach(function(a){a.classList.toggle('active',a.getAttribute('href')==='#'+id);});}window.addEventListener('scroll',u,{passive:true});u();})();
+</script>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

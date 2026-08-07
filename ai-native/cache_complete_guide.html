@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cache 全景知识分享 · AI 工程 — Tech Notes</title>
+<meta name="description" content="从 GPU 显存到业务层 — KV Cache / Prompt Cache / Semantic Cache / Redis 缓存全链路解析">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<link rel="stylesheet" href="../assets/kh-guide.css">
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav">
+
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="ai_engineering_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 11 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>S01 · AI 工程</h2>
+    <nav>
+      <ol>
+        <li><a href="#overview" class="active">概览</a></li>
+        <li><a href="#cache">Cache 全景图：三层缓存体系</a></li>
+        <li><a href="#kv-cache">KV Cache：推理层加速引擎</a></li>
+        <li><a href="#prompt-cache">Prompt Cache：跨请求复用</a></li>
+        <li><a href="#semantic-cache">Semantic Cache：语义级缓存</a></li>
+        <li><a href="#l1-l2-redis">L1 进程缓存 / L2 Redis 缓存 / 向量缓存</a></li>
+        <li><a href="#ch6">商业用法与成本收益</a></li>
+        <li><a href="#ch7">使用陷阱与解决方法</a></li>
+        <li><a href="#ch8">优化方案总结</a></li>
+        <li><a href="#ch9">参考卡片</a></li>
+        <li><a href="#q-a">Q&amp;A</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+    <header class="hero">
+      <div class="badge">S01 · AI 工程</div>
+      <h1>Cache 全景知识分享</h1>
+      <p class="sub">从 GPU 显存到业务层 — KV Cache / Prompt Cache / Semantic Cache / Redis 缓存全链路解析</p>
+      <div class="meta-row">
+        <span class="pill cyan">AI 工程</span>
+        <span class="pill green">阅读 ~11 min</span>
+        <span class="pill amber">11 章</span>
+      </div>
+    </header>
+
+    <section class="chapter" id="overview">
+      <div class="ch-head"><div class="num">00</div><div class="t"><h2>概览</h2><div class="sub">Cache 的本质都是&quot;空间换时间&quot;，但在不同层次有不同表现：KV Cache 在 GPU…</div></div></div>
+      <div class="intuition-box"><p>Cache 的本质都是"空间换时间"，但在不同层次有不同表现：KV Cache 在 GPU 显存层加速单次推理，Prompt Cache 在 API 层复用跨请求计算，Semantic Cache 在业务层跳过整次模型调用，Redis 在传统缓存层减少数据库访问。理解这四层，就掌握了 AI 系统缓存的全部核心。</p></div>
+    </section>
+
+    <section class="chapter" id="cache">
+      <div class="ch-head"><div class="num">01</div><div class="t"><h2>Cache 全景图：三层缓存体系</h2><div class="sub">在 AI 系统中，缓存不是单一的&quot;加个 Redis&quot;，而是一个多层体系 [3] ：</div></div></div>
+      <p>在 AI 系统中，缓存不是单一的"加个 Redis"，而是一个多层体系<sup class="ref"><a href="#ref-3">[3]</a></sup>：</p>
+
+<table>
+<tr><th>层级</th><th>名称</th><th>复用对象</th><th>直接收益</th><th>适用场景</th></tr>
+<tr><td>L1</td><td><span class="term">Prompt Cache</span></td><td>稳定前缀的 K/V 矩阵</td><td>输入成本降低 67-90%</td><td>固定 System Prompt、统一工具定义</td></tr>
+<tr><td>L2</td><td><span class="term">Semantic Cache</span></td><td>整条问答结果</td><td>跳过整次模型调用</td><td>客服 FAQ、制度问答、标准解释</td></tr>
+<tr><td>L3</td><td><span class="term">KV Cache</span></td><td>推理中间状态（K/V 矩阵）</td><td>提升吞吐、降低延迟</td><td>自建推理服务、长上下文生成</td></tr>
+</table>
+
+<div class="flow">
+  <div class="flow-title">用户请求流程</div>
+  <div class="flow-node accent"><div class="nlabel">请求到达</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">L2 Semantic Cache：语义匹配命中？ → 直接返回缓存答案（跳过模型）</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">L1 Prompt Cache：前缀匹配命中？ → 跳过 Prefill，节省输入计算</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">L3 KV Cache：推理层复用 K/V → 加速 Decode 阶段</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">传统 Redis Cache：缓存业务数据、会话状态</div></div>
+</div>
+
+<div class="highlight"><strong>关键认知：</strong>热点问题越多，L2 价值越高；稳定模板越多，L1 价值越高；自建推理越多，L3 价值越高<sup class="ref"><a href="#ref-3">[3]</a></sup>。</div>
+    </section>
+
+    <section class="chapter" id="kv-cache">
+      <div class="ch-head"><div class="num">02</div><div class="t"><h2>KV Cache：推理层加速引擎</h2><div class="sub">KV Cache 的本质：用空间换时间 — 缓存已计算的 Key/Value 向量，避免自回…</div></div></div>
+      <div class="intuition-box"><p>KV Cache 的本质：用空间换时间 — 缓存已计算的 Key/Value 向量，避免自回归生成时对相同 token 重复做矩阵乘法<sup class="ref"><a href="#ref-1">[1]</a></sup>。</p></div>
+
+<h3>2.1 原理</h3>
+<p>Transformer 的自回归生成每产生一个新 token，都需要对之前所有 token 做 Attention 计算。如果不缓存，每步都要重新计算所有 Key 和 Value — <strong>计算量随序列长度平方增长</strong><sup class="ref"><a href="#ref-6">[6]</a></sup>。</p>
+
+<div class="flow">
+  <div class="flow-node accent"><div class="nlabel">无 KV Cache（每步重算）：</div><div class="nsub">Step 1: 计算 token₁ 的 K, V → 生成 token₂ · Step 2: 重新计算 token₁, token₂ 的 K, V → 生成 token₃</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">O(n²) 重复计算</div><div class="nsub">有 KV Cache（增量追加）： · Step 1: 计算 token₁ 的 K, V → 缓存 → 生成 token₂ · Step 2: 复用缓存 + 只算 token₂ 的 K, V → 追加 → 生成 token₃</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">O(n) 增量计算</div></div>
+</div>
+
+<h3>2.2 显存开销</h3>
+<table>
+<tr><th>模型</th><th>层数</th><th>KV Heads</th><th>单 token KV 大小</th><th>4K 上下文</th><th>32K 上下文</th></tr>
+<tr><td>LLaMA 7B</td><td>32</td><td>32</td><td>~0.5 MB</td><td>~2 GB</td><td>~16 GB</td></tr>
+<tr><td>LLaMA 70B</td><td>80</td><td>8 (GQA)</td><td>~0.2 MB</td><td>~0.8 GB</td><td>~6.4 GB</td></tr>
+<tr><td>LLaMA 70B (MHA)</td><td>80</td><td>64</td><td>~1.6 MB</td><td>~6.4 GB</td><td>~51 GB</td></tr>
+</table>
+<p>公式：<code>2 × 层数 × KV_Heads × Head_Dim × seq_len × dtype_bytes</code><sup class="ref"><a href="#ref-1">[1]</a><a href="#ref-6">[6]</a></sup></p>
+
+<h3>2.3 核心痛点：显存碎片化</h3>
+<p>传统方案为每个请求<strong>预分配连续显存块</strong>（按最大上下文长度），导致 60-80% 的显存被浪费<sup class="ref"><a href="#ref-1">[1]</a><a href="#ref-4">[4]</a></sup>：</p>
+<table>
+<tr><th>碎片类型</th><th>成因</th><th>影响</th></tr>
+<tr><td><strong>内部碎片</strong></td><td>预分配 > 实际使用长度</td><td>预留但未用的空间不可复用</td></tr>
+<tr><td><strong>外部碎片</strong></td><td>请求结束后留下不连续空洞</td><td>新请求无法利用分散小块</td></tr>
+</table>
+
+<h3>2.4 三大优化策略</h3>
+
+<p><strong>PagedAttention (vLLM)</strong><sup class="ref"><a href="#ref-1">[1]</a><a href="#ref-4">[4]</a><a href="#ref-6">[6]</a></sup>：借鉴 OS 虚拟内存分页，将显存切分为固定大小 Block，按需分配非连续 Block，通过 Block Table 映射逻辑→物理地址。显存利用率从 20-40% 提升至 95%+。</p>
+
+<p><strong>GQA / MQA</strong><sup class="ref"><a href="#ref-1">[1]</a><a href="#ref-6">[6]</a></sup>：多个 Query Head 共享一组 KV，直接减少 KV Cache 大小。</p>
+<table>
+<tr><th>方案</th><th>KV Heads</th><th>Cache 压缩比</th><th>质量影响</th><th>代表模型</th></tr>
+<tr><td>MHA</td><td>N（全量）</td><td>1x</td><td>基准</td><td>LLaMA 1</td></tr>
+<tr><td>GQA</td><td>G（分组）</td><td>N/G 倍</td><td><1%</td><td>LLaMA 2/3, Mistral, Qwen</td></tr>
+<tr><td>MQA</td><td>1（全共享）</td><td>N 倍</td><td>轻微下降</td><td>Falcon 40B</td></tr>
+</table>
+
+<p><strong>KV 量化 + 窗口丢弃</strong><sup class="ref"><a href="#ref-1">[1]</a><a href="#ref-4">[4]</a></sup>：</p>
+<table>
+<tr><th>策略</th><th>显存节省</th><th>质量影响</th><th>适用场景</th></tr>
+<tr><td>FP16→INT8</td><td>50%</td><td><1%</td><td>通用生产</td></tr>
+<tr><td>FP16→INT4/NF4</td><td>75%</td><td>1-3%</td><td>长上下文 / 资源受限</td></tr>
+<tr><td>滑动窗口 + Attention Sink</td><td>固定窗口大小</td><td>丢失长距离依赖</td><td>流式推理（StreamingLLM）</td></tr>
+</table>
+
+<h3>2.5 策略叠加效果</h3>
+<div class="flow">
+  <div class="flow-title">生产级 KV Cache 优化 = 四层策略叠加</div>
+  <div class="flow-node accent"><div class="nlabel">Layer 1 · 模型层</div><div class="nsub">GQA（8 groups）→ KV Cache 减少 8×</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Layer 2 · 存储层</div><div class="nsub">INT8 量化 → 再减少 2×</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Layer 3 · 管理层</div><div class="nsub">PagedAttention → 消除碎片化（3–5×）</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">Layer 4 · 逻辑层</div><div class="nsub">Attention Sink + 窗口 → 控制长序列增长</div></div>
+</div>
+<table>
+<tr><th>综合效果（70B 模型，32K 上下文）</th><th>显存 / 请求</th><th>结论</th></tr>
+<tr><td>未优化</td><td><strong>~51 GB</strong></td><td>不可能部署</td></tr>
+<tr><td>四层优化后</td><td><strong>~0.8 GB</strong></td><td>8×A100 可跑 100 并发</td></tr>
+</table>
+
+<h3>2.6 商业用法</h3>
+<p>对自建推理服务（vLLM/TGI 集群），KV Cache 直接关系到单位 GPU 能承载多少请求<sup class="ref"><a href="#ref-3">[3]</a></sup>。生产案例：Llama 3 70B on A100 80GB×8，优化后单卡从 1 个并发提升到 16 个，单位请求成本从 $0.08 降至 $0.005（降幅 94%）<sup class="ref"><a href="#ref-1">[1]</a></sup>。</p>
+
+<h3>2.7 使用陷阱</h3>
+<div class="warning-box">
+<ul>
+<li><strong>静态预分配</strong>：按最大长度预留连续显存，碎片化浪费 60-80%<sup class="ref"><a href="#ref-4">[4]</a></sup></li>
+<li><strong>跳过 GQA 直接窗口丢弃</strong>：质量损失更大，应按三级降级顺序：量化→GQA→窗口丢弃<sup class="ref"><a href="#ref-4">[4]</a></sup></li>
+<li><strong>忽视显存监控</strong>：>90% 利用率时应自动触发降级策略<sup class="ref"><a href="#ref-4">[4]</a></sup></li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="prompt-cache">
+      <div class="ch-head"><div class="num">03</div><div class="t"><h2>Prompt Cache：跨请求复用</h2><div class="sub">Prompt Cache 的核心：多个请求共享相同的系统提示词前缀，每次都重新做 Prefi…</div></div></div>
+      <div class="intuition-box"><p>Prompt Cache 的核心：多个请求共享相同的系统提示词前缀，每次都重新做 Prefill 计算是巨大的浪费，把前缀的 K/V 缓存下来直接复用<sup class="ref"><a href="#ref-5">[5]</a></sup>。</p></div>
+
+<h3>3.1 与 KV Cache 的区别</h3>
+<table>
+<tr><th>维度</th><th>KV Cache</th><th>Prompt Cache</th></tr>
+<tr><td>优化阶段</td><td>Decode（逐 token 生成）</td><td>Prefill（输入处理）</td></tr>
+<tr><td>生命周期</td><td>单次对话结束销毁</td><td>长期驻留（LRU 淘汰）</td></tr>
+<tr><td>匹配方式</td><td>无需匹配（顺序追加）</td><td>精确前缀匹配</td></tr>
+<tr><td>复杂度降级</td><td>O(n²) → O(n)</td><td>O(n²) → O(1)（命中部分）</td></tr>
+<tr><td>收益来源</td><td>推理延迟降低</td><td>API 成本降低（Token 单价降至 10%）</td></tr>
+</table>
+<p>两者互补而非竞争：KV Cache 节省"输出生成"时间，Prompt Cache 节省"输入处理"成本<sup class="ref"><a href="#ref-2">[2]</a><a href="#ref-5">[5]</a></sup>。</p>
+
+<h3>3.2 前缀匹配机制</h3>
+<p>Prompt Cache 按<strong>最长前缀匹配</strong>工作 — 从请求第一个字节到缓存断点必须完全一致<sup class="ref"><a href="#ref-2">[2]</a><a href="#ref-5">[5]</a></sup>。位置编码敏感（第 i 个 token 的 K 向量编码了位置信息），所以只能前缀匹配，不能任意子串匹配。</p>
+
+<div class="flow">
+  <div class="flow-title">请求结构（从前往后）</div>
+  <div class="flow-node accent"><div class="nlabel">System Prompt + 工具定义 → CLAUDE.md → Session</div><div class="nsub">稳定内容放前面 → ← 可变内容放后面</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">缓存命中：前缀完全匹配 → 跳过 Prefill → Token 单价降至 10%</div><div class="nsub">缓存击穿：任何前缀变动 → 后续缓存全部作废</div></div>
+</div>
+
+<h3>3.3 Claude Code 团队的五大原则</h3>
+<p>Claude Code 团队将缓存命中率设为 <span class="term">SEV 事故级别告警</span>（掉几个点就是成本翻倍）<sup class="ref"><a href="#ref-2">[2]</a></sup>：</p>
+<table>
+<tr><th>原则</th><th>做法</th><th>反模式</th></tr>
+<tr><td>稳定内容前置</td><td>System Prompt + 工具定义放最前</td><td>前缀里塞时间戳、用户 ID</td></tr>
+<tr><td>信息更新走 message 层</td><td>用 system-reminder 标签注入新信息</td><td>每次更新 System Prompt</td></tr>
+<tr><td>工具集保持稳定</td><td>状态切换通过工具调用表达</td><td>动态加载/卸载工具</td></tr>
+<tr><td>不切模型</td><td>切便宜模型需重建 prefix 更贵</td><td>动态切模型</td></tr>
+<tr><td>压缩继承 prefix</td><td>继承父对话 prefix，仅追加压缩指令</td><td>重新构建对话历史</td></tr>
+</table>
+
+<h3>3.4 商业用法</h3>
+<p>最适合模板稳定、前缀高度一致的 SaaS 产品（客服、文案生成、报表总结）<sup class="ref"><a href="#ref-3">[3]</a></sup>。生产案例：AI 编程助手日均 50 万次 API 调用，启用 Prompt Cache 后命中率 92%，TTFT 从 800ms 降至 120ms，年化成本降低约 $180K<sup class="ref"><a href="#ref-5">[5]</a></sup>。</p>
+
+<h3>3.5 使用陷阱</h3>
+<div class="warning-box">
+<ul>
+<li><strong>System Prompt 塞时间戳</strong>：每次请求 prefix 不同，缓存全部作废<sup class="ref"><a href="#ref-2">[2]</a></sup></li>
+<li><strong>工具序列化顺序漂移</strong>：功能等价但 prefix 不同<sup class="ref"><a href="#ref-2">[2]</a></sup></li>
+<li><strong>频繁修改 System Prompt</strong>：每次修改使缓存失效<sup class="ref"><a href="#ref-5">[5]</a></sup></li>
+<li><strong>用户特有内容放前缀位置</strong>：破坏共享性<sup class="ref"><a href="#ref-5">[5]</a></sup></li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="semantic-cache">
+      <div class="ch-head"><div class="num">04</div><div class="t"><h2>Semantic Cache：语义级缓存</h2><div class="sub">Semantic Cache 通过向量相似度匹配，命中时直接返回缓存的完整答案，跳过整次模型…</div></div></div>
+      <div class="intuition-box"><p>Semantic Cache 通过向量相似度匹配，命中时直接返回缓存的完整答案，跳过整次模型调用。收益最大但风险也最高 — 对的答案会被放大，错的答案也会被放大<sup class="ref"><a href="#ref-3">[3]</a></sup>。</p></div>
+
+<h3>4.1 工作原理</h3>
+<div class="flow">
+  <div class="flow-title">用户提问 &quot;运费怎么算&quot;</div>
+  <div class="flow-node accent"><div class="nlabel">Embedding 向量化</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">向量数据库中查找相似问题（cosine similarity &gt; 阈值）</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">命中 → 直接返回缓存答案（跳过模型调用）</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">未命中 → 正常调用模型 → 结果写入缓存</div></div>
+</div>
+
+<h3>4.2 适用 vs 不适用</h3>
+<table>
+<tr><th>适合</th><th>不适合</th><th>关键设计</th></tr>
+<tr><td>标准 FAQ、静态制度、低个性化问答</td><td>个性化强、强实时、与订单状态强绑定</td><td>相似度阈值、TTL、版本隔离</td></tr>
+</table>
+
+<h3>4.3 商业用法</h3>
+<p>高频重复问答场景价值极高。案例：某客服机器人日均 180 万次咨询，前 200 个问题占 61% 流量。启用 Semantic Cache 后整体请求命中率 47%，输入 Token 成本下降 38%，P95 延迟从 6.9s 降至 2.4s<sup class="ref"><a href="#ref-3">[3]</a></sup>。</p>
+
+<h3>4.4 使用陷阱</h3>
+<div class="warning-box">
+<ul>
+<li><strong>阈值过低</strong>：不相似的问题也命中，返回错误答案</li>
+<li><strong>TTL 过长</strong>：过时政策被快速复制给大量用户<sup class="ref"><a href="#ref-3">[3]</a></sup></li>
+<li><strong>无版本隔离</strong>：新旧口径混用，错误答案持续命中<sup class="ref"><a href="#ref-3">[3]</a></sup></li>
+<li><strong>只看命中率</strong>：不看错误答案是否被放大 — 命中率高但答错更多，这种缓存没有商业价值<sup class="ref"><a href="#ref-3">[3]</a></sup></li>
+</ul>
+</div>
+
+<h3>4.5 解决方法</h3>
+<table>
+<tr><th>陷阱</th><th>解决方法</th></tr>
+<tr><td>错误答案放大</td><td>灰度启用 + 热点抽检 + 可快速清空命中池<sup class="ref"><a href="#ref-3">[3]</a></sup></td></tr>
+<tr><td>知识过期</td><td>缓存键带知识库版本号，按版本隔离<sup class="ref"><a href="#ref-3">[3]</a></sup></td></tr>
+<tr><td>个性化不匹配</td><td>先从标准 FAQ 和低风险场景试点<sup class="ref"><a href="#ref-3">[3]</a></sup></td></tr>
+<tr><td>模型版本差异</td><td>不同模型单独命中池<sup class="ref"><a href="#ref-3">[3]</a></sup></td></tr>
+</table>
+    </section>
+
+    <section class="chapter" id="l1-l2-redis">
+      <div class="ch-head"><div class="num">05</div><div class="t"><h2>L1 进程缓存 / L2 Redis 缓存 / 向量缓存</h2><div class="sub">在 AI 系统的业务层，传统多级缓存依然重要 [7] ：</div></div></div>
+      <h3>5.1 多级缓存架构</h3>
+<p>在 AI 系统的业务层，传统多级缓存依然重要<sup class="ref"><a href="#ref-7">[7]</a></sup>：</p>
+<table>
+<tr><th>层级</th><th>介质</th><th>延迟</th><th>容量</th><th>典型用途</th></tr>
+<tr><td>L1 进程缓存</td><td>应用进程内存</td><td>~0.1ms</td><td>极小（MB 级）</td><td>热点配置、模型路由表、高频工具描述</td></tr>
+<tr><td>L2 Redis 缓存</td><td>Redis 内存</td><td>~1ms</td><td>中等（GB 级）</td><td>会话状态、用户画像、Embedding 向量</td></tr>
+<tr><td>向量数据库</td><td>Milvus/Pinecone 等</td><td>~10ms</td><td>大（TB 级）</td><td>Semantic Cache、RAG 检索</td></tr>
+</table>
+
+<h3>5.2 Redis 在 AI 系统中的角色</h3>
+<p>Redis 在 AI 系统中远不止"加个缓存"，承担多种角色<sup class="ref"><a href="#ref-7">[7]</a></sup>：</p>
+<table>
+<tr><th>用途</th><th>Redis 数据结构</th><th>说明</th></tr>
+<tr><td>会话状态存储</td><td>Hash / String</td><td>Agent 多轮对话的中间状态</td></tr>
+<tr><td>缓存命中率计数</td><td>String (INCR)</td><td>实时监控缓存效果</td></tr>
+<tr><td>分布式限流</td><td>String + Lua</td><td>控制 API 调用频率</td></tr>
+<tr><td>幂等性保证</td><td>SETNX + TTL</td><td>防止 AI 请求重复执行<sup class="ref"><a href="#ref-8">[8]</a></sup></td></tr>
+<tr><td>缓存穿透防护</td><td>BloomFilter</td><td>拦截不存在数据的查询<sup class="ref"><a href="#ref-7">[7]</a></sup></td></tr>
+</table>
+
+<h3>5.3 缓存三大经典问题</h3>
+<table>
+<tr><th>问题</th><th>定义</th><th>解决方案</th></tr>
+<tr><td><strong>缓存穿透</strong></td><td>查询不存在的数据，直接打到 DB</td><td>布隆过滤器 + 缓存空值<sup class="ref"><a href="#ref-7">[7]</a></sup></td></tr>
+<tr><td><strong>缓存击穿</strong></td><td>热点 Key 过期瞬间大量请求打到 DB</td><td>互斥锁 (SETNX) + 逻辑过期<sup class="ref"><a href="#ref-7">[7]</a></sup></td></tr>
+<tr><td><strong>缓存雪崩</strong></td><td>大量 Key 同时过期</td><td>TTL 加随机偏移 + 多级缓存 + 限流<sup class="ref"><a href="#ref-7">[7]</a></sup></td></tr>
+</table>
+
+<h3>5.4 向量缓存</h3>
+<p>向量缓存是 Semantic Cache 的底层实现，也用于 RAG 检索加速：</p>
+<ul>
+<li><strong>Embedding 缓存</strong>：高频查询的向量结果缓存到 Redis 或专用向量库</li>
+<li><strong>ANN 索引</strong>：HNSW / IVF 等近似最近邻算法，在精度和速度间权衡</li>
+<li><strong>缓存键</strong>：查询文本的 Embedding 向量 + 相似度阈值</li>
+</ul>
+    </section>
+
+    <section class="chapter" id="ch6">
+      <div class="ch-head"><div class="num">06</div><div class="t"><h2>商业用法与成本收益</h2><div class="sub">商业化场景里，最高 ROI 往往不是&quot;微调提示词&quot;，而是先把重复请求拦掉、把简单请求分流掉…</div></div></div>
+      <h3>6.1 各层缓存的 ROI 对比</h3>
+<table>
+<tr><th>缓存层</th><th>常见收益区间</th><th>适合什么项目</th><th>风险</th></tr>
+<tr><td>Prompt Cache (L1)</td><td>输入成本下降 40-90%</td><td>System Prompt 稳定、模板化强<sup class="ref"><a href="#ref-8">[8]</a></sup></td><td>前缀变动导致全部失效</td></tr>
+<tr><td>Semantic Cache (L2)</td><td>跳过整次调用，省 100%</td><td>高频重复 FAQ<sup class="ref"><a href="#ref-3">[3]</a></sup></td><td>错误答案放大</td></tr>
+<tr><td>KV Cache (L3)</td><td>吞吐提升 3-5x</td><td>自建推理服务<sup class="ref"><a href="#ref-1">[1]</a></sup></td><td>显存管理复杂度</td></tr>
+<tr><td>Redis 缓存</td><td>DB 压力降低 50%+</td><td>通用后端<sup class="ref"><a href="#ref-7">[7]</a></sup></td><td>穿透/击穿/雪崩</td></tr>
+</table>
+
+<h3>6.2 优化优先级</h3>
+<p>商业化场景里，最高 ROI 往往不是"微调提示词"，而是先把重复请求拦掉、把简单请求分流掉<sup class="ref"><a href="#ref-8">[8]</a></sup>：</p>
+<p><strong>优化优先级（按 ROI 从高到低）：</strong></p>
+<ul class="pairs">
+  <li><b>1. 缓存复用（最高 ROI）</b><span>立刻减少重复输入/输出成本</span></li>
+  <li><b>2. 模型路由</b><span>让简单任务用便宜模型</span></li>
+  <li><b>3. 上下文压缩</b><span>减少输入 Token</span></li>
+  <li><b>4. 输出控制</b><span>减少输出成本和时延</span></li>
+</ul>
+
+<h3>6.3 生产案例汇总</h3>
+<table>
+<tr><th>场景</th><th>优化前</th><th>优化后</th><th>关键措施</th></tr>
+<tr><td>AI 编程助手<sup class="ref"><a href="#ref-5">[5]</a></sup></td><td>TTFT 800ms, 全量 Prefill</td><td>TTFT 120ms, 命中率 92%</td><td>Prompt Cache + 前缀标准化</td></tr>
+<tr><td>客服 FAQ<sup class="ref"><a href="#ref-3">[3]</a></sup></td><td>P95 延迟 6.9s, 全量调模型</td><td>P95 2.4s, 命中率 47%</td><td>Semantic Cache + 版本隔离</td></tr>
+<tr><td>Agent 服务<sup class="ref"><a href="#ref-2">[2]</a></sup></td><td>缓存命中率 45%, 月成本 $8500</td><td>命中率 91%, 月成本 $2200</td><td>五原则 + prefix 固定</td></tr>
+<tr><td>LLM 推理<sup class="ref"><a href="#ref-1">[1]</a></sup></td><td>并发 8, 碎片率 65%</td><td>并发 128, 碎片率 4%</td><td>PagedAttention + GQA + FP8</td></tr>
+<tr><td>营销文案<sup class="ref"><a href="#ref-8">[8]</a></sup></td><td>单请求 ¥0.042</td><td>单请求 ¥0.016</td><td>路由 + 前缀缓存 + Batch API</td></tr>
+</table>
+    </section>
+
+    <section class="chapter" id="ch7">
+      <div class="ch-head"><div class="num">07</div><div class="t"><h2>使用陷阱与解决方法</h2><div class="sub">Claude Code 团队踩过的三大坑 [2] ：</div></div></div>
+      <h3>7.1 跨层通用陷阱</h3>
+<table>
+<tr><th>陷阱</th><th>影响层</th><th>后果</th><th>解决方法</th></tr>
+<tr><td><strong>动态内容放前缀</strong></td><td>L1 Prompt Cache</td><td>缓存全部失效</td><td>稳定内容前置，动态内容后置<sup class="ref"><a href="#ref-2">[2]</a></sup></td></tr>
+<tr><td><strong>无版本隔离</strong></td><td>L2 Semantic</td><td>新旧口径混用</td><td>缓存键带版本号<sup class="ref"><a href="#ref-3">[3]</a></sup></td></tr>
+<tr><td><strong>静态预分配</strong></td><td>L3 KV Cache</td><td>碎片化 60-80%</td><td>PagedAttention<sup class="ref"><a href="#ref-1">[1]</a></sup></td></tr>
+<tr><td><strong>只看命中率</strong></td><td>所有层</td><td>错误答案被放大</td><td>同时监控命中率 + 错误率<sup class="ref"><a href="#ref-3">[3]</a></sup></td></tr>
+<tr><td><strong>缓存永不过期</strong></td><td>L2 Semantic</td><td>过时知识持续命中</td><td>TTL + 知识版本联动<sup class="ref"><a href="#ref-3">[3]</a></sup></td></tr>
+<tr><td><strong>灰度缺失</strong></td><td>L2 Semantic</td><td>错误缓存瞬间放大到全量</td><td>先低风险流量启用<sup class="ref"><a href="#ref-3">[3]</a></sup></td></tr>
+</table>
+
+<h3>7.2 Agent 特有陷阱</h3>
+<p>Claude Code 团队踩过的三大坑<sup class="ref"><a href="#ref-2">[2]</a></sup>：</p>
+<table>
+<tr><th>坑</th><th>原因</th><th>后果</th></tr>
+<tr><td>System Prompt 塞精确时间戳</td><td>每次请求 prefix 不同</td><td>缓存全部作废</td></tr>
+<tr><td>工具序列化顺序漂移</td><td>功能等价但 prefix 不同</td><td>缓存全部作废</td></tr>
+<tr><td>子 Agent 参数改动</td><td>无害修改落在 cached prefix 里</td><td>缓存全部作废</td></tr>
+</table>
+<p><strong>改写所有上层设计的认知：</strong>动态调工具 = 反模式；切便宜模型 = 可能更贵；独立总结 > 延伸任务 = 错的<sup class="ref"><a href="#ref-2">[2]</a></sup>。</p>
+
+<h3>7.3 缓存上线前必须解决的三个商业问题</h3>
+<table>
+<tr><th>问题</th><th>不解决的后果</th><th>推荐做法</th></tr>
+<tr><td>一致性</td><td>命中过期答案，业务口径错误</td><td>按知识版本、租户、模型版本分桶<sup class="ref"><a href="#ref-3">[3]</a></sup></td></tr>
+<tr><td>收益归因</td><td>不知道缓存省了多少钱</td><td>记录命中率、节省 Token、节省时延<sup class="ref"><a href="#ref-3">[3]</a></sup></td></tr>
+<tr><td>风险隔离</td><td>错误缓存被大规模复用</td><td>灰度启用 + 热点抽检 + 快速清空<sup class="ref"><a href="#ref-3">[3]</a></sup></td></tr>
+</table>
+    </section>
+
+    <section class="chapter" id="ch8">
+      <div class="ch-head"><div class="num">08</div><div class="t"><h2>优化方案总结</h2></div></div>
+      <h3>8.1 全链路优化路线图</h3>
+<div class="flow">
+  <div class="flow-title">Step 1: 稳定前缀标准化 → 吃 Prompt Cache 红利（L1）</div>
+  <div class="flow-node accent"><div class="nlabel">固定 System Prompt，动态内容后置</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">工具定义序列化顺序固定</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">监控命中率，低于 70% 排查前缀一致性</div><div class="nsub">Step 2: 高频 FAQ 语义缓存（L2）</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">先从标准 FAQ 和低风险场景试点</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">缓存键带版本号 + TTL</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">灰度启用 + 热点抽检</div><div class="nsub">Step 3: 自建推理 KV Cache 优化（L3）</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">PagedAttention 消除碎片化</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">GQA 减少 KV head 数量</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">INT8/FP8 量化压缩</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">三级降级策略：量化 → GQA → 窗口丢弃</div><div class="nsub">Step 4: 传统缓存加固</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Redis 多级缓存（L1 进程 + L2 Redis）</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">布隆过滤器防穿透</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">TTL 随机偏移防雪崩</div></div>
+</div>
+
+<h3>8.2 Do / Don't 总结</h3>
+<div class="practice-grid">
+<div class="do">
+<ul>
+<li>稳定前缀标准化，先吃 Prompt Cache 红利</li>
+<li>语义缓存先从标准 FAQ 试点</li>
+<li>缓存键带版本号 + 模型版本隔离</li>
+<li>同时监控命中率 + 错误率 + 节省成本</li>
+<li>KV Cache 三级降级策略自动触发</li>
+<li>灰度启用 + 热点抽检 + 快速清空机制</li>
+<li>PagedAttention + GQA + 量化叠加使用</li>
+</ul>
+</div>
+<div class="dont">
+<ul>
+<li>System Prompt 塞动态时间戳</li>
+<li>只看命中率不看错误答案放大</li>
+<li>缓存永不过期，假设知识永远正确</li>
+<li>所有场景统一用一套语义阈值</li>
+<li>动态加载/卸载工具破坏 prefix</li>
+<li>静态预分配 KV Cache（碎片化 60-80%）</li>
+<li>跳过 GQA 直接窗口丢弃（质量损失大）</li>
+</ul>
+</div>
+</div>
+    </section>
+
+    <section class="chapter" id="ch9">
+      <div class="ch-head"><div class="num">09</div><div class="t"><h2>参考卡片</h2></div></div>
+      <ol class="ref-list">
+<li id="ref-1"><span class="ref-num">1</span><a href="../topics/kv_cache_optimization.html">P01 · KV Cache 显存优化</a> — PagedAttention / GQA / MQA / KV 量化 / 窗口丢弃与 Attention Sink</li>
+<li id="ref-2"><span class="ref-num">2</span><a href="../topics/agent_cache_miss.html">P02 · Agent 缓存击穿：成本崩盘的隐形杀手</a> — Claude Code 团队缓存设计教训与五条原则</li>
+<li id="ref-3"><span class="ref-num">3</span><a href="../engineering/caching_strategies.html">E04 · 缓存策略</a> — 三层缓存体系（Prompt / Semantic / KV）商业化落地指南</li>
+<li id="ref-4"><span class="ref-num">4</span><a href="../topics/kv_cache_optimization.html">P01 · KV Cache 显存优化</a> — PagedAttention + GQA + 量化 + 窗口丢弃全链路优化</li>
+<li id="ref-5"><span class="ref-num">5</span><a href="../llm/prompt_cache_mechanism.html">L12 · Prompt Cache 核心机制</a> — KV Cache 单次加速 → Prompt Cache 跨请求复用 → 推理成本指数级降低</li>
+<li id="ref-6"><span class="ref-num">6</span><a href="../llm/kv_cache_inference.html">L05 · KV Cache 与推理优化</a> — 自回归推理 / Prefill vs Decode / Continuous Batching / Speculative Decoding</li>
+<li id="ref-7"><span class="ref-num">7</span><a href="../database/redis_cache_guide.html">B03 · Redis 与缓存</a> — 数据结构、持久化、集群与缓存穿透/击穿/雪崩</li>
+<li id="ref-8"><span class="ref-num">8</span><a href="../engineering/token_cost_optimization.html">E08 · Token 成本优化</a> — 缓存复用 / 模型路由 / 上下文压缩 / 输出控制四种高 ROI 手段</li>
+</ol>
+    </section>
+
+    <section class="chapter" id="q-a">
+      <div class="ch-head"><div class="num">10</div><div class="t"><h2>Q&amp;A</h2></div></div>
+      <details class="qa">
+<summary>KV Cache 和 Prompt Cache 是同一层优化吗？</summary>
+<div class="a">不是。<strong>KV Cache</strong> 优化 Decode 阶段（逐 token 生成），存储单次对话中已生成 token 的 K/V 矩阵，将单步复杂度从 O(N²) 降到 O(N)。<strong>Prompt Cache</strong> 优化 Prefill 阶段（输入处理），存储跨请求共享的前缀 K/V 矩阵，命中部分复杂度从 O(N²) 降到 O(1)。两者互补：一个减少推理延迟，一个减少 API 调用费用<sup class="ref"><a href="#ref-5">[5]</a></sup>。</div>
+</details>
+
+<details class="qa">
+<summary>缓存击穿对 Agent 为什么是致命问题？</summary>
+<div class="a">Agent 是长会话系统，每次对话可能涉及数十轮交互。如果缓存击穿，每次都按完整 Token 计费，成本指数级增长。Claude Code 团队将缓存命中率设为 SEV 事故级别告警 — 掉几个点就意味着成本翻倍。缓存命中率从 45% 优化至 91% 后，月成本从 $8,500 降至 $2,200（降幅 74%）<sup class="ref"><a href="#ref-2">[2]</a></sup>。</div>
+</details>
+
+<details class="qa">
+<summary>Semantic Cache 价值高但风险也最高，为什么？</summary>
+<div class="a">因为它省掉的是整次模型调用，收益最大；但复用的也是整条最终答案，一旦答案过期或不适用于当前用户，就会把错误直接放大。所以 Semantic Cache 非常依赖版本隔离、阈值设置和场景边界管理。必须先证明它不会放大错误，再追求更高命中率<sup class="ref"><a href="#ref-3">[3]</a></sup>。</div>
+</details>
+
+<details class="qa">
+<summary>PagedAttention 为什么能提升 3-5 倍吞吐？</summary>
+<div class="a">传统方案为每个请求预分配连续显存块（按最大长度），碎片化导致利用率仅 20-40%。PagedAttention 借鉴 OS 虚拟内存分页，将显存切分为固定 Block 按需分配，利用率接近 100%。同等 GPU 下可容纳 3-5 倍并发请求。加上 Block 共享（Beam Search、Prefix Caching），额外收益更大<sup class="ref"><a href="#ref-1">[1]</a><a href="#ref-6">[6]</a></sup>。</div>
+</details>
+
+<details class="qa">
+<summary>为什么"切便宜模型"可能反而更贵？</summary>
+<div class="a">切换模型（如从 Sonnet 切到 Haiku）需要重建 prefix，而重建 prefix 的成本可能超过使用便宜模型节省的钱。正确做法是不切模型，改用子 Agent 独立运行 — 子 Agent 有自己的 prefix，不影响主对话的缓存<sup class="ref"><a href="#ref-2">[2]</a></sup>。</div>
+</details>
+
+<details class="qa">
+<summary>缓存上线前最重要的三件事是什么？</summary>
+<div class="a">三个商业问题必须先解决：(1) <strong>一致性</strong> — 按知识版本、租户、模型版本分桶缓存；(2) <strong>收益归因</strong> — 记录命中率、节省 Token、节省时延；(3) <strong>风险隔离</strong> — 灰度启用、热点抽检、可快速清空。很多团队只看命中率，命中率高但答错更多，这种缓存没有商业价值<sup class="ref"><a href="#ref-3">[3]</a></sup>。</div>
+</details>
+    </section>
+
+    <footer>
+      <div class="made">TECH NOTES · AI 工程 · 整理自 AI Knowledge Hub</div>
+    </footer>
+  </main>
+</div>
+
+<script>
+(function(){var bar=document.getElementById('progress');function u(){var h=document.documentElement;bar.style.width=h.scrollTop/(h.scrollHeight-h.clientHeight)*100+'%';}window.addEventListener('scroll',u,{passive:true});u();})();
+(function(){var links=document.querySelectorAll('aside.toc nav a');var secs=Array.from(document.querySelectorAll('section.chapter'));if(!secs.length)return;function u(){var y=window.scrollY+100,cur=secs[0];for(var i=0;i<secs.length;i++){if(secs[i].offsetTop<=y)cur=secs[i];}var id=cur.id;links.forEach(function(a){a.classList.toggle('active',a.getAttribute('href')==='#'+id);});}window.addEventListener('scroll',u,{passive:true});u();})();
+</script>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

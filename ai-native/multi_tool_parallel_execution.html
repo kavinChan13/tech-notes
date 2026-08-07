@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent 多工具并行执行 · AI 工程 — Tech Notes</title>
+<meta name="description" content="依赖图构建 · DAG 调度引擎 · 并发控制策略 · 错误隔离机制 · 结果合并算法 · 生产级优化实践">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<link rel="stylesheet" href="../assets/kh-guide.css">
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav">
+
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="ai_engineering_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 12 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>A22 · AI 工程</h2>
+    <nav>
+      <ol>
+        <li><a href="#ch1" class="active">工具依赖图深度分析</a></li>
+        <li><a href="#ch2">并行调度引擎设计</a></li>
+        <li><a href="#ch3">错误隔离与结果合并</a></li>
+        <li><a href="#ch4">生产级性能优化</a></li>
+        <li><a href="#vs-vs">并行执行 vs 串行执行 vs 批处理</a></li>
+        <li><a href="#q-a-8">Q&amp;A（8 题）</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+    <header class="hero">
+      <div class="badge">A22 · AI 工程</div>
+      <h1>Agent 多工具并行执行</h1>
+      <p class="sub">依赖图构建 · DAG 调度引擎 · 并发控制策略 · 错误隔离机制 · 结果合并算法 · 生产级优化实践</p>
+      <div class="meta-row">
+        <span class="pill cyan">AI 工程</span>
+        <span class="pill green">阅读 ~12 min</span>
+        <span class="pill amber">6 章</span>
+      </div>
+    </header>
+
+    <section class="chapter" id="ch1">
+      <div class="ch-head"><div class="num">01</div><div class="t"><h2>工具依赖图深度分析</h2><div class="sub">LLM 在规划阶段需要分析用户意图，判断哪些工具调用之间有依赖</div></div></div>
+      <div class="arch-diagram">┌─────────────────────────────────────────────────────────────────────────┐
+│                    多工具并行执行架构                                     │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│   [用户 Query] ──▶ [LLM 规划] ──▶ [依赖图生成]                          │
+│                                         │                               │
+│                                         ▼                               │
+│   ┌─────────────────────────────────────────────────────────┐         │
+│   │              依赖图（DAG - 有向无环图）                    │         │
+│   │                                                         │         │
+│   │   ┌─────────┐         ┌─────────┐                      │         │
+│   │   │ Tool A  │────────▶│ Tool C  │  (数据依赖：C 需要 A 的输出)│         │
+│   │   │查天气    │         │翻译结果  │                          │         │
+│   │   └─────────┘         └─────────┘                      │         │
+│   │                                                         │         │
+│   │   ┌─────────┐         ┌─────────┐                      │         │
+│   │   │ Tool B  │────────▶│ Tool D  │  (数据依赖：D 需要 B 的输出)│         │
+│   │   │查汇率    │         │计算金额  │                          │         │
+│   │   └─────────┘         └─────────┘                      │         │
+│   │                                                         │         │
+│   │   ┌─────────┐                                          │         │
+│   │   │ Tool E  │  (无依赖：可独立并行)                      │         │
+│   │   │查新闻    │                                          │         │
+│   │   └─────────┘                                          │         │
+│   └─────────────────────────────────────────────────────────┘         │
+│                                         │                               │
+│                                         ▼                               │
+│   ┌─────────────────────────────────────────────────────────┐         │
+│   │              并行调度引擎                                 │         │
+│   │                                                         │         │
+│   │  Phase 1 (并行): [A, B, E] 同时执行                      │         │
+│   │           │                                             │         │
+│   │           ▼ (A, B 完成后)                                │         │
+│   │  Phase 2 (并行): [C, D] 同时执行                         │         │
+│   │           │                                             │         │
+│   │           ▼ (全部完成)                                   │         │
+│   │  Phase 3: [结果合并] ──▶ [返回 LLM] ──▶ [生成回答]        │         │
+│   └─────────────────────────────────────────────────────────┘         │
+│                                                                         │
+│   串行执行：A→B→C→D→E = 5.2 秒                                          │
+│   并行执行：(A|B|E)→(C|D) = 1.8 秒  (延迟降低 65%)                       │
+└─────────────────────────────────────────────────────────────────────────┘</div>
+
+<div class="highlight">
+<strong>核心设计哲学：</strong>多工具并行执行的本质是"把串行执行 5 个工具 = 5 秒"变成"并行执行 5 个无依赖工具 = 1 秒"。关键挑战不是"如何并行"，而是"正确识别哪些工具之间有依赖、哪些可以安全并行"。错误的并行会导致数据不一致（工具 B 使用了工具 A 尚未返回的旧数据）或资源冲突（两个工具同时写同一个文件）。<span class="term">依赖图</span>（Dependency Graph）是一个<span class="term">有向无环图</span>（DAG），节点是工具调用，边表示"A 的输出是 B 的输入"。只有没有依赖关系的工具才能安全并行。
+</div>
+
+<h3>三种依赖类型</h3>
+<table>
+<tr><th>依赖类型</th><th>定义</th><th>示例</th><th>能否并行</th><th>检测方法</th></tr>
+<tr><td><span class="term">数据依赖</span></td><td>工具 B 需要工具 A 的输出作为参数</td><td>"查天气，然后把结果翻译成英文"</td><td>❌ 必须串行</td><td>参数引用分析</td></tr>
+<tr><td><span class="term">资源依赖</span></td><td>两个工具都要写同一个共享资源</td><td>"两个工具都要写同一个文件"</td><td>❌ 必须串行或加锁</td><td>资源冲突检测</td></tr>
+<tr><td><strong>无依赖</strong></td><td>工具之间完全独立</td><td>"查北京天气"和"查美元汇率"</td><td>✅ 可安全并行</td><td>无引用 + 无资源冲突</td></tr>
+</table>
+
+<h3>依赖图生成算法</h3>
+<p>LLM 在规划阶段需要分析用户意图，判断哪些工具调用之间有依赖。推荐使用 <span class="term">Structured Output</span>（结构化输出）让 LLM 直接输出依赖图的 JSON 表示，而非让 LLM 用自然语言描述依赖关系（容易歧义）。</p>
+
+<div class="formula">
+依赖图 = { "tools": [A, B, C, D, E], "edges": [(A→C), (B→D)], "parallel_groups": [[A, B, E], [C, D]] }
+</div>
+
+<div class="intuition-box">
+<p>依赖图生成的核心是"参数引用分析"——如果工具 C 的某个参数引用了工具 A 的输出（如 <code>translate(text=A.result)</code>），则 C 依赖 A，必须串行。如果两个工具的参数互不引用且无共享资源，则可并行。</p>
+</div>
+
+<div class="practice-grid">
+<div class="do">
+  <ul>
+    <li>先分析依赖图，只并行无依赖的工具</li>
+    <li>用 Structured Output 让 LLM 输出依赖图 JSON</li>
+    <li>检测数据依赖（参数引用）和资源依赖（共享资源）</li>
+    <li>依赖图必须是 DAG（无环），有环则报错</li>
+    <li>日志记录依赖图（便于调试和分析）</li>
+  </ul>
+</div>
+<div class="dont">
+  <ul>
+    <li>不分析依赖就盲目并行（数据不一致风险）</li>
+    <li>用自然语言描述依赖关系（容易歧义）</li>
+    <li>忽略资源依赖（只检查数据依赖）</li>
+    <li>允许依赖图有环（死锁风险）</li>
+    <li>不记录依赖图（出问题无法回溯）</li>
+  </ul>
+</div>
+</div>
+
+<div class="highlight">
+<strong>生产案例：</strong>在某旅行规划 Agent 中，用户请求"规划去日本的旅行：查机票、查酒店、查汇率、翻译景点介绍、生成行程单"。串行执行 5 个工具需要 6.8 秒，通过依赖图分析识别出"查机票、查酒店、查汇率"三个工具无依赖可并行，"翻译景点"依赖"查酒店"（需要酒店位置信息），"生成行程单"依赖所有前序工具。并行执行后总耗时从 6.8 秒降至 2.9 秒，延迟降低 57%，用户体验显著提升。
+</div>
+    </section>
+
+    <section class="chapter" id="ch2">
+      <div class="ch-head"><div class="num">02</div><div class="t"><h2>并行调度引擎设计</h2><div class="sub">并行调度有两种实现范式：静态调度（提前分析依赖图，固定并行方案）和动态调度（运行时根据工具完…</div></div></div>
+      <div class="intuition-box">
+<p>并行调度有两种实现范式：静态调度（提前分析依赖图，固定并行方案）和动态调度（运行时根据工具完成状态动态触发下一步）。选择哪种取决于任务的"可预测性"。</p>
+</div>
+
+<h3>三种调度策略对比</h3>
+<table>
+<tr><th>调度策略</th><th>实现方式</th><th>优点</th><th>缺点</th><th>适用场景</th></tr>
+<tr><td><span class="term">静态 DAG 调度</span></td><td>LLM 生成 DAG → 引擎按拓扑序执行</td><td>可预测、易调试、执行计划透明</td><td>不够灵活，无法处理运行时依赖变化</td><td>工具调用计划在规划阶段可完全确定</td></tr>
+<tr><td><span class="term">动态事件驱动</span></td><td>工具完成后触发回调 → 引擎判断下一步</td><td>灵活，适应运行时变化</td><td>调试困难，可能出现意外并发</td><td>工具调用需要根据中间结果动态调整</td></tr>
+<tr><td><strong>混合调度</strong></td><td>静态 DAG + 动态回调兜底</td><td>兼顾可预测性和灵活性</td><td>实现复杂</td><td>大多数 Agent 场景（推荐）</td></tr>
+</table>
+
+<h3>静态 DAG 调度算法</h3>
+<p>静态调度的核心是<span class="term">拓扑排序</span>——将 DAG 中的节点按依赖关系排序，确保每个节点在其所有前驱节点完成后才执行。调度引擎按"阶段"（Phase）执行：第一阶段执行所有无前驱的节点（可并行），第二阶段执行所有前驱已完成的节点（可并行），以此类推。</p>
+
+<div class="arch-diagram">┌────────────────────────────────────────────────────────────────┐
+│                    静态 DAG 调度执行流程                         │
+├────────────────────────────────────────────────────────────────┤
+│                                                                │
+│  依赖图：A→C, B→D, E(无依赖)                                   │
+│                                                                │
+│  拓扑排序后：                                                   │
+│  ┌─────────────────────────────────────────────────────────┐  │
+│  │ Phase 1: [A, B, E]  ← 无前驱，可并行                     │  │
+│  │           │                                             │  │
+│  │           ▼ (等待 A, B, E 全部完成)                       │  │
+│  │ Phase 2: [C, D]     ← A, B 已完成，C, D 可并行          │  │
+│  │           │                                             │  │
+│  │           ▼ (等待 C, D 全部完成)                          │  │
+│  │ Phase 3: [结果合并]                                      │  │
+│  └─────────────────────────────────────────────────────────┘  │
+│                                                                │
+│  执行时间线：                                                   │
+│  时间 0s: 启动 A(1.0s), B(1.2s), E(0.8s)                      │
+│  时间 0.8s: E 完成                                             │
+│  时间 1.0s: A 完成                                             │
+│  时间 1.2s: B 完成 → 启动 C(0.6s), D(0.5s)                    │
+│  时间 1.7s: D 完成                                             │
+│  时间 1.8s: C 完成 → 结果合并                                   │
+│  总耗时：1.8 秒（vs 串行 5.2 秒）                               │
+│                                                                │
+└────────────────────────────────────────────────────────────────┘</div>
+
+<h3>动态事件驱动调度</h3>
+<p>动态调度适用于"工具调用计划需要根据中间结果调整"的场景。例如："先查 A，如果 A 的结果满足条件 X 则查 B，否则查 C"。这种条件分支无法在规划阶段预先确定，必须在运行时根据 A 的结果动态决策。动态调度的核心是<span class="term">事件循环</span>——每个工具完成后触发"完成事件"，调度器根据事件和当前状态决定下一步动作。</p>
+
+<h3>并发控制</h3>
+<p>并行不是越多越好。需要设置<span class="term">并发上限</span>（如最多 5 个工具同时执行），避免以下问题：</p>
+
+<table>
+<tr><th>问题</th><th>原因</th><th>后果</th><th>解决方案</th></tr>
+<tr><td><strong>API 限流</strong></td><td>同时调用 10 个外部 API</td><td>触发 rate limit，大量请求被拒绝</td><td>设并发上限 + 指数退避重试</td></tr>
+<tr><td><strong>上下文爆炸</strong></td><td>10 个工具结果同时返回</td><td>LLM 上下文窗口放不下，丢失关键信息</td><td>结果摘要 + 分批合并</td></tr>
+<tr><td><strong>资源竞争</strong></td><td>多个工具同时写数据库</td><td>死锁或数据不一致</td><td>资源锁 + 串行化写操作</td></tr>
+<tr><td><strong>内存溢出</strong></td><td>大量工具结果缓存在内存</td><td>进程 OOM 崩溃</td><td>流式处理 + 结果持久化</td></tr>
+</table>
+
+<div class="formula">
+推荐并发上限 = min(API_rate_limit, context_window / avg_result_size, db_connection_pool)
+</div>
+
+<div class="practice-grid">
+<div class="do">
+  <ul>
+    <li>根据任务可预测性选择调度策略（静态/动态/混合）</li>
+    <li>设并发上限（推荐 3~5 个），防止 API 限流</li>
+    <li>监控每个工具的耗时（P50/P95/P99）</li>
+    <li>工具结果做摘要压缩后再合并（控制 Token）</li>
+    <li>日志记录调度决策（便于调试）</li>
+  </ul>
+</div>
+<div class="dont">
+  <ul>
+    <li>并行 10+ 个工具导致上下文爆炸</li>
+    <li>不设并发上限（API 限流风险）</li>
+    <li>忽略资源竞争（数据库死锁）</li>
+    <li>不监控工具耗时（慢工具拖慢整体）</li>
+    <li>不记录调度日志（问题无法回溯）</li>
+  </ul>
+</div>
+</div>
+
+<div class="highlight">
+<strong>生产案例：</strong>某电商 Agent 的"商品推荐"任务需要调用 7 个工具：查用户画像、查商品库、查库存、查价格、查评价、查物流、生成推荐。串行执行需要 8.5 秒。通过静态 DAG 调度识别出 5 个无依赖工具可并行（查用户画像、查商品库、查库存、查价格、查评价），2 个有依赖工具串行（查物流依赖查库存，生成推荐依赖所有前序工具）。设置并发上限为 5，并行执行后总耗时从 8.5 秒降至 3.2 秒，延迟降低 62%。进一步优化：对工具结果做摘要压缩（每个结果从平均 800 token 压缩到 200 token），LLM 处理时间从 2.1 秒降至 0.8 秒。
+</div>
+    </section>
+
+    <section class="chapter" id="ch3">
+      <div class="ch-head"><div class="num">03</div><div class="t"><h2>错误隔离与结果合并</h2><div class="sub">并行执行时，一个工具失败不应该导致整个任务失败</div></div></div>
+      <div class="intuition-box">
+<p>并行执行时，一个工具失败不应该导致整个任务失败。错误隔离的核心是"每个工具调用独立超时和重试"——工具 A 超时不影响工具 B 的正常执行。结果合并的核心是"结构化聚合"——将多个工具的结果组装为一个统一的 JSON 对象，供 LLM 处理。</p>
+</div>
+
+<h3>三种错误处理策略</h3>
+<table>
+<tr><th>策略</th><th>行为</th><th>适用场景</th><th>实现方式</th></tr>
+<tr><td><span class="term">部分成功</span></td><td>失败的工具返回 null，其他工具的结果正常合并</td><td>非关键工具（如附加信息）</td><td>try-catch 包裹每个工具调用</td></tr>
+<tr><td><span class="term">全有全无</span></td><td>任一工具失败则整体回滚</td><td>关键流程（如金融交易）</td><td>事务机制 + 补偿操作</td></tr>
+<tr><td><span class="term">降级替代</span></td><td>失败的工具用备选工具或默认值替代</td><td>有降级方案的场景</td><td>fallback 函数 + 默认值配置</td></tr>
+</table>
+
+<h3>部分成功策略详解</h3>
+<p>部分成功是最常用的策略——它允许"部分信息缺失"，让 LLM 基于已有结果生成回答，并标注"部分信息获取失败"。例如：用户请求"查北京天气和上海天气"，如果上海天气 API 超时，系统返回"北京：晴，28°C；上海：信息获取失败"，而非整体失败。</p>
+
+<h3>全有全无策略详解</h3>
+<p>全有全无适用于"任一环节失败都会导致业务错误"的场景，如金融交易（转账时扣款成功但入账失败是灾难性的）。实现方式：① 使用事务机制（所有工具调用要么全部成功，要么全部回滚）；② 对于不支持事务的工具，实现补偿操作（如"发送邮件"失败后"撤销已创建的订单"）。</p>
+
+<h3>结果合并算法</h3>
+<p>并行执行后需要将多个工具的结果合并为一个统一的数据结构，供 LLM 处理。推荐三种合并方式：</p>
+
+<table>
+<tr><th>合并方式</th><th>实现</th><th>优点</th><th>缺点</th></tr>
+<tr><td><strong>按工具名拼接</strong></td><td>"天气结果：...，汇率结果：..."</td><td>简单直观</td><td>LLM 解析困难</td></tr>
+<tr><td><strong>按执行顺序拼接</strong></td><td>先完成的放前面</td><td>保留时间信息</td><td>顺序不稳定</td></tr>
+<tr><td><strong>结构化合并（推荐）</strong></td><td>将多个结果组装为一个 JSON 对象</td><td>LLM 解析能力强，结构清晰</td><td>需要预定义 Schema</td></tr>
+</table>
+
+<div class="arch-diagram">┌────────────────────────────────────────────────────────────────┐
+│                    结果合并流程                                   │
+├────────────────────────────────────────────────────────────────┤
+│                                                                │
+│  并行执行结果：                                                  │
+│  ┌─────────┐  ┌─────────┐  ┌─────────┐                       │
+│  │ Tool A  │  │ Tool B  │  │ Tool C  │                       │
+│  │ 成功    │  │ 成功    │  │ 失败    │                       │
+│  │ {temp:  │  │ {rate:  │  │ {error: │                       │
+│  │  28°C}  │  │  7.2}   │  │ "超时"} │                       │
+│  └────┬────┘  └────┬────┘  └────┬────┘                       │
+│       │            │            │                              │
+│       └────────────┼────────────┘                              │
+│                    ▼                                           │
+│  ┌─────────────────────────────────────────────────────────┐  │
+│  │              结构化合并（推荐）                            │  │
+│  │  {                                                      │  │
+│  │    "weather": {"status": "success", "temp": 28},        │  │
+│  │    "exchange": {"status": "success", "rate": 7.2},      │  │
+│  │    "news": {"status": "failed", "error": "timeout"}     │  │
+│  │  }                                                      │  │
+│  └─────────────────────────────────────────────────────────┘  │
+│                    │                                           │
+│                    ▼                                           │
+│  [LLM 处理] → "北京气温 28°C，当前汇率 7.2，新闻信息获取失败"    │
+│                                                                │
+└────────────────────────────────────────────────────────────────┘</div>
+
+<div class="practice-grid">
+<div class="do">
+  <ul>
+    <li>每个工具独立超时和重试（错误隔离）</li>
+    <li>根据业务场景选择错误策略（部分成功/全有全无/降级）</li>
+    <li>用结构化合并（JSON 对象）而非文本拼接</li>
+    <li>合并后检查总 Token 数（防止上下文溢出）</li>
+    <li>日志记录每个工具的状态（success/failed/timeout）</li>
+  </ul>
+</div>
+<div class="dont">
+  <ul>
+    <li>一个工具失败导致整个任务失败（无隔离）</li>
+    <li>所有场景都用"全有全无"（过于严格）</li>
+    <li>用文本拼接合并结果（LLM 解析困难）</li>
+    <li>不检查合并后的 Token 数（上下文溢出）</li>
+    <li>不记录工具状态（问题无法定位）</li>
+  </ul>
+</div>
+</div>
+
+<div class="highlight">
+<strong>生产案例：</strong>某金融 Agent 的"投资组合分析"任务需要并行调用 6 个数据源（股票行情、基金净值、债券利率、汇率、新闻情绪、宏观经济指标）。初期采用"全有全无"策略，任一数据源超时则整体失败，导致任务成功率仅 72%（因为新闻 API 经常超时）。切换到"部分成功 + 降级替代"策略后：新闻 API 超时用缓存数据替代（降级），其他数据源失败返回 null（部分成功），任务成功率从 72% 提升至 94%。同时引入结果摘要压缩（每个数据源结果从平均 600 token 压缩到 150 token），LLM 处理时间从 3.2 秒降至 1.1 秒。
+</div>
+    </section>
+
+    <section class="chapter" id="ch4">
+      <div class="ch-head"><div class="num">04</div><div class="t"><h2>生产级性能优化</h2><div class="sub">并行执行的性能优化不仅是&quot;让工具跑得快&quot;，更是&quot;让整个流水线高效运转&quot;——从依赖图生成、调度…</div></div></div>
+      <div class="intuition-box">
+<p>并行执行的性能优化不仅是"让工具跑得快"，更是"让整个流水线高效运转"——从依赖图生成、调度决策、工具执行、结果合并到 LLM 处理，每个环节都有优化空间。</p>
+</div>
+
+<h3>五层优化策略</h3>
+<table>
+<tr><th>优化层</th><th>优化目标</th><th>优化方法</th><th>预期效果</th></tr>
+<tr><td><strong>规划层</strong></td><td>依赖图生成速度</td><td>缓存常见任务的依赖图模板</td><td>规划时间从 800ms 降至 200ms</td></tr>
+<tr><td><strong>调度层</strong></td><td>调度决策延迟</td><td>预计算拓扑排序，运行时直接执行</td><td>调度延迟从 50ms 降至 5ms</td></tr>
+<tr><td><strong>执行层</strong></td><td>工具执行时间</td><td>结果缓存 + 连接池复用</td><td>重复查询延迟降低 90%</td></tr>
+<tr><td><strong>合并层</strong></td><td>结果合并 Token</td><td>摘要压缩（LLM 提取关键信息）</td><td>Token 减少 60~75%</td></tr>
+<tr><td><strong>LLM 层</strong></td><td>LLM 处理时间</td><td>结构化输入 + 精简上下文</td><td>LLM 响应时间降低 40%</td></tr>
+</table>
+
+<h3>结果缓存策略</h3>
+<p>对于"相同参数的工具调用"，可以直接返回缓存结果而非重新执行。缓存键为 <code>tool_name + sorted(params)</code>，缓存过期时间根据工具的"数据时效性"设定：天气数据缓存 10 分钟，汇率数据缓存 1 小时，静态配置数据缓存 24 小时。</p>
+
+<h3>连接池复用</h3>
+<p>并行调用多个外部 API 时，每个工具独立创建 HTTP 连接会导致"连接建立开销"（TCP 握手 + TLS 握手 ≈ 100~200ms）。通过<span class="term">连接池</span>复用 HTTP 连接，可以将连接建立开销降低 80%。推荐连接池大小 = 并发上限 × 1.5（预留缓冲）。</p>
+
+<div class="formula">
+总延迟 = max(并行组内最慢工具) + 合并时间 + LLM处理时间
+</div>
+
+<div class="highlight">
+<strong>性能优化案例：</strong>某客服 Agent 的"用户问题处理"任务需要并行调用 4 个工具（查用户信息、查订单、查知识库、查 FAQ）。优化前后对比：① 规划层：缓存常见问题的依赖图模板，规划时间从 600ms 降至 150ms；② 执行层：结果缓存命中率 35%，重复查询延迟从 800ms 降至 50ms；③ 合并层：结果摘要压缩，Token 从平均 3200 降至 900；④ LLM 层：结构化输入，LLM 响应时间从 2.5 秒降至 1.4 秒。整体端到端延迟从 5.8 秒降至 2.1 秒，降低 64%。
+</div>
+    </section>
+
+    <section class="chapter" id="vs-vs">
+      <div class="ch-head"><div class="num">05</div><div class="t"><h2>并行执行 vs 串行执行 vs 批处理</h2><div class="sub">并行执行不是万能的——它在&quot;多工具无依赖&quot;场景中优势明显，但在&quot;强依赖链&quot;或&quot;单工具&quot;场景中…</div></div></div>
+      <div class="intuition-box">
+<p>并行执行不是万能的——它在"多工具无依赖"场景中优势明显，但在"强依赖链"或"单工具"场景中可能不如串行执行简单高效。选择合适的执行模式需要分析任务的依赖结构。</p>
+</div>
+
+<table>
+<tr><th>维度</th><th>并行执行</th><th>串行执行</th><th>批处理</th></tr>
+<tr><td><strong>执行模式</strong></td><td>无依赖工具同时执行</td><td>按顺序逐个执行</td><td>收集一批请求后统一处理</td></tr>
+<tr><td><strong>延迟</strong></td><td>最低（并行组内取最慢）</td><td>最高（所有工具时间之和）</td><td>中（等待批次填满）</td></tr>
+<tr><td><strong>实现复杂度</strong></td><td>高（依赖图 + 调度 + 错误隔离）</td><td>低（简单循环）</td><td>中（批次管理 + 超时）</td></tr>
+<tr><td><strong>适用场景</strong></td><td>多工具且大部分无依赖</td><td>强依赖链（每步依赖上一步）</td><td>高并发请求（如批量查询）</td></tr>
+<tr><td><strong>资源利用</strong></td><td>高（并发利用 CPU/网络）</td><td>低（串行等待）</td><td>高（批量处理减少开销）</td></tr>
+<tr><td><strong>错误处理</strong></td><td>复杂（需要隔离 + 合并）</td><td>简单（逐个处理）</td><td>中（批次级错误处理）</td></tr>
+</table>
+
+<div class="highlight">
+<strong>选择建议：</strong>如果任务有 3+ 个无依赖工具 → 用并行执行（延迟降低 50%+）；如果工具之间有强依赖链（每步都依赖上一步）→ 用串行执行（实现简单）；如果是高并发场景（如同时处理 100 个用户请求）→ 用批处理（减少系统开销）。实际生产中常混合使用：整体任务用并行，强依赖子链用串行，高并发请求用批处理。
+</div>
+    </section>
+
+    <section class="chapter" id="q-a-8">
+      <div class="ch-head"><div class="num">06</div><div class="t"><h2>Q&amp;A（8 题）</h2></div></div>
+      <details class="qa">
+<summary>LLM 如何判断工具之间的依赖关系？准确率如何保证？</summary>
+<div class="a">LLM 通过分析用户意图和工具描述来判断依赖关系。如果工具 B 的某个参数需要工具 A 的输出值，则有数据依赖。实践中推荐用 Structured Output 让 LLM 输出依赖图的 JSON 表示（如 <code>{"parallel": ["A", "B"], "sequential": [["C", "D"]]}</code>），引擎据此调度。准确率保障：① 在工具描述中明确标注"该工具的输入需要哪些其他工具的输出"；② 用 Few-shot 示例教 LLM 识别依赖关系；③ 对 LLM 生成的依赖图做后验检查（如检测是否有环、是否有未连接的孤立节点）。实测准确率可达 92~96%。</div>
+</details>
+
+<details class="qa">
+<summary>并行调用时如何合并结果给 LLM？哪种方式最好？</summary>
+<div class="a">三种合并方式：① 按工具名拼接（"天气结果：...，汇率结果：..."）——简单但 LLM 解析困难；② 按执行顺序拼接（先完成的放前面）——保留时间信息但顺序不稳定；③ 结构化合并（将多个工具结果组装为一个 JSON 对象，如 <code>{"weather": {...}, "exchange": {...}}</code>）——LLM 解析能力最强，推荐。合并后的总 Token 数需要检查是否超过上下文窗口，超过则做摘要压缩（每个结果提取关键信息，控制在 200 token 以内）。</div>
+</details>
+
+<details class="qa">
+<summary>并发上限设为多少合适？如何动态调整？</summary>
+<div class="a">并发上限取决于三个约束：① API rate limit（如 OpenAI 每分钟 60 次请求 → 并发上限 ≤ 10）；② LLM 上下文窗口（每个工具结果约 500~1000 token，5 个工具 = 2500~5000 token，需确保不超过窗口的 30%）；③ 系统资源（网络带宽、数据库连接池）。通常设 3~5 个并发上限。动态调整：监控 API 限流错误率，如果限流率 > 5% 则自动降低并发上限；如果限流率 < 1% 且资源充裕则适当提高。推荐公式：<code>concurrency = min(rate_limit/10, context_window/3000, db_pool_size)</code>。</div>
+</details>
+
+<details class="qa">
+<summary>动态调度和静态调度怎么选择？能否混合使用？</summary>
+<div class="a">选择依据是"工具调用计划在规划阶段能否完全确定"。如果计划可完全确定（如"查 A、查 B、查 C 三个独立信息"），用静态 DAG 调度（可预测、易调试）。如果计划需要根据中间结果动态调整（如"先查 A，如果 A 的结果满足条件则查 B，否则查 C"），用动态事件驱动（灵活但调试困难）。大多数 Agent 场景推荐混合方案：整体计划用静态 DAG（确定哪些工具可并行），细节执行用动态回调（处理运行时异常和条件分支）。这种混合方案兼顾可预测性和灵活性。</div>
+</details>
+
+<details class="qa">
+<summary>工具 A 超时但工具 B 成功了，怎么处理？</summary>
+<div class="a">取决于业务场景和错误策略。如果是"部分成功"策略（最常用）：工具 A 返回 null 或超时标记，工具 B 的结果正常返回给 LLM，LLM 根据已有结果生成回答并标注"部分信息获取失败"。如果是"全有全无"策略（关键流程）：取消所有工具调用，整体重试或降级到备选方案。如果是"降级替代"策略：工具 A 用备选工具或默认值替代（如天气 API 超时用缓存数据）。推荐默认使用"部分成功"，对关键工具单独配置"降级替代"。</div>
+</details>
+
+<details class="qa">
+<summary>并行执行会不会导致 API 限流？如何避免？</summary>
+<div class="a">会，这是并行执行最常见的生产问题。避免策略：① 设并发上限（如最多 5 个工具同时执行），根据 API rate limit 动态调整；② 指数退避重试（限流后等待 1s、2s、4s 再重试）；③ 请求分散（将 10 个并行请求分成 2 批，每批 5 个，间隔 500ms）；④ 使用多个 API Key（不同 Key 有不同的 rate limit 配额）；⑤ 结果缓存（相同参数不重复调用）。监控指标：API 限流错误率，目标 < 2%。如果限流率持续 > 5%，需要降低并发上限或联系 API 提供商提高配额。</div>
+</details>
+
+<details class="qa">
+<summary>依赖图生成会不会成为性能瓶颈？如何优化？</summary>
+<div class="a">依赖图生成通常需要 LLM 调用，耗时 500~1000ms，可能成为瓶颈。优化策略：① 依赖图模板缓存——对于常见任务类型（如"旅行规划"、"商品推荐"），预定义依赖图模板，运行时直接加载而非重新生成（耗时从 800ms 降至 50ms）；② 规则引擎——对于简单场景（如"查 A 和查 B"），用规则引擎（而非 LLM）判断依赖关系（如"相同工具+不同参数 = 无依赖"）；③ 异步生成——依赖图生成和工具执行流水线化，边生成边执行（生成 Phase 1 后立即执行，同时生成 Phase 2）。实测优化后依赖图生成耗时从 800ms 降至 150ms。</div>
+</details>
+
+<details class="qa">
+<summary>并行执行和 LangChain 的 RunnableParallel 是什么关系？</summary>
+<div class="a">LangChain 的 RunnableParallel 是并行执行的一种实现——它允许将多个 Runnable（如 Tool 调用）并行执行，自动合并结果。但 RunnableParallel 是"无依赖并行"——它假设所有 Runnable 之间无依赖，不支持依赖图分析和阶段调度。如果需要更复杂的并行（如"Phase 1 并行 A/B/C，Phase 2 并行 D/E，其中 D 依赖 A"），需要自定义调度逻辑。建议：简单并行用 RunnableParallel，复杂依赖图用自定义 DAG 调度引擎（或 LangGraph 的 StateGraph）。</div>
+</details>
+    </section>
+
+    <footer>
+      <div class="made">TECH NOTES · AI 工程 · 整理自 AI Knowledge Hub</div>
+    </footer>
+  </main>
+</div>
+
+<script>
+(function(){var bar=document.getElementById('progress');function u(){var h=document.documentElement;bar.style.width=h.scrollTop/(h.scrollHeight-h.clientHeight)*100+'%';}window.addEventListener('scroll',u,{passive:true});u();})();
+(function(){var links=document.querySelectorAll('aside.toc nav a');var secs=Array.from(document.querySelectorAll('section.chapter'));if(!secs.length)return;function u(){var y=window.scrollY+100,cur=secs[0];for(var i=0;i<secs.length;i++){if(secs[i].offsetTop<=y)cur=secs[i];}var id=cur.id;links.forEach(function(a){a.classList.toggle('active',a.getAttribute('href')==='#'+id);});}window.addEventListener('scroll',u,{passive:true});u();})();
+</script>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

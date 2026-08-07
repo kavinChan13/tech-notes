@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>检索与重排序 · AI 工程 — Tech Notes</title>
+<meta name="description" content="从粗召回到精排序的完整检索管线 — 漏斗式架构：先快后精，兼顾速度和质量">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<link rel="stylesheet" href="../assets/kh-guide.css">
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav">
+
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="ai_engineering_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 11 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>G04 · AI 工程</h2>
+    <nav>
+      <ol>
+        <li><a href="#ch1" class="active">检索架构全景：三种编码范式</a></li>
+        <li><a href="#bm25-tf-idf">稀疏检索（BM25 / TF-IDF）</a></li>
+        <li><a href="#bi-encoder-ann">密集检索（Bi-Encoder + ANN）</a></li>
+        <li><a href="#rrf">混合检索与 RRF 融合</a></li>
+        <li><a href="#cross-encoder-reranker">Cross-Encoder Reranker</a></li>
+        <li><a href="#colbert">ColBERT 延迟交互</a></li>
+        <li><a href="#query">Query 变换技术</a></li>
+        <li><a href="#ch8">生产级检索管线设计</a></li>
+        <li><a href="#q-a">Q&amp;A</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+    <header class="hero">
+      <div class="badge">G04 · AI 工程</div>
+      <h1>检索与重排序</h1>
+      <p class="sub">从粗召回到精排序的完整检索管线 — 漏斗式架构：先快后精，兼顾速度和质量</p>
+      <div class="meta-row">
+        <span class="pill cyan">AI 工程</span>
+        <span class="pill green">阅读 ~11 min</span>
+        <span class="pill amber">9 章</span>
+      </div>
+    </header>
+
+    <section class="chapter" id="ch1">
+      <div class="ch-head"><div class="num">01</div><div class="t"><h2>检索架构全景：三种编码范式</h2><div class="sub">RAG 检索的核心矛盾：速度和精度的权衡</div></div></div>
+      <div class="intuition-box">
+<p>RAG 检索的核心矛盾：速度和精度的权衡。Bi-Encoder 快但不精确，Cross-Encoder 精确但慢，生产环境用"漏斗式"架构——先用 Bi-Encoder 粗筛百万文档到 Top-20，再用 Cross-Encoder 精排到 Top-5。</p>
+</div>
+
+<p>检索系统的性能取决于<span class="term">编码器</span>如何平衡三个维度：编码速度（能否预计算）、交互深度（能否捕捉 query-doc 的细粒度匹配）、精度（能否区分相关和不相关文档）。三种主流范式各有取舍：</p>
+
+<table>
+<tr><th>特性</th><th>Bi-Encoder</th><th>Cross-Encoder</th><th>ColBERT</th></tr>
+<tr><td>编码方式</td><td>query 和 doc 独立编码</td><td>query 和 doc 拼接后一起编码</td><td>独立编码但保留 token 级向量</td></tr>
+<tr><td>交互程度</td><td>无（单向量点积）</td><td>深度（全注意力）</td><td>轻量（MaxSim token 级匹配）</td></tr>
+<tr><td>预计算</td><td>可以（doc 向量离线存储）</td><td>不可以（每个 pair 独立推理）</td><td>可以（doc 多向量离线存储）</td></tr>
+<tr><td>检索速度</td><td>最快（ANN 搜索，ms 级）</td><td>最慢（线性扫描，秒级）</td><td>快（特殊索引，百 ms 级）</td></tr>
+<tr><td>精度</td><td>中等</td><td>最高（SOTA）</td><td>高（接近 Cross-Encoder）</td></tr>
+<tr><td>适用场景</td><td>大规模初筛</td><td>小规模精排</td><td>需要兼顾速度和精度的折中</td></tr>
+</table>
+    </section>
+
+    <section class="chapter" id="bm25-tf-idf">
+      <div class="ch-head"><div class="num">02</div><div class="t"><h2>稀疏检索（BM25 / TF-IDF）</h2><div class="sub">BM25 的本质：用词频和文档频率的统计权重衡量关键词重要性</div></div></div>
+      <div class="intuition-box">
+<p>BM25 的本质：用词频和文档频率的统计权重衡量关键词重要性。虽然"古老"，但在精确术语匹配场景下仍优于向量检索，是混合检索不可或缺的一极。</p>
+</div>
+
+<h3>从 TF-IDF 到 BM25</h3>
+<p><span class="term">TF-IDF</span>（Term Frequency - Inverse Document Frequency）通过词频（TF）和逆文档频率（IDF）的乘积衡量词对文档的重要性。高频词 + 低文档频率 = 高权重。BM25 是 TF-IDF 的进化版，加入了两个关键改进：<strong>TF 饱和函数</strong>（防止词频过高主导排名）和<strong>文档长度归一化</strong>（短文档中的匹配比长文档更有价值）。</p>
+
+<p>BM25 的两个超参数通常不需要调优：<code>k1=1.2</code>（TF 饱和参数）和 <code>b=0.75</code>（长度归一化参数）在大多数场景下表现良好。BM25 的核心优势是<strong>精确关键词匹配</strong>——对于产品名（"iPhone 15 Pro Max"）、错误码（"NullPointerException"）、API 名（"torch.nn.Linear"）等专有名词，BM25 几乎不会遗漏，而向量检索可能因为语义泛化而漏掉。</p>
+
+<h3>稀疏检索的优缺点</h3>
+<table>
+<tr><th>优点</th><th>缺点</th></tr>
+<tr><td>精确关键词匹配（不遗漏包含关键词的文档）</td><td>无法理解同义词 / 语义相似</td></tr>
+<tr><td>无需训练、无需 GPU、可解释性强</td><td>"词汇鸿沟"：query 和文档用词不同则失效</td></tr>
+<tr><td>速度极快（倒排索引，ms 级）</td><td>不适合长尾/口语化查询、多语言语义对齐</td></tr>
+</table>
+
+<div class="highlight">
+<strong>BM25 在 RAG 中的定位：</strong>不是替代向量检索，而是互补。混合检索（BM25 + Dense + RRF）几乎总是优于任一单一方法，实测 Recall@10 提升 10-15%。如果文档含大量专有名词/精确术语，BM25 的权重应适当提高。
+</div>
+
+<div class="interview-box">
+<ul>
+<li>BM25 的 k1 和 b 参数通常不需要调：默认值(1.2, 0.75)在大多数场景够好</li>
+<li>稀疏检索 + 密集检索的混合几乎总是优于任一单一方法</li>
+<li>BM25 在包含特定术语/名词的检索中仍优于向量检索（如产品名、错误码）</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="bi-encoder-ann">
+      <div class="ch-head"><div class="num">03</div><div class="t"><h2>密集检索（Bi-Encoder + ANN）</h2><div class="sub">Bi-Encoder 的核心优势：query 和 document 独立编码，文档向量可预计…</div></div></div>
+      <div class="intuition-box">
+<p>Bi-Encoder 的核心优势：query 和 document 独立编码，文档向量可预计算并存入向量数据库，检索时只需计算 query 向量 + ANN 搜索，支持百万级文档的毫秒级检索。</p>
+</div>
+
+<h3>Bi-Encoder 架构</h3>
+<p><span class="term">Bi-Encoder</span> 将 query 和 document 分别通过 Transformer 编码为固定维度的向量（如 768 维），通过余弦相似度或点积衡量相关性。关键优势是文档向量可以<strong>离线预计算</strong>并存入向量数据库（如 FAISS、Milvus），在线检索时只需计算 query 向量，然后通过 <span class="term">ANN</span>（Approximate Nearest Neighbor）算法快速找到最相似的 Top-K 文档。</p>
+
+<h3>ANN 算法（近似最近邻）</h3>
+<p>精确最近邻搜索在百万级文档下太慢（需要线性扫描），ANN 算法通过牺牲少量精度换取数量级的速度提升：</p>
+
+<table>
+<tr><th>算法</th><th>原理</th><th>特点</th><th>代表实现</th></tr>
+<tr><td><strong>HNSW</strong></td><td>多层跳表图结构</td><td>高召回率（>95%）、内存密集</td><td>Hnswlib, Qdrant, Milvus</td></tr>
+<tr><td><strong>IVF</strong></td><td>聚类 + 只搜索近邻簇</td><td>可扩展、需训练</td><td>FAISS IVF</td></tr>
+<tr><td><strong>PQ</strong></td><td>乘积量化压缩</td><td>省内存、精度略降</td><td>FAISS PQ</td></tr>
+<tr><td><strong>ScaNN</strong></td><td>Google: 各向异性量化</td><td>速度极快</td><td>Google ScaNN</td></tr>
+<tr><td><strong>DiskANN</strong></td><td>SSD-based 图索引</td><td>超大规模、低成本</td><td>Microsoft DiskANN</td></tr>
+</table>
+
+<p><span class="term">HNSW</span>（Hierarchical Navigable Small World）是目前最流行的 ANN 算法：通过构建多层跳表图结构，实现高召回率（Recall@10 > 95%）和低延迟（< 10ms，百万级文档）。向量检索不是精确搜索——ANN 可能遗漏少量相关文档，这是速度的代价，但通过调参（如增大 ef_search）可以在精度和速度间权衡。</p>
+
+<h3>密集检索的优缺点</h3>
+<table>
+<tr><th>优点</th><th>缺点</th></tr>
+<tr><td>语义理解（同义词/释义/口语化查询都能匹配）</td><td>精确词匹配不如 BM25（专有名词/错误码）</td></tr>
+<tr><td>支持跨语言检索</td><td>需要 GPU 做 embedding（离线阶段）</td></tr>
+<tr><td>对模糊查询鲁棒</td><td>向量空间的"各向异性"可能影响精度</td></tr>
+</table>
+
+<div class="interview-box">
+<ul>
+<li>Bi-Encoder 的核心优势：query 和 doc 独立编码，支持预计算文档向量→毫秒级检索</li>
+<li>HNSW 是目前最流行的 ANN 算法：Recall@10 > 95%，延迟 < 10ms（百万级）</li>
+<li>向量检索不是精确搜索——ANN 可能遗漏少量相关文档，这是速度的代价</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="rrf">
+      <div class="ch-head"><div class="num">04</div><div class="t"><h2>混合检索与 RRF 融合</h2><div class="sub">混合检索的本质：BM25 擅长精确关键词匹配（专有名词、错误码），Dense 擅长语义理解（…</div></div></div>
+      <div class="intuition-box">
+<p>混合检索的本质：BM25 擅长精确关键词匹配（专有名词、错误码），Dense 擅长语义理解（同义词、释义、口语化查询）。两者盲区互补——BM25 召回的 Dense 可能漏掉（关键词变化），Dense 召回的 BM25 可能漏掉（语义相近但用词不同）。</p>
+</div>
+
+<h3>为什么需要混合检索？</h3>
+<p>稀疏检索和密集检索各有盲区：BM25 抓关键词但不懂语义，向量检索懂语义但可能漏关键词。两者互补可显著提升召回率。实测：Hybrid 的 Recall@10 通常比单一方法高 10-15%。</p>
+
+<h3>Reciprocal Rank Fusion (RRF)</h3>
+<p><span class="term">RRF</span>（Reciprocal Rank Fusion）是将多路检索结果融合的简单有效算法。核心思想：每个文档根据其在各路结果中的排名得分，分数加和后重新排序。</p>
+
+<div class="formula">RRF 公式：score(d) = Σ 1/(rank<sub>i</sub> + k)，其中 k 通常取 60</div>
+
+<p>RRF 的优势：①只看排名不看绝对分数，天然解决不同检索器分数尺度不同的问题（BM25 的分数和向量相似度的量纲不同，无法直接比较）②不需要任何训练③简单有效。论文推荐 k=60，实践中 k=20~100 差异不大。</p>
+
+<h3>混合检索效果对比</h3>
+<table>
+<tr><th>方法</th><th>Recall@10</th><th>适合查询类型</th></tr>
+<tr><td>BM25 only</td><td>~0.65</td><td>含专有名词/精确术语</td></tr>
+<tr><td>Dense only</td><td>~0.72</td><td>语义化/口语化查询</td></tr>
+<tr><td>Hybrid (RRF)</td><td>~0.82</td><td>所有类型（通用最优）</td></tr>
+</table>
+
+<div class="highlight">
+<strong>权重分配：</strong>如果文档含大量专有名词/精确术语（如产品名、错误码、API 名），BM25 权重应适当提高（如 0.6:0.4）；语义化查询多则 Dense 权重高（如 0.4:0.6）。Hybrid 检索几乎没有缺点，建议作为生产环境的默认选择。
+</div>
+
+<div class="interview-box">
+<ul>
+<li>RRF 的优势：不需要对不同检索器的分数做归一化（只看排名不看绝对分数）</li>
+<li>RRF 中 k=60 是论文推荐值，实践中 k=20~100 差异不大</li>
+<li>Hybrid 检索几乎没有缺点，建议作为生产环境的默认选择</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="cross-encoder-reranker">
+      <div class="ch-head"><div class="num">05</div><div class="t"><h2>Cross-Encoder Reranker</h2><div class="sub">Reranker 是 RAG 中 ROI 最高的优化——增加 ~200ms 延迟换取 10-…</div></div></div>
+      <div class="intuition-box">
+<p>Reranker 是 RAG 中 ROI 最高的优化——增加 ~200ms 延迟换取 10-20% Precision 提升。典型流程：Dense/Hybrid 检索 Top-20 → Reranker 精排 → 取 Top-3~5 给 LLM。</p>
+</div>
+
+<h3>Bi-Encoder vs Cross-Encoder</h3>
+<p><span class="term">Cross-Encoder</span> 将 query 和 document 拼接后一起输入 Transformer（格式：<code>[CLS] query [SEP] document [SEP]</code>），通过全注意力机制实现深度交互。每个 query token 与每个 document token 都能看到对方，捕捉细粒度的匹配信号（如精确词匹配、否定关系、条件关系）。这种深度交互带来 SOTA 精度，但代价是<strong>无法预计算</strong>——每个 (query, document) pair 都需要独立推理，速度极慢。</p>
+
+<p>因此 Cross-Encoder 不能替代检索（太慢），只能在小候选集上使用。典型用法：Bi-Encoder 或 Hybrid 检索先粗筛出 Top-20~50 候选，再用 Cross-Encoder 对每个 (query, candidate) pair 打分，取 Top-3~5 传给 LLM。这种"漏斗式"架构兼顾了速度和质量。</p>
+
+<h3>典型 Reranker 模型</h3>
+<table>
+<tr><th>模型</th><th>机构</th><th>特点</th></tr>
+<tr><td>bge-reranker-v2-m3</td><td>BAAI</td><td>多语言，开源最强之一</td></tr>
+<tr><td>bge-reranker-v2-gemma</td><td>BAAI</td><td>基于 Gemma，推理能力强</td></tr>
+<tr><td>Cohere Rerank v3</td><td>Cohere</td><td>商业 API，效果极好</td></tr>
+<tr><td>ms-marco-MiniLM-L-12</td><td>SBERT</td><td>轻量级，速度快</td></tr>
+<tr><td>Jina Reranker v2</td><td>Jina AI</td><td>支持长文本 rerank</td></tr>
+</table>
+
+<div class="interview-box">
+<ul>
+<li>Reranker 是 RAG 中 ROI 最高的优化——增加 ~200ms 延迟换取 10-20% Precision 提升</li>
+<li>典型流程: Dense/Hybrid 检索 Top-20 → Reranker 精排 → 取 Top-3~5 给 LLM</li>
+<li>Cross-Encoder 为何更精确？— 全注意力让 query 的每个 token 与 doc 的每个 token 交互</li>
+<li>Reranker 不能替代检索（太慢），只能在小候选集上使用</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="colbert">
+      <div class="ch-head"><div class="num">06</div><div class="t"><h2>ColBERT 延迟交互</h2><div class="sub">ColBERT 的核心创新：保留 token 级粒度的交互，同时支持文档向量预计算</div></div></div>
+      <div class="intuition-box">
+<p>ColBERT 的核心创新：保留 token 级粒度的交互，同时支持文档向量预计算。介于 Bi-Encoder 和 Cross-Encoder 之间的折中方案。</p>
+</div>
+
+<h3>ColBERT 核心思想</h3>
+<p><span class="term">ColBERT</span>（Contextualized Late Interaction over BERT）将 query 和 document 分别编码，但不做 pooling 成单向量，而是保留每个 token 的向量。然后通过 <span class="term">MaxSim</span> 操作实现轻量级交互：对每个 query token，找到 document 中最相似的 token，取最大值后求和。</p>
+
+<div class="formula">ColBERT 打分：score(q, d) = Σ<sub>i</sub> max<sub>j</sub> cos_sim(q<sub>i</sub>, d<sub>j</sub>)</div>
+
+<p>这种设计让 ColBERT 能捕捉精确词匹配（某个 query token 与 doc token 高度匹配）和语义匹配能力，同时文档端的多向量仍可预计算并存入特殊索引，支持高效检索。缺点是存储开销大（每个文档 N 个 token 向量），通常用量化（2-bit）压缩缓解。</p>
+
+<h3>ColBERT 优势</h3>
+<table>
+<tr><th>对比</th><th>Bi-Encoder</th><th>ColBERT</th><th>Cross-Encoder</th></tr>
+<tr><td>Doc 预计算</td><td>可以（单向量）</td><td>可以（多向量）</td><td>不可以</td></tr>
+<tr><td>精度</td><td>中</td><td>高（比 Bi-Encoder 高 5-10%）</td><td>最高</td></tr>
+<tr><td>检索速度</td><td>最快</td><td>快（需特殊索引）</td><td>最慢</td></tr>
+<tr><td>存储</td><td>低（1 vec/doc）</td><td>高（N vecs/doc，需量化）</td><td>无需存储</td></tr>
+</table>
+
+<div class="highlight">
+<strong>BGE-M3 的多模式支持：</strong>BGE-M3 同时支持 Dense + Sparse + ColBERT 三种模式，一次编码三种用途，是生产环境中灵活切换检索策略的理想选择。
+</div>
+
+<div class="interview-box">
+<ul>
+<li>ColBERT 的核心创新：保留 token 级粒度的交互，同时支持文档向量预计算</li>
+<li>MaxSim 操作让 ColBERT 能捕捉精确词匹配（类似 BM25）+ 语义匹配（类似 Dense）</li>
+<li>存储开销大是主要缺点：每个 doc 存 N 个 token 向量，可用量化（2-bit）缓解</li>
+<li>BGE-M3 同时支持 Dense + Sparse + ColBERT 三种模式，一次编码三种用途</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="query">
+      <div class="ch-head"><div class="num">07</div><div class="t"><h2>Query 变换技术</h2><div class="sub">用户的原始 query 往往不是最优的检索输入：可能过于简短、模糊、或与文档表述不匹配</div></div></div>
+      <div class="intuition-box">
+<p>用户的原始 query 往往不是最优的检索输入：可能过于简短、模糊、或与文档表述不匹配。Query 变换在检索前优化查询，bridging query-document 语义鸿沟，提升召回率。</p>
+</div>
+
+<h3>主要技术</h3>
+<table>
+<tr><th>技术</th><th>原理</th><th>效果</th></tr>
+<tr><td><strong>HyDE</strong></td><td>用 LLM 生成假设性答案，用答案做检索</td><td>bridging query-doc 语义鸿沟</td></tr>
+<tr><td><strong>Multi-Query</strong></td><td>用 LLM 改写为多个不同表述的 query</td><td>提高召回覆盖面</td></tr>
+<tr><td><strong>Step-Back</strong></td><td>将具体问题抽象为更高层的概念</td><td>找到更全面的相关文档</td></tr>
+<tr><td><strong>Sub-Query</strong></td><td>将复杂问题分解为多个子问题</td><td>multi-hop 问题的分步检索</td></tr>
+</table>
+
+<h3>HyDE（Hypothetical Document Embeddings）</h3>
+<p><span class="term">HyDE</span> 的核心思想：让 LLM 先"猜"一个答案，用猜测的答案去检索。原理是答案的表述方式比问题更接近文档的表述方式（减小 query-document 语义鸿沟）。例如 query 是"RAG 怎么减少幻觉？"（短、口语化），LLM 生成的假设性文档可能是"RAG 通过检索相关文档作为上下文来约束 LLM 的生成，减少模型自行编造不存在信息的概率..."（长、接近文档表述），这个假设性文档的 embedding 与实际文档的相似度更高。</p>
+
+<p>HyDE 的局限：LLM 可能生成错误的假设答案 → 检索到不相关文档；增加延迟（多一次 LLM 调用）；对简单/精确的查询反而有害（"Python 3.12 changelog"这种直接 BM25 更好）。缓解方法：将 HyDE 与原始 query 的检索结果融合，而非完全替代。</p>
+
+<h3>Multi-Query 改写</h3>
+<p>用 LLM 将一个 query 改写为多个不同角度的表述，每个变体独立检索，合并去重结果。例如原始 query "Python 的 GIL 是什么"，改写为"Python 全局解释器锁的工作原理"、"GIL 对 Python 多线程的影响"、"为什么 Python 有 GIL"，不同变体可能检索到不同相关文档，提高召回覆盖面。Multi-Query 几乎没有副作用，是最安全的 query 增强方法。</p>
+
+<div class="interview-box">
+<ul>
+<li>HyDE 的局限：LLM 可能生成错误的假设答案 → 检索到不相关文档。对模型能力有要求</li>
+<li>Multi-Query 几乎没有副作用，是最安全的 query 增强方法</li>
+<li>Step-Back Prompting："Python 的 GIL" → 抽象为"编程语言的并发机制" → 检索更广泛</li>
+<li>这些技术可以组合使用：Multi-Query + HyDE + Reranker</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="ch8">
+      <div class="ch-head"><div class="num">08</div><div class="t"><h2>生产级检索管线设计</h2><div class="sub">生产级 RAG 的检索延迟通常控制在 200-500ms（不含 LLM 生成）</div></div></div>
+      <div class="intuition-box">
+<p>生产级 RAG 的检索延迟通常控制在 200-500ms（不含 LLM 生成）。Metadata 过滤 + 混合检索 + Reranker 是"三板斧"，缺一不可。</p>
+</div>
+
+<h3>典型 Pipeline</h3>
+<p>一个完整的生产级检索管线包含以下组件：User Query → Query Preprocessor（意图识别/改写/扩展）→ 并行检索（BM25 Retriever K=20 + Dense Retriever K=20）→ RRF 融合 → 候选集（30-50 docs）→ Cross-Encoder Reranker（Top-30 → Top-5）→ Context Compression（去冗余/提取关键段）→ LLM Generation（with Top-5 context）。</p>
+
+<h3>延迟预算分配</h3>
+<table>
+<tr><th>组件</th><th>典型延迟</th><th>优化方式</th></tr>
+<tr><td>Query Embedding</td><td>5-20ms</td><td>本地 GPU / 轻量模型</td></tr>
+<tr><td>BM25 检索</td><td>5-30ms</td><td>Elasticsearch/Lucene</td></tr>
+<tr><td>Dense 检索 (ANN)</td><td>5-50ms</td><td>HNSW / GPU 加速</td></tr>
+<tr><td>Reranker</td><td>100-300ms</td><td>轻量模型 / 减少候选数</td></tr>
+<tr><td>LLM 生成</td><td>1000-3000ms</td><td>流式输出 / 小模型路由</td></tr>
+<tr><td><strong>总计</strong></td><td><strong>1.2-3.5s</strong></td><td></td></tr>
+</table>
+
+<h3>Metadata 过滤</h3>
+<p>在向量检索前/后使用 metadata 过滤缩小范围，常用 metadata 包括时间、来源、类别、权限、语言。Pre-filtering（先过滤再检索）可以减小搜索空间，Post-filtering（先检索再过滤）简单但可能浪费 K 配额。建议优先使用 Pre-filtering，向量数据库（如 Qdrant、Milvus）通常原生支持。</p>
+
+<div class="highlight">
+<strong>检索结果应添加相似度分数阈值：</strong>低于阈值（如 <0.5）的结果不传给 LLM，避免噪声干扰生成。流式输出是改善用户体验的关键——检索完成后立即开始生成第一个 token，不要等全部生成完毕再返回。
+</div>
+
+<div class="practice-grid">
+<div class="do">
+<ul>
+<li>混合检索（BM25 + Dense + RRF）作为默认选择</li>
+<li>加 Reranker 精排（ROI 最高）</li>
+<li>用 Metadata 过滤缩小范围</li>
+<li>设相似度阈值过滤低质量结果</li>
+<li>流式输出改善用户体验</li>
+</ul>
+</div>
+<div class="dont">
+<ul>
+<li>只用单一检索方式（BM25 only 或 Dense only）</li>
+<li>跳过 Reranker（精度损失大）</li>
+<li>把所有 Top-K 结果都传给 LLM（噪声多）</li>
+<li>忽略 Metadata 过滤（搜索空间大）</li>
+<li>等全部生成完毕再返回（延迟高）</li>
+</ul>
+</div>
+</div>
+
+<div class="interview-box">
+<ul>
+<li>生产级 RAG 的检索延迟通常控制在 200-500ms（不含 LLM 生成）</li>
+<li>Metadata 过滤 + 混合检索 + Reranker 是"三板斧"，缺一不可</li>
+<li>流式输出是改善用户体验的关键——检索完成后立即开始生成第一个 token</li>
+<li>检索结果应添加相似度分数阈值（如 >0.5），低于阈值的结果不传给 LLM</li>
+</ul>
+</div>
+    </section>
+
+    <section class="chapter" id="q-a">
+      <div class="ch-head"><div class="num">09</div><div class="t"><h2>Q&amp;A</h2></div></div>
+      <details class="qa">
+<summary>Bi-Encoder 和 Cross-Encoder 有什么区别？为什么 RAG 中两者配合使用？</summary>
+<div class="a">Bi-Encoder：query 和 document 分别独立编码为向量，通过余弦相似度排序。优点是文档向量可预计算、检索速度极快（ms 级支持百万文档）；缺点是 query-doc 无深度交互，精度有限。Cross-Encoder：将 query 和 document 拼接后一起输入 Transformer，全注意力交互。精度远高于 Bi-Encoder（SOTA），但无法预计算、每个 pair 需独立推理，速度极慢。配合使用的原因：Bi-Encoder 负责大规模粗筛（百万→Top-20~50），Cross-Encoder 负责小规模精排（Top-50→Top-5）。这是"漏斗式"检索架构：先快后精，兼顾速度和质量。</div>
+</details>
+
+<details class="qa">
+<summary>什么是 RRF？为什么混合检索几乎总是优于单一检索？</summary>
+<div class="a">RRF（Reciprocal Rank Fusion）是将多路检索结果融合的算法。公式：对每个文档 d，score(d) = Σ 1/(rank_i + k)，其中 rank_i 是 d 在第 i 路结果中的排名，k 是常数（通常60）。然后按总分重排。RRF 的优势：①只看排名不看绝对分数，天然解决不同检索器分数尺度不同的问题②不需要任何训练③简单有效。混合检索为何更优：BM25 擅长精确关键词匹配（专有名词、错误码），Dense 擅长语义理解（同义词、释义、口语化查询）。两者盲区互补——BM25 召回的 Dense 可能漏掉（关键词变化），Dense 召回的 BM25 可能漏掉（语义相近但用词不同）。实测：Hybrid 的 Recall@10 通常比单一方法高 10-15%。</div>
+</details>
+
+<details class="qa">
+<summary>HyDE 是什么？在什么场景下有效？有什么风险？</summary>
+<div class="a">HyDE（Hypothetical Document Embeddings）：先用 LLM 根据 query 生成一个"假设性答案"，再用这个假设答案的 embedding 去检索。原理：答案的表述方式比问题更接近文档的表述方式（减小 query-document 语义鸿沟）。有效场景：①短/模糊的 query（"GIL"→LLM 展开为完整描述）②query 和文档表述差异大的场景③不方便 fine-tune embedding 的场景。风险：①LLM 可能生成错误的假设答案→检索方向完全偏②增加延迟（多一次 LLM 调用）③对简单/精确的查询反而有害（"Python 3.12 changelog"这种直接 BM25 更好）。缓解：将 HyDE 与原始 query 的检索结果融合，而非完全替代。</div>
+</details>
+
+<details class="qa">
+<summary>ColBERT 的 Late Interaction 是什么意思？相比 Bi-Encoder 和 Cross-Encoder 有什么优势？</summary>
+<div class="a">Late Interaction：query 和 document 分别独立编码（像 Bi-Encoder），但保留每个 token 的向量而非 pooling 成单向量。在计算相似度时通过 MaxSim 操作进行 token 级轻量交互：对每个 query token 找到 document 中最相似的 token，取最大值后求和。优势：①相比 Bi-Encoder：token 级交互捕获更精细的匹配信号（如精确词匹配），精度高 5-10%②相比 Cross-Encoder：文档端向量仍可预计算，支持高效索引，速度快几个数量级③兼具精确词匹配（某个 query token 与 doc token 高度匹配）和语义匹配能力。缺点：存储量大（每个文档 N 个 token 向量），通常用量化（2-bit）压缩。</div>
+</details>
+
+<details class="qa">
+<summary>设计一个生产级检索管线需要考虑哪些因素？</summary>
+<div class="a">核心考量：①延迟预算：端到端通常要求 <3s，检索部分 <500ms；各组件预算分配（embedding 20ms + ANN 30ms + Reranker 200ms）②召回策略：混合检索（BM25+Dense+RRF）是默认最优；特殊场景加 ColBERT③精排：Cross-Encoder Reranker 是 ROI 最高的组件，初筛 K=20-50，精排后 Top-3~5④Metadata 过滤：时间/来源/权限/类别，pre-filter 减小搜索空间⑤Query 预处理：意图识别（需不需要检索）、Multi-query/HyDE 提升召回⑥容错机制：相似度阈值过滤低质量结果、fallback 策略（检索失败时直接用 LLM）⑦可观测性：记录每一步的中间结果（检索了什么/重排结果/最终 context），方便调试⑧缓存：语义缓存热门 query 的检索结果，减少重复计算。</div>
+</details>
+
+<details class="qa">
+<summary>BM25 在什么场景下优于密集向量检索？</summary>
+<div class="a">BM25 优于 Dense 的场景：①精确术语/专有名词查询（产品名"iPhone 15 Pro Max"、错误码"NullPointerException"、API 名"torch.nn.Linear"）②关键词明确且文档中原样出现③新词/未登录词（embedding 模型训练时没见过的新术语）④短文档/FAQ（BM25 的文档长度归一化在短文本上效果好）⑤数据量小时（Dense 需要足够数据训练/选模型，BM25 开箱即用）。Dense 更优的场景：同义词/释义查询、口语化表述、跨语言检索、长查询。结论：不要二选一，混合检索是最优解。一个实用判断：如果 query 中有专有名词/精确术语，BM25 几乎肯定能补充 Dense 遗漏的结果。</div>
+</details>
+
+<details class="qa">
+<summary>如何评估检索质量？有哪些核心指标？</summary>
+<div class="a">离线评估核心指标：①Recall@K：Top-K 结果中包含相关文档的比例（最重要，漏掉的文档后续无法恢复）②MRR（Mean Reciprocal Rank）：第一个相关结果的排名倒数的均值（衡量"排第几"）③NDCG@K：归一化折损累积增益（考虑排名位置，越靠前越好）④Precision@K：Top-K 中相关文档的占比。评估数据来源：用户搜索日志 + 人工标注相关文档，50-100 条即可起步。A/B 测试：改动任何检索组件后，在评估集上回归测试 Recall 和 MRR，确保没有退化。Recall 是检索层最重要的指标——漏掉的文档后续无法恢复，所以宁可多召回（高 Recall）让 Reranker 过滤，也不要漏掉关键文档。</div>
+</details>
+    </section>
+
+    <footer>
+      <div class="made">TECH NOTES · AI 工程 · 整理自 AI Knowledge Hub</div>
+    </footer>
+  </main>
+</div>
+
+<script>
+(function(){var bar=document.getElementById('progress');function u(){var h=document.documentElement;bar.style.width=h.scrollTop/(h.scrollHeight-h.clientHeight)*100+'%';}window.addEventListener('scroll',u,{passive:true});u();})();
+(function(){var links=document.querySelectorAll('aside.toc nav a');var secs=Array.from(document.querySelectorAll('section.chapter'));if(!secs.length)return;function u(){var y=window.scrollY+100,cur=secs[0];for(var i=0;i<secs.length;i++){if(secs[i].offsetTop<=y)cur=secs[i];}var id=cur.id;links.forEach(function(a){a.classList.toggle('active',a.getAttribute('href')==='#'+id);});}window.addEventListener('scroll',u,{passive:true});u();})();
+</script>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Function Calling 底层揭秘 · AI 工程 — Tech Notes</title>
+<meta name="description" content="Function Calling Internals — 没有新推理模块，只有 next token prediction 的模式切换，从训练到推理的全链路拆解">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<link rel="stylesheet" href="../assets/kh-guide.css">
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav">
+
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="ai_engineering_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 6 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>A12 · AI 工程</h2>
+    <nav>
+      <ol>
+        <li><a href="#overview" class="active">概览</a></li>
+        <li><a href="#next-token-prediction">核心机制：Next Token Prediction 的模式切换</a></li>
+        <li><a href="#ch2">训练两阶段</a></li>
+        <li><a href="#ch3">失败模式与优化</a></li>
+        <li><a href="#ch4">厂商实现差异</a></li>
+        <li><a href="#ch5">完整推理链路</a></li>
+        <li><a href="#ch6">生产案例</a></li>
+        <li><a href="#q-a">面试 Q&amp;A</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+    <header class="hero">
+      <div class="badge">A12 · AI 工程</div>
+      <h1>Function Calling 底层揭秘</h1>
+      <p class="sub">Function Calling Internals — 没有新推理模块，只有 next token prediction 的模式切换，从训练到推理的全链路拆解</p>
+      <div class="meta-row">
+        <span class="pill cyan">AI 工程</span>
+        <span class="pill green">阅读 ~6 min</span>
+        <span class="pill amber">8 章</span>
+      </div>
+    </header>
+
+    <section class="chapter" id="overview">
+      <div class="ch-head"><div class="num">00</div><div class="t"><h2>概览</h2><div class="sub">Function Calling 的底层真相：模型并没有引入任何新的「推理模块」</div></div></div>
+      <div class="intuition-box"><p>Function Calling 的底层真相：模型并没有引入任何新的「推理模块」。它只是通过训练学会了在特定 token（如 <code>&lt;tool_call&gt;</code>）触发后，切换到一种结构化的文本生成模式 —— 输出 JSON 而非自然语言。本质上，这仍然是 next token prediction。</p></div>
+    </section>
+
+    <section class="chapter" id="next-token-prediction">
+      <div class="ch-head"><div class="num">01</div><div class="t"><h2>核心机制：Next Token Prediction 的模式切换</h2><div class="sub">大模型的 Function Calling 不依赖任何特殊架构改动，完全建立在 next t…</div></div></div>
+      <p>大模型的 Function Calling 不依赖任何特殊架构改动，完全建立在<span class="term">next token prediction</span>之上：</p>
+
+<pre><code>普通对话模式:
+  User: "今天天气怎么样？"
+  Model: "让我帮你查一下..."  ← 自然语言 token 序列
+
+Function Calling 模式:
+  User: "今天天气怎么样？"
+  [系统注入工具定义]
+  Model:
+</think>
+{"name": "get_weather",    ← 结构化 JSON token 序列
+ "arguments": {"city": "北京"}}
+</pre></code></pre>
+
+<h3>特殊 token 作为格式切换开关</h3>
+
+<table>
+<tr><th>Token</th><th>作用</th><th>触发后行为</th></tr>
+<tr><td><code>&lt;tool_call&gt;</code></td><td>开始工具调用</td><td>模型切换到 JSON 生成模式</td></tr>
+<tr><td><code>&lt;/tool_call&gt;</code></td><td>结束工具调用</td><td>模型回到自然语言模式</td></tr>
+<tr><td><code>&lt;tool_result&gt;</code></td><td>注入工具结果</td><td>模型基于结果继续推理</td></tr>
+</table>
+
+<div class="highlight">关键洞察：模型「并不理解」自己在调用工具。它只是学会了：当上下文包含工具定义 + 用户意图匹配时，下一个 token 应该生成 <code>&lt;tool_call&gt;</code>，然后按 JSON 格式输出。外部系统负责解析 JSON 并执行实际调用。</div>
+    </section>
+
+    <section class="chapter" id="ch2">
+      <div class="ch-head"><div class="num">02</div><div class="t"><h2>训练两阶段</h2><div class="sub">目标：让模型学会工具调用的 格式 和 三种核心能力</div></div></div>
+      <h3>2.1 阶段一：监督微调（SFT）</h3>
+
+<p>目标：让模型学会工具调用的<strong>格式</strong>和<strong>三种核心能力</strong>。</p>
+
+<table>
+<tr><th>能力</th><th>含义</th><th>训练数据示例</th></tr>
+<tr><td><strong>触发时机判断</strong></td><td>什么时候该调工具、什么时候直接回答</td><td>「1+1=?」→ 直接回答；「北京天气？」→ 调工具</td></tr>
+<tr><td><strong>参数格式生成</strong></td><td>按 Schema 生成正确的参数 JSON</td><td><code>{"city": "北京", "date": "2024-01-01"}</code></td></tr>
+<tr><td><strong>结果整合</strong></td><td>拿到工具返回后，整合成自然语言回答</td><td>工具返回温度数据 → 生成「北京今天 25°C，晴」</td></tr>
+</table>
+
+<pre><code>SFT 训练数据格式:
+
+Input:
+  [System] 你有以下工具: get_weather(city, date)
+  [User] 明天北京天气怎么样？
+
+Expected Output:
+  &lt;tool_call&gt;
+  {"name": "get_weather", "arguments": {"city": "北京", "date": "tomorrow"}}
+  &lt;/tool_call&gt;
+
+Input (with tool result):
+  [Tool Result] {"temp": 22, "condition": "多云"}
+
+Expected Output:
+  明天北京多云，气温 22°C，适合出行。</code></pre>
+
+<h3>2.2 阶段二：强化学习（RL）</h3>
+
+<p>SFT 只教了格式，RL 负责优化<strong>调用质量</strong>：</p>
+
+<table>
+<tr><th>优化目标</th><th>RL 奖励信号</th><th>效果</th></tr>
+<tr><td><strong>工具选择准确性</strong></td><td>选对工具 +1，选错 -1</td><td>减少「调错工具」的错误</td></tr>
+<tr><td><strong>参数提取精确性</strong></td><td>参数正确 +1，参数缺失/错误 -0.5</td><td>减少「参数漏填」和「参数格式错误」</td></tr>
+<tr><td><strong>边界控制</strong></td><td>该调不调 -1，不该调乱调 -1</td><td>减少「误触发」和「漏触发」</td></tr>
+</table>
+
+<div class="highlight">RL 阶段的核心价值：让模型不仅"会调工具"，还要"调得准"。SFT 解决了格式问题，RL 解决了质量问题。</div>
+    </section>
+
+    <section class="chapter" id="ch3">
+      <div class="ch-head"><div class="num">03</div><div class="t"><h2>失败模式与优化</h2></div></div>
+      <h3>3.1 三类典型失败</h3>
+
+<table>
+<tr><th>失败类型</th><th>根因</th><th>表现</th><th>优化方案</th></tr>
+<tr><td><strong>调用错误</strong></td><td>训练数据覆盖不足 / 工具描述歧义</td><td>选错工具、该调不调</td><td>补充相似场景训练样本、优化工具描述</td></tr>
+<tr><td><strong>参数错误</strong></td><td>缺少格式示例</td><td>参数缺失、类型错误</td><td>在描述中明确参数范例</td></tr>
+<tr><td><strong>误触发</strong></td><td>预训练惯性过强</td><td>不需要工具时乱调</td><td>强化系统提示 + 增加负样本</td></tr>
+</table>
+
+<h3>3.2 工具描述优化示例</h3>
+
+<pre><code># 差的描述（导致参数错误）
+description: "获取天气信息"
+parameters:
+  city: string
+  date: string
+
+# 好的描述（减少参数错误）
+description: "获取指定城市的天气预报。支持查询未来7天内的天气。"
+parameters:
+  city: string  # 城市名称，如 "北京"、"上海"
+  date: string  # 日期，格式为 YYYY-MM-DD，如 "2024-01-15"
+examples:
+  - {"city": "北京", "date": "2024-01-15"}  # 明确的格式范例
+  - {"city": "上海", "date": "2024-01-16"}</code></pre>
+
+<div class="highlight">经验法则：工具描述中每多一个具体示例，参数错误率下降约 30%。模型对 few-shot 示例的遵循度远高于对抽象描述的遵循度。</div>
+    </section>
+
+    <section class="chapter" id="ch4">
+      <div class="ch-head"><div class="num">04</div><div class="t"><h2>厂商实现差异</h2><div class="sub">部分模型支持在单次生成中调用多个工具（ Parallel Function Calling…</div></div></div>
+      <h3>4.1 标记设计差异</h3>
+
+<table>
+<tr><th>厂商</th><th>标记方式</th><th>示例</th></tr>
+<tr><td><strong>OpenAI</strong></td><td>控制符 + JSON Schema</td><td><code>function_call</code> 字段 + 结构化参数</td></tr>
+<tr><td><strong>Anthropic</strong></td><td>XML 标签</td><td><code>&lt;tool_use&gt;...&lt;/tool_use&gt;</code></td></tr>
+<tr><td><strong>开源模型</strong></td><td>特殊 token / 纯文本约定</td><td><code>&lt;|tool_call|&gt;</code> 或约定格式</td></tr>
+</table>
+
+<h3>4.2 并行调用能力</h3>
+
+<p>部分模型支持在单次生成中调用多个工具（<span class="term">Parallel Function Calling</span>）：</p>
+
+<div class="flow">
+  <div class="flow-node accent"><div class="nlabel">串行调用 (基础):</div><div class="nsub">Model → tool_call(get_weather) → result → tool_call(get_stock) → result → final_answer · 并行调用 (进阶): · Model → tool_call(get_weather) + tool_call(get_stock) ← 一次生成两个调用</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">results → final_answer</div></div>
+</div>
+
+<h3>4.3 强制控制机制</h3>
+
+<p>通过干预 token 概率分布实现调用开关：</p>
+
+<table>
+<tr><th>模式</th><th>实现方式</th><th>效果</th></tr>
+<tr><td><strong>强制调用</strong></td><td>将 <code>&lt;tool_call&gt;</code> token 概率设为 1.0</td><td>模型必须调工具</td></tr>
+<tr><td><strong>禁止调用</strong></td><td>将 <code>&lt;tool_call&gt;</code> token 概率设为 0.0</td><td>模型不能调工具</td></tr>
+<tr><td><strong>自动模式</strong></td><td>不干预，模型自主决策</td><td>模型自行判断是否需要调工具</td></tr>
+</table>
+
+<div class="highlight">强制控制的本质：在 softmax 层直接修改特定 token 的概率。这是工程层面的 hack，不涉及模型参数修改。OpenAI 的 <code>tool_choice: "required"</code> 就是这个原理。</div>
+    </section>
+
+    <section class="chapter" id="ch5">
+      <div class="ch-head"><div class="num">05</div><div class="t"><h2>完整推理链路</h2></div></div>
+      <div class="flow">
+  <div class="flow-title">完整 Function Calling 推理流程</div>
+  <div class="flow-node accent"><div class="nlabel">Step 1: 构建 Prompt</div><div class="nsub">System Prompt + 工具定义(JSON Schema) + 用户消息</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Step 2: 模型推理</div><div class="nsub">Next Token Prediction → 生成 &lt;tool_call&gt; · 切换到 JSON 模式 → 输出 {&quot;name&quot;:..., &quot;args&quot;:...}</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Step 3: 外部系统执行</div><div class="nsub">解析 JSON → 找到对应函数 → 执行 → 获取结果 · ⚠️ 模型不参与执行！只负责生成文本</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">Step 4: 结果回注</div><div class="nsub">将工具结果以 &lt;tool_result&gt; 格式注入上下文 · 模型基于结果生成最终自然语言回答</div></div>
+</div>
+
+<div class="practice-grid">
+<div class="do">
+<ul>
+<li>工具描述包含具体参数示例</li>
+<li>用 RL 优化调用质量（不只是格式）</li>
+<li>为相似工具增加区分性描述</li>
+<li>增加「不需要调用」的负样本</li>
+<li>监控工具调用的成功率和参数正确率</li>
+</ul>
+</div>
+<div class="dont">
+<ul>
+<li>不要以为模型「理解」了工具调用的含义</li>
+<li>不要只靠 SFT 不跑 RL</li>
+<li>不要用模糊的工具名称（如 "get_data"）</li>
+<li>不要忽略误触发问题（不该调时乱调）</li>
+<li>不要假设所有模型的 FC 实现方式相同</li>
+</ul>
+</div>
+</div>
+    </section>
+
+    <section class="chapter" id="ch6">
+      <div class="ch-head"><div class="num">06</div><div class="t"><h2>生产案例</h2><div class="sub">生产验证： 某 Agent 平台对 Function Calling 内部机制的深度分析：(…</div></div></div>
+      <div class="intuition-box">
+<p><strong>生产验证：</strong>某 Agent 平台对 Function Calling 内部机制的深度分析：(1) 工具描述的 token 占比 — 20 个工具的描述占 System Prompt 的 <strong>35%</strong>（约 4.2K tokens），工具数 &gt;30 时该比例升至 <strong>55%</strong>，挤压任务指令空间；(2) 工具选择延迟 — 工具数 5 个时选择延迟 <strong>120ms</strong>，工具数 30 个时升至 <strong>680ms</strong>（LLM 需要更多注意力来比较工具描述）；(3) 参数幻觉率 — 当参数描述缺少示例值时，LLM 编造参数值的概率 <strong>23%</strong>（如编造不存在的 API endpoint），添加示例值后降至 <strong>3%</strong>。Structured Output（JSON Schema 强制模式）使参数格式正确率从 87% 提升至 <strong>99.7%</strong>，但语义正确率不变（仍需应用层校验）。</p>
+</div>
+    </section>
+
+    <section class="chapter" id="q-a">
+      <div class="ch-head"><div class="num">07</div><div class="t"><h2>面试 Q&amp;A</h2></div></div>
+      <details class="qa">
+<summary>Function Calling 的底层原理是什么？需要改模型架构吗？</summary>
+<div class="a">不需要改模型架构。Function Calling 完全基于 next token prediction：模型通过训练学会了在特定 token（如 &lt;tool_call&gt;）触发后切换到 JSON 生成模式。本质上，生成 JSON 和生成自然语言对模型来说没有区别 —— 都是预测下一个 token。特殊 token 只是格式切换开关，模型参数和推理流程完全不变。</div>
+</details>
+
+<details class="qa">
+<summary>SFT 和 RL 两个阶段分别解决什么问题？</summary>
+<div class="a">SFT 解决「会不会」的问题 —— 让模型学会工具调用的格式（什么时候生成 &lt;tool_call&gt;、JSON 怎么写）。RL 解决「好不好」的问题 —— 通过奖励信号优化工具选择的准确性、参数提取的精确性和边界控制。SFT 是入门培训，RL 是技能精修。只做 SFT 的模型能调工具但经常选错或参数出错。</div>
+</details>
+
+<details class="qa">
+<summary>强制调用（tool_choice: required）的底层实现是什么？</summary>
+<div class="a">在 softmax 层直接修改 token 概率。具体来说：当用户设置 tool_choice=required 时，推理引擎将 &lt;tool_call&gt; token 的 logits 设为极大值（或将非工具 token 的 logits 设为极小值），确保模型必然生成工具调用。这是工程层面的 hack，不涉及模型参数修改，推理完成后恢复正常。</div>
+</details>
+
+<details class="qa">
+<summary>为什么有时候模型会「误触发」—— 不需要工具时乱调？</summary>
+<div class="a">三个原因：(1) 预训练惯性 —— 模型在预训练中学到了「当用户提问时应该回答」的模式，但如果 SFT 数据中工具调用占比过高，模型会形成「看到问题就调工具」的偏见；(2) 工具描述过于宽泛 —— 比如一个叫 "search" 的工具描述了「搜索任何信息」，模型会觉得所有问题都该用它；(3) 缺少负样本 —— 训练数据中没有足够的「不需要调用工具」的示例。解决方案：增加负样本 + 优化工具描述边界。</div>
+</details>
+
+<details class="qa">
+<summary>不同厂商的 Function Calling 实现有什么差异？</summary>
+<div class="a">三个维度的差异：(1) 标记方式 —— OpenAI 用控制符+JSON Schema、Anthropic 用 XML 标签、开源模型用特殊 token 或纯文本约定；(2) 并行调用 —— 部分模型（如 GPT-4）支持单次生成多个工具调用，其他模型只能串行；(3) 强制控制 —— 各厂商提供的 tool_choice 选项不同（auto/required/none/specific_tool）。但底层原理相同：都是 next token prediction 的模式切换。</div>
+</details>
+
+<details class="qa">
+<summary>如何提升 Function Calling 的可靠性？</summary>
+<div class="a">从模型侧和使用侧两方面优化：模型侧 —— (1) 高质量 SFT 数据覆盖多样场景；(2) RL 优化调用准确性；(3) 增加负样本减少误触发。使用侧 —— (1) 工具描述清晰且包含参数示例；(2) 避免工具功能重叠；(3) 系统提示明确何时该调、何时不该调。可靠性 = 训练数据质量 × 工具描述清晰度 × RL 优化策略。</div>
+</details>
+    </section>
+
+    <footer>
+      <div class="made">TECH NOTES · AI 工程 · 整理自 AI Knowledge Hub</div>
+    </footer>
+  </main>
+</div>
+
+<script>
+(function(){var bar=document.getElementById('progress');function u(){var h=document.documentElement;bar.style.width=h.scrollTop/(h.scrollHeight-h.clientHeight)*100+'%';}window.addEventListener('scroll',u,{passive:true});u();})();
+(function(){var links=document.querySelectorAll('aside.toc nav a');var secs=Array.from(document.querySelectorAll('section.chapter'));if(!secs.length)return;function u(){var y=window.scrollY+100,cur=secs[0];for(var i=0;i<secs.length;i++){if(secs[i].offsetTop<=y)cur=secs[i];}var id=cur.id;links.forEach(function(a){a.classList.toggle('active',a.getAttribute('href')==='#'+id);});}window.addEventListener('scroll',u,{passive:true});u();})();
+</script>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

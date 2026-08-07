@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>大模型结构化输出四道防线 · AI 工程 — Tech Notes</title>
+<meta name="description" content="JSON Schema 约束 / 重试机制 / 输出清洗 / 日志审计">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<link rel="stylesheet" href="../assets/kh-guide.css">
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav">
+
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="ai_engineering_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 11 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>L13 · AI 工程</h2>
+    <nav>
+      <ol>
+        <li><a href="#overview" class="active">概览</a></li>
+        <li><a href="#json-schema">第一道防线：JSON Schema 约束</a></li>
+        <li><a href="#ch2">第二道防线：智能重试机制</a></li>
+        <li><a href="#ch3">第三道防线：输出清洗与容错</a></li>
+        <li><a href="#ch4">第四道防线：日志审计与监控</a></li>
+        <li><a href="#ch5">多模型输出统一化处理</a></li>
+        <li><a href="#q-a">Q&amp;A</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+    <header class="hero">
+      <div class="badge">L13 · AI 工程</div>
+      <h1>大模型结构化输出四道防线</h1>
+      <p class="sub">JSON Schema 约束 / 重试机制 / 输出清洗 / 日志审计</p>
+      <div class="meta-row">
+        <span class="pill cyan">AI 工程</span>
+        <span class="pill green">阅读 ~11 min</span>
+        <span class="pill amber">7 章</span>
+      </div>
+    </header>
+
+    <section class="chapter" id="overview">
+      <div class="ch-head"><div class="num">00</div><div class="t"><h2>概览</h2><div class="sub">大模型结构化输出的核心矛盾：LLM 本质是文本生成器，不是 API 服务器</div></div></div>
+      <div class="intuition-box">
+<p>大模型结构化输出的核心矛盾：LLM 本质是文本生成器，不是 API 服务器。你不能假设它每次都输出合法的 JSON——必须有工程化的防线来"兜底"。</p>
+</div>
+    </section>
+
+    <section class="chapter" id="json-schema">
+      <div class="ch-head"><div class="num">01</div><div class="t"><h2>第一道防线：JSON Schema 约束</h2><div class="sub">JSON Schema 是结构化输出的&quot;模具&quot;——通过 Schema 定义期望的输出格式（字…</div></div></div>
+      <p><span class="term">JSON Schema</span> 是结构化输出的"模具"——通过 Schema 定义期望的输出格式（字段名、类型、必填项、枚举值），让 LLM 在生成时受到格式约束。</p>
+
+<h3>三种约束方式</h3>
+<table>
+<tr><th>方式</th><th>实现</th><th>可靠性</th><th>适用模型</th></tr>
+<tr><td><strong>Structured Output</strong></td><td>调用 API 时传入 Schema 参数</td><td>最高（模型内部约束）</td><td>OpenAI / Claude / Gemini</td></tr>
+<tr><td><strong>Prompt 约束</strong></td><td>在 system prompt 中描述格式要求</td><td>中（依赖模型遵守指令）</td><td>所有模型</td></tr>
+<tr><td><strong>Logit Bias</strong></td><td>在解码时限制 token 概率分布</td><td>高（但灵活性低）</td><td>开源模型自部署</td></tr>
+</table>
+
+<p>Structured Output 是最可靠的方式——模型在解码阶段就被约束为只生成符合 Schema 的 token 序列。Prompt 约束是最灵活但最不可靠的方式——即使 GPT-4 也有约 2-5% 的概率输出不合规格式。</p>
+
+<div class="intuition-box">
+<p>Structured Output 的本质是"把 JSON 语法编码到模型的 token 采样规则中"——每一步生成时，不合法的 token 被直接屏蔽。这不是模型"学会了"输出 JSON，而是系统在物理层面不允许它输出别的东西。</p>
+</div>
+
+<p>Logit Bias 方式主要适用于自部署开源模型（如 LLaMA、Qwen），通过修改 logits 分布来强制生成合法 JSON token。该方式灵活性较低，不适合复杂的嵌套 Schema，但在无 Structured Output API 的场景下是有效的替代方案。典型实现包括 <code>outlines</code> 库和 <code>lm-format-enforcer</code>，它们通过 CFG（Context-Free Grammar）约束解码过程。</p>
+
+<div class="highlight">
+<strong>关键设计原则：</strong>Schema 设计应遵循"最小必要"原则——只约束必须的结构（如 <code>name: string, age: integer</code>），不要过度约束内容（如不要用 enum 限制所有可能的值）。过度约束会降低模型的表达能力，导致"格式正确但内容空洞"。
+</div>
+
+<h3>Schema 设计反模式</h3>
+<table>
+<tr><th>反模式</th><th>问题</th><th>改进方案</th></tr>
+<tr><td>枚举所有可能值</td><td>模型无法生成 Schema 中未列出的值，导致截断或空值</td><td>用 <code>string</code> + 描述性说明替代 <code>enum</code>，仅对有限集合（如性别、状态）使用 enum</td></tr>
+<tr><td>嵌套超过 3 层</td><td>生成 token 数增加，格式失败率显著上升</td><td>拆分为多个扁平 Schema，通过多次调用组合结果</td></tr>
+<tr><td>必填字段过多</td><td>模型在信息不足时被迫填充"占位值"，降低内容质量</td><td>区分 <code>required</code> 和 <code>optional</code>，仅将业务关键字段设为必填</td></tr>
+<tr><td>字段名使用缩写</td><td>模型对缩写的理解不一致，可能生成错误字段</td><td>使用完整的、有语义的英文字段名（如 <code>sentiment_score</code> 而非 <code>ss</code>）</td></tr>
+</table>
+
+
+<div class="highlight">
+<strong>生产案例：</strong>某电商评论分析系统接入 GPT-4 进行结构化情感抽取，初期仅依赖 Prompt 约束，格式失败率高达 <strong>12.3%</strong>（主要为 Markdown 包裹和尾随逗号）。部署四道防线后：Structured Output API 将格式失败率降至 <strong>1.8%</strong>；输出清洗层进一步修复 90% 的残余格式问题，最终到达 Schema 校验阶段的不合规率仅 <strong>0.3%</strong>；重试机制兜底后，业务侧实际感知到的失败率低于 <strong>0.05%</strong>（日均调用 50,000 次，失败约 25 次）。端到端 P99 延迟从 4.2s 降至 2.8s（因重试次数大幅减少）。
+</div>
+    </section>
+
+    <section class="chapter" id="ch2">
+      <div class="ch-head"><div class="num">02</div><div class="t"><h2>第二道防线：智能重试机制</h2><div class="sub">即使有 Schema 约束，LLM 仍有小概率输出不合规格式</div></div></div>
+      <div class="intuition-box">
+<p>即使有 Schema 约束，LLM 仍有小概率输出不合规格式。重试机制是"不合格就返工"的工程化实现。</p>
+</div>
+
+<h3>重试策略设计</h3>
+<table>
+<tr><th>策略</th><th>触发条件</th><th>重试方式</th><th>上限</th></tr>
+<tr><td><strong>格式重试</strong></td><td>JSON 解析失败</td><td>追加"请严格按格式输出"提示后重试</td><td>最多 3 次</td></tr>
+<tr><td><strong>内容重试</strong></td><td>格式正确但字段值不合法</td><td>追加字段约束说明后重试</td><td>最多 2 次</td></tr>
+<tr><td><strong>降级重试</strong></td><td>多次重试仍失败</td><td>切换到更简单的 Schema 或备选模型</td><td>1 次</td></tr>
+</table>
+
+<p>重试的核心原则是<strong>递增约束</strong>：第一次重试只追加格式提示，第二次重试追加格式 + 内容约束，第三次切换为降级方案。避免无脑重试同一个请求——如果模型连续失败 3 次，大概率是 Schema 设计有问题，而不是模型"运气不好"。</p>
+
+<div class="intuition-box">
+<p>重试不是"再给模型一次机会"，而是"给模型更多信息"。每次重试都应携带失败原因和更明确的约束，让模型在下一次尝试时有更大的概率生成合规输出。</p>
+</div>
+
+<h3>重试消息模板</h3>
+<pre><code># 格式重试（第1次）
+"你上次的输出无法被 JSON 解析。请仅输出一个合法的 JSON 对象，
+不要包含任何额外文字、Markdown 标记或代码块。"
+
+# 内容重试（第2次）
+"JSON 解析成功，但字段 'status' 的值 'maybe' 不在允许的枚举列表中。
+允许的值为：'positive', 'negative', 'neutral'。请修正后重新输出。"
+
+# 降级提示（第3次 → 切换备选模型或简化 Schema）
+"当前 Schema 过于复杂，切换为简化版本：仅保留必填字段。"</code></pre>
+
+<div class="highlight">
+<strong>超时保护：</strong>重试机制必须配合超时控制。建议单次 LLM 调用（含重试）的总超时设为 30 秒。如果第一次调用已耗时 20 秒，后续重试应缩短超时时间或跳过重试直接降级，避免阻塞整个请求链路。
+</div>
+
+<div class="flow">
+  <div class="flow-title">LLM 输出</div>
+  <div class="flow-node accent"><div class="nlabel">JSON 解析 失败 → 追加格式提示 → 重试（最多3次）</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">成功</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Schema 校验 失败 → 追加字段约束 → 重试（最多2次）</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">通过</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">输出清洗 → 日志记录 → 返回结果</div></div>
+</div>
+    </section>
+
+    <section class="chapter" id="ch3">
+      <div class="ch-head"><div class="num">03</div><div class="t"><h2>第三道防线：输出清洗与容错</h2><div class="sub">输出清洗是在 JSON 解析前后做&quot;预处理&quot;和&quot;后处理&quot;，修复 LLM 常见的格式偏差</div></div></div>
+      <p>输出清洗是在 JSON 解析前后做"预处理"和"后处理"，修复 LLM 常见的格式偏差。</p>
+
+<h3>常见清洗规则</h3>
+<table>
+<tr><th>问题</th><th>LLM 输出示例</th><th>清洗方式</th></tr>
+<tr><td>Markdown 包裹</td><td><code>```json\n{...}\n```</code></td><td>正则去除代码块标记</td></tr>
+<tr><td>多余文本</td><td><code>这是结果：{"name": "Alice"}</code></td><td>提取第一个 <code>{</code> 到最后一个 <code>}</code></td></tr>
+<tr><td>尾随逗号</td><td><code>{"a": 1, "b": 2,}</code></td><td>正则去除逗号后无值的情况</td></tr>
+<tr><td>单引号</td><td><code>{'name': 'Alice'}</code></td><td>替换为双引号（注意处理内容中的撇号）</td></tr>
+<tr><td>注释</td><td><code>{"a": 1 // 说明}</code></td><td>正则去除 <code>//</code> 和 <code>/* */</code> 注释</td></tr>
+</table>
+
+<p>清洗层应使用宽松的 JSON 解析器（如 Python 的 <code>json5</code> 库），它原生支持尾随逗号、单引号、注释等非标准 JSON 语法，减少手动清洗的工作量。</p>
+
+<h3>清洗管线实现示例</h3>
+<pre><code>import json5, re
+
+def clean_llm_output(raw: str) -&gt; dict:
+    # Step 1: 去除 Markdown 代码块包裹
+    text = re.sub(r'^```(?:json)?\s*\n?', '', raw.strip())
+    text = re.sub(r'\n?```\s*$', '', text)
+
+    # Step 2: 提取首个 { 到末尾 } 的区间
+    start = text.find('{')
+    end = text.rfind('}')
+    if start == -1 or end == -1:
+        raise ValueError("未找到 JSON 对象边界")
+    text = text[start:end + 1]
+
+    # Step 3: json5 宽松解析（自动处理尾随逗号、单引号、注释）
+    return json5.loads(text)</code></pre>
+
+<div class="intuition-box">
+<p>清洗顺序很重要——先做"大范围"的提取（去 Markdown、截取 JSON 区间），再做"细粒度"的修复（逗号、引号）。如果顺序反了，正则表达式可能被 Markdown 标记干扰，导致修复失败。</p>
+</div>
+
+
+<div class="flow">
+  <div class="flow-title">端到端输出验证管线（完整链路）</div>
+  <div class="flow-node accent"><div class="nlabel">User Request</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Schema 注入层</div><div class="nsub">Structured Output API（硬约束）+ System Prompt 格式指令（软约束）</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">LLM 推理</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">输出清洗层（预处理）</div><div class="nsub">去 Markdown 包裹 → 提取 {…} → 修复尾逗号/单引号/注释 → json5 宽松解析</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Schema 校验层</div><div class="nsub">类型检查 · 必填完整性 · 值域约束（min/max/pattern）</div></div>
+  <div class="flow-arrow" data-label="通过 / 失败分流"></div>
+  <div class="flow-node"><div class="nlabel">分流处理</div>
+    <ul class="pairs">
+      <li><b>通过</b><span>进入业务逻辑</span></li>
+      <li><b>失败</b><span>智能重试引擎：格式重试×3 · 内容重试×2 · 降级切换×1</span></li>
+    </ul>
+  </div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">日志审计 &amp; 监控告警</div><div class="nsub">raw/parsed_output · retry_count · latency_ms · Prometheus / Grafana</div></div>
+</div>
+    </section>
+
+    <section class="chapter" id="ch4">
+      <div class="ch-head"><div class="num">04</div><div class="t"><h2>第四道防线：日志审计与监控</h2><div class="sub">日志不是为了&quot;有就行&quot;，而是为了&quot;出问题能追溯&quot;</div></div></div>
+      <div class="intuition-box">
+<p>日志不是为了"有就行"，而是为了"出问题能追溯"。每次 LLM 调用的输入、输出、重试次数、耗时都应记录。</p>
+</div>
+
+<h3>日志关键字段</h3>
+<table>
+<tr><th>字段</th><th>用途</th><th>示例</th></tr>
+<tr><td><code>request_id</code></td><td>唯一追踪 ID</td><td><code>req-20240101-abc123</code></td></tr>
+<tr><td><code>raw_output</code></td><td>LLM 原始输出（清洗前）</td><td>完整字符串</td></tr>
+<tr><td><code>parsed_output</code></td><td>清洗后的结构化结果</td><td>JSON 对象</td></tr>
+<tr><td><code>retry_count</code></td><td>重试次数</td><td>0 / 1 / 2 / 3</td></tr>
+<tr><td><code>schema_valid</code></td><td>Schema 校验是否通过</td><td>true / false</td></tr>
+<tr><td><code>latency_ms</code></td><td>总耗时（含重试）</td><td>1200</td></tr>
+</table>
+
+<p>基于日志可以建立监控告警：重试率 > 10% 触发 P2 告警（可能是 Schema 设计问题或模型降级），格式失败率 > 5% 触发 P1 告警（可能是 API 变更或模型更新）。</p>
+
+<h3>监控仪表盘核心指标</h3>
+<table>
+<tr><th>指标名称</th><th>计算方式</th><th>告警阈值</th><th>告警级别</th></tr>
+<tr><td><strong>格式失败率</strong></td><td><code>json_parse_errors / total_requests</code></td><td>&gt; 5% 持续 5 分钟</td><td>P1（紧急）</td></tr>
+<tr><td><strong>Schema 校验失败率</strong></td><td><code>schema_violations / parsed_requests</code></td><td>&gt; 3% 持续 10 分钟</td><td>P2（重要）</td></tr>
+<tr><td><strong>重试触发率</strong></td><td><code>requests_with_retry / total_requests</code></td><td>&gt; 10% 持续 15 分钟</td><td>P2（重要）</td></tr>
+<tr><td><strong>平均重试次数</strong></td><td><code>sum(retry_count) / retried_requests</code></td><td>&gt; 2.0</td><td>P3（关注）</td></tr>
+<tr><td><strong>P99 端到端延迟</strong></td><td><code>percentile(latency_ms, 0.99)</code></td><td>&gt; 5000ms</td><td>P2（重要）</td></tr>
+<tr><td><strong>降级切换率</strong></td><td><code>fallback_count / total_requests</code></td><td>&gt; 1% 持续 30 分钟</td><td>P1（紧急）</td></tr>
+</table>
+
+<div class="intuition-box">
+<p>监控的关键不是"指标多"，而是"每个指标都有明确的 action owner"。格式失败率飙升时 oncall 应该先看模型提供商是否发了更新公告；重试率升高时应该先检查最近一次 Schema 变更的 diff。</p>
+</div>
+
+<h3>告警分级与响应 SOP</h3>
+<table>
+<tr><th>级别</th><th>响应时间</th><th>处理流程</th><th>典型案例</th></tr>
+<tr><td><strong>P1 紧急</strong></td><td>5 分钟内响应</td><td>立即切换降级模型 → 通知模型团队 → 排查根因</td><td>OpenAI 发布新模型版本导致输出格式变更</td></tr>
+<tr><td><strong>P2 重要</strong></td><td>30 分钟内响应</td><td>检查 Schema 近期变更 → 回滚或修复 → 观察恢复</td><td>新上线的 Schema 嵌套层级过深</td></tr>
+<tr><td><strong>P3 关注</strong></td><td>次日处理</td><td>分析日志定位 Top 失败 pattern → 优化工单</td><td>某类输入文本总是触发尾随逗号</td></tr>
+</table>
+
+<h3>日志存储与查询建议</h3>
+<p>生产环境推荐将结构化输出日志写入 <code>Elasticsearch</code> 或 <code>ClickHouse</code>，支持按 <code>request_id</code> 精确检索单次调用的完整链路。常用查询场景：</p>
+<ul>
+<li>按 <code>model_version</code> 聚合失败率，定位是否某次模型升级引入了回归</li>
+<li>按 <code>schema_id</code> 聚合重试次数，找出"最容易失败"的 Schema 进行优化</li>
+<li>按 <code>input_length</code> 分桶统计延迟，发现长文本场景下的性能瓶颈</li>
+<li>按时间窗口对比 <code>raw_output</code> 与 <code>parsed_output</code>，追踪清洗层的修复命中率</li>
+</ul>
+
+<div class="intuition-box">
+<p>日志的价值不在于"写了多少"，而在于"能不能在 5 分钟内定位到根因"。一条好的结构化输出日志应该能让 oncall 工程师直接看到：哪个模型、哪个 Schema、什么输入、输出长什么样、在哪一步失败——无需再翻其他系统。</p>
+</div>
+
+<div class="practice-grid">
+<div class="do">
+<ul>
+<li>优先使用 Structured Output API（模型内部约束）</li>
+<li>重试策略递增约束，设上限避免死循环</li>
+<li>用 json5 等宽松解析器减少清洗工作</li>
+<li>每次调用记录完整日志，建立监控告警</li>
+</ul>
+</div>
+<div class="dont">
+<ul>
+<li>只靠 Prompt 约束不做重试</li>
+<li>无脑重试同一个请求 10 次</li>
+<li>忽略 LLM 输出中的 Markdown 包裹</li>
+<li>不记录原始输出，出问题无法追溯</li>
+</ul>
+</div>
+</div>
+    </section>
+
+    <section class="chapter" id="ch5">
+      <div class="ch-head"><div class="num">05</div><div class="t"><h2>多模型输出统一化处理</h2><div class="sub">多模型架构下，不同提供商的 LLM 对同一 Schema 的输出&quot;癖好&quot;截然不同</div></div></div>
+      <div class="intuition-box">
+<p>多模型架构下，不同提供商的 LLM 对同一 Schema 的输出"癖好"截然不同。统一化处理是在清洗层和校验层之间增加一个"模型适配器"，抹平各家差异。</p>
+</div>
+
+<h3>主流模型输出差异对比</h3>
+<table>
+<tr><th>差异点</th><th>OpenAI (GPT-4o)</th><th>Claude (Sonnet)</th><th>Gemini (Pro)</th></tr>
+<tr><td><strong>Structured Output 支持</strong></td><td><code>response_format</code> 参数，100% 合规</td><td>Tool Use 模式间接实现</td><td><code>response_mime_type</code> + Schema</td></tr>
+<tr><td><strong>常见格式偏差</strong></td><td>偶尔在 JSON 前后添加解释文字</td><td>倾向用 <code>xml</code> 标签包裹输出</td><td>偶发尾随逗号和单引号</td></tr>
+<tr><td><strong>空值表示</strong></td><td><code>null</code></td><td>省略字段或用空字符串</td><td><code>null</code> 或空字符串混用</td></tr>
+<tr><td><strong>数字精度</strong></td><td>大数可能转为科学计数法</td><td>保持完整精度</td><td>浮点数可能多/少小数位</td></tr>
+<tr><td><strong>Unicode 处理</strong></td><td>emoji 正常输出</td><td>emoji 偶尔被转义为 <code>\uXXXX</code></td><td>CJK 字符偶发编码异常</td></tr>
+</table>
+
+<h3>适配器层设计</h3>
+<p>适配器（Model Adapter）是一个按模型类型分发的中间层，负责将各家模型的原始输出转换为统一的中间格式，再交给下游的 Schema 校验和业务逻辑。</p>
+
+<div class="flow">
+  <div class="flow-title">多模型适配器架构</div>
+  <div class="flow-node accent"><div class="nlabel">多模型输出</div>
+    <div class="kvmap"><span class="q">OpenAI</span><span class="q">Claude</span><span class="q">Gemini</span></div>
+  </div>
+  <div class="flow-arrow" data-label="各自归一化"></div>
+  <div class="flow-node"><div class="nlabel">Model Adapter Layer</div>
+    <ul class="pairs">
+      <li><b>OpenAIAdapter</b><span>strip_surrounding_text · normalize_scientific_notation</span></li>
+      <li><b>ClaudeAdapter</b><span>strip_xml_tags · fill_missing_nulls</span></li>
+      <li><b>GeminiAdapter</b><span>fix_trailing_commas · normalize_quote_style · fix_unicode_encoding</span></li>
+    </ul>
+  </div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">统一中间格式（Canonical JSON）</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">Schema 校验 → 业务逻辑</div></div>
+</div>
+
+<div class="intuition-box">
+<p>适配器应该保持"薄层"——只做格式归一化，不做业务逻辑。每个 Adapter 的代码量通常在 50-100 行，核心是正则表达式和字段映射。新增模型时只需实现一个新 Adapter，不影响已有管线。</p>
+</div>
+
+<h3>统一化最佳实践</h3>
+<div class="practice-grid">
+<div class="do">
+<ul>
+<li>为每个模型维护独立的 Adapter 类，通过工厂模式按 <code>model_name</code> 分发</li>
+<li>在 Adapter 输出上运行同一套 Schema 校验，确保"多入口、单标准"</li>
+<li>定期对比各模型的 <code>raw_output</code> 样本，发现新的格式偏差及时补充清洗规则</li>
+<li>对空值统一为 <code>null</code>，对数字统一为 Python <code>Decimal</code> 避免精度丢失</li>
+</ul>
+</div>
+<div class="dont">
+<ul>
+<li>在业务代码里写 <code>if model == "gpt-4"</code> 的条件分支</li>
+<li>对不同模型使用不同的 Schema——这会导致下游逻辑复杂化</li>
+<li>忽略模型更新带来的格式变化，应建立"模型版本变更 → 触发 Adapter 回归测试"的流程</li>
+<li>把 Adapter 和业务逻辑耦合，导致换模型时需要改业务代码</li>
+</ul>
+</div>
+</div>
+
+<h3>多模型回归测试策略</h3>
+<p>每次模型版本升级或 Adapter 修改后，需要运行回归测试套件来验证输出质量没有退化。推荐建立以下测试体系：</p>
+<table>
+<tr><th>测试类型</th><th>内容</th><th>通过标准</th><th>触发时机</th></tr>
+<tr><td><strong>格式合规测试</strong></td><td>使用 100 条典型输入，验证输出能被 json5 解析且通过 Schema 校验</td><td>通过率 ≥ 98%</td><td>每次模型版本变更</td></tr>
+<tr><td><strong>字段完整性测试</strong></td><td>检查必填字段是否全部存在且非空</td><td>缺失率 &lt; 1%</td><td>每次 Schema 修改</td></tr>
+<tr><td><strong>一致性对比测试</strong></td><td>同一输入分别调用两个模型，比较输出结构的相似度</td><td>Jaccard 相似度 ≥ 0.85</td><td>新增或切换模型时</td></tr>
+<tr><td><strong>边界值测试</strong></td><td>使用极长文本、空输入、特殊字符等边界场景</td><td>不抛出未捕获异常</td><td>每次 Adapter 修改</td></tr>
+</table>
+
+<div class="highlight">
+<strong>工程建议：</strong>将回归测试集成到 CI/CD 管线中。每次模型提供商发布新版本公告后，自动触发回归测试。如果测试失败，阻断部署并通知 oncall。建议保留至少 3 个月的历史测试数据，用于趋势分析和基线对比。
+</div>
+
+<p>在实际落地中，建议为每个 Adapter 维护一份"格式偏差清单"（Quirk Manifest），记录该模型已知的输出特性和对应的清洗规则。当模型版本更新时，逐条验证清单中的每一项是否仍然有效。</p>
+    </section>
+
+    <section class="chapter" id="q-a">
+      <div class="ch-head"><div class="num">06</div><div class="t"><h2>Q&amp;A</h2></div></div>
+      <details class="qa">
+<summary>Structured Output 和 Prompt 约束的本质区别是什么？</summary>
+<div class="a">Structured Output 在模型解码阶段约束 token 生成——如果某个 token 会导致输出不合规，它的概率被强制设为 0。这是"硬约束"，100% 保证格式合规。Prompt 约束只是"告诉模型要输出 JSON"，模型可能不遵守（尤其是输出较长时容易"忘记"格式要求）。前者可靠性远高于后者。</div>
+</details>
+
+<details class="qa">
+<summary>重试时为什么不能直接用同一个请求重试？</summary>
+<div class="a">因为 LLM 的输出有随机性（temperature > 0），同一个请求重试可能输出相同的结果（如果 temperature 很低）或完全不同的结果（如果 temperature 很高）。更有效的方式是在重试时追加更明确的约束提示（如"你的上次输出格式不正确，请严格按以下 Schema 输出"），给模型更多上下文来纠正错误。</div>
+</details>
+
+<details class="qa">
+<summary>json5 和标准 json 库有什么区别？</summary>
+<div class="a">json5 是 JSON 的超集，支持标准 JSON 不允许的语法：尾随逗号（<code>{"a":1,}</code>）、单引号（<code>{'a':1}</code>）、注释（<code>{"a":1 //注释}</code>）、无引号键名（<code>{a:1}</code>）。LLM 输出的"不标准 JSON"大多能被 json5 直接解析，减少手动清洗的工作量。</div>
+</details>
+
+<details class="qa">
+<summary>Schema 设计太复杂会导致什么问题？</summary>
+<div class="a">两个问题：一是模型生成速度变慢（需要更多 token 来满足复杂 Schema），二是格式失败率上升（越复杂的 Schema 越容易出错）。经验法则是 Schema 嵌套不超过 3 层，必填字段不超过 10 个。如果业务需要更复杂的结构，考虑拆分为多次 LLM 调用，每次返回一个子结构。</div>
+</details>
+
+<details class="qa">
+<summary>如何区分"格式失败"和"内容不合法"？</summary>
+<div class="a">格式失败是 JSON 解析异常（如缺少大括号、引号不匹配），发生在 json.loads() 阶段。内容不合法是 JSON 解析成功但字段值不符合 Schema（如 age 字段应该是 integer 但模型返回了 string "twenty"），发生在 Schema 校验阶段。两者的重试策略不同：格式失败追加格式提示，内容不合法追加字段约束说明。</div>
+</details>
+
+<details class="qa">
+<summary>多模型架构下，如何处理不同提供商的 API 参数差异？</summary>
+<div class="a">通过 Model Adapter 模式实现解耦。定义一个统一的 <code>StructuredOutputClient</code> 接口，内部按 <code>model_name</code> 分发到对应的 Adapter。OpenAI 使用 <code>response_format={"type": "json_schema", ...}</code>，Claude 使用 Tool Use 的 <code>input_schema</code>，Gemini 使用 <code>response_mime_type="application/json"</code>。Adapter 负责将不同的 API 参数翻译为各家的原生格式，并在返回时将输出统一为 Canonical JSON。新增模型只需实现一个新 Adapter 类，业务代码零修改。</div>
+</details>
+
+<details class="qa">
+<summary>监控告警频繁误报怎么办？</summary>
+<div class="a">误报通常源于告警阈值设置不合理。三个优化方向：（1）用"持续时间窗口"替代"瞬时阈值"——例如格式失败率 > 5% 需持续 5 分钟才触发，避免偶发请求导致的抖动告警；（2）引入"基线对比"——将当前指标与过去 7 天同时段均值比较，只有偏离基线 2 个标准差才告警；（3）区分"工作日 vs 周末"和"高峰 vs 低谷"时段，为不同时段设置不同阈值。目标是将告警的"有效率"提升到 70% 以上，避免 oncall 产生告警疲劳。</div>
+</details>
+    </section>
+
+    <footer>
+      <div class="made">TECH NOTES · AI 工程 · 整理自 AI Knowledge Hub</div>
+    </footer>
+  </main>
+</div>
+
+<script>
+(function(){var bar=document.getElementById('progress');function u(){var h=document.documentElement;bar.style.width=h.scrollTop/(h.scrollHeight-h.clientHeight)*100+'%';}window.addEventListener('scroll',u,{passive:true});u();})();
+(function(){var links=document.querySelectorAll('aside.toc nav a');var secs=Array.from(document.querySelectorAll('section.chapter'));if(!secs.length)return;function u(){var y=window.scrollY+100,cur=secs[0];for(var i=0;i<secs.length;i++){if(secs[i].offsetTop<=y)cur=secs[i];}var id=cur.id;links.forEach(function(a){a.classList.toggle('active',a.getAttribute('href')==='#'+id);});}window.addEventListener('scroll',u,{passive:true});u();})();
+</script>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

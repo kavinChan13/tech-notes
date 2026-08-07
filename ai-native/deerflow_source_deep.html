@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DeerFlow 源码深度解析 · AI 工程 — Tech Notes</title>
+<meta name="description" content="从 Config 到断点续跑：逐模块源码级拆解，读懂 DeerFlow 2.0 的每一行代码">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<link rel="stylesheet" href="../assets/kh-guide.css">
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav">
+
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="ai_engineering_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 11 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>H02 · AI 工程</h2>
+    <nav>
+      <ol>
+        <li><a href="#config-17" class="active">Config 系统：17 子配置 + 热重载</a></li>
+        <li><a href="#14-middleware">14 层 Middleware：洋葱模型执行引擎</a></li>
+        <li><a href="#10-system-prompt">10 层 System Prompt 解剖</a></li>
+        <li><a href="#subagent">SubAgent 并发执行引擎</a></li>
+        <li><a href="#sandbox-dip-srp">Sandbox 三层抽象：DIP + SRP 落地</a></li>
+        <li><a href="#ch6">三级记忆架构：上下文 + 历史分层 + 事实列表</a></li>
+        <li><a href="#ch7">断点续跑：五层架构 + 双模式持久化</a></li>
+        <li><a href="#do-don-t">Do / Don&#x27;t</a></li>
+        <li><a href="#q-a">常见问题 Q&amp;A</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+    <header class="hero">
+      <div class="badge">H02 · AI 工程</div>
+      <h1>DeerFlow 源码深度解析</h1>
+      <p class="sub">从 Config 到断点续跑：逐模块源码级拆解，读懂 DeerFlow 2.0 的每一行代码</p>
+      <div class="meta-row">
+        <span class="pill cyan">AI 工程</span>
+        <span class="pill green">阅读 ~11 min</span>
+        <span class="pill amber">9 章</span>
+      </div>
+    </header>
+
+    <section class="chapter" id="config-17">
+      <div class="ch-head"><div class="num">01</div><div class="t"><h2>Config 系统：17 子配置 + 热重载</h2><div class="sub">环境变量 → config</div></div></div>
+      <div class="intuition-box">
+DeerFlow 的 Config 不是一坨硬编码常量，而是一套<strong>声明式 + 多层回退 + 运行时热重载</strong>的配置系统。改一行 YAML 不用重启，切一个模型不用改代码。
+</div>
+
+<h3>17 个子配置分组</h3>
+<table>
+<tr><th>分组</th><th>子配置</th><th>说明</th></tr>
+<tr><td rowspan="3"><strong>模型配置</strong></td><td>lead_agent.model</td><td>Lead Agent 使用的模型</td></tr>
+<tr><td>lead_agent.temperature</td><td>温度参数（默认 0.3）</td></tr>
+<tr><td>lead_agent.max_tokens</td><td>最大输出 Token</td></tr>
+<tr><td rowspan="3"><strong>SubAgent 配置</strong></td><td>subagent.max_concurrent</td><td>最大并发数（默认 5）</td></tr>
+<tr><td>subagent.timeout_seconds</td><td>单任务超时（默认 300s）</td></tr>
+<tr><td>subagent.retry_count</td><td>重试次数（默认 2）</td></tr>
+<tr><td rowspan="3"><strong>Sandbox 配置</strong></td><td>sandbox.type</td><td>沙箱类型：local / docker / e2b</td></tr>
+<tr><td>sandbox.working_dir</td><td>工作目录路径</td></tr>
+<tr><td>sandbox.cleanup_on_exit</td><td>退出时是否清理</td></tr>
+<tr><td rowspan="2"><strong>Memory 配置</strong></td><td>memory.enabled</td><td>是否启用记忆</td></tr>
+<tr><td>memory.storage_path</td><td>记忆文件存储路径</td></tr>
+<tr><td rowspan="2"><strong>Middleware 配置</strong></td><td>middleware.order</td><td>中间件执行顺序</td></tr>
+<tr><td>middleware.enabled</td><td>启用的中间件列表</td></tr>
+<tr><td rowspan="2"><strong>Checkpoint 配置</strong></td><td>checkpointer.type</td><td>memory / sqlite / postgres</td></tr>
+<tr><td>checkpointer.retain_days</td><td>快照保留天数</td></tr>
+<tr><td rowspan="2"><strong>Skills 配置</strong></td><td>skills.dir</td><td>Skills 目录路径</td></tr>
+<tr><td>skills.auto_reload</td><td>文件变更自动重载</td></tr>
+</table>
+
+<h3>多层回退策略</h3>
+<pre><code><div class="node">环境变量</code></pre>
+<div class="arrow">→</div>
+<div class="node">config.yaml</div>
+<div class="arrow">→</div>
+<div class="node">config.default.yaml</div>
+<div class="arrow">→</div>
+<div class="node">硬编码默认值</div>
+</div>
+<p>配置查找优先级从高到低：环境变量覆盖 → 用户 config.yaml → 项目 config.default.yaml → 代码内置默认值。</p>
+
+<h3>热重载机制</h3>
+<table>
+<tr><th>配置项</th><th>热重载</th><th>实现方式</th></tr>
+<tr><td>模型参数</td><td>✅</td><td>下次调用时读取最新配置</td></tr>
+<tr><td>Skills 目录</td><td>✅</td><td>文件 watcher 检测变更</td></tr>
+<tr><td>Sandbox 类型</td><td>❌</td><td>需重启（涉及进程/容器状态）</td></tr>
+<tr><td>Checkpoint 后端</td><td>❌</td><td>需重启（涉及数据库连接）</td></tr>
+<tr><td>Middleware 顺序</td><td>✅</td><td>下次图编译时重新排列</td></tr>
+</table>
+    </section>
+
+    <section class="chapter" id="14-middleware">
+      <div class="ch-head"><div class="num">02</div><div class="t"><h2>14 层 Middleware：洋葱模型执行引擎</h2></div></div>
+      <div class="intuition-box">
+DeerFlow 的 Middleware 不是松散的插件集合，而是<strong>严格有序的 14 层洋葱模型</strong>：请求从外向内穿透，响应从内向外回溯。顺序写死在源码中，错一层就崩。
+</div>
+
+<h3>14 层完整列表（由外到内）</h3>
+<table>
+<tr><th>层</th><th>名称</th><th>before_agent 职责</th><th>after_agent 职责</th></tr>
+<tr><td>1</td><td><strong>ThreadData</strong></td><td>注入 thread_id、working_dir</td><td>—</td></tr>
+<tr><td>2</td><td><strong>LoopDetection</strong></td><td>检测循环模式，防止死循环</td><td>更新循环计数</td></tr>
+<tr><td>3</td><td><strong>TokenUsage</strong></td><td>—</td><td>统计 Token 消耗，写入 state</td></tr>
+<tr><td>4</td><td><strong>Sandbox</strong></td><td>初始化沙箱，注入工具</td><td>释放沙箱资源</td></tr>
+<tr><td>5</td><td><strong>Skills</strong></td><td>加载 Skills，注册工具</td><td>—</td></tr>
+<tr><td>6</td><td><strong>Memory</strong></td><td>注入记忆到 system prompt</td><td>触发异步记忆更新</td></tr>
+<tr><td>7</td><td><strong>SubAgent</strong></td><td>注入 task/subagent 工具</td><td>清理后台任务</td></tr>
+<tr><td>8</td><td><strong>MCP</strong></td><td>连接 MCP 服务器</td><td>断开 MCP 连接</td></tr>
+<tr><td>9</td><td><strong>ACP</strong></td><td>连接 ACP 服务器</td><td>断开 ACP 连接</td></tr>
+<tr><td>10</td><td><strong>ToolFilter</strong></td><td>按 allow/deny 列表过滤工具</td><td>—</td></tr>
+<tr><td>11</td><td><strong>Logging</strong></td><td>记录请求开始</td><td>记录请求结束 + 耗时</td></tr>
+<tr><td>12</td><td><strong>ErrorHandler</strong></td><td>—</td><td>捕获异常，降级处理</td></tr>
+<tr><td>13</td><td><strong>Retry</strong></td><td>—</td><td>检测可重试错误，自动重试</td></tr>
+<tr><td>14</td><td><strong>Clarification</strong></td><td>检测是否需要澄清</td><td>—</td></tr>
+</table>
+
+<h3>洋葱模型执行流程</h3>
+<div class="arch-diagram">请求 → ┌─ ThreadData ─────────────────────────────────┐
+       │  ┌─ LoopDetection ─────────────────────────┐  │
+       │  │  ┌─ TokenUsage ──────────────────────┐  │  │
+       │  │  │  ┌─ Sandbox ───────────────────┐  │  │  │
+       │  │  │  │  ... 10 层嵌套 ...          │  │  │  │
+       │  │  │  │  ┌─ Clarification ──────┐   │  │  │  │
+       │  │  │  │  │   🧠 Lead Agent      │   │  │  │  │
+       │  │  │  │  └──────────────────────┘   │  │  │  │
+       │  │  │  └────────────────────────────┘  │  │  │
+       │  │  └──────────────────────────────────┘  │  │
+       │  └────────────────────────────────────────┘  │
+       └──────────────────────────────────────────────┘
+                                                      ← 响应
+before: 由外到内（1→14）
+after:  由内到外（14→1）</div>
+
+<h3>关键依赖关系</h3>
+<table>
+<tr><th>依赖</th><th>原因</th></tr>
+<tr><td>ThreadData 必须第 1 层</td><td>后续所有中间件需要 thread_id 和 working_dir</td></tr>
+<tr><td>Sandbox 在 Skills 之前</td><td>Skills 需要沙箱环境来执行</td></tr>
+<tr><td>Memory 在 SubAgent 之前</td><td>SubAgent 需要记忆上下文</td></tr>
+<tr><td>Clarification 必须最后</td><td>可能通过 Command(goto=END) 拦截整个图执行</td></tr>
+<tr><td>LoopDetection 靠前</td><td>尽早拦截死循环，避免资源浪费</td></tr>
+</table>
+
+<div class="warn-box">
+<strong>中间件顺序不可随意调整。</strong>DeerFlow 部分中间件存在隐式依赖——外层中间件需要内层中间件注入的状态。这是"僵硬但安全"的工程选择。
+</div>
+    </section>
+
+    <section class="chapter" id="10-system-prompt">
+      <div class="ch-head"><div class="num">03</div><div class="t"><h2>10 层 System Prompt 解剖</h2></div></div>
+      <div class="intuition-box">
+Lead Agent 的 System Prompt 不是一段固定文本，而是由 <strong>10 层模板</strong>按优先级动态组装。每层都有明确的注入时机和内容边界。
+</div>
+
+<h3>10 层模板组装</h3>
+<table>
+<tr><th>层</th><th>名称</th><th>注入时机</th><th>内容</th><th>Token 预算</th></tr>
+<tr><td>1</td><td><strong>Identity</strong></td><td>始终</td><td>角色定义："你是 DeerFlow，一个 Super Agent"</td><td>~50</td></tr>
+<tr><td>2</td><td><strong>Core Principles</strong></td><td>始终</td><td>行为准则：准确性优先、透明性、安全性</td><td>~100</td></tr>
+<tr><td>3</td><td><strong>Tool Usage</strong></td><td>始终</td><td>工具使用规范：必须先搜索再行动</td><td>~80</td></tr>
+<tr><td>4</td><td><strong>Memory Context</strong></td><td>记忆启用时</td><td>用户记忆注入（三级记忆摘要）</td><td>~200</td></tr>
+<tr><td>5</td><td><strong>Skills Context</strong></td><td>有 Skills 时</td><td>可用 Skills 列表和描述</td><td>~150</td></tr>
+<tr><td>6</td><td><strong>Tool Context</strong></td><td>有工具时</td><td>工具列表和使用示例</td><td>~200</td></tr>
+<tr><td>7</td><td><strong>Sandbox Info</strong></td><td>沙箱启用时</td><td>沙箱能力说明和限制</td><td>~80</td></tr>
+<tr><td>8</td><td><strong>SubAgent Protocol</strong></td><td>多 Agent 时</td><td>Sub-Agent 委派协议和格式</td><td>~100</td></tr>
+<tr><td>9</td><td><strong>Output Format</strong></td><td>始终</td><td>输出格式要求：Markdown、代码块</td><td>~60</td></tr>
+<tr><td>10</td><td><strong>Dynamic Injection</strong></td><td>运行时</td><td>用户自定义 prompt 片段</td><td>~100</td></tr>
+</table>
+
+<h3>组装流程</h3>
+<pre><code><div class="node">10 层模板</code></pre>
+<div class="arrow">→</div>
+<div class="node">按序拼接</div>
+<div class="arrow">→</div>
+<div class="node">Token 预算裁剪</div>
+<div class="arrow">→</div>
+<div class="node">最终 System Prompt</div>
+</div>
+
+<h3>Token 预算裁剪策略</h3>
+<table>
+<tr><th>优先级</th><th>裁剪顺序（先裁的）</th><th>原因</th></tr>
+<tr><td>最后裁剪</td><td>Identity + Core Principles</td><td>核心身份不可丢</td></tr>
+<tr><td>中间裁剪</td><td>Tool Context + Skills Context</td><td>工具描述可简化</td></tr>
+<tr><td>最先裁剪</td><td>Memory Context + Dynamic Injection</td><td>记忆摘要可缩短</td></tr>
+</table>
+    </section>
+
+    <section class="chapter" id="subagent">
+      <div class="ch-head"><div class="num">04</div><div class="t"><h2>SubAgent 并发执行引擎</h2></div></div>
+      <div class="intuition-box">
+SubAgent 不是"开新线程跑任务"那么简单。DeerFlow 定义了<strong>6 种生命周期状态</strong>、<strong>线程安全的状态同步</strong>、<strong>三种执行模式</strong>，构成一个完整的并发状态机。
+</div>
+
+<h3>6 种生命周期状态</h3>
+<table>
+<tr><th>状态</th><th>含义</th><th>可转入</th></tr>
+<tr><td><code>PENDING</code></td><td>待执行，已创建但未启动</td><td>RUNNING</td></tr>
+<tr><td><code>RUNNING</code></td><td>执行中</td><td>COMPLETED / FAILED / CANCELLED / TIMED_OUT</td></tr>
+<tr><td><code>COMPLETED</code></td><td>成功完成</td><td>终态</td></tr>
+<tr><td><code>FAILED</code></td><td>执行失败</td><td>终态（可重试→PENDING）</td></tr>
+<tr><td><code>CANCELLED</code></td><td>被取消</td><td>终态</td></tr>
+<tr><td><code>TIMED_OUT</code></td><td>超时</td><td>终态</td></tr>
+</table>
+
+<h3>状态流转图</h3>
+<div class="flow">
+  <div class="flow-node accent"><div class="nlabel">PENDING → RUNNING → COMPLETED</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">FAILED → (重试) PENDING</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">CANCELLED</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">TIMED_OUT</div></div>
+</div>
+
+<h3>三种执行模式</h3>
+<table>
+<tr><th>模式</th><th>方法</th><th>适用场景</th><th>特点</th></tr>
+<tr><td><strong>同步</strong></td><td><code>execute()</code></td><td>CLI、短任务</td><td>阻塞等待结果</td></tr>
+<tr><td><strong>异步</strong></td><td><code>execute_async()</code></td><td>FastAPI、长任务</td><td>返回 task_id，后台执行</td></tr>
+<tr><td><strong>后台</strong></td><td><code>_aexecute()</code></td><td>SubAgent 内部</td><td>状态实时写入 _background_tasks</td></tr>
+</table>
+
+<h3>状态同步机制</h3>
+<pre><code><div class="node">SubAgent 执行</code></pre>
+<div class="arrow">→</div>
+<div class="node">result_holder 实时更新</div>
+<div class="arrow">→</div>
+<div class="node">_background_tasks 全局存储</div>
+<div class="arrow">→</div>
+<div class="node">task_tool 轮询同步</div>
+<div class="arrow">→</div>
+<div class="node">ThreadState</div>
+</div>
+
+<table>
+<tr><th>组件</th><th>职责</th><th>线程安全</th></tr>
+<tr><td><code>SubagentResult</code></td><td>子代理状态唯一数据载体</td><td>—</td></tr>
+<tr><td><code>result_holder</code></td><td>实时同步工具，连接 Result 与全局存储</td><td>引用对象</td></tr>
+<tr><td><code>_background_tasks</code></td><td>内存级临时仓库，dict[task_id → Result]</td><td>Lock 保护</td></tr>
+<tr><td><code>task_tool</code></td><td>轮询机制，从全局存储同步到 ThreadState</td><td>轮询间隔可配</td></tr>
+</table>
+    </section>
+
+    <section class="chapter" id="sandbox-dip-srp">
+      <div class="ch-head"><div class="num">05</div><div class="t"><h2>Sandbox 三层抽象：DIP + SRP 落地</h2></div></div>
+      <div class="intuition-box">
+DeerFlow 的 Sandbox 不是"docker run"的包装，而是<strong>三层抽象 + 依赖倒置 + 单一职责</strong>的完整受控执行环境。上层不依赖底层实现，切换沙箱类型只改一行配置。
+</div>
+
+<h3>三层架构</h3>
+<table>
+<tr><th>层</th><th>组件</th><th>职责</th><th>设计原则</th></tr>
+<tr><td><strong>中间件层</strong></td><td>SandboxMiddleware</td><td>与 Agent 生命周期绑定：获取、注入、释放沙箱</td><td>SRP：只管生命周期</td></tr>
+<tr><td><strong>工厂层</strong></td><td>SandboxProvider</td><td>沙箱实例的创建、获取、释放（单例模式）</td><td>DIP：依赖抽象接口</td></tr>
+<tr><td><strong>接口层</strong></td><td>Sandbox (ABC)</td><td>定义 8 个核心操作方法的统一接口</td><td>接口契约</td></tr>
+</table>
+
+<h3>8 个抽象方法</h3>
+<table>
+<tr><th>方法</th><th>功能</th><th>返回</th></tr>
+<tr><td><code>execute_command(cmd)</code></td><td>执行 shell 命令</td><td>stdout + stderr + exit_code</td></tr>
+<tr><td><code>read_file(path)</code></td><td>读取文件内容</td><td>文件文本</td></tr>
+<tr><td><code>write_file(path, content)</code></td><td>写入文件</td><td>成功/失败</td></tr>
+<tr><td><code>list_dir(path)</code></td><td>列出目录内容</td><td>文件/目录列表</td></tr>
+<tr><td><code>glob(pattern)</code></td><td>按模式搜索文件</td><td>匹配路径列表</td></tr>
+<tr><td><code>grep(pattern, path)</code></td><td>按内容搜索文件</td><td>匹配行列表</td></tr>
+<tr><td><code>create_dir(path)</code></td><td>创建目录</td><td>成功/失败</td></tr>
+<tr><td><code>cleanup()</code></td><td>释放沙箱资源</td><td>—</td></tr>
+</table>
+
+<h3>三种沙箱实现</h3>
+<table>
+<tr><th>实现</th><th>隔离级别</th><th>启动速度</th><th>适用场景</th></tr>
+<tr><td><strong>LocalSandbox</strong></td><td>进程级（路径映射 + 只读保护）</td><td>毫秒级</td><td>开发/测试</td></tr>
+<tr><td><strong>DockerSandbox</strong></td><td>容器级（独立文件系统 + 网络隔离）</td><td>秒级</td><td>生产环境</td></tr>
+<tr><td><strong>E2BSandbox</strong></td><td>云端级（远程沙箱服务）</td><td>秒级</td><td>云端部署</td></tr>
+</table>
+
+<h3>懒加载 vs 饿加载</h3>
+<table>
+<tr><th>模式</th><th>初始化时机</th><th>优势</th><th>劣势</th></tr>
+<tr><td><strong>懒加载</strong>（默认）</td><td>第一次工具调用时</td><td>避免资源浪费</td><td>首次调用有延迟</td></tr>
+<tr><td><strong>饿加载</strong></td><td>Agent 启动时（before_agent）</td><td>首次调用无延迟</td><td>可能浪费资源</td></tr>
+</table>
+    </section>
+
+    <section class="chapter" id="ch6">
+      <div class="ch-head"><div class="num">06</div><div class="t"><h2>三级记忆架构：上下文 + 历史分层 + 事实列表</h2><div class="sub">MemoryMiddleware（拦截） → 消息预处理（清洗+信号检测） → 防抖队列（批…</div></div></div>
+      <div class="intuition-box">
+DeerFlow 的记忆不是"短期 + 长期"两层的粗放设计，而是<strong>用户上下文（实时） + 历史分层（沉淀） + 事实列表（检索）</strong>的三级结构化体系。记忆不是信息堆砌，而是有骨架的状态管理。
+</div>
+
+<h3>三层记忆对比</h3>
+<table>
+<tr><th>层级</th><th>类型</th><th>更新频率</th><th>生命周期</th><th>核心作用</th></tr>
+<tr><td><strong>user（用户上下文）</strong></td><td>短期 / 活跃记忆</td><td>每次对话</td><td>小时/天</td><td>实时反映用户当下状态</td></tr>
+<tr><td><strong>history（历史分层）</strong></td><td>中期 / 长期记忆</td><td>按月/季度</td><td>月/年</td><td>沉淀用户行为轨迹</td></tr>
+<tr><td><strong>facts（事实列表）</strong></td><td>结构化长期记忆</td><td>低频率</td><td>永久/半永久</td><td>固化离散知识点，供快速检索</td></tr>
+</table>
+
+<h3>user 层：3 个子字段</h3>
+<table>
+<tr><th>字段</th><th>内容</th><th>示例</th><th>更新频率</th></tr>
+<tr><td><code>workContext</code></td><td>职业角色、公司、项目、技术栈</td><td>"字节跳动高级工程师，主导 DeerFlow，Python + LangChain"</td><td>中等</td></tr>
+<tr><td><code>personalContext</code></td><td>语言能力、沟通偏好、兴趣</td><td>"中英文双语，偏好简洁直接的技术沟通"</td><td>低</td></tr>
+<tr><td><code>topOfMind</code></td><td>当前关注的多个焦点（3-5 条）</td><td>"准备 v2.0 发布、优化调度策略"</td><td>最高</td></tr>
+</table>
+
+<h3>history 层：3 个时间窗口</h3>
+<table>
+<tr><th>字段</th><th>时间范围</th><th>内容</th><th>字数限制</th></tr>
+<tr><td><code>recentMonths</code></td><td>近 1-3 个月</td><td>详细活动摘要</td><td>4-6 句</td></tr>
+<tr><td><code>earlierContext</code></td><td>3-12 个月</td><td>重要行为模式</td><td>3-5 句</td></tr>
+<tr><td><code>longTermBackground</code></td><td>长期</td><td>不变的基础背景</td><td>2-4 句</td></tr>
+</table>
+
+<h3>facts 层：5 种类别</h3>
+<table>
+<tr><th>类别</th><th>含义</th><th>示例</th></tr>
+<tr><td><code>preference</code></td><td>用户偏好</td><td>"偏好使用 Vim 而非 VS Code"</td></tr>
+<tr><td><code>knowledge</code></td><td>专业知识</td><td>"精通 Rust 和 WebAssembly"</td></tr>
+<tr><td><code>context</code></td><td>背景事实</td><td>"在字节跳动担任高级工程师"</td></tr>
+<tr><td><code>behavior</code></td><td>行为模式</td><td>"习惯先写测试再写实现"</td></tr>
+<tr><td><code>goal</code></td><td>目标意图</td><td>"计划在 Q2 发布 v2.0"</td></tr>
+</table>
+
+<h3>记忆处理四大模块</h3>
+<pre><code><div class="node">MemoryMiddleware（拦截）</code></pre>
+<div class="arrow">→</div>
+<div class="node">消息预处理（清洗+信号检测）</div>
+<div class="arrow">→</div>
+<div class="node">防抖队列（批量聚合）</div>
+<div class="arrow">→</div>
+<div class="node">更新引擎（LLM 结构化）</div>
+</div>
+<pre><code><div class="node">持久化存储</code></pre>
+<div class="arrow">→</div>
+<div class="node">Token 预算格式化</div>
+<div class="arrow">→</div>
+<div class="node">注入 System Prompt</div>
+</div>
+
+<table>
+<tr><th>模块</th><th>文件</th><th>核心职责</th></tr>
+<tr><td><strong>消息预处理</strong></td><td>message_processing.py</td><td>清洗无效信息 + 检测纠正/正向反馈信号</td></tr>
+<tr><td><strong>防抖队列</strong></td><td>queue.py</td><td>Debounce 批量聚合，避免高频 LLM 调用</td></tr>
+<tr><td><strong>更新引擎</strong></td><td>updater.py + prompt.py</td><td>7 步管道：读取→格式化→Prompt→LLM→应用→清洗→原子写入</td></tr>
+<tr><td><strong>持久化存储</strong></td><td>storage.py</td><td>抽象接口 + 文件实现（支持扩展向量数据库）</td></tr>
+</table>
+
+<h3>记忆注入：Token 预算感知</h3>
+<p>由于 LLM 上下文窗口有限，DeerFlow 采用<strong>按置信度排序 + 动态裁剪</strong>策略：优先保留高置信度、高相关性的记忆内容，超出预算时从低优先级记忆开始裁剪。</p>
+    </section>
+
+    <section class="chapter" id="ch7">
+      <div class="ch-head"><div class="num">07</div><div class="t"><h2>断点续跑：五层架构 + 双模式持久化</h2></div></div>
+      <div class="intuition-box">
+DeerFlow 的断点续跑不是"try-except + 重试"，而是<strong>LangGraph 原生 Checkpointer + ThreadState 唯一可信源 + SubAgent 无独立断点 + 双模式持久化</strong>的四位一体设计。进程重启后，从最后成功的 step 继续。
+</div>
+
+<h3>五层分层架构</h3>
+<div class="flow">
+  <div class="flow-node accent"><div class="nlabel">应用层 API</div><div class="nsub">/threads/{thread_id}/resume · /tasks/{task_id}/status</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Runtime 调度层</div><div class="nsub">RunWorker（集成 checkpointer 双模式入口）</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">LangGraph 编排层</div><div class="nsub">StateSnapshot 全量序列化 · Super-step 自动快照点 · next_node 精准续跑路由</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">子代理执行层</div><div class="nsub">SubagentExecutor._aexecute() · _background_tasks 全局状态存储</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">统一持久化层（双模式）</div><div class="nsub">async_provider.py → AsyncSqlite/Postgres · provider.py → Sqlite/Postgres</div></div>
+</div>
+
+<h3>双模式持久化</h3>
+<table>
+<tr><th>模式</th><th>核心文件</th><th>入口</th><th>适用场景</th><th>后端</th></tr>
+<tr><td><strong>异步</strong></td><td>async_provider.py</td><td>make_checkpointer()</td><td>FastAPI、长时异步任务</td><td>InMemory / AsyncSqlite / AsyncPostgres</td></tr>
+<tr><td><strong>同步</strong></td><td>provider.py</td><td>get_checkpointer()</td><td>CLI、单元测试</td><td>InMemory / Sqlite / Postgres</td></tr>
+</table>
+
+<h3>核心设计原则</h3>
+<table>
+<tr><th>原则</th><th>实现</th><th>好处</th></tr>
+<tr><td><strong>ThreadState 唯一可信源</strong></td><td>所有需持久化的状态（主+子代理+沙箱）均收敛于此</td><td>续跑时反序列化即可恢复全部上下文</td></tr>
+<tr><td><strong>SubAgent 无独立断点</strong></td><td>子代理状态通过 SubagentResult → _background_tasks → ThreadState 链路同步</td><td>避免多快照冲突，状态一致性有保障</td></tr>
+<tr><td><strong>配置驱动选型</strong></td><td>config.yaml 中 checkpointer.type 自动切换后端</td><td>开发用 memory，生产用 postgres，零代码切换</td></tr>
+<tr><td><strong>自动容错</strong></td><td>配置为空时降级为 InMemorySaver</td><td>保障基础功能可用</td></tr>
+</table>
+
+<h3>续跑恢复流程</h3>
+<pre><code><div class="node">进程重启</code></pre>
+<div class="arrow">→</div>
+<div class="node">加载 ThreadState 快照</div>
+<div class="arrow">→</div>
+<div class="node">检查 SubAgent 状态</div>
+<div class="arrow">→</div>
+<div class="node">COMPLETED → 跳过</div>
+</div>
+<pre><code><div class="node">RUNNING/FAILED</code></pre>
+<div class="arrow">→</div>
+<div class="node">重启 SubAgent</div>
+<div class="arrow">→</div>
+<div class="node">从 last_step 继续</div>
+</div>
+    </section>
+
+    <section class="chapter" id="do-don-t">
+      <div class="ch-head"><div class="num">08</div><div class="t"><h2>Do / Don&#x27;t</h2></div></div>
+      <div class="practice-grid">
+<div class="do">
+<ul>
+<li>使用 Config 系统管理所有参数，避免硬编码</li>
+<li>严格遵守 14 层 Middleware 顺序</li>
+<li>SubAgent 状态通过 ThreadState 统一管理</li>
+<li>生产环境使用 Docker 或 E2B 沙箱</li>
+<li>启用三级记忆提升个性化交互质量</li>
+<li>生产环境配置 Postgres Checkpointer</li>
+<li>利用防抖队列减少 LLM 调用开销</li>
+<li>为 System Prompt 设置 Token 预算裁剪策略</li>
+</ul>
+</div>
+<div class="dont">
+<ul>
+<li>不要随意调整 Middleware 顺序（隐式依赖）</li>
+<li>不要给 SubAgent 维护独立断点（多快照冲突）</li>
+<li>不要跳过沙箱直接操作宿主机</li>
+<li>不要把所有记忆不加裁剪地注入 Prompt</li>
+<li>不要用 InMemory Checkpointer 跑生产（重启丢数据）</li>
+<li>不要频繁同步更新记忆（阻塞交互）</li>
+<li>不要在 SubAgent 中再创建 SubAgent</li>
+<li>不要忽略 Clarification 中间件的位置约束</li>
+</ul>
+</div>
+</div>
+    </section>
+
+    <section class="chapter" id="q-a">
+      <div class="ch-head"><div class="num">09</div><div class="t"><h2>常见问题 Q&amp;A</h2><div class="sub">参考来源：</div></div></div>
+      <details class="qa">
+<summary>为什么 14 层 Middleware 顺序不能调？</summary>
+<div class="a">DeerFlow 部分中间件存在隐式状态依赖：ThreadData 注入 thread_id 后，Sandbox 才能创建工作目录；Memory 注入后，SubAgent 才有上下文。这是"僵硬但安全"的工程选择，避免了隐式约定带来的维护风险。</div>
+</details>
+
+<details class="qa">
+<summary>SubAgent 为什么没有独立断点？</summary>
+<div class="a">如果 SubAgent 有独立快照，主线程和子线程的快照可能不一致（比如主线程已记录"子任务完成"但子线程快照还在"执行中"）。DeerFlow 选择"ThreadState 唯一可信源"，所有子代理状态最终同步到主线程，由主线程统一快照，彻底避免多快照冲突。</div>
+</details>
+
+<details class="qa">
+<summary>三级记忆和 OpenClaw 的三级记忆有什么区别？</summary>
+<div class="a">OpenClaw 的三级记忆是"工作记忆/情景记忆/语义记忆"（模拟人类认知），存储介质是 SQLite + 向量。DeerFlow 的三级记忆是"用户上下文/历史分层/事实列表"（面向用户画像），存储介质是 JSON 文件 + LLM 结构化抽取。两者设计目标不同：OpenClaw 面向通用 Agent 运行时，DeerFlow 面向 Super Agent 的个性化交互。</div>
+</details>
+
+<details class="qa">
+<summary>Config 热重载的边界在哪里？</summary>
+<div class="a">涉及运行时状态的配置（Sandbox 类型、Checkpoint 后端）不能热重载，因为切换需要重建进程/连接。不涉及运行时状态的配置（模型参数、Skills 目录、Middleware 顺序）可以热重载，下次调用时自动生效。</div>
+</details>
+
+<details class="qa">
+<summary>记忆更新的防抖窗口设多大合适？</summary>
+<div class="a">取决于对话频率。高频场景（客服机器人）建议 30-60 秒，避免每句话都触发 LLM 更新；低频场景（研究助手）建议 5-10 秒，保证记忆时效性。防抖窗口过短会导致 LLM 调用过载，过长会导致记忆滞后。</div>
+</details>
+
+<details class="qa">
+<summary>断点续跑时 SubAgent 处于 RUNNING 状态怎么办？</summary>
+<div class="a">续跑时检查 SubAgent 状态：如果 COMPLETED 则跳过；如果 RUNNING/FAILED/TIMED_OUT，根据业务逻辑决定是否重启。DeerFlow 默认策略是重启 RUNNING 状态的 SubAgent（因为进程已重启，之前的执行上下文已丢失）。</div>
+</details>
+
+
+
+
+
+
+<div class="source-link">
+<p><strong>参考来源：</strong></p>
+<p>1. <a href="https://sihanli.blog.csdn.net/article/details/160805215" target="_blank">【DeerFlow 2.0】代码详解（一）：架构总览与核心骨架</a></p>
+<p>2. <a href="https://sihanli.blog.csdn.net/article/details/160805543" target="_blank">【DeerFlow 2.0】代码详解（二）：Lead Agent 与 Prompt 工程</a></p>
+<p>3. <a href="https://sihanli.blog.csdn.net/article/details/160805614" target="_blank">【DeerFlow 2.0】代码详解（三）：SubAgent 并发执行引擎</a></p>
+<p>4. <a href="https://sihanli.blog.csdn.net/article/details/160805725" target="_blank">【DeerFlow 2.0】代码详解（四）：Sandbox 安全隔离与 Skills 技能系统</a></p>
+<p>5. <a href="https://sihanli.blog.csdn.net/article/details/160805835" target="_blank">【DeerFlow 2.0】代码详解（五）：Memory 记忆系统与 MCP/ACP 扩展</a></p>
+<p>6. <a href="https://mp.weixin.qq.com/s/OBzU9pIKdMalgjcj5WYkXg" target="_blank">DeerFlow 14 层 Middleware 洋葱模型深度解析 — 尼恩</a></p>
+<p>7. <a href="https://mp.weixin.qq.com/s/2I_Rm5dpQFqzaHZ7cTbxvg" target="_blank">DeerFlow 2.0 断点续跑机制架构设计与实现 — 尼恩</a></p>
+<p>8. <a href="https://mp.weixin.qq.com/s/DyKv0rmmmSrk-Ao6wUvoeA" target="_blank">DeerFlow 2.0 Sandbox 架构设计与源码深度解析 — 尼恩</a></p>
+<p>9. <a href="https://mp.weixin.qq.com/s/q8O-DjZPvksUHavG5sidZQ" target="_blank">DeerFlow 三级记忆架构：上下文 + 历史分层 + 事实列表 — 尼恩</a></p>
+</div>
+    </section>
+
+    <footer>
+      <div class="made">TECH NOTES · AI 工程 · 整理自 AI Knowledge Hub</div>
+    </footer>
+  </main>
+</div>
+
+<script>
+(function(){var bar=document.getElementById('progress');function u(){var h=document.documentElement;bar.style.width=h.scrollTop/(h.scrollHeight-h.clientHeight)*100+'%';}window.addEventListener('scroll',u,{passive:true});u();})();
+(function(){var links=document.querySelectorAll('aside.toc nav a');var secs=Array.from(document.querySelectorAll('section.chapter'));if(!secs.length)return;function u(){var y=window.scrollY+100,cur=secs[0];for(var i=0;i<secs.length;i++){if(secs[i].offsetTop<=y)cur=secs[i];}var id=cur.id;links.forEach(function(a){a.classList.toggle('active',a.getAttribute('href')==='#'+id);});}window.addEventListener('scroll',u,{passive:true});u();})();
+</script>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

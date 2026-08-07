@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Markdown 流式渲染技术解析 · AI 工程 — Tech Notes</title>
+<meta name="description" content="Markdown Streaming Render — O(n²)→O(n)增量解析 / 不完整语法处理 / 分块渲染 / AST打字机">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<link rel="stylesheet" href="../assets/kh-guide.css">
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav">
+
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="ai_engineering_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 13 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>E31 · AI 工程</h2>
+    <nav>
+      <ol>
+        <li><a href="#overview" class="active">概览</a></li>
+        <li><a href="#o-n">全量解析的 O(n²) 灾难</a></li>
+        <li><a href="#o-n-o-n">增量解析：O(n²) → O(n) 的核心引擎</a></li>
+        <li><a href="#ch3">不完整语法处理：流式场景的语法修复层</a></li>
+        <li><a href="#ast">分块渲染：AST 节点级缓存与打字机效果</a></li>
+        <li><a href="#ch5">业界方案横向对比</a></li>
+        <li><a href="#ch6">大厂最佳实践与决策指南</a></li>
+        <li><a href="#q-a">Q&amp;A</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+    <header class="hero">
+      <div class="badge">E31 · AI 工程</div>
+      <h1>Markdown 流式渲染技术解析</h1>
+      <p class="sub">Markdown Streaming Render — O(n²)→O(n)增量解析 / 不完整语法处理 / 分块渲染 / AST打字机</p>
+      <div class="meta-row">
+        <span class="pill cyan">AI 工程</span>
+        <span class="pill green">阅读 ~13 min</span>
+        <span class="pill amber">8 章</span>
+      </div>
+    </header>
+
+    <section class="chapter" id="overview">
+      <div class="ch-head"><div class="num">00</div><div class="t"><h2>概览</h2><div class="sub">流式 Markdown 渲染的本质不是&quot;更快地解析&quot;，而是&quot;少解析&quot;——只对新增片段做解析…</div></div></div>
+      <div class="intuition-box">
+<p>流式 Markdown 渲染的本质不是"更快地解析"，而是"少解析"——只对新增片段做解析，已完成的块永不触碰，从而将复杂度从 O(n²) 压回 O(n)。</p>
+</div>
+    </section>
+
+    <section class="chapter" id="o-n">
+      <div class="ch-head"><div class="num">01</div><div class="t"><h2>全量解析的 O(n²) 灾难</h2><div class="sub">大模型对话场景中，服务端以 SSE （Server-Sent Events）逐 token…</div></div></div>
+      <p>大模型对话场景中，服务端以 <span class="term">SSE</span>（Server-Sent Events）逐 token 推送 Markdown 文本，前端每收到一个 chunk（通常 1-5 字符）就触发一次渲染。传统方案直接把累积文本丢给 <code>marked</code> 或 <code>markdown-it</code> 做全量解析——每次都从第 1 个字符扫到最后 1 个字符。</p>
+
+<h3>复杂度分析</h3>
+<p>假设一次完整回复共 N 个字符、每次收到 K 个字符（即 N/K 次 chunk），那么：</p>
+
+<div class="formula">
+总解析量 = K + 2K + 3K + ... + N = K × (1+2+...+N/K) = O(N²/K) ≈ O(N²)
+</div>
+
+<p>当 N = 20000 字符（约 20KB 回复，典型的技术文档输出）、K = 5 字符时，全量解析共执行 4000 次解析调用，累计处理约 4000 万字符。实测数据表明，在 <code>marked</code> 引擎下这一过程的总耗时为 1.6-5.7 秒，且后期每次 chunk 的解析耗时呈线性增长，直接导致打字机效果从流畅逐渐退化为卡顿，最终页面冻结。</p>
+
+<pre><code>全量解析的耗时曲线（每次 chunk 的解析时间）
+
+  ms/chunk
+  50 |                                          ╱╱
+  40 |                                       ╱╱
+  30 |                                    ╱╱
+  20 |                             ╱╱╱╱╱
+  10 |                    ╱╱╱╱╱╱
+   0 |___╱╱╱╱╱╱╱╱╱╱╱╱╱╱╱
+     +--------------------------------------------→ chunk 序号
+     0    500   1000   1500   2000   2500   3000
+
+  ← 前期流畅 → ← 开始卡顿 → ← 页面冻结 →
+
+  原因：第 i 次解析的文本长度 = i × K，线性增长
+  累计复杂度：Σ(i×K) for i=1..N/K = O(N²)</code></pre>
+
+<table>
+<tr><th>文本长度</th><th>Chunk 次数</th><th>全量解析累计处理量</th><th>实测总耗时(marked)</th><th>用户体感</th></tr>
+<tr><td>2 KB</td><td>400</td><td>~80 万字符</td><td>~120ms</td><td>流畅</td></tr>
+<tr><td>5 KB</td><td>1000</td><td>~500 万字符</td><td>~450ms</td><td>轻微延迟</td></tr>
+<tr><td>10 KB</td><td>2000</td><td>~2000 万字符</td><td>~1.2s</td><td>明显卡顿</td></tr>
+<tr><td>20 KB</td><td>4000</td><td>~8000 万字符</td><td>~3.8s</td><td>页面冻结</td></tr>
+<tr><td>50 KB</td><td>10000</td><td>~5 亿字符</td><td>~18s</td><td>浏览器无响应</td></tr>
+</table>
+
+<div class="intuition-box">
+<p>O(n²) 不是"慢一点"，而是"越长越慢"的加速恶化——20KB 的回复让主流方案直接不可用，这在长代码生成、技术文档问答场景中极为常见。</p>
+</div>
+
+<div class="highlight">
+<strong>生产案例：</strong>某 AI 编程助手产品上线初期使用 react-markdown 做流式渲染。当模型输出超过 15KB 的代码解释文档时，用户反馈"打字机效果在前 30% 还正常，后半段几乎停滞，最后 5 秒才一次性刷出"。性能监控显示：第 3000 个 chunk 的解析耗时已达 42ms（远超 16ms/帧），主线程阻塞率 78%，页面 FPS 降至 4-8。切换到增量解析方案后，同场景 FPS 稳定在 58-60，格式崩溃率从 12% 降至 0.3%。
+</div>
+    </section>
+
+    <section class="chapter" id="o-n-o-n">
+      <div class="ch-head"><div class="num">02</div><div class="t"><h2>增量解析：O(n²) → O(n) 的核心引擎</h2><div class="sub">增量解析的核心思想极其简洁： 已完成的块不再触碰，只解析新到达的片段</div></div></div>
+      <p>增量解析的核心思想极其简洁：<strong>已完成的块不再触碰，只解析新到达的片段。</strong> Incremark 是这一方案的典型实现，它将每个顶层 Markdown 元素（段落、标题、代码块、列表）视为一个独立的 <span class="term">Block</span>，并引入两态生命周期管理。</p>
+
+<h3>Block 两态生命周期</h3>
+
+<table>
+<tr><th>状态</th><th>含义</th><th>行为</th><th>何时转换</th></tr>
+<tr><td><span class="term">Pending</span></td><td>正在流式接收中，内容和类型都可能变化</td><td>每次新 chunk 到达时，仅对该 Block 的文本做微解析</td><td>检测到语法边界后</td></tr>
+<tr><td><span class="term">Completed</span></td><td>已确认完成，后续输入不影响此 Block</td><td>持久缓存，不再参与解析和重渲染</td><td>流重置前永久有效</td></tr>
+</table>
+
+<p>为什么需要 Pending 态？在 Markdown 中，前缀决定类型——当输入 <code>#</code> 时，它可能是标题的开始，也可能只是一段以 # 开头的普通文本。只有收到空格或换行后，类型才真正确定。Pending 态就是用来容纳这种"类型未决"的过渡期。</p>
+
+<div class="flow">
+  <div class="flow-title">增量解析引擎工作流程（O(n²) → O(n)）</div>
+  <div class="flow-node accent"><div class="nlabel">Markdown Stream（逐 token 到达）→ Line Buffer</div><div class="nsub">累积当前 chunk</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">边界检测引擎（Boundary Detection）</div><div class="nsub">空行 / 新标题 / Fenced 闭合 / 列表缩进回退 / 引用标记消失</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">按边界分流</div><div class="nsub">发现边界 → 标记 Completed 缓存 AST；未发现 → 仅对 Pending Block 做微解析</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">AST 增量合并（缓存节点 + 新解析节点）→ BlockTransformer 打字机层（逐字 Fade-in）</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">DOM 渲染</div></div>
+</div>
+
+<h3>边界检测规则</h3>
+
+<p><span class="term">边界检测</span>（Boundary Detection）是增量解析的关键——它决定了何时可以将一个 Block 从 Pending 转为 Completed。Incremark 采用启发式规则覆盖三大类边界：</p>
+
+<table>
+<tr><th>边界类型</th><th>触发条件</th><th>示例</th></tr>
+<tr><td>简单块边界</td><td>空行出现，或新标题/分隔线开始</td><td>段落后遇到空行 → 段落完成</td></tr>
+<tr><td>Fenced 块边界</td><td>检测到匹配的闭合 fence（```）</td><td>代码块在闭合 ``` 出现前保持 Pending</td></tr>
+<tr><td>嵌套块边界</td><td>缩进回退或引用标记消失</td><td>列表项缩进减少 → 当前列表完成</td></tr>
+</table>
+
+<p>引擎维护一个轻量 <span class="term">状态机</span> 来追踪上下文：当前是否在 Fenced Code 中、是否在自定义容器内、嵌套列表栈、引用深度。这些信息帮助引擎在流式过程中精确判断边界。</p>
+
+<h3>性能对比</h3>
+
+<table>
+<tr><th>维度</th><th>全量解析 (marked/markdown-it)</th><th>增量解析 (Incremark)</th></tr>
+<tr><td>单次增量复杂度</td><td>O(N) — 处理全部累积文本</td><td><strong>O(K) — 仅处理当前 chunk</strong></td></tr>
+<tr><td>总解析复杂度</td><td>O(N²)</td><td><strong>O(N)</strong></td></tr>
+<tr><td>内存开销</td><td>高（反复创建 AST 对象）</td><td>低（增量 AST 复用）</td></tr>
+<tr><td>UI 响应性</td><td>随 N 增大性能退化</td><td>保持 60fps</td></tr>
+<tr><td>20KB 文档实测</td><td>1.6-5.7 秒</td><td><strong>~87ms</strong></td></tr>
+</table>
+
+<div class="intuition-box">
+<p>增量解析把"每次从头读一遍书"变成了"只读新来的那一页"——复杂度与文档总长度无关，只与当前 chunk 大小线性相关。</p>
+</div>
+
+<div class="highlight">
+<strong>Benchmark 数据（Incremark 官方）：</strong>在 916 行、28912 字符的长文档测试中，Incremark 总耗时 87.7ms，Streamdown 总耗时 1441.1ms（16.4 倍差距）；对比 ant-design-x 快约 7 倍，对比 markstream-vue 快约 28 倍。文档越长，增量优势越明显——100 行文档快 4-6 倍，400 行快 10 倍以上，900 行快 16-65 倍。
+</div>
+    </section>
+
+    <section class="chapter" id="ch3">
+      <div class="ch-head"><div class="num">03</div><div class="t"><h2>不完整语法处理：流式场景的语法修复层</h2><div class="sub">流式输出的 Markdown 有一个静态文档不会遇到的问题： 语法永远是&quot;半成品&quot;</div></div></div>
+      <p>流式输出的 Markdown 有一个静态文档不会遇到的问题：<strong>语法永远是"半成品"。</strong> 一个代码块可能只输出了开头的 <code>```python</code> 而闭合标记还没到；加粗标记 <code>**重点</code> 的右侧 <code>**</code> 可能还在下一个 chunk 里；表格的前两行已经到了，分隔行还没来。传统解析器面对这些半截语法，要么渲染出错误的 DOM，要么直接崩溃。</p>
+
+<h3>三大类不完整语法与处理策略</h3>
+
+<table>
+<tr><th>语法类型</th><th>不完整示例</th><th>处理策略</th><th>占位方式</th></tr>
+<tr><td>未闭合行内标记</td><td><code>**加粗文字</code>（缺少闭合 **）</td><td>暂存缓冲区，不渲染半拉子标签</td><td>显示为普通文本，闭合后切换为 bold</td></tr>
+<tr><td>残缺代码块</td><td>只有开头 <code>```python</code></td><td>延迟渲染，等收到完整闭合标记</td><td>显示骨架屏或 "代码加载中..."</td></tr>
+<tr><td>不完整结构性语法</td><td>表格缺少分隔行、链接 URL 截断</td><td>占位组件 + 语法补全</td><td>Skeleton 占位符，可自定义组件</td></tr>
+</table>
+
+<div class="flow">
+  <div class="flow-title">不完整语法处理流水线</div>
+  <div class="flow-node accent"><div class="nlabel">输入 chunk: &quot;**important&quot;</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">语法边界扫描器</div><div class="nsub">检测: &quot;**&quot; 开启 · 寻找闭合 &quot;**&quot; → 未找到</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">暂存缓冲区 (Buffer)</div><div class="nsub">内容: &quot;**important&quot; · 状态: INCOMPLETE_BOLD</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">渲染决策</div><div class="nsub">完整语法 → 正常渲染 · 行内不完整 → 原文 · 代码块不完整 → 延迟 · 结构不完整 → 占位符</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">下一个 chunk: &quot;text**&quot;</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">缓冲区拼接</div><div class="nsub">&quot;**important text**&quot; · 语法完整 → 渲染 bold</div></div>
+</div>
+
+<p><span class="term">Ant Design X Markdown</span> 提供了一套完整的流式配置 API：通过 <code>streaming.hasNextChunk</code> 告知渲染器是否还有后续内容，<code>incompleteMarkdownComponentMap</code> 将不完整语法类型映射到自定义占位组件。支持的占位类型包括 link、image、heading、table、xml 五种。当 <code>hasNextChunk</code> 最终设为 <code>false</code> 时，所有占位符会被刷新为最终渲染内容。</p>
+
+<p><span class="term">Streamdown</span>（Vercel 出品）则通过 <code>parseIncompleteMarkdown</code> 属性实现类似能力——在解析阶段就自动修复不完整的语法，例如为未闭合的代码块补上 <code>```</code>，为未闭合的粗体补上 <code>**</code>。这种方式更激进：它不是"等一等"，而是"先补一个合理的临时版本，等真正内容到了再替换"。</p>
+
+<div class="intuition-box">
+<p>不完整语法处理的核心矛盾是"立即渲染会出错" vs "等太久用户觉得卡"——最佳策略是分类处理：行内语法等一等（开销小），代码块延迟渲染（体验好），结构语法用占位符（视觉不空）。</p>
+</div>
+
+<div class="highlight">
+<strong>生产案例：</strong>某客服 AI 系统在处理流式表格输出时，由于表格分隔行 <code>|---|---|</code> 总是比表头晚 2-3 个 chunk 到达，未做不完整语法处理的方案在前几个 chunk 时把表头渲染成了普通文本段落，分隔行到达后又突然"跳变"为表格结构，导致用户看到的界面频繁闪烁。引入 table 类型占位符后，表头阶段显示 "表格加载中" 骨架屏，分隔行到达后一次性渲染完整表格，格式跳变投诉从每周 47 件降至 2 件。
+</div>
+
+<div class="intuition-box">
+<p>占位符设计的关键约束：<code>hasNextChunk</code> 必须最后一个 chunk 设为 <code>false</code>，否则占位符永远不会被刷新为正式内容——这是流式渲染中最常见的配置遗漏。</p>
+</div>
+    </section>
+
+    <section class="chapter" id="ast">
+      <div class="ch-head"><div class="num">04</div><div class="t"><h2>分块渲染：AST 节点级缓存与打字机效果</h2><div class="sub">增量解析解决了&quot;解析慢&quot;的问题，但渲染层如果不做优化，依然会在每次 chunk 到达时重新…</div></div></div>
+      <p>增量解析解决了"解析慢"的问题，但渲染层如果不做优化，依然会在每次 chunk 到达时重新 diff 整棵 DOM 树。<span class="term">分块渲染</span>（Chunked Rendering）的思路是将 AST 按顶层 Block 拆分为独立的渲染单元，每个 Block 维护自己的缓存，只有内容发生变化的 Block 才触发重渲染。</p>
+
+<h3>React 生态中的实现</h3>
+<p>在 React 中，这一机制通过 <code>React.memo</code> 实现：每个 Block 组件接收 AST 节点作为 prop，React 在 props 引用不变时跳过该组件的 reconciliation。由于增量解析保证了 Completed Block 的 AST 节点引用不变，这些组件在整个流式过程中<strong>只渲染一次</strong>。</p>
+
+<table>
+<tr><th>Block 类型</th><th>渲染策略</th><th>React 缓存方式</th><th>更新频率</th></tr>
+<tr><td>标题 (Heading)</td><td>一次性渲染</td><td>memo + 引用比较</td><td>仅首次</td></tr>
+<tr><td>段落 (Paragraph)</td><td>增量追加文本</td><td>memo + 文本哈希</td><td>当前段 Pending 期间</td></tr>
+<tr><td>代码块 (CodeBlock)</td><td>延迟渲染 + 语法高亮</td><td>memo + 内容相等比较</td><td>闭合后一次</td></tr>
+<tr><td>列表 (List)</td><td>逐项追加</td><td>memo + 项数比较</td><td>新项到达时</td></tr>
+<tr><td>表格 (Table)</td><td>整表渲染</td><td>memo + 行列哈希</td><td>分隔行到达后</td></tr>
+</table>
+
+<div class="flow">
+  <div class="flow-title">分块渲染架构（AST → Block 组件 → DOM）</div>
+  <div class="flow-node accent"><div class="nlabel">增量 AST</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Block[0]: Heading &quot;## 概述&quot; → [Completed] → memo skip ✓</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Block[1]: Paragraph &quot;AI 模型...&quot; → [Completed] → memo skip ✓</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Block[2]: CodeBlock ```python → [Pending] → 重新渲染 ↻</div><div class="nsub">(正在流式接收中)</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Block[3]: Paragraph &quot;上述代码...&quot; → [Completed] → memo skip ✓</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Block[4]: List → [Pending] → 追加新项 +</div><div class="nsub">渲染结果：</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">✅ Block[0] — 不触碰 (缓存命中)</div><div class="nsub">✅ Block[1] — 不触碰 (缓存命中) · 🔄 Block[2] — 仅重渲染此块 · ✅ Block[3] — 不触碰 (缓存命中) · ➕ Block[4] — 追加新列表项</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">DOM 操作量：仅 Block[2] + Block[4] 的局部更新</div><div class="nsub">而非整棵树的 reconciliation</div></div>
+</div>
+
+<h3>AST 级打字机效果</h3>
+
+<p><span class="term">BlockTransformer</span> 是 Incremark 在 AST 和渲染层之间插入的一层"动画过滤器"。它将解析的"瞬时结果"转化为"渐进过程"：追踪哪些字符已经被"播放"过，把新增的文本节点包裹为 <code>TextChunk</code>，渲染层对 TextChunk 实现 fade-in CSS 动画。这就是 <span class="term">AST 级打字机</span>——不是逐字符闪烁，而是在 AST 节点粒度上做平滑的逐字显现。</p>
+
+<p>BlockTransformer 还支持"智能跳过"：当用户主动滚动查看历史消息时，跳过动画直接显示完整内容；对图片等非文本节点也直接显示，避免不必要的延迟。</p>
+
+<div class="intuition-box">
+<p>分块渲染让 DOM 操作量从 O(总节点数) 降至 O(变化节点数)——在 10 个 Block 的文档中，如果只有 1 个 Block 在流式更新，DOM 操作量降低 90%。</p>
+</div>
+    </section>
+
+    <section class="chapter" id="ch5">
+      <div class="ch-head"><div class="num">05</div><div class="t"><h2>业界方案横向对比</h2><div class="sub">当前主流的 Markdown 流式渲染方案可分为两大阵营： 全量重解析阵营 和 增量解析阵营</div></div></div>
+      <p>当前主流的 Markdown 流式渲染方案可分为两大阵营：<strong>全量重解析阵营</strong>和<strong>增量解析阵营</strong>。以下从架构、性能、生态三个维度做横向对比。</p>
+
+<table>
+<tr><th>方案</th><th>解析策略</th><th>复杂度</th><th>框架支持</th><th>不完整语法</th><th>打字机</th><th>特色</th></tr>
+<tr><td><strong>Incremark</strong></td><td>增量解析</td><td>O(n)</td><td>Vue/React/Svelte/Solid</td><td>Pending/Completed 两态</td><td>BlockTransformer</td><td>双引擎(marked+micromark)，最快</td></tr>
+<tr><td><strong>Ant Design X</strong></td><td>全量重解析</td><td>O(n²)</td><td>React</td><td>incompleteMarkdownComponentMap</td><td>enableAnimation</td><td>蚂蚁官方，插件生态丰富</td></tr>
+<tr><td><strong>Streamdown</strong></td><td>全量重解析</td><td>O(n²)</td><td>React</td><td>parseIncompleteMarkdown</td><td>内置 fade-in</td><td>Vercel 出品，AI SDK 集成</td></tr>
+<tr><td><strong>markstream-vue</strong></td><td>全量重解析</td><td>O(n²)</td><td>Vue</td><td>状态机追踪</td><td>逐字渲染</td><td>Vue 原生，结构解析</td></tr>
+<tr><td><strong>react-markdown</strong></td><td>全量重解析</td><td>O(n²)</td><td>React</td><td>无原生支持</td><td>无</td><td>静态渲染标杆，非流式设计</td></tr>
+</table>
+
+<h3>Incremark 双引擎架构</h3>
+
+<p>Incremark 的一个独特设计是 <span class="term">双引擎架构</span>：底层同时支持 <code>marked</code>（极速、流式优化）和 <code>micromark</code>（严格 CommonMark 兼容）两个解析引擎，上层共享同一套增量解析层，产出相同的 <span class="term">mdast</span>（Markdown AST）格式。两个引擎可通过 tree-shaking 按需引入——生产环境选 marked 追求极致性能，需要严格规范兼容时切 micromark。</p>
+
+<table>
+<tr><th>引擎</th><th>特点</th><th>最佳场景</th></tr>
+<tr><td>marked（默认）</td><td>极速、流式优化</td><td>实时 AI 对话、性能敏感场景</td></tr>
+<tr><td>micromark</td><td>CommonMark 兼容、丰富插件</td><td>复杂扩展需求、严格规范合规</td></tr>
+</table>
+
+<h3>Ant Design X 的流式能力演进</h3>
+
+<p>Ant Design X Markdown 虽然底层仍基于 marked 做全量重解析（O(n²) 复杂度），但在流式体验层做了大量补偿：支持 <code>enableAnimation</code> 淡入动画、<code>tail</code> 尾部光标（默认 ▋）、debug 面板监控性能。在 Mermaid 图表流式渲染中，还修复了 id 不稳定导致的抖动问题——将模块级 <code>uuid++</code> 替换为 React <code>useId()</code>，并将 throttle(100ms) 改为 debounce(200ms)，在语法不完整时静默跳过而非抛出错误。</p>
+
+<div class="flow">
+  <div class="flow-title">两大阵营架构对比</div>
+  <div class="flow-node accent"><div class="nlabel">全量重解析阵营</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">chunk 到达 → 拼接全文 → 全量 parse → 全量 diff</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">代表：Ant Design X / Streamdown / marked</div><div class="nsub">优势：实现简单，兼容性好 · 劣势：O(n²)，长文本卡顿 · 补偿：动画/占位符/防抖掩盖性能问题</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">增量解析阵营</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">chunk 到达 → 边界检测 → 仅 parse Pending块</div><div class="nsub">合并 AST → 局部 diff</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">代表：Incremark</div><div class="nsub">优势：O(n)，长文本不卡顿 · 劣势：实现复杂，边界规则需持续维护 · 补偿：BlockTransformer 保证打字机体验</div></div>
+</div>
+
+<div class="intuition-box">
+<p>选型决策树：文档通常 &lt; 5KB → 全量方案足够且实现简单；文档经常 &gt; 10KB（长代码/文档生成） → 增量方案是刚需，复杂度收益巨大。</p>
+</div>
+
+<div class="intuition-box">
+<p>Ant Design X 的 Mermaid 抖动修复是一个经典教训：流式场景中组件 id 必须稳定（useId 而非自增计数器），否则每次重渲染都会卸载旧 DOM 再挂载新 DOM，引起视觉抖动。</p>
+</div>
+    </section>
+
+    <section class="chapter" id="ch6">
+      <div class="ch-head"><div class="num">06</div><div class="t"><h2>大厂最佳实践与决策指南</h2><div class="sub">综合业界实践，一个生产级 Markdown 流式渲染方案通常是&quot;增量解析 + 分块渲染 +…</div></div></div>
+      <p>综合业界实践，一个生产级 Markdown 流式渲染方案通常是"增量解析 + 分块渲染 + 语法修复"三合一的组合。以下从架构决策到工程细节给出完整指引。</p>
+
+<h3>技术选型决策表</h3>
+
+<table>
+<tr><th>场景</th><th>推荐方案</th><th>理由</th></tr>
+<tr><td>短对话（&lt;3KB）</td><td>react-markdown / marked + 手动节流</td><td>全量解析开销可忽略，实现成本最低</td></tr>
+<tr><td>通用 AI 对话（3-15KB）</td><td>Ant Design X / Streamdown</td><td>流式 API 完善，占位符和动画开箱即用</td></tr>
+<tr><td>长文档/代码生成（15KB+）</td><td>Incremark</td><td>O(n) 增量解析是唯一能保持 60fps 的方案</td></tr>
+<tr><td>多框架项目</td><td>Incremark（Vue/React/Svelte/Solid）</td><td>核心逻辑共享，框架连接器按需引入</td></tr>
+<tr><td>严格 CommonMark 合规</td><td>Incremark micromark 引擎</td><td>CommonMark 规范测试全覆盖</td></tr>
+</table>
+
+<h3>分块渲染的性能调优参数</h3>
+
+<table>
+<tr><th>参数</th><th>推荐值</th><th>作用</th></tr>
+<tr><td>Chunk 节流间隔</td><td>16-50ms</td><td>将高频 token 合并为一次渲染，避免每 token 都触发 DOM 更新</td></tr>
+<tr><td>Mermaid 防抖</td><td>200ms debounce</td><td>等内容稳定后再渲染图表，避免流式过程中反复 mount/unmount</td></tr>
+<tr><td>代码高亮策略</td><td>闭合后一次性高亮</td><td>流式过程中只渲染纯文本，闭合后用 Shiki/Prism 做语法高亮</td></tr>
+<tr><td>动画开关</td><td>历史消息关闭</td><td>用户滚动查看历史时跳过 fade-in，直接显示完整内容</td></tr>
+<tr><td>tail 光标</td><td>▋ 或自定义组件</td><td>给用户"正在生成中"的视觉反馈</td></tr>
+</table>
+
+<h3>小程序端特殊挑战</h3>
+
+<p>小程序端缺乏浏览器原生的 HTML 渲染能力，流式 Markdown 渲染面临额外挑战：格式突变（语法不完整导致渲染错乱）、频繁重解析（无 DOM diff，每次全量重建 WXML 树）、性能损耗（setData 的序列化开销）。蚂蚁团队推出的 <code>@ant-design/x-markdown-mini</code> 专门针对小程序场景做了适配，核心思路是将 AST 转换为小程序组件树而非 HTML 字符串。</p>
+
+<div class="practice-grid">
+<div class="do">
+<ul>
+<li>对长回复启用增量解析，保证 60fps</li>
+<li>为不完整语法配置占位组件（骨架屏）</li>
+<li>代码块延迟渲染，闭合后再做语法高亮</li>
+<li>Mermaid 组件使用稳定 id + debounce</li>
+<li>历史消息关闭打字机动画</li>
+<li>配置 hasNextChunk 生命周期（最终设为 false）</li>
+<li>监控 chunk 解析耗时，超过 16ms 报警</li>
+</ul>
+</div>
+<div class="dont">
+<ul>
+<li>不要对 15KB+ 的文档使用全量重解析</li>
+<li>不要忽略不完整语法——它会引发格式跳变</li>
+<li>不要用自增计数器做组件 id（流式场景会抖动）</li>
+<li>不要在流式过程中做语法高亮（开销大且不稳定）</li>
+<li>不要忘记最后一个 chunk 设置 hasNextChunk=false</li>
+<li>不要对所有消息都启用 fade-in 动画（影响滚动体验）</li>
+<li>不要在 debug 面板开启的情况下部署生产环境</li>
+</ul>
+</div>
+</div>
+
+<div class="intuition-box">
+<p>大厂最佳实践的共识：增量解析是性能基石，不完整语法处理是体验保障，分块缓存是渲染加速——三者缺一不可，组合使用才是生产级方案。</p>
+</div>
+    </section>
+
+    <section class="chapter" id="q-a">
+      <div class="ch-head"><div class="num">07</div><div class="t"><h2>Q&amp;A</h2></div></div>
+      <details class="qa">
+<summary>为什么传统的 marked 或 markdown-it 不适合流式场景？</summary>
+<div class="a">这两个库是为静态文档设计的——它们假设输入是完整的 Markdown 文本，一次性解析为 AST 或 HTML。在流式场景中，每收到一个 chunk 就要把累积全文传给它们重新解析，导致 O(n²) 的累计复杂度。20KB 的回复在 marked 下需要 1.6-5.7 秒的总解析时间，后期每个 chunk 的解析耗时线性增长，直接导致主线程阻塞、页面冻结。它们本身没有"已完成块缓存"和"边界检测"机制，无法做到增量更新。</div>
+</details>
+
+<details class="qa">
+<summary>增量解析的边界检测会不会误判？比如把未完成的段落错误标记为 Completed？</summary>
+<div class="a">边界检测采用保守策略——宁可延迟标记，不会提前标记。例如段落只有在遇到空行时才标记为 Completed，如果后续内容紧跟在同一行（没有空行），该段落会一直保持 Pending 态。对于代码块，必须检测到匹配的闭合 ``` 才会标记完成。这种保守策略的代价是某些 Block 的 Pending 期较长（如长代码块），但由于 Pending 态的微解析只处理当前 Block 的文本片段，性能影响极小。</div>
+</details>
+
+<details class="qa">
+<summary>Incremark 的双引擎（marked vs micromark）该怎么选？</summary>
+<div class="a">marked 引擎是默认选项，特点是极速和流式优化，适合绝大多数 AI 对话场景。micromark 引擎严格遵循 CommonMark 规范，有丰富的插件生态，适合需要严格规范合规的场景（如文档系统、合规审查）。两者共享同一套增量解析层，产出相同的 mdast 格式，切换引擎不需要修改上层代码。通过 tree-shaking 可以只打包使用到的引擎，不会增加额外体积。</div>
+</details>
+
+<details class="qa">
+<summary>Streamdown 的 parseIncompleteMarkdown 和 Incremark 的 Pending/Completed 方案有什么区别？</summary>
+<div class="a">两者处理不完整语法的哲学不同。Streamdown 采用"积极修复"策略——遇到不完整的语法时，自动补上合理的临时闭合标记（如为未闭合的粗体补上 **），先渲染出一个临时版本，等真正内容到了再替换。优势是用户始终能看到格式化内容，劣势是可能出现短暂的"错误格式"。Incremark 采用"等待确认"策略——不完整的语法暂存缓冲区，不渲染半成品，等语法完整后再一次性渲染。优势是格式永远正确，劣势是在语法闭合前用户看到的是原文或占位符。选择取决于你对"格式正确" vs "即时反馈"的优先级。</div>
+</details>
+
+<details class="qa">
+<summary>流式渲染中 Mermaid 图表为什么会抖动？怎么修复？</summary>
+<div class="a">抖动的根因是组件 id 不稳定。某些实现使用模块级自增计数器（uuid++）拼接 children.length 来生成 Mermaid 容器的 DOM id。在流式场景中，每次重渲染时 children.length 都在变化，导致 id 变化，React 认为这是一个新组件——先卸载旧 DOM 再挂载新 DOM，Mermaid 创建的 SVG 节点被反复销毁重建，视觉上表现为抖动。修复方案是改用 React 的 useId() 生成稳定 id，确保同一组件实例在多次渲染中 id 不变。同时用 debounce(200ms) 替代 throttle(100ms)，等内容稳定后再渲染图表，进一步减少中间态渲染。</div>
+</details>
+
+<details class="qa">
+<summary>为什么小程序端的流式 Markdown 渲染比 Web 端更困难？</summary>
+<div class="a">小程序端面临三个 Web 端不存在的约束。第一，缺乏原生 HTML 渲染能力——Web 端可以直接 innerHTML 或 dangerouslySetInnerHTML，小程序端必须将 AST 转换为 WXML 组件树，每次更新都涉及 setData 的序列化开销。第二，无虚拟 DOM diff——Web 端 React 可以精确知道哪些 DOM 节点需要更新，小程序端每次 setData 都是全量传输，频繁调用会导致严重的性能问题。第三，组件嵌套限制——小程序对组件嵌套层数有限制，复杂的 Markdown 结构（如嵌套列表中的代码块）可能超出限制。因此小程序端方案通常需要更激进的节流策略和组件树扁平化优化。</div>
+</details>
+
+<details class="qa">
+<summary>生产环境中如何监控流式渲染的性能？</summary>
+<div class="a">核心监控指标包括四项。第一，单 chunk 解析耗时——超过 16ms（一帧）就应该报警，这表示解析已经跟不上帧率。第二，主线程阻塞率——通过 Performance API 的 longtask 监控，超过 50ms 的任务即为 long task。第三，FPS——流式过程中应保持在 55fps 以上。第四，内存增长——增量解析方案的内存应基本平稳，全量方案的内存会随文档长度线性增长。Ant Design X 提供了 debug 面板可实时查看这些指标，但务必在生产环境关闭，避免性能开销和信息泄露。</div>
+</details>
+
+<details class="qa">
+<summary>如何为不同长度的回复选择最优渲染策略？</summary>
+<div class="a">实践中可以按回复长度分三档处理。短回复（&lt;3KB，约占 AI 对话的 60%）使用 react-markdown 或 marked 全量解析即可，每次解析耗时 &lt;5ms，完全不影响体验。中等回复（3-15KB）推荐 Ant Design X 或 Streamdown，它们的流式 API（占位符、动画、tail 光标）能提供良好体验，O(n²) 的开销在可接受范围内。长回复（15KB+，如代码生成、技术文档）必须使用 Incremark 等增量方案，否则后期卡顿不可避免。更精细的做法是动态切换：开始时用全量方案，当累积文本超过阈值时自动切换到增量方案。</div>
+</details>
+    </section>
+
+    <footer>
+      <div class="made">TECH NOTES · AI 工程 · 整理自 AI Knowledge Hub</div>
+    </footer>
+  </main>
+</div>
+
+<script>
+(function(){var bar=document.getElementById('progress');function u(){var h=document.documentElement;bar.style.width=h.scrollTop/(h.scrollHeight-h.clientHeight)*100+'%';}window.addEventListener('scroll',u,{passive:true});u();})();
+(function(){var links=document.querySelectorAll('aside.toc nav a');var secs=Array.from(document.querySelectorAll('section.chapter'));if(!secs.length)return;function u(){var y=window.scrollY+100,cur=secs[0];for(var i=0;i<secs.length;i++){if(secs[i].offsetTop<=y)cur=secs[i];}var id=cur.id;links.forEach(function(a){a.classList.toggle('active',a.getAttribute('href')==='#'+id);});}window.addEventListener('scroll',u,{passive:true});u();})();
+</script>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

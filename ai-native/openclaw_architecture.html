@@ -1,0 +1,758 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OpenClaw 架构深度解析 · AI 工程 — Tech Notes</title>
+<meta name="description" content="开源 Agent-Native 运行时 — 四层架构、三级记忆、Gateway-Pi 执行链路、沙箱隔离、混合搜索、多 Agent 路由、自进化机制">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<link rel="stylesheet" href="../assets/kh-guide.css">
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav">
+
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="ai_engineering_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 16 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>H01 · AI 工程</h2>
+    <nav>
+      <ol>
+        <li><a href="#sec-1" class="active">OpenClaw 是什么</a></li>
+        <li><a href="#sec-2">总体架构：以 Gateway 为核心的分布式系统</a></li>
+        <li><a href="#sec-3">Gateway：系统的单一控制平面</a></li>
+        <li><a href="#sec-4">Agentic Loop：事件驱动的推理循环</a></li>
+        <li><a href="#sec-5">Cron 定时系统：单定时器 + Heartbeat</a></li>
+        <li><a href="#sec-6">工具系统：Skill 与 Tool 的分层架构</a></li>
+        <li><a href="#sec-7">Sandbox 沙箱系统：三重安全防护</a></li>
+        <li><a href="#sec-8">记忆管理：三级存储 + 混合搜索</a></li>
+        <li><a href="#sec-9">Session 管理</a></li>
+        <li><a href="#sec-10">多 Agent 路由：7 层优先级</a></li>
+        <li><a href="#sec-11">自进化机制</a></li>
+        <li><a href="#sec-12">Channels 与 Nodes</a></li>
+        <li><a href="#sec-13">Gateway-Pi 执行架构：云端大脑 + 本地肢体</a></li>
+        <li><a href="#sec-14">架构优势与挑战</a></li>
+        <li><a href="#sec-15">实践建议</a></li>
+        <li><a href="#sec-16">常见问题</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+    <header class="hero">
+      <div class="badge">H01 · AI 工程</div>
+      <h1>OpenClaw 架构深度解析</h1>
+      <p class="sub">开源 Agent-Native 运行时 — 四层架构、三级记忆、Gateway-Pi 执行链路、沙箱隔离、混合搜索、多 Agent 路由、自进化机制</p>
+      <div class="meta-row">
+        <span class="pill cyan">AI 工程</span>
+        <span class="pill green">阅读 ~16 min</span>
+        <span class="pill amber">16 章</span>
+      </div>
+    </header>
+
+    <section class="chapter" id="sec-1">
+      <div class="ch-head"><div class="num">01</div><div class="t"><h2>OpenClaw 是什么</h2><div class="sub">OpenClaw 是一个 开源、可自托管的 Agent-Native 运行时 ，由社区于 2…</div></div></div>
+      <p>OpenClaw 是一个<strong>开源、可自托管的 Agent-Native 运行时</strong>，由社区于 2026 年 2 月发起。它不是 chatbot 封装器，而是一个完整的 <span class="term">Agent OS</span> — 提供从消息接入、模型调用、工具执行到记忆管理的全栈运行环境。</p>
+
+<div class="intuition-box">
+<p>OpenClaw 的本质是"Agent 的操作系统" — 不是某个具体的 AI 模型，而是让任何模型都能变成 Agent 的运行时平台。类比 Android：Gateway = 运营商适配层，记忆系统 = 手机存储，工具生态 = App Store，多平台支持 = 跨设备。</p>
+</div>
+
+<table>
+<tr><th>特性</th><th>说明</th></tr>
+<tr><td><strong>Agent-Native</strong></td><td>为"自主行动"设计的运行时，不是为"对话"设计</td></tr>
+<tr><td><strong>Self-Hosted</strong></td><td>单机部署、完全可控，无需依赖第三方 SaaS</td></tr>
+<tr><td><strong>Multi-Platform</strong></td><td>20+ 消息平台（Slack/Discord/Telegram/WeChat/WhatsApp/CLI 等）</td></tr>
+<tr><td><strong>Local-First</strong></td><td>本地优先，多端联动</td></tr>
+<tr><td><strong>自进化</strong></td><td>Agent 可修改自己的核心文件（AGENTS.md/SOUL.md/MEMORY.md）</td></tr>
+</table>
+    </section>
+
+    <section class="chapter" id="sec-2">
+      <div class="ch-head"><div class="num">02</div><div class="t"><h2>总体架构：以 Gateway 为核心的分布式系统</h2></div></div>
+      <pre><code><div class="node">Channels (20+ 平台)</code></pre>
+<span class="arrow">→</span>
+<div class="node">Gateway (控制平面)</div>
+<span class="arrow">→</span>
+<div class="node">Pi Agent (推理引擎)</div>
+<span class="arrow">→</span>
+<div class="node">Tools + Sandbox</div>
+<span class="arrow">→</span>
+<div class="node">Memory + Skills</div>
+</div>
+
+<h3>16 个核心模块</h3>
+<table>
+<tr><th>模块</th><th>职责</th><th>复杂度</th></tr>
+<tr><td><strong>Gateway</strong></td><td>单一控制平面：会话、状态、配置、定时任务、网络钩子、控制 UI</td><td>高</td></tr>
+<tr><td><strong>Agentic Loop</strong></td><td>事件驱动的推理循环：主循环→尝试层→事件订阅→工具循环</td><td>高</td></tr>
+<tr><td><strong>Cron 定时系统</strong></td><td>单定时器设计、Heartbeat 机制、任务持久化与恢复</td><td>中</td></tr>
+<tr><td><strong>工具系统</strong></td><td>内置工具 + MCP 工具 + 浏览器控制 + Live Canvas</td><td>高</td></tr>
+<tr><td><strong>Channels</strong></td><td>多频道集成、路由规则、提及门控、自动消息分块</td><td>中</td></tr>
+<tr><td><strong>上下文管理</strong></td><td>系统提示动态构建、压缩管道、工具列表管理</td><td>中</td></tr>
+<tr><td><strong>SubAgent</strong></td><td>子智能体 RPC 委派、独立上下文、并发控制</td><td>中</td></tr>
+<tr><td><strong>Sandbox</strong></td><td>Docker 隔离层、三种模式、工具策略层级</td><td>高</td></tr>
+<tr><td><strong>记忆管理</strong></td><td>文件即真相、混合搜索（向量+BM25）、MMR 去重、时间衰减</td><td>高</td></tr>
+<tr><td><strong>Skills</strong></td><td>ClawHub 技能平台、按需加载、三种位置（workspace/managed/bundled）</td><td>中</td></tr>
+<tr><td><strong>Session 管理</strong></td><td>Session Key 规范、新鲜度策略、线程派生、投递路由</td><td>高</td></tr>
+<tr><td><strong>自进化</strong></td><td>可修改核心文件、动态系统提示、自我修改能力</td><td>低</td></tr>
+<tr><td><strong>工作区</strong></td><td>文件系统级隔离、引导文件、安全边界</td><td>中</td></tr>
+<tr><td><strong>多 Agent 路由</strong></td><td>7 层路由优先级、精确匹配→公会→团队→默认</td><td>高</td></tr>
+<tr><td><strong>Nodes</strong></td><td>跨设备节点（macOS/iOS/Android）、硬件能力调用、语音唤醒</td><td>中</td></tr>
+<tr><td><strong>安全策略</strong></td><td>路径边界检查、文件大小限制、权限分层</td><td>中</td></tr>
+</table>
+    </section>
+
+    <section class="chapter" id="sec-3">
+      <div class="ch-head"><div class="num">03</div><div class="t"><h2>Gateway：系统的单一控制平面</h2><div class="sub">Gateway 是 OpenClaw 的心脏，充当系统的单一控制平面</div></div></div>
+      <p>Gateway 是 OpenClaw 的心脏，充当系统的单一控制平面。所有功能模块围绕它运转。</p>
+
+<table>
+<tr><th>维度</th><th>实现</th></tr>
+<tr><td><strong>运行环境</strong></td><td>Node ≥ 22，作为 Daemon 常驻后台</td></tr>
+<tr><td><strong>通信协议</strong></td><td>WebSocket（双向持久连接），默认端口 :18789</td></tr>
+<tr><td><strong>消息格式</strong></td><td>JSON-RPC style（method + params + id）</td></tr>
+<tr><td><strong>核心服务</strong></td><td>Session Manager、Router、Auth Module、Channel Adapters、Tool Registry、Memory Layer、Cron Scheduler</td></tr>
+</table>
+
+<h3>Gateway 生命周期</h3>
+<ol>
+<li><strong>启动</strong>：加载配置 → 初始化 WebSocket 服务 → 注册 Channel Adapters → 启动 Cron</li>
+<li><strong>运行</strong>：接收消息 → 路由到 Agent → 执行 ReAct 循环 → 返回结果 → 更新记忆</li>
+<li><strong>健康检查</strong>：支持 <code>--deep</code> 深度检查、Channel 探测、网络网关发现</li>
+</ol>
+
+<h3>路由策略</h3>
+<p>Gateway 的路由决定了"哪条消息交给哪个 Agent 处理"：</p>
+<ul>
+<li>按 <code>(platform, channel_id, user_id)</code> 组合创建独立 Session</li>
+<li>Session 内有独立记忆空间</li>
+<li>Session 超时自动归档（可配置 TTL）</li>
+</ul>
+
+<div class="interview-box">
+单 Daemon 架构降低部署复杂度（一个进程搞定），适合单机/小团队，避免分布式一致性问题。Gateway 类比 Service Mesh（Envoy/Istio）：做流量路由、认证、可观测性 — 但服务对象是 Agent 而非微服务。
+</div>
+    </section>
+
+    <section class="chapter" id="sec-4">
+      <div class="ch-head"><div class="num">04</div><div class="t"><h2>Agentic Loop：事件驱动的推理循环</h2><div class="sub">OpenClaw 的推理循环是事件驱动的四层架构：</div></div></div>
+      <p>OpenClaw 的推理循环是事件驱动的四层架构：</p>
+
+<pre><code><div class="node">① 主循环 (run.ts)</code></pre>
+<span class="arrow">→</span>
+<div class="node">② 尝试层 (attempt.ts)</div>
+<span class="arrow">→</span>
+<div class="node">③ 事件订阅 (subscribe.ts)</div>
+<span class="arrow">→</span>
+<div class="node">④ 工具循环 (SDK)</div>
+</div>
+
+<table>
+<tr><th>层级</th><th>职责</th><th>核心逻辑</th></tr>
+<tr><td><strong>主循环</strong></td><td>错误处理、重试、profile 轮换</td><td>while(true) 无限循环，每次检查重试次数限制</td></tr>
+<tr><td><strong>尝试层</strong></td><td>单次 LLM 调用的完整生命周期</td><td>准备阶段→会话初始化→执行推理→返回结果</td></tr>
+<tr><td><strong>事件订阅</strong></td><td>处理流式响应和工具调用</td><td>message_start/update/end、tool_execution、agent_start/end</td></tr>
+<tr><td><strong>工具循环</strong></td><td>当模型返回 tool_use 时自动执行</td><td>由底层 SDK 自动管理</td></tr>
+</table>
+
+<h3>主循环的错误处理</h3>
+<table>
+<tr><th>错误类型</th><th>处理方式</th></tr>
+<tr><td>Context Overflow</td><td>自动压缩后重试</td></tr>
+<tr><td>Auth Failure</td><td>Profile 轮换（切换到备用 API Key）</td></tr>
+<tr><td>Timeout</td><td>重试或报错</td></tr>
+<tr><td>达到最大迭代</td><td>强制退出并反馈失败原因</td></tr>
+</table>
+
+<h3>尝试层的四阶段</h3>
+<ol>
+<li><strong>准备</strong>：创建 workspace 和 session，解析 tools，构建 system prompt</li>
+<li><strong>会话初始化</strong>：createAgentSession()，设置 streamFn，安装事件订阅器</li>
+<li><strong>执行推理</strong>：await activeSession.prompt()，处理事件流</li>
+<li><strong>返回结果</strong>：assistantTexts（生成文本）、toolMetas（工具调用元数据）、usage（token 统计）</li>
+</ol>
+
+<div class="interview-box">
+OpenClaw 默认 ReAct（思考→行动→观察），可通过 prompt 切换 plan-first（先规划再执行，适合复杂任务）。max_iterations（通常 10-20）防止 Agent 无限循环。
+</div>
+    </section>
+
+    <section class="chapter" id="sec-5">
+      <div class="ch-head"><div class="num">05</div><div class="t"><h2>Cron 定时系统：单定时器 + Heartbeat</h2><div class="sub">定时任务通过 Heartbeat 机制唤醒 Agent：</div></div></div>
+      <h3>核心设计</h3>
+<ul>
+<li><strong>单一定时器</strong>：只维护一个定时器，基于最近任务的 nextRunAtMs</li>
+<li><strong>最大延迟 60 秒</strong>：防止时钟漂移</li>
+<li><strong>错误指数退避</strong>：30s → 1min → 5min → 15min → 60min</li>
+<li><strong>自动清理</strong>：卡住的任务 2 小时超时自动清理</li>
+</ul>
+
+<h3>两种执行模式</h3>
+<table>
+<tr><th>模式</th><th>Session Target</th><th>Payload</th><th>用途</th></tr>
+<tr><td>Main Session</td><td><code>"main"</code></td><td>systemEvent</td><td>注入系统事件到主会话</td></tr>
+<tr><td>Isolated Agent</td><td><code>"isolated"</code></td><td>agentTurn</td><td>独立 Agent 会话执行</td></tr>
+</table>
+
+<h3>任务持久化与恢复</h3>
+<ul>
+<li><strong>存储位置</strong>：<code>~/.openclaw/cron/jobs.json</code></li>
+<li><strong>原子写入</strong>：临时文件 + rename，防止写入中断导致数据损坏</li>
+<li><strong>启动恢复</strong>：加载存储 → 清理卡住的任务 → 运行错过的任务 → 重新计算下次运行时间 → 启动定时器</li>
+<li><strong>运行日志</strong>：<code>~/.openclaw/cron/runs/&lt;jobId&gt;.jsonl</code>，自动裁剪（默认 2MB，保留 2000 行）</li>
+</ul>
+
+<h3>与 Heartbeat 集成</h3>
+<p>定时任务通过 Heartbeat 机制唤醒 Agent：</p>
+<ul>
+<li><code>next-heartbeat</code>：等待下次心跳执行</li>
+<li><code>now</code>：立即触发心跳</li>
+</ul>
+    </section>
+
+    <section class="chapter" id="sec-6">
+      <div class="ch-head"><div class="num">06</div><div class="t"><h2>工具系统：Skill 与 Tool 的分层架构</h2><div class="sub">快速判断方法：执行 openclaw tools list 看到 Tool，执行 openc…</div></div></div>
+      <div class="intuition-box">Tool 是 Agent 已经"长在身上"的执行器官（exec、read、browser），Skill 则是一份操作说明书（SKILL.md），教会大模型如何组合这些器官来完成特定任务。99% 的"装了技能没用"现象，根因在于 SKILL.md 的写法不够清晰。</div>
+
+<h3>Skill vs Tool 的核心边界</h3>
+<table>
+<tr><th>维度</th><th>Tool（工具）</th><th>Skill（技能）</th></tr>
+<tr><td>本质</td><td>执行器官（函数/命令）</td><td>说明书（SKILL.md）</td></tr>
+<tr><td>可否被调用</td><td>直接可调用</td><td>需先被加载阅读</td></tr>
+<tr><td>谁发起调用</td><td>Agent 核心引擎直接调用</td><td>模型阅读后<strong>明白如何调用 Tool</strong></td></tr>
+<tr><td>能否独立存在</td><td>可以</td><td>依赖 Tool 才能完成动作</td></tr>
+<tr><td>示例</td><td><code>exec</code>、<code>write</code>、<code>browser</code></td><td>"抓取微信公众号文章"技能</td></tr>
+</table>
+
+<p>快速判断方法：执行 <code>openclaw tools list</code> 看到 Tool，执行 <code>openclaw skills list</code> 看到 Skill。一个 Skill 可引用多个 Tool，反之不能。</p>
+
+<h3>四类基础工具</h3>
+<table>
+<tr><th>类型</th><th>来源</th><th>示例</th></tr>
+<tr><td><strong>内置工具</strong></td><td>OpenClaw 自带</td><td>exec、read、write、edit、apply_patch、browser、canvas、image</td></tr>
+<tr><td><strong>MCP 工具</strong></td><td>外部 MCP Server</td><td>无限扩展，通过 MCP 协议接入任意服务</td></tr>
+<tr><td><strong>浏览器控制</strong></td><td>内置 Chrome/Chromium</td><td>快照、动作执行、文件上传</td></tr>
+<tr><td><strong>Live Canvas</strong></td><td>基于 A2UI</td><td>实时交互画布，Agent 驱动视觉化工作空间</td></tr>
+</table>
+
+<h3>渐进式披露：三层加载机制</h3>
+<pre><code><span class="node">第一层：索引层</span> <span class="arrow">→</span>
+<span class="node">第二层：定义层</span> <span class="arrow">→</span>
+<span class="node">第三层：执行层</span></code></pre>
+<p>传统 Agent 面临的最大问题之一是工具越加越多，效果反而变差。模型面对大量工具描述时，既理解任务又判断该用哪个工具，注意力被稀释。渐进式披露正是为了解决这个问题：</p>
+<table>
+<tr><th>层级</th><th>加载时机</th><th>加载内容</th></tr>
+<tr><td><strong>索引层</strong></td><td>系统启动时</td><td>仅读取极简的能力索引（Skill 名字 + 一行描述），预判"哪些 Skill 可能对当前任务有用"</td></tr>
+<tr><td><strong>定义层</strong></td><td>用户输入匹配到某场景时</td><td>加载对应 Skill 的完整定义（SKILL.md 全文内容）</td></tr>
+<tr><td><strong>执行层</strong></td><td>真正执行时</td><td>引入具体上下文、参数和中间结果</td></tr>
+</table>
+<p>效果：Agent 启动更快、对话成本更低、工具选择准确率明显提升——模型不再在一堆工具中"猜"，而在少量强相关的能力中"选"。</p>
+
+<h3>SKILL.md 格式规范</h3>
+<p>Skill 的核心文件是 SKILL.md，包含 YAML frontmatter（元数据）和 Markdown 内容（使用说明）：</p>
+<pre><code>---
+name: my-custom-skill
+description: 技能功能的简洁描述（用于索引层判断是否加载）
+version: 1.0.0
+metadata:
+  openclaw:
+    requires:
+      bins: ["curl", "jq"]  # 声明此技能依赖的系统命令
+---
+
+# 技能标题
+
+## 使用场景
+当用户提到【场景描述】时，使用此技能。
+
+## 执行步骤
+1. 使用 `read` 工具读取配置文件
+2. 使用 `exec` 工具调用 `curl -X GET '...'`
+3. 使用 `write` 工具将结果写入报告文件
+
+## 异常处理
+- API 返回 401 → 提示用户检查 API Key
+- 网络超时 → 重试最多 3 次
+
+## 可用工具参考
+本技能使用：`read`、`write`、`exec`
+</code></pre>
+
+<h3>SKILL.md 五要素</h3>
+<table>
+<tr><th>要素</th><th>作用</th></tr>
+<tr><td><strong>描述信息</strong></td><td>清晰简述 Skill 的功能和使用场景（决定索引层是否加载）</td></tr>
+<tr><td><strong>触发器</strong></td><td>定义哪些用户输入或意图会激活此 Skill</td></tr>
+<tr><td><strong>使用说明</strong></td><td>详细的步骤指南，确保逻辑清晰完整</td></tr>
+<tr><td><strong>环境变量</strong></td><td>列出此 Skill 需要的环境变量及默认值</td></tr>
+<tr><td><strong>所需工具</strong></td><td>明确列出运行该 Skill 需要的 Tool（Tool 的 deny 策略会影响 Skill 可用性）</td></tr>
+</table>
+
+<h3>Skill 的物理结构与存放位置</h3>
+<p>一个 Skill 本质上是一个包含 SKILL.md 文件的目录，可存放于三处位置：</p>
+<table>
+<tr><th>存放位置</th><th>优先级</th><th>说明</th></tr>
+<tr><td><code>~/.openclaw/workspace/skills/</code></td><td>最高</td><td>工作区技能，随当前 Agent 加载</td></tr>
+<tr><td><code>~/.openclaw/skills/</code></td><td>中等</td><td>托管/本地技能，可跨 Agent 共享</td></tr>
+<tr><td>捆绑技能</td><td>最低</td><td>随 OpenClaw 安装包内置，开箱即用</td></tr>
+</table>
+
+<h3>ClawHub 技能生态</h3>
+<p>截至 2026 年 2 月，ClawHub 收录 5705 个社区技能，筛选后 2868 个入选热门列表（过滤垃圾/恶意/重复技能）。官方内置 53 个经过安全校验的核心技能。</p>
+
+<div class="warn-box">2026 年 2 月 ClawHavoc 事件：安全研究团队在 ClawHub 发现 396 个恶意技能，通过伪造前置条件诱导用户下载含木马的技能包。安装任何社区技能前都应审核 SKILL.md 内容和权限范围。</div>
+
+<h3>Tool Use 协议</h3>
+<p>Agent 通过 SKILL.md 理解"怎么做"后，真正的执行依赖底层 Tool 调用，遵循三步标准流程：</p>
+<ol>
+<li><strong>构造请求</strong>：Agent 引擎构造 Tool 调用请求（Tool 名称 + JSON 参数）</li>
+<li><strong>安全检查</strong>：Gateway 的 Tool 策略层基于 allow/deny 配置和沙箱策略进行过滤</li>
+<li><strong>结果回写</strong>：执行结果写入会话转录（<code>role: "tool"</code> 消息），供模型下一轮读取</li>
+</ol>
+<p>每条 Tool 调用有唯一的 <code>toolCallId</code> 关联请求和结果，确保多轮并行调用中不会混淆。</p>
+    </section>
+
+    <section class="chapter" id="sec-7">
+      <div class="ch-head"><div class="num">07</div><div class="t"><h2>Sandbox 沙箱系统：三重安全防护</h2><div class="sub">隔离范围覆盖：工具执行（exec、read、write、edit）、浏览器进程、CDP 端点</div></div></div>
+      <div class="intuition-box">Skills 的执行安全依赖三重防护——沙箱隔离决定 Tool 在哪里运行（Docker 容器或宿主机），Tool 策略决定哪些 Tool 可用，提升执行则作为仅限 exec 的逃生通道。三者独立但协同，构成"三层大坝"。</div>
+
+<div class="warn-box">官方明确声明：这不是完美的安全边界，但当模型做出愚蠢行为时，它能实质性地限制文件系统和进程访问。绝不能把沙箱当作唯一的防线。</div>
+
+<h3>第一重：沙箱隔离（在哪里运行）</h3>
+<table>
+<tr><th>模式</th><th>行为</th><th>适用场景</th></tr>
+<tr><td><code>"off"</code></td><td>不隔离，所有工具直接在主机运行</td><td>仅限开发测试，高风险</td></tr>
+<tr><td><code>"non-main"</code></td><td>仅隔离非主会话（默认）</td><td>群聊访问自动沙箱化</td></tr>
+<tr><td><code>"all"</code></td><td>所有会话都在容器中运行</td><td>多用户生产环境，最安全</td></tr>
+</table>
+
+<p>隔离范围覆盖：工具执行（exec、read、write、edit）、浏览器进程、CDP 端点。作用域 <code>scope</code> 决定容器数量：</p>
+<table>
+<tr><th>作用域</th><th>容器数量</th></tr>
+<tr><td><code>"session"</code></td><td>每个会话一个容器（默认）</td></tr>
+<tr><td><code>"agent"</code></td><td>每个 Agent 一个容器</td></tr>
+<tr><td><code>"shared"</code></td><td>所有会话共享一个容器</td></tr>
+</table>
+
+<h3>第二重：工具策略（什么能跑）</h3>
+<p>即使启用沙箱，没有工具策略限制，模型仍可通过 <code>exec</code> 执行任意危险命令。</p>
+<pre><code>{
+  "tools": {
+    "deny": ["exec", "apply_patch", "browser"],
+    "allow": ["read", "write", "edit", "filesystem"]
+  }
+}</code></pre>
+<p><strong>核心规则</strong>：</p>
+<ul>
+<li><strong>deny 永远优先</strong>——无论 allow 如何配置，deny 列表中的工具都被硬性阻止</li>
+<li>如果 allow 非空，其他所有未明确允许的工具都被视为阻止</li>
+<li><code>/exec</code> 命令无法绕过被策略拒绝的 exec 工具——硬性阻断</li>
+</ul>
+
+<p>隔离时工具过滤顺序（从宽到窄）：全局策略 → Agent 策略 → Sandbox 策略（只能进一步限制）→ 子 Agent 策略。</p>
+
+<h3>第三重：提升执行（受控逃生通道）</h3>
+<p>仅针对 <code>exec</code> 工具。在沙箱中运行时，某些任务需要访问宿主机真实资源（如读取实时数据），提升执行提供受控突破：</p>
+<pre><code># 在聊天对话中启用提升执行
+/elevated on</code></pre>
+<ul>
+<li>退出会话或超时后自动关闭</li>
+<li>仍可能被审批（approval）策略拦截</li>
+<li><strong>不会绕过</strong>工具策略的 deny 配置——如果 <code>tools.deny</code> 含 <code>exec</code>，<code>/elevated on</code> 也无效</li>
+</ul>
+
+<h3>安全限制</h3>
+<ul>
+<li><strong>禁止的绑定挂载</strong>：系统路径（/etc、/proc、/sys、/dev、/root、/boot）、Docker socket、根文件系统</li>
+<li><strong>禁止的网络模式</strong>：host（绕过网络隔离）、container:&lt;id&gt;（命名空间加入）</li>
+<li><strong>默认安全配置</strong>：只读根文件系统、无网络、丢弃所有能力</li>
+</ul>
+
+<h3>第四重：Cell Isolation（Pi-embedded 进程级隔离）</h3>
+<p>当执行层通过 Pi-embedded 在本地设备上运行时，还有一层进程级沙箱——<strong>Cell Isolation</strong>：</p>
+<table>
+<tr><th>步骤</th><th>行为</th><th>目的</th></tr>
+<tr><td>1. 环境快照</td><td>记录执行前的环境状态</td><td>基线对比</td></tr>
+<tr><td>2. 创建 venv</td><td>独立 Python 虚拟环境</td><td>依赖隔离，互不干扰</td></tr>
+<tr><td>3. 安装依赖</td><td>动态安装技能所需的包</td><td>按需加载</td></tr>
+<tr><td>4. 执行代码</td><td>在隔离环境中运行技能</td><td>权限可控</td></tr>
+<tr><td>5. 恢复快照</td><td>无论成功与否，恢复到初始状态</td><td>环境纯净</td></tr>
+</table>
+
+<h3>诊断命令</h3>
+<pre><code>openclaw sandbox explain --session main</code></pre>
+<p>实时查看当前会话的三重防护生效情况：沙箱模式/范围/工作区权限、是否被隔离、工具 allow/deny 配置及来源、提升执行阈值。沙箱权限配置混乱时最快的定位入口。</p>
+    </section>
+
+    <section class="chapter" id="sec-8">
+      <div class="ch-head"><div class="num">08</div><div class="t"><h2>记忆管理：三级存储 + 混合搜索</h2><div class="sub">每个 Agent 对应一个独立的 SQLite 数据库，表结构兼顾全文搜索和向量相似度搜索：</div></div></div>
+      <div class="intuition-box">
+OpenClaw 没有盲目追随纯向量数据库方案，而是创造性地提出<strong>三级记忆架构</strong>，模拟人类记忆的分层特性——从瞬时的工作记忆，到短期的情景记忆，再到长期的语义记忆。文件即真相，索引辅助检索。
+</div>
+
+<h3>三级记忆架构</h3>
+<table>
+<tr><th>层级</th><th>类比人类</th><th>OpenClaw 实现</th><th>生命周期</th><th>检索方式</th></tr>
+<tr><td><strong>工作记忆</strong></td><td>当前对话上下文</td><td>当前会话的消息历史</td><td>会话期间（压缩后丢失）</td><td>直接在上下文中</td></tr>
+<tr><td><strong>情景记忆</strong></td><td>近期经历</td><td><code>memory/YYYY-MM-DD.md</code> 每日日志</td><td>参与时间衰减（半衰期 30 天）</td><td>混合搜索（向量+BM25）</td></tr>
+<tr><td><strong>语义记忆</strong></td><td>长期知识</td><td><code>MEMORY.md</code> 精选事实</td><td>常青文件，不衰减</td><td>混合搜索（向量+BM25）</td></tr>
+</table>
+
+<h3>存储层：SQLite + 向量的融合</h3>
+<p>每个 Agent 对应一个独立的 SQLite 数据库，表结构兼顾全文搜索和向量相似度搜索：</p>
+<table>
+<tr><th>表</th><th>用途</th><th>关键设计</th></tr>
+<tr><td><code>files</code></td><td>文件元数据</td><td>path + mtime + hash，用于增量索引（只重索引变化的文件）</td></tr>
+<tr><td><code>chunks</code></td><td>文本块存储</td><td>大文件切分 + 文本块哈希去重 + JSON 序列化向量（如 1536 维）</td></tr>
+<tr><td><code>chunks_fts</code></td><td>全文搜索引擎</td><td>SQLite FTS5 扩展，支持 BM25 排序</td></tr>
+<tr><td><code>chunks_vec</code></td><td>向量搜索引擎</td><td>sqlite-vec 扩展，余弦距离计算</td></tr>
+</table>
+
+<h3>优雅降级机制</h3>
+<p><code>sqlite-vec</code> 是 C 语言编写的 SQLite 扩展，并非所有系统都能安装。系统设计了优雅降级：</p>
+<table>
+<tr><th>路径</th><th>条件</th><th>性能</th></tr>
+<tr><td><strong>快速路径</strong></td><td>sqlite-vec 可用</td><td>数据库内直接计算余弦距离，毫秒级</td></tr>
+<tr><td><strong>回退路径</strong></td><td>sqlite-vec 不可用</td><td>全量加载到内存，JavaScript 暴力计算，秒级</td></tr>
+</table>
+<p>确保任何环境下都能正常工作，只是性能有差异。</p>
+
+<h3>混合搜索机制</h3>
+<pre><code><div class="node">用户查询</code></pre>
+<span class="arrow">→</span>
+<div class="node">关键词提取 (FTS)</div>
+<span class="arrow">+</span>
+<div class="node">向量嵌入</div>
+<span class="arrow">→</span>
+<span class="branch">并行搜索</span>
+<span class="arrow">→</span>
+<div class="node">加权融合</div>
+<span class="arrow">→</span>
+<div class="node">MMR 去重 + 时间衰减</div>
+<span class="arrow">→</span>
+<div class="node">Top-K 结果</div>
+</div>
+
+<table>
+<tr><th>搜索类型</th><th>优势</th><th>劣势</th></tr>
+<tr><td><strong>向量搜索</strong></td><td>理解语义、容错性强、同义词处理</td><td>对精确 token 弱（ID、代码符号）</td></tr>
+<tr><td><strong>BM25 搜索</strong></td><td>精确匹配、高信号 token</td><td>不理解语义</td></tr>
+</table>
+
+<h3>MMR 去重与时间衰减</h3>
+<ul>
+<li><strong>MMR（Maximal Marginal Relevance）</strong>：在相关性和多样性之间取平衡，λ=0.7</li>
+<li><strong>时间衰减</strong>：<code>decayedScore = score × e^(-λ × ageInDays)</code>，半衰期 30 天</li>
+<li><strong>常青文件</strong>：MEMORY.md 和非日期命名文件不参与衰减</li>
+</ul>
+
+<h3>Embedding 提供商</h3>
+<p>自动选择逻辑（优先级从高到低）：</p>
+<ol>
+<li>Local（本地模型）</li>
+<li>OpenAI（text-embedding-3-small，默认远程）</li>
+<li>Gemini（gemini-embedding-001）</li>
+<li>Voyage（voyage-4-large）</li>
+<li>Mistral（mistral-embed）</li>
+<li>Disabled（无可用 Key）</li>
+</ol>
+
+<h3>自动记忆刷新</h3>
+<p>当会话接近自动压缩时，触发预压缩提示：</p>
+<ul>
+<li>发送静默提示："Session nearing compaction. Store durable memories now."</li>
+<li>模型可能回复（但通常 NO_REPLY）</li>
+<li>每个压缩周期仅触发一次</li>
+<li>只在可写工作空间执行</li>
+</ul>
+    </section>
+
+    <section class="chapter" id="sec-9">
+      <div class="ch-head"><div class="num">09</div><div class="t"><h2>Session 管理</h2><div class="sub">所有 sessionKey 遵循统一格式：</div></div></div>
+      <h3>Session Key 规范</h3>
+<p>所有 sessionKey 遵循统一格式：</p>
+<ul>
+<li><code>agent:main:main</code> — 默认 Agent 的主会话</li>
+<li><code>agent:ops:work</code> — ops Agent 的主会话</li>
+<li><code>agent:main:telegram:direct:user123</code> — Telegram DM 会话</li>
+<li><code>agent:main:discord:group:guild789</code> — Discord 群组会话</li>
+<li><code>agent:main:cron:daily-backup:run:uuid</code> — Cron 任务运行会话</li>
+<li><code>agent:main:subagent:child-session</code> — 子代理会话</li>
+</ul>
+
+<h3>会话类型</h3>
+<table>
+<tr><th>类型</th><th>识别模式</th><th>示例</th></tr>
+<tr><td>direct</td><td>包含 :direct: 或 :dm:</td><td>telegram:direct:user123</td></tr>
+<tr><td>group</td><td>包含 :group:</td><td>discord:group:guild789</td></tr>
+<tr><td>channel</td><td>包含 :channel:</td><td>slack:channel:C123</td></tr>
+<tr><td>cron</td><td>rest 以 cron: 开头</td><td>cron:backup</td></tr>
+<tr><td>subagent</td><td>包含 :subagent:</td><td>subagent:child</td></tr>
+<tr><td>thread</td><td>包含 :thread: 或 :topic:</td><td>discord:group:123:thread:456</td></tr>
+</table>
+
+<h3>会话新鲜度策略</h3>
+<table>
+<tr><th>会话类型</th><th>默认过期时间</th></tr>
+<tr><td>direct（DM）</td><td>24 小时</td></tr>
+<tr><td>group（群组）</td><td>4 小时</td></tr>
+<tr><td>thread（线程）</td><td>24 小时</td></tr>
+</table>
+
+<h3>线程派生机制</h3>
+<ul>
+<li>当父会话 token 超过阈值（默认 100,000）时跳过派生，避免上下文溢出</li>
+<li>派生会话记录 <code>parentSession</code> 链接，支持追溯</li>
+<li><code>/new</code> 或 <code>/reset</code> 后保留用户设置的 thinkingLevel、verboseLevel 等</li>
+<li>清空 token 统计和压缩计数，确保干净的会话状态</li>
+</ul>
+
+<h3>关键设计决策</h3>
+<ol>
+<li><strong>大小写不敏感的键匹配</strong>：所有 sessionKey 统一转为小写</li>
+<li><strong>会话归档</strong>：重置或删除时，对话文件移动到 .archived/ 目录</li>
+<li><strong>投递路由持久化</strong>：内部 webchat/系统消息不应覆盖已知的外部投递路由</li>
+<li><strong>Cron 会话清理</strong>：定期删除过期的 cron 运行会话，归档对话文件</li>
+</ol>
+    </section>
+
+    <section class="chapter" id="sec-10">
+      <div class="ch-head"><div class="num">10</div><div class="t"><h2>多 Agent 路由：7 层优先级</h2><div class="sub">路由系统决定&quot;哪个 Agent 处理哪条消息&quot;，是 OpenClaw 多 Agent 架构的…</div></div></div>
+      <p>路由系统决定"哪个 Agent 处理哪条消息"，是 OpenClaw 多 Agent 架构的核心。</p>
+
+<table>
+<tr><th>优先级</th><th>匹配方式</th><th>说明</th></tr>
+<tr><td>1</td><td>binding.peer</td><td>精确对等匹配</td></tr>
+<tr><td>2</td><td>binding.peer.parent</td><td>父对等匹配（线程）</td></tr>
+<tr><td>3</td><td>binding.guild+roles</td><td>公会 + 角色匹配</td></tr>
+<tr><td>4</td><td>binding.guild</td><td>公会匹配</td></tr>
+<tr><td>5</td><td>binding.team</td><td>团队匹配</td></tr>
+<tr><td>6</td><td>binding.channel</td><td>频道匹配</td></tr>
+<tr><td>7</td><td>default</td><td>默认 Agent</td></tr>
+</table>
+
+<h3>工作区</h3>
+<p>工作区是 Agent 的文件系统级隔离环境，包含引导文件、记忆、身份和工具配置：</p>
+<ul>
+<li>默认路径：<code>~/.openclaw/workspace</code></li>
+<li>每个工作区包含：AGENTS.md、SOUL.md、TOOLS.md、IDENTITY.md、USER.md、MEMORY.md</li>
+<li>所有文件读取通过 <code>openBoundaryFile</code> 进行边界检查，防止路径遍历攻击</li>
+<li>文件大小限制：2MB</li>
+<li>子代理和定时任务会过滤掉非核心引导文件</li>
+</ul>
+    </section>
+
+    <section class="chapter" id="sec-11">
+      <div class="ch-head"><div class="num">11</div><div class="t"><h2>自进化机制</h2><div class="sub">OpenClaw 通过以下机制实现自我更新与进化：</div></div></div>
+      <p>OpenClaw 通过以下机制实现自我更新与进化：</p>
+
+<table>
+<tr><th>机制</th><th>说明</th></tr>
+<tr><td><strong>可修改核心文件</strong></td><td>AGENTS.md（操作指南）、SOUL.md（人设）、MEMORY.md（长期记忆）、memory/YYYY-MM-DD.md（短期记忆）</td></tr>
+<tr><td><strong>动态系统提示</strong></td><td>每次运行时动态构建，注入工作区文件内容、可用工具列表、Skills、运行时环境信息</td></tr>
+<tr><td><strong>Skills 扩展</strong></td><td>通过 ClawHub 发现和安装新 skills，教 Agent 使用新工具</td></tr>
+<tr><td><strong>自我修改能力</strong></td><td>Agent 内置 read/write/edit 工具，可更新行为、学习经验、扩展能力、调整人设</td></tr>
+<tr><td><strong>自我更新指令</strong></td><td>config.apply（应用配置变更）、update.run（执行更新流程）</td></tr>
+</table>
+
+<pre><code><div class="node">用户指令/反馈</code></pre>
+<span class="arrow">→</span>
+<div class="node">Agent 修改文件</div>
+<span class="arrow">→</span>
+<div class="node">下次会话加载新内容</div>
+<span class="arrow">→</span>
+<div class="node">行为改变</div>
+<span class="arrow">→</span>
+<span class="branch">持续迭代</span>
+</div>
+
+<div class="interview-box">
+这种设计让 Agent 能够像人类一样"学习"和"成长"，通过文件系统持久化进化成果。文件修改后，下次会话立即反映变化。
+</div>
+    </section>
+
+    <section class="chapter" id="sec-12">
+      <div class="ch-head"><div class="num">12</div><div class="t"><h2>Channels 与 Nodes</h2><div class="sub">OpenClaw 原生支持 20+ 通讯平台：</div></div></div>
+      <h3>Channels：多平台连接</h3>
+<p>OpenClaw 原生支持 20+ 通讯平台：</p>
+<ul>
+<li>WhatsApp、Telegram、Slack、Discord、Google Chat、Signal、iMessage、Microsoft Teams、Matrix、Zalo</li>
+<li><strong>路由规则</strong>：提及门控（Mention gating）、回复标签处理、针对不同频道的自动消息分块</li>
+</ul>
+
+<h3>Nodes：跨设备节点</h3>
+<p>通过将不同设备定义为"节点"，实现跨设备硬件控制：</p>
+<ul>
+<li><strong>跨平台</strong>：macOS 菜单栏应用、iOS 节点、Android 节点</li>
+<li><strong>硬件能力</strong>：通过 <code>node.invoke</code> 协议，远程调用摄像头拍照/录码、屏幕录制、地理位置获取</li>
+<li><strong>Voice Wake &amp; Talk Mode</strong>：利用 ElevenLabs 等技术，提供始终在线的语音唤醒和连续对话</li>
+</ul>
+    </section>
+
+    <section class="chapter" id="sec-13">
+      <div class="ch-head"><div class="num">13</div><div class="t"><h2>Gateway-Pi 执行架构：云端大脑 + 本地肢体</h2><div class="sub">Orchestrator（大脑） → Gateway（协议桥） → Pi-embedded（…</div></div></div>
+      <div class="intuition-box">
+OpenClaw 最硬核的创新是<strong>Gateway-Pi 架构</strong>：将"思考"（LLM 推理）放在云端或高性能机器，将"执行"（文件操作、系统调用）交给用户本地设备上的轻量级代理。完美平衡算力需求与数据隐私。
+</div>
+
+<h3>三层执行链路</h3>
+<pre><code><div class="node">Orchestrator（大脑）</code></pre>
+<span class="arrow">→</span>
+<div class="node">Gateway（协议桥）</div>
+<span class="arrow">→</span>
+<div class="node">Pi-embedded（执行端）</div>
+</div>
+
+<table>
+<tr><th>层级</th><th>部署位置</th><th>职责</th><th>关键技术</th></tr>
+<tr><td><strong>Orchestrator</strong></td><td>云端 GPU 或本地高性能机器</td><td>与 LLM 交互、理解意图、拆解任务为原子步骤（JSON 指令）</td><td>模型路由、上下文组装</td></tr>
+<tr><td><strong>Gateway</strong></td><td>中枢服务器</td><td>鉴权、流量整形、协议翻译（Protobuf + WebSocket）</td><td>节点注册表、心跳检测</td></tr>
+<tr><td><strong>Pi-embedded</strong></td><td>用户本地设备（Mac/Linux/树莓派）</td><td>在安全沙箱中执行脚本、返回结果</td><td>Cell Isolation、venv 隔离</td></tr>
+</table>
+
+<h3>完整调用链：一次指令的旅程</h3>
+<p>以"查 CPU 温度并生成图表"为例：</p>
+<table>
+<tr><th>步骤</th><th>组件</th><th>行为</th></tr>
+<tr><td>1</td><td>Orchestrator</td><td>LLM 识别需调用 <code>get_cpu_temp</code> + <code>generate_chart</code>，生成 JSON 任务指令</td></tr>
+<tr><td>2</td><td>Gateway</td><td>验证指令签名 → 查询注册表找到在线 Pi-embedded 节点 → 序列化为 Protobuf → WebSocket 发送</td></tr>
+<tr><td>3</td><td>Pi-embedded</td><td>解包消息 → 启动沙箱 → 挂载只读权限（<code>/sys/class/thermal/</code> 或 <code>ioreg</code>）</td></tr>
+<tr><td>4</td><td>Sandbox</td><td>执行 <code>get_temp.py</code> 获取数据 → 执行 <code>chart_gen.py</code> 生成 PNG</td></tr>
+<tr><td>5</td><td>Callback</td><td>图片二进制 → WebSocket 返回 Gateway → 转发到用户聊天窗口</td></tr>
+</table>
+
+<h3>节点健康与故障转移</h3>
+<ul>
+<li><strong>心跳机制</strong>：所有 Pi-embedded 节点定期向 Gateway 发送心跳包</li>
+<li><strong>失联处理</strong>：节点失联后，Gateway 将后续指令智能路由到其他可用节点</li>
+<li><strong>场景覆盖</strong>：轻松应对本地设备休眠、网络抖动等不稳定因素</li>
+</ul>
+    </section>
+
+    <section class="chapter" id="sec-14">
+      <div class="ch-head"><div class="num">14</div><div class="t"><h2>架构优势与挑战</h2></div></div>
+      <h3>核心优势</h3>
+<table>
+<tr><th>优势</th><th>实现方式</th><th>价值</th></tr>
+<tr><td><strong>零运维</strong></td><td>SQLite 单文件 + 本地 Markdown 存储</td><td>无需维护数据库集群</td></tr>
+<tr><td><strong>数据私有</strong></td><td>所有数据存储在本地，不上云</td><td>数据主权完全在用户手中</td></tr>
+<tr><td><strong>可审计</strong></td><td>一切皆文件，Git 可追踪</td><td>随时审查 AI 的行为和记忆</td></tr>
+<tr><td><strong>增量索引</strong></td><td>mtime + hash 增量更新</td><td>高效检索 + 低资源消耗</td></tr>
+<tr><td><strong>优雅降级</strong></td><td>多级回退策略</td><td>任何环境都能工作</td></tr>
+<tr><td><strong>插件生态</strong></td><td>插件化架构 + ClawHub 市场</td><td>10,000+ 技能，社区自驱动</td></tr>
+</table>
+
+<h3>现存挑战</h3>
+<table>
+<tr><th>挑战</th><th>原因</th><th>缓解方案</th></tr>
+<tr><td><strong>Token 消耗偏高</strong></td><td>MEMORY.md 内容注入每次 LLM 请求</td><td>社区插件通过 Elasticsearch 按需加载</td></tr>
+<tr><td><strong>关系推理局限</strong></td><td>向量检索擅长找相关信息，不擅长推理实体间复杂关系</td><td>需要图谱增强（未来方向）</td></tr>
+<tr><td><strong>规模增长成本</strong></td><td>文件数量膨胀 → 索引维护和记忆梳理变复杂</td><td>定期"记忆体检"，合并/淘汰旧记忆</td></tr>
+<tr><td><strong>WebSocket 稳定性</strong></td><td>移动网络切换时出现 1006 错误</td><td>完善重连和状态同步机制</td></tr>
+<tr><td><strong>小白用户门槛</strong></td><td>文件结构、通道配置、插件管理有一定学习曲线</td><td>官方文档 + 社区教程</td></tr>
+</table>
+    </section>
+
+    <section class="chapter" id="sec-15">
+      <div class="ch-head"><div class="num">15</div><div class="t"><h2>实践建议</h2></div></div>
+      <div class="practice-grid">
+<div class="do">
+<ul>
+<li>用 Gateway 作为单一控制平面，避免分布式一致性问题</li>
+<li>用 Sandbox 隔离工具执行，减少"爆炸半径"</li>
+<li>把重要信息写入 MEMORY.md（常青文件，不参与时间衰减）</li>
+<li>用 Cron + Heartbeat 实现定时自主任务</li>
+<li>用 Skills 按需扩展 Agent 能力</li>
+<li>用多 Agent 路由实现不同频道的专属 Agent</li>
+<li>让 Agent 通过自进化机制持续学习</li>
+</ul>
+</div>
+<div class="dont">
+<ul>
+<li>不要跳过 Sandbox 直接在主机上执行工具</li>
+<li>不要把所有记忆都放在对话里（压缩会丢失）</li>
+<li>不要忽略 Session 新鲜度策略（会导致上下文溢出）</li>
+<li>不要让 Sub-Agent 继承主 Agent 的全部权限</li>
+<li>不要一次性加载所有 Skills（浪费上下文窗口）</li>
+<li>不要忽略工具策略层级（Sandbox 策略只能进一步限制）</li>
+<li>不要让记忆文件无限增长（定期压缩旧记忆）</li>
+</ul>
+</div>
+</div>
+    </section>
+
+    <section class="chapter" id="sec-16">
+      <div class="ch-head"><div class="num">16</div><div class="t"><h2>常见问题</h2><div class="sub">📖 知识来源（三篇合并）：</div></div></div>
+      <details class="qa">
+<summary>OpenClaw 和 LangGraph/CrewAI 有什么区别？</summary>
+<div class="a">OpenClaw 是运行时（runtime，管"怎么跑"），LangGraph/CrewAI 是编排框架（orchestration，管"跑什么"）。OpenClaw 提供完整的 session 管理、工具沙箱、记忆层和多平台路由，开箱即用。LangGraph 需要你自己搭建这些基础设施。</div>
+</details>
+
+<details class="qa">
+<summary>为什么 OpenClaw 用单 Daemon 而不是微服务？</summary>
+<div class="a">单机部署降低运维复杂度，适合个人/小团队。避免分布式一致性问题（CAP 定理的坑）。所有模块在一个进程内通信，延迟低、调试简单。当需要扩展时，可以通过 Nodes 机制跨设备分布式协作。</div>
+</details>
+
+<details class="qa">
+<summary>记忆系统为什么用 Markdown 文件而不是数据库？</summary>
+<div class="a">"文件即真相"的设计哲学：人类可读可编辑、Git 可追踪、Agent 自组织。SQLite + 向量嵌入只是索引层，真正的数据在 Markdown 文件中。这样即使索引损坏，数据也不会丢失。</div>
+</details>
+
+<details class="qa">
+<summary>混合搜索（向量+BM25）为什么比纯向量搜索好？</summary>
+<div class="a">向量搜索擅长语义理解（"Mac Studio gateway host" ≈ "运行 gateway 的机器"），但对精确 token 弱（ID、代码符号、错误字符串）。BM25 擅长精确匹配。两者结合后，既能理解语义又能精确匹配，通过加权融合和 MMR 去重得到最优结果。</div>
+</details>
+
+<details class="qa">
+<summary>Sandbox 的三种模式怎么选？</summary>
+<div class="a">开发调试用 "off"（不隔离，最快）；生产环境用 "non-main"（默认，仅隔离非主会话）；高安全要求用 "all"（所有会话都隔离）。容器作用域通常选 "session"（每个会话一个容器），资源共享场景选 "shared"。</div>
+</details>
+
+<details class="qa">
+<summary>自进化机制会不会让 Agent "学坏"？</summary>
+<div class="a">自进化通过文件系统持久化，人类可以随时审查和修改 AGENTS.md、SOUL.md、MEMORY.md。安全边界（openBoundaryFile）防止路径遍历攻击，文件大小限制（2MB）防止无限膨胀。关键行为变更可以通过 Git 追踪。</div>
+</details>
+
+<details class="qa">
+<summary>多 Agent 路由的 7 层优先级怎么配置？</summary>
+<div class="a">从高到低：精确对等匹配 → 父对等匹配 → 公会+角色 → 公会 → 团队 → 频道 → 默认 Agent。配置通过 binding 规则定义，支持按平台、频道、用户、角色等维度精确路由。</div>
+</details>
+
+<div class="source-link">
+<p>📖 知识来源（三篇合并）：</p>
+<p>1. <a href="https://mp.weixin.qq.com/s/wVcItgqsCiwl9-PZ56z27w" target="_blank">深入理解 OpenClaw 技术架构与实现原理（上）— 阿里妹</a></p>
+<p>2. <a href="https://mp.weixin.qq.com/s/FUJEofqbK7vX-J64UX8Nkg" target="_blank">深入理解 OpenClaw 技术架构与实现原理（下）— 阿里妹</a></p>
+<p>3. <a href="https://cloud.tencent.com/developer/article/2657039" target="_blank">OpenClaw 源码架构深度剖析：四层架构、三级记忆系统、Gateway-Pi — 腾讯云</a></p>
+</div>
+    </section>
+
+    <footer>
+      <div class="made">TECH NOTES · AI 工程 · 整理自 AI Knowledge Hub</div>
+    </footer>
+  </main>
+</div>
+
+<script>
+(function(){var bar=document.getElementById('progress');function u(){var h=document.documentElement;bar.style.width=h.scrollTop/(h.scrollHeight-h.clientHeight)*100+'%';}window.addEventListener('scroll',u,{passive:true});u();})();
+(function(){var links=document.querySelectorAll('aside.toc nav a');var secs=Array.from(document.querySelectorAll('section.chapter'));if(!secs.length)return;function u(){var y=window.scrollY+100,cur=secs[0];for(var i=0;i<secs.length;i++){if(secs[i].offsetTop<=y)cur=secs[i];}var id=cur.id;links.forEach(function(a){a.classList.toggle('active',a.getAttribute('href')==='#'+id);});}window.addEventListener('scroll',u,{passive:true});u();})();
+</script>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

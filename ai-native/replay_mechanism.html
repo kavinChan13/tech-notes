@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Replay 机制核心解析 · AI 工程 — Tech Notes</title>
+<meta name="description" content="Replay Mechanism — 执行现场复现 / 黑匣子原理 / 故障诊断·回归测试·版本对比">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<link rel="stylesheet" href="../assets/kh-guide.css">
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav">
+
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="ai_engineering_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 14 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>E29 · AI 工程</h2>
+    <nav>
+      <ol>
+        <li><a href="#overview" class="active">概览</a></li>
+        <li><a href="#ch1">核心误区与本质价值</a></li>
+        <li><a href="#ch2">黑匣子架构设计</a></li>
+        <li><a href="#ch3">执行流程四阶段</a></li>
+        <li><a href="#ch4">录制与回放工程实现</a></li>
+        <li><a href="#ch5">企业级应用场景</a></li>
+        <li><a href="#diff">Diff 对比与版本对比报告</a></li>
+        <li><a href="#ch7">生产架构与最佳实践</a></li>
+        <li><a href="#q-a">Q&amp;A</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+    <header class="hero">
+      <div class="badge">E29 · AI 工程</div>
+      <h1>Replay 机制核心解析</h1>
+      <p class="sub">Replay Mechanism — 执行现场复现 / 黑匣子原理 / 故障诊断·回归测试·版本对比</p>
+      <div class="meta-row">
+        <span class="pill cyan">AI 工程</span>
+        <span class="pill green">阅读 ~14 min</span>
+        <span class="pill amber">9 章</span>
+      </div>
+    </header>
+
+    <section class="chapter" id="overview">
+      <div class="ch-head"><div class="num">00</div><div class="t"><h2>概览</h2><div class="sub">90% 的工程师误以为 Replay 就是日志重放</div></div></div>
+      <div class="intuition-box">
+<p>90% 的工程师误以为 Replay 就是日志重放。但单纯文本日志有三大致命缺陷：仅保存最终报错（发现过晚）、缺乏执行过程记录（无法定位根源）、依赖人工猜测（效率极低）。Replay 的本质价值不是查看历史，而是<strong>完整复现执行现场</strong>——让同一条输入在同样的环境下产出完全一致的执行轨迹，精准定位故障步骤。核心原则："让历史可重新执行"。</p>
+</div>
+    </section>
+
+    <section class="chapter" id="ch1">
+      <div class="ch-head"><div class="num">01</div><div class="t"><h2>核心误区与本质价值</h2><div class="sub">传统日志体系在 AI Agent 场景下彻底失效</div></div></div>
+      <p>传统日志体系在 AI Agent 场景下彻底失效。Agent 的执行链路包含 LLM 调用、工具执行、Memory 读写、RAG 检索等多个非确定性环节，任何一步的微小差异都可能导致完全不同的输出。仅靠文本日志，工程师面对的是"发生过就消失"的幽灵 Bug。</p>
+
+<h3>1.1 传统日志的三大缺陷</h3>
+<table>
+<tr><th>缺陷</th><th>具体表现</th><th>后果</th><th>影响比例</th></tr>
+<tr><td><span class="term">仅保存最终报错</span></td><td>只记录最后一次 LLM 输出或异常信息</td><td>发现过晚——问题可能在第 3 步就埋下种子，但直到第 15 步才暴露</td><td>78% 的 Agent 故障</td></tr>
+<tr><td><span class="term">缺乏执行过程</span></td><td>不记录中间步骤的工具返回、模型推理参数、上下文状态</td><td>无法定位根源——只知道"结果错了"，不知道哪一步开始偏</td><td>65% 的诊断时间浪费</td></tr>
+<tr><td><span class="term">依赖人工猜测</span></td><td>工程师凭经验假设可能的故障点，手动重跑</td><td>LLM 非确定性导致重跑结果不同——Bug 无法复现</td><td>90% 的复现失败率</td></tr>
+</table>
+
+<h3>1.2 Agent Bug 与传统 Bug 的根本差异</h3>
+<table>
+<tr><th>维度</th><th>传统软件 Bug</th><th>Agent Bug</th></tr>
+<tr><td>可复现性</td><td>有堆栈、有步骤，照着走就出现</td><td>一次性的——LLM 非确定性，发生过就消失</td></tr>
+<tr><td>手中证据</td><td>完整调用栈、变量快照</td><td>经常只剩最后一条输出</td></tr>
+<tr><td>定位方式</td><td>单步调试、断点</td><td>连那次调用序列都抓不回来</td></tr>
+<tr><td>根因层</td><td>代码逻辑错误</td><td>Prompt 变化 / 模型版本 / 工具返回差异 / 上下文漂移</td></tr>
+</table>
+
+<div class="highlight">
+<strong>反直觉事实：</strong>整个技术栈几乎每一层都是可回放的——数据库有快照、HTTP 请求有 curl 重放、分布式系统有确定性模拟——唯独 LLM 调用这一层，我们把它留成了不可回放的。Replay 机制正是要填补这个最不确定、最容易出问题的环节。
+</div>
+
+<div class="intuition-box">
+<p>Replay 的价值从"记录"跃迁到"复现"：不再是看日志猜原因，而是把那次执行原封不动地重演——同样的 Prompt 输入、同样的模型响应、同样的工具返回、同样的中间状态。Agent 变成<strong>完全确定性</strong>的，可以在故障点上反复打断点、加日志、改逻辑，每次都精确重演同一条轨迹。</p>
+</div>
+    </section>
+
+    <section class="chapter" id="ch2">
+      <div class="ch-head"><div class="num">02</div><div class="t"><h2>黑匣子架构设计</h2><div class="sub">一个完整的 Replay 系统需要录制 Agent 执行链路中的所有非确定性环节</div></div></div>
+      <p>一个完整的 Replay 系统需要录制 Agent 执行链路中的所有非确定性环节。核心录制对象涵盖四大维度：输入层、模型层、工具层、状态层。</p>
+
+<div class="arch-diagram">┌─────────────────────────────────────────────────────────────────────┐
+│                    Replay 黑匣子录制架构                             │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│  ┌─── 输入层 ───┐  ┌─── 模型层 ───┐  ┌─── 工具层 ───┐             │
+│  │ Prompt 全文   │  │ 模型版本/ID  │  │ 工具名称     │             │
+│  │ Context 窗口  │  │ 输出全文     │  │ 调用参数     │             │
+│  │ System 指令   │  │ 采样参数     │  │ 返回结果     │             │
+│  │ 用户消息      │  │ Token 用量   │  │ 错误信息     │             │
+│  │ 历史对话      │  │ 延迟/耗时    │  │ 执行耗时     │             │
+│  └───────────────┘  └──────────────┘  └──────────────┘             │
+│                                                                     │
+│  ┌─── 状态层 ───┐  ┌─── 元数据 ───┐                                │
+│  │ Memory 快照   │  │ Run ID       │                                │
+│  │ RAG 检索结果  │  │ 时间戳       │                                │
+│  │ Agent 状态    │  │ 环境信息     │                                │
+│  │ 中间变量      │  │ 成本统计     │                                │
+│  └───────────────┘  └──────────────┘                                │
+│                                                                     │
+│  存储: 本地 SQLite / 远程 Trace Store                                │
+│  索引: run_id → step_index → 完整请求/响应对                         │
+└─────────────────────────────────────────────────────────────────────┘</div>
+
+<h3>2.1 四大录制维度详解</h3>
+<table>
+<tr><th>维度</th><th>录制内容</th><th>为什么必须录制</th><th>存储开销</th></tr>
+<tr><td><span class="term">输入层</span></td><td>Prompt、System 指令、Context 窗口、历史对话</td><td>同样的输入是复现的前提；System Prompt 一个词的改动可能导致完全不同的行为</td><td>~2KB/step</td></tr>
+<tr><td><span class="term">模型层</span></td><td>模型版本、完整输出、temperature/top_p、Token 用量</td><td>LLM 非确定性——同输入不同输出是 Bug 最常见根因；模型升级可能引入行为变化</td><td>~5KB/step</td></tr>
+<tr><td><span class="term">工具层</span></td><td>工具名称、调用参数、返回结果、错误信息</td><td>工具返回是 Agent 决策的关键输入；API 超时/返回格式变化直接影响下游</td><td>~3KB/step</td></tr>
+<tr><td><span class="term">状态层</span></td><td>Memory 读写快照、RAG 检索结果、Agent 内部状态</td><td>Agent 的决策依赖累积状态；Memory 污染或 RAG 返回偏差导致静默失败</td><td>~8KB/step</td></tr>
+</table>
+
+<h3>2.2 采样参数录制的必要性</h3>
+<table>
+<tr><th>参数</th><th>影响</th><th>不录制的后果</th></tr>
+<tr><td><code>temperature</code></td><td>控制输出随机性——0.0 确定性，1.0+ 高随机性</td><td>无法判断输出差异是 Prompt 变化还是温度变化导致</td></tr>
+<tr><td><code>top_p</code></td><td>核采样范围——影响候选 Token 集合</td><td>模型升级后默认 top_p 变化导致行为漂移</td></tr>
+<tr><td><code>max_tokens</code></td><td>输出长度上限——截断可能破坏 JSON 结构</td><td>输出被截断但日志不显示，误以为模型输出不完整</td></tr>
+<tr><td><code>seed</code></td><td>随机种子——部分 API 支持确定性输出</td><td>丢失复现的最后手段</td></tr>
+</table>
+
+<div class="intuition-box">
+<p>黑匣子的录制粒度决定了诊断能力的上限。录制 Prompt 但漏掉 temperature，就像记录了飞行员的操纵杆输入但没记录风速——关键变量缺失，复现必然失败。<strong>完整的录制 = 输入 + 模型 + 工具 + 状态 + 参数 + 时序</strong>，缺一不可。</p>
+</div>
+    </section>
+
+    <section class="chapter" id="ch3">
+      <div class="ch-head"><div class="num">03</div><div class="t"><h2>执行流程四阶段</h2><div class="sub">Replay 的执行流程可以精确分解为四个时间阶段（T1-T4），每个阶段有明确的职责和输出</div></div></div>
+      <p>Replay 的执行流程可以精确分解为四个时间阶段（T1-T4），每个阶段有明确的职责和输出。这四个阶段构成一个闭环：固定输入 → 记录输出 → 保存中间态 → 精准定位。</p>
+
+<div class="flow">
+  <div class="flow-title">Replay 四阶段执行流程</div>
+  <div class="flow-node accent"><div class="nlabel">T1 · 固定输入（确定性前提）</div><div class="nsub">冻结 Prompt / Context / 参数，生成 RunID</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">T2 · 记录输出（完整证据链）</div><div class="nsub">录制模型 / 工具 / 状态 / 时序</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">T3 · 保存中间态（可回溯状态）</div><div class="nsub">快照所有中间变量 / Memory / RAG</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">T4 · 精准定位（故障归因）</div><div class="nsub">逐步回放 → 二分定位 → Diff 对比 → 根因确认</div></div>
+</div>
+
+<h3>3.1 四阶段详细职责</h3>
+<table>
+<tr><th>阶段</th><th>核心动作</th><th>输入</th><th>输出</th><th>关键约束</th></tr>
+<tr><td><span class="term">T1 固定输入</span></td><td>冻结所有输入变量，生成唯一 Run ID</td><td>用户请求、System Prompt、配置参数</td><td>不可变的输入快照 + Run ID</td><td>输入一旦冻结不可修改</td></tr>
+<tr><td><span class="term">T2 记录输出</span></td><td>录制每个 LLM 调用和工具执行的完整响应</td><td>T1 的固定输入</td><td>每步的完整请求/响应对</td><td>录制不干预执行——旁路记录</td></tr>
+<tr><td><span class="term">T3 保存中间态</span></td><td>快照每步执行后的 Agent 状态和外部依赖</td><td>T2 执行过程中的状态变化</td><td>Memory/RAG/变量快照序列</td><td>快照粒度到每步——不能只存最终态</td></tr>
+<tr><td><span class="term">T4 精准定位</span></td><td>回放录制数据，逐步比对定位故障步骤</td><td>T1-T3 的完整录制</td><td>故障根因报告 + 修复建议</td><td>回放必须确定性——同 Run ID 同结果</td></tr>
+</table>
+
+<h3>3.2 T4 精准定位的二分策略</h3>
+<p>在一个 20 步的 Agent 执行链中，逐步排查效率极低。T4 阶段采用<strong>二分定位法</strong>：先检查中间步骤（第 10 步）的输出是否正确，若正确则故障在后半段，若错误则在前半段。反复二分，O(log N) 步即可定位故障点。</p>
+
+<table>
+<tr><th>步骤范围</th><th>检查点</th><th>输出状态</th><th>缩小范围</th></tr>
+<tr><td>Step 1-20</td><td>Step 10</td><td>✓ 正确</td><td>故障在 Step 11-20</td></tr>
+<tr><td>Step 11-20</td><td>Step 15</td><td>✗ 错误</td><td>故障在 Step 11-15</td></tr>
+<tr><td>Step 11-15</td><td>Step 13</td><td>✗ 错误</td><td>故障在 Step 11-13</td></tr>
+<tr><td>Step 11-13</td><td>Step 12</td><td>✓ 正确</td><td>故障在 Step 13</td></tr>
+<tr><td>Step 13</td><td>详细检查</td><td>工具返回超时 → 默认值异常</td><td>根因确认</td></tr>
+</table>
+
+<div class="intuition-box">
+<p>四阶段的本质是将"不可复现的幽灵 Bug"转化为"可重复实验的科学问题"。T1 控制变量（固定输入），T2 采集数据（记录输出），T3 保存环境（中间状态），T4 分析归因（精准定位）。这正是科学研究的标准范式——只不过应用在 AI Agent 的故障诊断上。</p>
+</div>
+    </section>
+
+    <section class="chapter" id="ch4">
+      <div class="ch-head"><div class="num">04</div><div class="t"><h2>录制与回放工程实现</h2><div class="sub">Replay 的工程实现核心在于&quot;录制&quot;和&quot;回放&quot;两个模式</div></div></div>
+      <p>Replay 的工程实现核心在于"录制"和"回放"两个模式。录制模式下，所有 LLM 调用和工具执行的请求/响应被拦截并持久化；回放模式下，相同的调用被拦截并从录制数据中返回缓存的响应——不再真正调用 API。</p>
+
+<div class="flow">
+  <div class="flow-title">录制模式 (Record)</div>
+  <div class="flow-node accent"><div class="nlabel">Agent Code (业务代码零改动)</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">LLM API 调用 → 真实 API → 真实响应 → 录制到 SQLite</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Tool 执行 → 真实工具 → 真实返回 → 录制到 SQLite</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Memory 读写 → 真实存储 → 真实状态 → 录制到 SQLite</div><div class="nsub">回放模式 (Replay)： · Agent Code (完全相同的代码)</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">LLM API 调用 → 拦截 → 从 SQLite 返回录制响应 (cache hit)</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Tool 执行 → 拦截 → 从 SQLite 返回录制返回 (cache hit)</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">Memory 读写 → 拦截 → 从 SQLite 返回录制状态 (cache hit)</div><div class="nsub">结果: 0 次真实 API 调用, 100% 确定性输出, 执行轨迹与录制时完全一致</div></div>
+</div>
+
+<h3>4.1 工程实现关键设计</h3>
+<table>
+<tr><th>设计要素</th><th>方案</th><th>原因</th></tr>
+<tr><td><span class="term">零侵入录制</span></td><td>通过装饰器/中间件拦截，业务代码不改动</td><td>录制不应影响业务逻辑，降低接入门槛</td></tr>
+<tr><td><span class="term">本地 SQLite 存储</span></td><td>录制数据存在本地 <code>.replay/recordings.db</code></td><td>纯本地、不上云、保护敏感数据</td></tr>
+<tr><td><span class="term">Run ID 索引</span></td><td>每次运行生成唯一 Run ID，步骤按序编号</td><td>精确定位到某次运行的某一步</td></tr>
+<tr><td><span class="term">Fork 机制</span></td><td>从故障步骤分叉，修改输入后重新执行</td><td>不需要从头重跑——只从出错点开始修复验证</td></tr>
+<tr><td><span class="term">确定性保证</span></td><td>回放时拦截所有外部调用，返回录制数据</td><td>同 Run ID 的任何次回放结果完全一致</td></tr>
+</table>
+
+<h3>4.2 Fork 机制：从故障点修复验证</h3>
+<p>Fork 是 Replay 最强大的能力之一——不是从头重跑整个执行链，而是从故障步骤"分叉"出一条新路径。修改该步骤的输入（Prompt、工具参数等），然后从该步骤开始重新执行，后续步骤正常调用 API。</p>
+
+<table>
+<tr><th>操作</th><th>传统调试</th><th>Replay + Fork</th></tr>
+<tr><td>定位故障</td><td>手动猜测 + 反复重跑</td><td>二分定位，O(log N) 步找到</td></tr>
+<tr><td>修复验证</td><td>改代码 → 全链路重跑 → 祈祷复现</td><td>Fork 故障步 → 改参数 → 局部重跑 → 确定性对比</td></tr>
+<tr><td>耗时</td><td>30 分钟 ~ 数小时</td><td>3 分钟 ~ 10 分钟</td></tr>
+<tr><td>信心</td><td>低（"好像修好了"）</td><td>高（"同样的输入，结果确实变了"）</td></tr>
+</table>
+
+<div class="intuition-box">
+<p>回放模式的本质是将 Agent 从<strong>非确定性系统</strong>变成<strong>确定性系统</strong>。在回放模式下，LLM 不再真正调用 API（省钱、省时间），工具不再真正执行（避免副作用），Memory 不再真正读写（隔离环境）。这使得故障调试变成了可控的科学实验——每次只改变一个变量，精确观察其对执行轨迹的影响。</p>
+</div>
+    </section>
+
+    <section class="chapter" id="ch5">
+      <div class="ch-head"><div class="num">05</div><div class="t"><h2>企业级应用场景</h2><div class="sub">Replay 机制在企业场景中有三大核心应用：故障诊断、回归测试、版本对比</div></div></div>
+      <p>Replay 机制在企业场景中有三大核心应用：故障诊断、回归测试、版本对比。每个场景都从 Replay 的"确定性复现"能力中获益。</p>
+
+<h3>5.1 三大应用场景对比</h3>
+<table>
+<tr><th>场景</th><th>问题</th><th>Replay 解决方案</th><th>量化收益</th></tr>
+<tr><td><span class="term">故障诊断</span></td><td>线上 Agent 偶发异常，用户报告"回答很奇怪"但无法复现</td><td>回放故障 Run ID，二分定位故障步骤，Fork 修复验证</td><td>诊断时间从 4h → 20min，复现率从 10% → 100%</td></tr>
+<tr><td><span class="term">回归测试</span></td><td>升级模型/Prompt 后，不确定是否引入了新问题</td><td>将历史成功运行固化为 Replay 测试集，新版本执行后自动对比</td><td>回归问题发现率从 15% → 92%，发布事故减少 78%</td></tr>
+<tr><td><span class="term">版本对比</span></td><td>需要评估新版本在输出质量、成功率、延迟、成本上的变化</td><td>批量 Replay 同一批输入，自动生成对比报告</td><td>评估覆盖率从 20% → 100%，决策信心显著提升</td></tr>
+</table>
+
+<h3>5.2 故障诊断实战案例</h3>
+<p>某金融 AI 客服系统日均处理 12 万次对话。一次用户投诉："它告诉我信用卡免息期是 90 天"（实际应为 50 天）。工程师打开日志，发现只有最终输出记录，无法定位是 RAG 检索错误还是 LLM 推理错误。</p>
+
+<div class="highlight">
+<strong>生产数据：</strong>引入 Replay 后，该系统的故障诊断流程变为：(1) 找到投诉对应的 Run ID；(2) 回放执行链——共 8 步；(3) 二分定位——第 4 步 RAG 检索返回了一篇过期的产品文档（免息期曾从 50 天改为 56 天再改回 50 天，旧文档缓存了 56 天的版本）；(4) Fork 第 4 步替换 RAG 返回 → 验证后续输出正确。全程耗时 18 分钟。此前平均诊断时间 4.5 小时。
+</div>
+
+<h3>5.3 回归测试实战案例</h3>
+<p>将历史上 200 次成功的 Agent 运行固化为 Replay 测试集。每次 Prompt 或模型升级后，自动执行以下流程：(1) 用新配置处理同一批 200 个输入；(2) 逐步对比新旧执行轨迹；(3) 标记所有出现差异的步骤和最终输出。</p>
+
+<table>
+<tr><th>检测项</th><th>检测方式</th><th>典型发现</th></tr>
+<tr><td>输出内容变化</td><td>新输出 vs 录制输出文本对比</td><td>模型升级后 15% 的回答风格变化（更长/更短）</td></tr>
+<tr><td>工具调用变化</td><td>新工具调用序列 vs 录制序列</td><td>Prompt 改动导致 Agent 多调了一次搜索 API（成本 +30%）</td></tr>
+<tr><td>延迟漂移</td><td>新延迟 vs 录制延迟</td><td>新模型版本 P95 延迟从 2.1s → 3.8s</td></tr>
+<tr><td>成功率下降</td><td>新成功率 vs 录制成功率</td><td>System Prompt 微调后任务完成率从 94% → 87%</td></tr>
+</table>
+
+<div class="intuition-box">
+<p>回归测试是 Replay 最具 ROI 的应用。一次模型升级可能导致 20% 的行为变化，但只有 2% 是有害的——没有 Replay 对比，你根本不知道那 2% 在哪里。有了 Replay，每次发布前自动跑 200 条 Replay 测试，任何有害变化都会被<strong>精确定位到具体步骤和具体字段</strong>。</p>
+</div>
+    </section>
+
+    <section class="chapter" id="diff">
+      <div class="ch-head"><div class="num">06</div><div class="t"><h2>Diff 对比与版本对比报告</h2><div class="sub">Replay 的 Diff 功能可以精确对比两次运行的每一步差异，而不是让工程师拿着两份日志…</div></div></div>
+      <p>Replay 的 Diff 功能可以精确对比两次运行的每一步差异，而不是让工程师拿着两份日志肉眼比对。版本对比报告则从更宏观的维度评估输出质量、成功率、延迟和成本。</p>
+
+<div class="arch-diagram">
+Diff 对比输出示例：
+
+  $ replay diff run-a1b2c3 run-x9y8z7
+
+  step 1   request.messages     ✓ identical
+  step 2   request.system       ✗ changed
+           - You are a helpful assistant.
+           + You are a concise assistant. Prefer tool calls.
+  step 2   response.tool_calls  ✗ 0 → 1 (search_docs)
+  step 3   request.messages     ✓ identical
+  step 3   response.content     ✗ different
+           - 根据文档，信用卡免息期为50天。
+           + 信用卡免息期通常为50天，但具体以发卡行规定为准。
+  step 4   ✓ identical
+
+  Summary: 2 steps diverged · first divergence at step 2 (request.system)
+</div>
+
+<h3>6.1 Diff 对比的三个层次</h3>
+<table>
+<tr><th>层次</th><th>对比对象</th><th>发现能力</th><th>典型场景</th></tr>
+<tr><td><span class="term">请求层 Diff</span></td><td>Prompt/System 指令/参数</td><td>发现输入变化——是谁改了什么导致行为不同</td><td>Prompt 版本管理、A/B 测试</td></tr>
+<tr><td><span class="term">响应层 Diff</span></td><td>LLM 输出/工具返回/状态</td><td>发现输出漂移——同样的输入是否产出了不同的结果</td><td>模型升级影响评估</td></tr>
+<tr><td><span class="term">轨迹层 Diff</span></td><td>完整执行链的步骤序列</td><td>发现结构变化——步骤数量、工具调用顺序是否改变</td><td>Agent 行为回归测试</td></tr>
+</table>
+
+<h3>6.2 版本对比报告四维评估</h3>
+<table>
+<tr><th>维度</th><th>指标</th><th>对比方式</th><th>预警阈值</th></tr>
+<tr><td><span class="term">输出质量</span></td><td>语义相似度、关键信息覆盖率、幻觉率</td><td>新旧输出经 LLM-as-Judge 评分对比</td><td>质量分下降 &gt; 5%</td></tr>
+<tr><td><span class="term">成功率</span></td><td>任务完成率、工具调用成功率</td><td>同一测试集的成功/失败统计</td><td>成功率下降 &gt; 3%</td></tr>
+<tr><td><span class="term">延迟</span></td><td>P50/P95/P99 端到端延迟</td><td>新旧延迟分布对比</td><td>P95 延迟增加 &gt; 30%</td></tr>
+<tr><td><span class="term">成本</span></td><td>Token 消耗、API 调用次数</td><td>新旧成本统计对比</td><td>单次请求成本增加 &gt; 20%</td></tr>
+</table>
+
+<div class="highlight">
+<strong>生产案例：</strong>某 AI 编码助手在模型从 GPT-4o 0513 升级到 0806 后，自动版本对比报告发现：(1) 代码生成质量分提升 8%（正面）；(2) 但工具调用次数增加 45%（Agent 更频繁地调用搜索）；(3) 单次请求成本从 $0.023 增至 $0.034（+48%）；(4) P95 延迟从 3.2s 增至 5.1s。团队据此决定：只在复杂任务路由到新模型，简单任务保持旧模型——成本不变但质量提升。
+</div>
+
+<div class="intuition-box">
+<p>Diff 对比将"感觉好像变了"变成"第 3 步的 tool_calls 从 0 变成了 1，搜索 API 多调了一次"。版本对比报告将"新模型好不好"变成"质量 +8%、成本 +48%、延迟 +59%"——<strong>用数据驱动决策，而不是凭直觉</strong>。</p>
+</div>
+    </section>
+
+    <section class="chapter" id="ch7">
+      <div class="ch-head"><div class="num">07</div><div class="t"><h2>生产架构与最佳实践</h2><div class="sub">Replay 机制的终极目标是让 AI Agent 的工程化水平追上传统软件</div></div></div>
+      <h3>7.1 生产级 Replay 系统架构</h3>
+<div class="arch-diagram">┌─────────────────────────────────────────────────────────────────┐
+│                    生产级 Replay 系统架构                         │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  ┌────────────┐    ┌────────────────┐    ┌──────────────────┐  │
+│  │ Agent 应用  │───→│ Replay 中间件   │───→│ LLM API / Tools  │  │
+│  │ (业务代码)  │    │ ┌────────────┐ │    └──────────────────┘  │
+│  └────────────┘    │ │ Record 模式 │ │           │              │
+│                    │ │ 拦截+录制   │ │           │              │
+│                    │ ├────────────┤ │           │              │
+│                    │ │ Replay 模式 │ │           │              │
+│                    │ │ 拦截+回放   │ │           │              │
+│                    │ └────────────┘ │           │              │
+│                    └───────┬────────┘           │              │
+│                            │                     │              │
+│                    ┌───────▼────────┐           │              │
+│                    │ Trace Store    │←──────────┘              │
+│                    │ (SQLite/S3)    │                           │
+│                    ├────────────────┤                           │
+│                    │ Run ID 索引    │                           │
+│                    │ Step 序列      │                           │
+│                    │ 请求/响应对    │                           │
+│                    └───────┬────────┘                           │
+│                            │                                     │
+│         ┌──────────────────┼──────────────────┐                 │
+│         ▼                  ▼                  ▼                 │
+│  ┌────────────┐   ┌────────────┐   ┌────────────┐             │
+│  │ 故障诊断    │   │ 回归测试    │   │ 版本对比    │             │
+│  │ Replay+Diff │   │ 自动化测试  │   │ 批量评估    │             │
+│  └────────────┘   └────────────┘   └────────────┘             │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘</div>
+
+<h3>7.2 录制策略配置</h3>
+<table>
+<tr><th>环境</th><th>录制比例</th><th>存储策略</th><th>保留周期</th></tr>
+<tr><td>开发环境</td><td>100% 全量录制</td><td>本地 SQLite</td><td>永久保留</td></tr>
+<tr><td>测试环境</td><td>100% 全量录制</td><td>本地 SQLite + S3 备份</td><td>90 天</td></tr>
+<tr><td>预发布环境</td><td>100% 全量录制</td><td>S3 + 冷热分层</td><td>180 天</td></tr>
+<tr><td>生产环境</td><td>采样录制（5-20%）</td><td>S3 + 冷热分层 + 异常触发全量</td><td>30 天热存储 + 1 年冷存储</td></tr>
+</table>
+
+<h3>7.3 最佳实践与常见陷阱</h3>
+<div class="practice-grid">
+<div class="do">
+<ul>
+<li><strong>录制粒度覆盖全链路：</strong>Prompt + 模型输出 + 工具返回 + Memory 状态 + 采样参数，缺一不可</li>
+<li><strong>生产环境异常触发全量录制：</strong>检测到输出异常（如用户负反馈）时，自动对该会话全量录制</li>
+<li><strong>将故障 Run 固化为回归测试：</strong>每个线上故障修复后，对应的 Run ID 加入回归测试集</li>
+<li><strong>Diff 工具集成 CI/CD：</strong>每次 Prompt/模型变更自动跑 Diff 报告，阻断有害变更上线</li>
+<li><strong>敏感数据脱敏后存储：</strong>PII 字段在录制时自动脱敏，确保合规</li>
+<li><strong>使用 Fork 做局部修复验证：</strong>不要从头重跑——从故障步骤 Fork，修改参数后局部验证</li>
+</ul>
+</div>
+<div class="dont">
+<ul>
+<li><strong>不要只录制最终输出：</strong>只存最后一条回复等于没有录制——中间步骤才是真正的诊断依据</li>
+<li><strong>不要忽略采样参数：</strong>temperature/top_p 的变化可能导致完全不同的输出，必须录制</li>
+<li><strong>不要在生产环境全量录制：</strong>全量录制的存储开销可能超过 LLM 调用成本，用采样 + 异常触发</li>
+<li><strong>不要只对比最终输出：</strong>最终输出相同不代表执行过程正确——中间步骤可能已经漂移</li>
+<li><strong>不要忽略时序信息：</strong>延迟变化是重要的性能指标，录制时必须记录每步耗时</li>
+<li><strong>不要假设回放与录制完全等价：</strong>有外部副作用的工具（如发邮件、写入数据库）在回放时需谨慎处理</li>
+</ul>
+</div>
+</div>
+
+<div class="intuition-box">
+<p>Replay 机制的终极目标是让 AI Agent 的工程化水平追上传统软件。核心原则："让历史可重新执行"。当每一次 Agent 运行都可以被精确录制、确定性回放、逐步对比、Fork 修复时，AI Agent 才真正从"黑魔法"变成了"可工程化管理的系统"。</p>
+</div>
+    </section>
+
+    <section class="chapter" id="q-a">
+      <div class="ch-head"><div class="num">08</div><div class="t"><h2>Q&amp;A</h2><div class="sub">E29 · Replay 机制核心解析 · AI Knowledge Base</div></div></div>
+      <details class="qa">
+<summary>Replay 和传统日志/Trace（如 OpenTelemetry）有什么本质区别？</summary>
+<div class="a">传统日志和 Trace 是"只读"的——它们记录发生了什么，但你不能用它们来重放执行。Replay 是"可执行"的——它不仅记录请求/响应，还接管了 API 调用层，使得回放时不再真正调用 LLM/工具，而是返回录制的数据。这意味着：(1) 回放零成本（不调用 API）；(2) 回放 100% 确定性（同 Run ID 同结果）；(3) 可以从任意步骤 Fork（修改参数后局部重跑）。传统 Trace 告诉你"发生了什么"，Replay 让你"重新经历一遍"。</div>
+</details>
+
+<details class="qa">
+<summary>生产环境全量录制的存储开销有多大？如何控制成本？</summary>
+<div class="a">单次 Agent 运行（平均 10 步，每步含 Prompt+响应+工具调用）约 20-50 KB。日均 10 万次运行的系统，全量录制约 2-5 GB/天，月存储 60-150 GB。成本控制策略：(1) 采样录制：生产环境只录制 5-20% 的运行（1 GB/天），异常触发时自动全量录制该会话；(2) 冷热分层：7 天内的热数据存 S3 Standard（$0.023/GB/月），7 天后转 S3 Glacier（$0.004/GB/月）；(3) 压缩：录制数据 JSON 压缩率约 70%，实际存储仅 30%。综合下来，月存储成本约 $5-15，远低于一次故障诊断的人力成本。</div>
+</details>
+
+<details class="qa">
+<summary>LLM 的非确定性如何保证回放的确定性？</summary>
+<div class="a">回放时根本不真正调用 LLM——Replay 中间件拦截所有 LLM API 调用，根据 Run ID + Step 序号从录制数据库中返回当初录制的响应。Agent 代码感知不到差异（返回的数据结构完全相同），但它拿到的是历史录制的确定性数据，而非 LLM 的实时输出。这就是 Replay 的核心魔法：不是让 LLM 变得确定（这不可能），而是绕过 LLM，用录制数据替代。类似地，工具调用也被拦截并返回录制数据。</div>
+</details>
+
+<details class="qa">
+<summary>Fork 机制是怎么工作的？修改了故障步骤后，后续步骤怎么执行？</summary>
+<div class="a">Fork 从指定的故障步骤开始分叉：(1) 故障步骤之前的所有步骤，继续从录制数据中回放（确定性）；(2) 在故障步骤，替换掉你修改的输入（如 Prompt、工具参数），然后真正调用 API 获取新响应；(3) 后续步骤正常调用 API（不再是回放），因为前一步的输出变了，后续执行自然会走新路径。这样你可以精确验证："如果当时第 5 步的 Prompt 是 XXX 而不是 YYY，最终结果会不会正确？"整个过程只需要真正调用故障步骤之后的 API，前面的步骤零成本回放。</div>
+</details>
+
+<details class="qa">
+<summary>Replay 对 Agent 性能有多大影响？录制会不会拖慢系统？</summary>
+<div class="a">设计良好的 Replay 中间件对性能影响极小：(1) 录制是旁路操作——请求/响应在主路径上正常流转，录制数据异步写入 SQLite/存储（不阻塞主路径）；(2) 序列化开销约 1-2ms/step（JSON 序列化 + 写入 buffer）；(3) 整体 P95 延迟增加 &lt; 5ms（对于平均 2-5 秒的 Agent 运行来说可忽略）。回放模式反而更快——因为不调用真实 API，每步延迟仅 10-20ms（SQLite 查询），10 步 Agent 回放仅需 100-200ms。</div>
+</details>
+
+<details class="qa">
+<summary>AgentRR 论文提出的"经验录制"和本文的工程 Replay 有什么区别？</summary>
+<div class="a">AgentRR（上海交通大学 IPADS，2025）将 Replay 提升到了"经验复用"的高度——不仅录制执行轨迹，还将轨迹总结为结构化的"经验"，在后续类似任务中指导 Agent 行为。工程 Replay 聚焦于故障诊断和回归测试（"出了问题回头看"），AgentRR 聚焦于经验积累和性能提升（"下次做得更好"）。两者互补：工程 Replay 是基础设施层（录制+回放+Diff），AgentRR 是应用层（经验抽象+复用+优化）。实际生产中，先建设好工程 Replay，再在其上构建经验复用机制。</div>
+</details>
+
+<details class="qa">
+<summary>有外部副作用的工具（发邮件、写数据库）在回放时怎么处理？</summary>
+<div class="a">这是 Replay 系统设计中最需要注意的问题。策略：(1) 回放模式下，所有工具调用都被拦截并返回录制数据——发邮件不会真正发送，写数据库不会真正写入。这是默认行为，确保安全。(2) Fork 模式下需要谨慎——Fork 后的步骤会真正执行工具调用。如果工具涉及不可逆操作（发邮件、支付），需要在 Fork 前设置 dry-run 模式或 mock 环境。(3) 最佳实践：将工具分为"只读"和"写入"两类，回放/Fork 时只对只读工具自动放行，写入工具默认 mock。</div>
+</details>
+
+<details class="qa">
+<summary>如何从零开始为现有 Agent 系统接入 Replay？</summary>
+<div class="a">分三步：(1) 安装 Replay SDK（如 FlightBox、agent-replay 或自研中间件），在 Agent 入口添加一个装饰器/中间件；(2) 配置录制策略——开发环境全量录制，生产环境采样录制 + 异常触发；(3) 集成到 CI/CD——将历史故障 Run ID 加入回归测试集，每次 Prompt/模型变更自动跑 Diff 报告。关键原则是"零侵入"：业务代码不需要任何改动，Replay 中间件在 API 调用层拦截。接入成本约 1-2 天（含测试和 CI/CD 集成）。</div>
+</details>
+
+
+
+<div class="footer">
+<p>E29 · Replay 机制核心解析 · AI Knowledge Base</p>
+</div>
+    </section>
+
+    <footer>
+      <div class="made">TECH NOTES · AI 工程 · 整理自 AI Knowledge Hub</div>
+    </footer>
+  </main>
+</div>
+
+<script>
+(function(){var bar=document.getElementById('progress');function u(){var h=document.documentElement;bar.style.width=h.scrollTop/(h.scrollHeight-h.clientHeight)*100+'%';}window.addEventListener('scroll',u,{passive:true});u();})();
+(function(){var links=document.querySelectorAll('aside.toc nav a');var secs=Array.from(document.querySelectorAll('section.chapter'));if(!secs.length)return;function u(){var y=window.scrollY+100,cur=secs[0];for(var i=0;i<secs.length;i++){if(secs[i].offsetTop<=y)cur=secs[i];}var id=cur.id;links.forEach(function(a){a.classList.toggle('active',a.getAttribute('href')==='#'+id);});}window.addEventListener('scroll',u,{passive:true});u();})();
+</script>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

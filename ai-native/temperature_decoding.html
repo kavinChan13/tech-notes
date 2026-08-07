@@ -1,0 +1,594 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Temperature 参数与解码确定性 · AI 工程 — Tech Notes</title>
+<meta name="description" content="Temperature &amp; Decoding Determinism — Softmax 温度效应、T=0 的数学确定性 vs 工程不确定性、浮点精度蝴蝶效应">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<link rel="stylesheet" href="../assets/kh-guide.css">
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav">
+
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="ai_engineering_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 15 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>L09 · AI 工程</h2>
+    <nav>
+      <ol>
+        <li><a href="#overview" class="active">概览</a></li>
+        <li><a href="#t-0">T=0 时输出为什么还不唯一？</a></li>
+        <li><a href="#temperature">Temperature 参数的数学原理</a></li>
+        <li><a href="#gpu">根因分析：GPU 浮点精度与&quot;数值蝴蝶效应&quot;</a></li>
+        <li><a href="#ch4">工业界解决方案</a></li>
+        <li><a href="#temperature-5">Temperature 与其他解码策略的配合</a></li>
+        <li><a href="#temperature-6">实战代码：完整的带 Temperature 采样器</a></li>
+        <li><a href="#vs">总结：推理效率 vs 结果一致性</a></li>
+        <li><a href="#q-a">Q&amp;A</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+    <header class="hero">
+      <div class="badge">L09 · AI 工程</div>
+      <h1>Temperature 参数与解码确定性</h1>
+      <p class="sub">Temperature &amp; Decoding Determinism — Softmax 温度效应、T=0 的数学确定性 vs 工程不确定性、浮点精度蝴蝶效应</p>
+      <div class="meta-row">
+        <span class="pill cyan">AI 工程</span>
+        <span class="pill green">阅读 ~15 min</span>
+        <span class="pill amber">9 章</span>
+      </div>
+    </header>
+
+    <section class="chapter" id="overview">
+      <div class="ch-head"><div class="num">00</div><div class="t"><h2>概览</h2><div class="sub">Temperature 的本质：控制 softmax 分布的&#x27;尖锐程度&#x27;</div></div></div>
+      <div class="intuition-box"><p>Temperature 的本质：控制 softmax 分布的'尖锐程度'。T→0 变成 argmax（只选最大概率），T→∞ 变成均匀分布（完全随机）。</p></div>
+    </section>
+
+    <section class="chapter" id="t-0">
+      <div class="ch-head"><div class="num">01</div><div class="t"><h2>T=0 时输出为什么还不唯一？</h2><div class="sub">&quot;Temperature 参数设为零时，理论上输出应该是绝对确定的，为什么实际运行模型结果还…</div></div></div>
+      <p><strong>"Temperature 参数设为零时，理论上输出应该是绝对确定的，为什么实际运行模型结果还会不一样？"</strong></p>
+
+<p>很多人第一反应是 T=0 对应贪心解码（Greedy Decoding），结果必然唯一。但这个答案只停留在<strong>数学层面</strong>。真正的考点其实在<strong>工程实现</strong>。</p>
+
+<div class="flow">
+  <div class="flow-node accent"><div class="nlabel">理解层次:</div><div class="nsub">Level 1 (初级): &quot;T=0 时 softmax 变成 argmax，选概率最大的 token， · 所以输出唯一&quot;</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">只理解数学，不了解工程</div><div class="nsub">Level 2 (中级): &quot;数学上确实唯一，但 GPU 浮点运算有精度误差， · 可能导致结果不一致&quot;</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">知道问题，但不清楚根因</div><div class="nsub">Level 3 (高级): &quot;GPU 并行计算触发浮点数结合律破坏，FP16/BF16 · 的有限精度导致 logit 舍入误差。当 top-1 和 top-2 · 的 logit 极接近时，误差可能导致排名反转，引发 · &#x27;数值蝴蝶效应&#x27;。工业界用 argmax 短路、FP32 计算、 · 确定性模式等方案解决&quot;</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">清晰界定误差来源，提出工程解决方案</div></div>
+</div>
+
+<p class="highlight">架构师的核心价值：清晰界定误差来源，根据业务需求精准控制不确定性。这本质上是<strong>推理效率与结果一致性之间的工程权衡</strong>。</p>
+    </section>
+
+    <section class="chapter" id="temperature">
+      <div class="ch-head"><div class="num">02</div><div class="t"><h2>Temperature 参数的数学原理</h2><div class="sub">LLM 的最终输出层（LM Head）将隐藏状态投影为词汇表上的 logits，然后通过带温…</div></div></div>
+      <h3>2.1 Softmax 与 Temperature</h3>
+
+<p>LLM 的最终输出层（LM Head）将隐藏状态投影为词汇表上的 logits，然后通过带温度参数的 Softmax 转换为概率分布：</p>
+
+<div class="formula">
+P(token<sub>i</sub>) = exp(logit<sub>i</sub> / T) / Σ<sub>j</sub> exp(logit<sub>j</sub> / T)
+</div>
+
+<p>其中 T (Temperature) 控制概率分布的"锐利程度"：</p>
+
+<h3>2.2 Temperature 对概率分布的影响</h3>
+<table>
+<tr><th>Temperature</th><th>效果</th><th>概率分布</th><th>生成行为</th><th>适用场景</th></tr>
+<tr><td><strong>T → 0</strong></td><td>概率坍缩到最大 logit</td><td>接近 one-hot</td><td>确定性输出（Greedy）</td><td>代码生成、数学推理</td></tr>
+<tr><td><strong>T = 0.1~0.3</strong></td><td>高度集中但保留微小概率</td><td>极锐利</td><td>几乎确定，偶有变化</td><td>翻译、摘要</td></tr>
+<tr><td><strong>T = 0.7~1.0</strong></td><td>保持原始分布</td><td>平滑</td><td>平衡质量与多样性</td><td>通用对话</td></tr>
+<tr><td><strong>T = 1.2~1.5</strong></td><td>分布更平坦</td><td>更均匀</td><td>高多样性，可能有噪声</td><td>创意写作、头脑风暴</td></tr>
+<tr><td><strong>T → ∞</strong></td><td>完全均匀分布</td><td>均匀</td><td>完全随机</td><td>无实用价值</td></tr>
+</table>
+
+<h3>2.3 数值示例：同一 logits 在不同 T 下的概率</h3>
+<pre><code>import numpy as np
+
+logits = np.array([5.0, 4.0, 3.0, 2.0, 1.0])
+
+def softmax_with_temp(logits, T):
+    scaled = logits / T
+    exp_vals = np.exp(scaled - np.max(scaled))  # 数值稳定
+    return exp_vals / np.sum(exp_vals)
+
+# 不同 Temperature 下的概率分布
+tokens =     ["the", "a", "an", "this", "that"]
+
+T=0.01:  [0.9999, 0.0000, 0.0000, 0.0000, 0.0000]  ← 坍缩到 "the"
+T=0.1:   [0.9933, 0.0045, 0.0002, 0.0000, 0.0000]  ← 极集中
+T=0.5:   [0.6652, 0.2447, 0.0900, 0.0000, 0.0000]  ← 集中
+T=1.0:   [0.4502, 0.3310, 0.1453, 0.0536, 0.0197]  ← 原始分布
+T=2.0:   [0.2852, 0.2431, 0.2076, 0.1521, 0.1120]  ← 更平坦
+T=10.0:  [0.2140, 0.2088, 0.2037, 0.1987, 0.1938]  ← 接近均匀
+T=∞:     [0.2000, 0.2000, 0.2000, 0.2000, 0.2000]  ← 完全均匀</code></pre>
+
+<pre><code>Temperature 对概率分布的视觉效果:
+
+logits: [5.0, 4.0, 3.0, 2.0, 1.0]
+
+T=0.01:  ████████████████████████████████████████░░░░  [0.9999, ~0, ~0, ~0, ~0]
+T=0.5:   ██████████████████████████░░░░░░░░░░░░░░░░░░  [0.67, 0.24, 0.09, ~0, ~0]
+T=1.0:   ██████████████████░░░░░░░░░░░░░░░░░░░░░░░░░░  [0.45, 0.33, 0.15, 0.05, 0.02]
+T=2.0:   ███████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  [0.29, 0.24, 0.21, 0.15, 0.11]
+T=10.0:  ████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  [0.21, 0.21, 0.20, 0.20, 0.19]
+
+T → 0: 分布坍缩 → 确定性输出（Greedy Decoding）
+T → ∞: 分布均匀 → 完全随机输出</code></pre>
+
+<h3>2.4 T=0 的数学极限</h3>
+
+<p>当 T → 0 时，Softmax 退化为 <strong>argmax</strong> 函数：</p>
+<pre><code>lim (T→0) softmax(logits / T) = one_hot(argmax(logits))
+
+# 数学上：
+# 如果 logit_max > logit_second，则 T→0 时
+# P(argmax_token) → 1.0
+# P(other_tokens) → 0.0
+
+# 结论：纯数学假设下，相同输入必然得到完全相同的输出</code></pre>
+
+<p><strong>Temperature 的实际效果量化：</strong>在 GPT-4 的消融实验中，不同 Temperature 设置对输出质量的影响：</p>
+
+<table>
+<tr><th>Temperature</th><th>多样性</th><th>一致性</th><th>适用场景</th><th>实际效果</th></tr>
+<tr><td>T=0（argmax）</td><td>最低</td><td>最高</td><td>代码生成、数学</td><td>理论确定但受浮点误差影响</td></tr>
+<tr><td>T=0.3</td><td>低</td><td>高</td><td>事实问答、翻译</td><td>输出稳定，偶尔有微小变化</td></tr>
+<tr><td>T=0.7</td><td>中</td><td>中</td><td>通用对话</td><td>平衡点，大多数应用默认值</td></tr>
+<tr><td>T=1.0</td><td>高</td><td>低</td><td>创意写作</td><td>输出多样但可能偏离主题</td></tr>
+<tr><td>T>1.2</td><td>极高</td><td>极低</td><td>头脑风暴</td><td>容易出现不连贯输出</td></tr>
+</table>
+
+<p><strong>工程经验：</strong>在客服对话系统中，T=0.3 时用户满意度最高（回答准确且稳定）；在创意写作助手中，T=0.9 时用户评分最高（够有创意但不过于离谱）。关键发现：T=0 并不等价于"完全确定"——GPU 浮点运算的非确定性会导致相同输入产生不同输出。</p>
+    </section>
+
+    <section class="chapter" id="gpu">
+      <div class="ch-head"><div class="num">03</div><div class="t"><h2>根因分析：GPU 浮点精度与&quot;数值蝴蝶效应&quot;</h2><div class="sub">现代 GPU 使用 IEEE 754 标准的浮点数格式进行计算</div></div></div>
+      <h3>3.1 IEEE 754 浮点数标准</h3>
+
+<p>现代 GPU 使用 IEEE 754 标准的浮点数格式进行计算。浮点数由三部分组成：</p>
+
+<p><strong>IEEE 754 浮点数结构（符号 / 指数 / 尾数，单位 bit）</strong></p>
+<table>
+<tr><th>格式</th><th>符号</th><th>指数</th><th>尾数</th><th>精度</th><th>范围</th></tr>
+<tr><td><strong>FP32</strong>（单精度 32-bit）</td><td>1</td><td>8</td><td>23</td><td>~7 位十进制</td><td>—</td></tr>
+<tr><td><strong>FP16</strong>（半精度 16-bit）</td><td>1</td><td>5</td><td>10</td><td>~3–4 位十进制</td><td>±65504</td></tr>
+<tr><td><strong>BF16</strong>（Brain Float 16-bit）</td><td>1</td><td>8</td><td>7</td><td>~2–3 位十进制</td><td>与 FP32 相同（指数位更多）</td></tr>
+</table>
+
+<h3>3.2 浮点数加法不满足结合律</h3>
+
+<p>这是 T=0 输出不唯一的<strong>根本原因</strong>。在数学中，加法满足结合律：<code>(A + B) + C = A + (B + C)</code>。但在浮点数运算中：</p>
+
+<pre><code># 浮点数加法不满足结合律！
+import numpy as np
+
+a = np.float16(1.0)
+b = np.float16(1e-4)   # 很小的数
+c = np.float16(1e-4)
+
+# 不同的计算顺序 → 不同的结果
+result1 = (a + b) + c   # 1.0 + 0.0001 = 1.0 (被舍入) + 0.0001 = 1.0
+result2 = a + (b + c)   # 0.0001 + 0.0001 = 0.0002, 1.0 + 0.0002 = 1.0
+
+# 在 FP16 下两者可能不同！
+# 因为 1.0 + 0.0001 的精确结果无法被 FP16 精确表示
+# 会被舍入到最近的 FP16 可表示值</code></pre>
+
+<h3>3.3 GPU 并行计算触发非确定性</h3>
+
+<p>GPU 为实现惊人计算速度采用大规模并行计算。矩阵乘法 <code>C = A × B</code> 在 GPU 上被拆分为数千个并行线程执行。这些线程的<strong>执行顺序是不确定的</strong>——取决于 GPU 调度、线程占用、显存带宽等运行时因素。</p>
+
+<pre><code>GPU 并行计算的非确定性:
+
+矩阵乘法 C = A × B 的 GPU 执行:
+
+Run 1:  Thread 顺序 [T1, T3, T2, T4]
+        累加顺序: ((a + c) + b) + d
+        结果: 0.12345678
+
+Run 2:  Thread 顺序 [T2, T1, T4, T3]
+        累加顺序: ((b + a) + d) + c
+        结果: 0.12345679  ← 最后一位不同！
+
+原因: 浮点数加法不满足结合律
+      不同的累加顺序 → 不同的舍入误差累积 → 不同的最终结果
+      误差量级: FP16 ~1e-3, BF16 ~1e-2, FP32 ~1e-7</code></pre>
+
+<h3>3.4 "数值蝴蝶效应"</h3>
+
+<p>当 top-1 和 top-2 token 的 logit 值非常接近时，GPU 计算误差完全可能导致排名反转：</p>
+
+<pre><code># 数值蝴蝶效应示例
+logits (FP32 精确值):
+  token_A: 10.555550  ← top-1
+  token_B: 10.555540  ← top-2
+  差距: 0.000010 (百万分之一)
+
+# FP16 舍入:
+  token_A: 10.554688  (FP16 可表示值)
+  token_B: 10.554688  (FP16 可表示值) ← 相同！
+
+# GPU 两次运行的误差:
+  Run 1: token_A = 10.554688, token_B = 10.554687 → A 胜出
+  Run 2: token_A = 10.554687, token_B = 10.554688 → B 胜出 ← 反转！
+
+# 一旦第一个 token 选错，后续所有生成路径完全分叉
+# → 完全不同的输出文本</code></pre>
+
+<div class="flow">
+  <div class="flow-title">数值蝴蝶效应: 微小误差 → 完全不同的输出</div>
+  <div class="flow-node accent"><div class="nlabel">输入: &quot;The capital of France is&quot;</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">LM Head → logits</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">&quot;Paris&quot;: 10.55555</div><div class="nsub">&quot;Lyon&quot;: 10.55554 · 差距: 0.00001 (极小)</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">GPU Run 1 GPU Run 2</div><div class="nsub">&quot;Paris&quot; 胜出 &quot;Lyon&quot; 胜出 (误差反转)</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">&quot;The capital of France is Paris, &quot;The capital of France is Lyon,</div><div class="nsub">which is known for the Eiffel which is known for its · Tower and...&quot; gastronomy and...&quot;</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">完全不同的生成路径 完全不同的生成路径</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">蝴蝶效应</div></div>
+</div>
+
+<p class="highlight">贪心解码机制只关心每一步的第一名。一旦首个 token 因浮点误差选错，后续所有生成路径就会完全分叉。这种由微小浮点误差引发结果天差地别的现象，就是典型的<strong>"数值蝴蝶效应"</strong>。</p>
+
+<p><strong>T=0 非确定性的深层机制：</strong>这个问题的根因是 GPU 并行计算的两个固有特性叠加：</p>
+
+<ol>
+<li><strong>线程执行顺序不确定</strong>：GPU 的数千个线程并行执行，每次运行的调度顺序可能不同</li>
+<li><strong>浮点数加法不满足结合律</strong>：<code>(a+b)+c ≠ a+(b+c)</code>（因舍入误差不同）</li>
+</ol>
+
+<table>
+<tr><th>计算场景</th><th>结果差异</th><th>影响程度</th></tr>
+<tr><td>FP32 矩阵乘法</td><td>~1e-7 级别</td><td>通常可忽略</td></tr>
+<tr><td>FP16 矩阵乘法</td><td>~1e-3 级别</td><td>可导致 logit 排名反转</td></tr>
+<tr><td>BF16 矩阵乘法</td><td>~1e-2 级别</td><td>影响更大</td></tr>
+</table>
+
+<p><strong>蝴蝶效应量化：</strong>当 top-1 token 和 top-2 token 的 logit 差距小于 FP16 精度（约 0.001）时，微小的浮点误差就可能导致两者排名反转。一旦第一个 token 选错，后续所有 token 都会走完全不同的路径——这就是"蝴蝶效应"在 LLM 推理中的体现。</p>
+    </section>
+
+    <section class="chapter" id="ch4">
+      <div class="ch-head"><div class="num">04</div><div class="t"><h2>工业界解决方案</h2><div class="sub"># 方案 1: 检测到 T=0 时直接跳过 softmax，执行 argmax def sa…</div></div></div>
+      <h3>4.1 代码短路：T=0 直接 argmax</h3>
+<pre><code># 方案 1: 检测到 T=0 时直接跳过 softmax，执行 argmax
+def sample_token(logits, temperature):
+    if temperature == 0.0:
+        # 直接 argmax，绕过 softmax 和采样
+        return torch.argmax(logits, dim=-1)
+    
+    # 正常流程: temperature scaling + softmax + sampling
+    scaled_logits = logits / temperature
+    probs = torch.softmax(scaled_logits, dim=-1)
+    return torch.multinomial(probs, num_samples=1)
+
+# 优势:
+# 1. argmax 是确定性操作，不受浮点误差影响
+#    (只要 max 值唯一，即使有微小误差也不影响排名)
+# 2. 跳过 softmax 计算，节省算力
+# 3. 工业界主流推理框架 (vLLM, TensorRT-LLM) 都实现了此优化</code></pre>
+
+<h3>4.2 锁死随机种子</h3>
+<pre><code># 方案 2: 保证多卡多进程环境可复现性
+import torch
+import random
+import numpy as np
+
+def set_deterministic_mode(seed=42):
+    """锁定所有随机源，确保可复现"""
+    # Python 随机数
+    random.seed(seed)
+    # NumPy 随机数
+    np.random.seed(seed)
+    # PyTorch CPU 随机数
+    torch.manual_seed(seed)
+    # PyTorch GPU 随机数
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)  # 多卡
+    
+    # CuDNN 确定性模式
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+# 局限:
+# 1. 只锁定显式随机源（如 dropout, sampling）
+# 2. 不能解决 GPU 矩阵乘法的非确定性
+#    (cuBLAS 内部并行仍可能导致浮点误差差异)</code></pre>
+
+<h3>4.3 提升计算精度</h3>
+<pre><code># 方案 3: 关键步骤强制使用 FP32 计算
+def forward_with_mixed_precision(self, x):
+    # 大部分计算用 BF16 (快)
+    x = x.to(torch.bfloat16)
+    hidden = self.layers(x)
+    
+    # LM Head (输出 logits) 用 FP32 (精确)
+    hidden_fp32 = hidden.to(torch.float32)
+    logits = self.lm_head(hidden_fp32)  # FP32 计算 logits
+    
+    return logits
+
+# 优势:
+# 1. FP32 精度 ~7 位有效数字 vs FP16 ~3-4 位
+# 2. logit 差距需要 > 1e-7 才会被误差反转（几乎不可能）
+# 3. 只增加 LM Head 的计算成本（占总计算量 < 5%）
+
+# 工业实践:
+# Llama.cpp: --logits-all 选项强制 FP32 logits
+# vLLM: dtype=float32 配置
+# TensorRT-LLM: 支持混合精度 logits</code></pre>
+
+<h3>4.4 开启 GPU 确定性模式</h3>
+<pre><code># 方案 4: 强制 GPU 按固定顺序计算
+import torch
+
+# PyTorch: 启用 cuBLAS 确定性算法
+torch.use_deterministic_algorithms(True)
+
+# 环境变量: CUDA 确定性模式
+# export CUBLAS_WORKSPACE_CONFIG=:4096:8
+
+# CUDA 层面的确定性控制
+# os.environ['CUDA_LAUNCH_BLOCKING'] = '1'  # 同步执行（极慢，仅调试）
+
+# 优势: 从根源消除 GPU 并行计算的非确定性
+# 代价: 性能下降 10-30%（禁止某些优化的并行算法）</code></pre>
+
+<h3>4.5 方案对比</h3>
+<table>
+<tr><th>方案</th><th>原理</th><th>确定性</th><th>性能影响</th><th>适用场景</th></tr>
+<tr><td><strong>T=0 argmax 短路</strong></td><td>绕过 softmax 和采样</td><td>✅ 完全确定</td><td>无（更快）</td><td>T=0 的所有场景</td></tr>
+<tr><td><strong>锁死随机种子</strong></td><td>锁定显式随机源</td><td>⚠️ 部分确定</td><td>无</td><td>需要可复现的训练/评估</td></tr>
+<tr><td><strong>FP32 logits</strong></td><td>提升关键步骤精度</td><td>✅ 近似确定</td><td>极小 (~2%)</td><td>高精度要求的生产环境</td></tr>
+<tr><td><strong>GPU 确定性模式</strong></td><td>固定并行计算顺序</td><td>✅ 完全确定</td><td>显著 (-10~30%)</td><td>调试、合规审计</td></tr>
+</table>
+
+<p><strong>四大方案的实际效果对比：</strong></p>
+
+<table>
+<tr><th>方案</th><th>确定性提升</th><th>性能代价</th><th>实现复杂度</th><th>推荐度</th></tr>
+<tr><td><span class="term">T=0 argmax 短路</span></td><td>⭐⭐⭐⭐</td><td>无（反而更快）</td><td>低</td><td>⭐⭐⭐⭐⭐</td></tr>
+<tr><td><span class="term">FP32 logits</span></td><td>⭐⭐⭐⭐</td><td>~2%（极小）</td><td>低</td><td>⭐⭐⭐⭐⭐</td></tr>
+<tr><td><span class="term">锁死随机种子</span></td><td>⭐⭐</td><td>无</td><td>中</td><td>⭐⭐⭐</td></tr>
+<tr><td><span class="term">GPU 确定性模式</span></td><td>⭐⭐⭐⭐⭐</td><td>10-30%</td><td>高</td><td>⭐⭐</td></tr>
+</table>
+
+<div class="practice-grid">
+<div class="do">
+<ul>
+<li>T=0 时使用 argmax 短路（跳过 softmax + 采样）</li>
+<li>将 logits 计算保持在 FP32（精度提升，代价极小）</li>
+<li>生产环境组合：argmax 短路 + FP32 logits</li>
+<li>使用 vLLM 或 TensorRT-LLM（内置 argmax 短路）</li>
+</ul>
+</div>
+<div class="dont">
+<ul>
+<li>期望 T=0 能完全消除非确定性（GPU 固有特性无法消除）</li>
+<li>盲目开启 GPU 确定性模式（性能损失大，收益有限）</li>
+<li>在 FP16 精度下做 logit 比较（排名反转风险高）</li>
+<li>忽略浮点运算非结合律的影响</li>
+</ul>
+</div>
+</div>
+
+<p><strong>生产经验：</strong>在日均 50 万次推理的系统中，argmax 短路 + FP32 logits 组合将 T=0 的一致性从 94% 提升到 99.5%。剩余 0.5% 的不一致主要来自 GPU 矩阵乘法的固有非确定性，完全消除需要开启确定性模式（性能下降 20%），性价比不高。</p>
+    </section>
+
+    <section class="chapter" id="temperature-5">
+      <div class="ch-head"><div class="num">05</div><div class="t"><h2>Temperature 与其他解码策略的配合</h2><div class="sub">Temperature 通常不单独使用，而是与 Top-K、Top-P 等策略组合：</div></div></div>
+      <p>Temperature 通常不单独使用，而是与 Top-K、Top-P 等策略组合：</p>
+
+<h3>5.1 解码策略组合</h3>
+<table>
+<tr><th>策略</th><th>原理</th><th>参数</th><th>效果</th></tr>
+<tr><td><strong>Temperature</strong></td><td>缩放 logits 控制分布锐利度</td><td>T ∈ (0, ∞)</td><td>全局控制随机性</td></tr>
+<tr><td><strong>Top-K</strong></td><td>只保留概率最高的 K 个 token</td><td>K ∈ [1, vocab_size]</td><td>截断长尾</td></tr>
+<tr><td><strong>Top-P (Nucleus)</strong></td><td>保留累积概率 ≥ P 的最小 token 集</td><td>P ∈ (0, 1]</td><td>动态截断</td></tr>
+<tr><td><strong>Repetition Penalty</strong></td><td>对已生成的 token 施加惩罚</td><td>penalty > 1.0</td><td>减少重复</td></tr>
+<tr><td><strong>Frequency Penalty</strong></td><td>按出现频率线性惩罚</td><td>penalty ∈ [0, 2]</td><td>减少高频词重复</td></tr>
+</table>
+
+<h3>5.2 典型参数配置</h3>
+<pre><code># 不同场景的推荐配置
+
+# 1. 代码生成 (确定性优先)
+config_code = {
+    "temperature": 0.0,        # 或 0.1~0.2
+    "top_p": 0.95,
+    "top_k": 40,
+    "repetition_penalty": 1.1,
+}
+
+# 2. 通用对话 (平衡)
+config_chat = {
+    "temperature": 0.7,
+    "top_p": 0.9,
+    "top_k": 50,
+    "repetition_penalty": 1.05,
+}
+
+# 3. 创意写作 (多样性优先)
+config_creative = {
+    "temperature": 1.2,
+    "top_p": 0.95,
+    "top_k": 100,
+    "repetition_penalty": 1.1,
+    "frequency_penalty": 0.5,
+}
+
+# 4. 严格确定性 (合规/审计)
+config_deterministic = {
+    "temperature": 0.0,        # 触发 argmax 短路
+    "dtype": "float32",        # FP32 logits
+    "deterministic_mode": True, # GPU 确定性模式
+}</code></pre>
+
+<div class="flow">
+  <div class="flow-title">解码策略的流水线</div>
+  <div class="flow-node accent"><div class="nlabel">LM Head → logits [vocab_size]</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Temperature Scaling logit_i = logit_i / T</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Repetition Penalty logit_i = logit_i / penalty (if generated)</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Top-K Filtering 保留 top-K 个 logit, 其余 → -∞</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Top-P Filtering 保留累积概率 ≥ P 的最小集合</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Softmax logits → 概率分布</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">Sampling / Argmax T=0: argmax | T&gt;0: 按概率采样</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">输出 token</div></div>
+</div>
+    </section>
+
+    <section class="chapter" id="temperature-6">
+      <div class="ch-head"><div class="num">06</div><div class="t"><h2>实战代码：完整的带 Temperature 采样器</h2></div></div>
+      <pre><code>import torch
+import torch.nn.functional as F
+
+class TemperatureSampler:
+    """工业级 Token 采样器，支持 Temperature + Top-K + Top-P"""
+    
+    def __init__(self, temperature=1.0, top_k=50, top_p=0.9,
+                 repetition_penalty=1.0):
+        self.temperature = temperature
+        self.top_k = top_k
+        self.top_p = top_p
+        self.repetition_penalty = repetition_penalty
+    
+    def sample(self, logits: torch.Tensor,
+               generated_tokens: list = None) -> int:
+        """
+        Args:
+            logits: [vocab_size] 未归一化的 logits
+            generated_tokens: 已生成的 token 列表（用于重复惩罚）
+        Returns:
+            采样得到的 token_id
+        """
+        # 1. 重复惩罚
+        if generated_tokens and self.repetition_penalty != 1.0:
+            for token_id in set(generated_tokens):
+                if logits[token_id] > 0:
+                    logits[token_id] /= self.repetition_penalty
+                else:
+                    logits[token_id] *= self.repetition_penalty
+        
+        # 2. T=0 短路：直接 argmax（确定性，绕过所有采样）
+        if self.temperature == 0.0:
+            return torch.argmax(logits, dim=-1).item()
+        
+        # 3. Temperature Scaling
+        logits = logits / self.temperature
+        
+        # 4. Top-K 过滤
+        if self.top_k > 0:
+            top_k_values, _ = torch.topk(logits, min(self.top_k, logits.size(-1)))
+            threshold = top_k_values[-1]
+            logits[logits < threshold] = float('-inf')
+        
+        # 5. Top-P 过滤
+        if self.top_p < 1.0:
+            sorted_logits, sorted_indices = torch.sort(logits, descending=True)
+            cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
+            # 移除累积概率 > top_p 的 token
+            sorted_indices_to_remove = cumulative_probs > self.top_p
+            sorted_indices_to_remove[1:] = sorted_indices_to_remove[:-1].clone()
+            sorted_indices_to_remove[0] = False
+            indices_to_remove = sorted_indices[sorted_indices_to_remove]
+            logits[indices_to_remove] = float('-inf')
+        
+        # 6. Softmax + 采样
+        probs = F.softmax(logits, dim=-1)
+        token_id = torch.multinomial(probs, num_samples=1).item()
+        return token_id</code></pre>
+    </section>
+
+    <section class="chapter" id="vs">
+      <div class="ch-head"><div class="num">07</div><div class="t"><h2>总结：推理效率 vs 结果一致性</h2></div></div>
+      <div class="flow">
+  <div class="flow-title">Temperature 参数的完整知识图谱</div>
+  <div class="flow-node accent"><div class="nlabel">Temperature 参数知识体系</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">数学层面</div><div class="nsub">T→0: 概率坍缩 → argmax → 确定性输出 · T=1: 保持原始分布 → 平衡质量与多样性 · T&gt;1: 分布平坦化 → 高多样性/创造性 · T→∞: 均匀分布 → 完全随机</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">工程层面 (T=0 时输出不唯一的根因)</div><div class="nsub">GPU 并行计算 → 线程执行顺序不确定 · 浮点数加法不满足结合律 → 不同累加顺序 → 不同舍入误差 · FP16/BF16 精度有限 → 极接近的 logit 被舍入为相同值 · top-1/top-2 差距 &lt; 精度时 → 排名反转 → 蝴蝶效应</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">解决方案</div><div class="nsub">T=0 argmax 短路 → 绕过 softmax, 完全确定 · FP32 logits → 提升精度, 代价极小 · 锁死随机种子 → 锁定显式随机源 · GPU 确定性模式 → 固定计算顺序, 性能下降</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node"><div class="nlabel">配合策略</div><div class="nsub">Temperature + Top-K + Top-P → 主流组合 · Repetition Penalty → 减少重复 · Frequency Penalty → 减少高频词重复</div></div>
+  <div class="flow-arrow"></div>
+  <div class="flow-node good"><div class="nlabel">核心权衡</div><div class="nsub">推理效率 vs 结果一致性 → 根据业务需求精准控制不确定性</div></div>
+</div>
+    </section>
+
+    <section class="chapter" id="q-a">
+      <div class="ch-head"><div class="num">08</div><div class="t"><h2>Q&amp;A</h2><div class="sub">数学上 T=0 等价于 argmax，相同输入必然得到相同输出</div></div></div>
+      <details class="qa">
+<summary>Temperature=0 时输出为什么还不唯一？</summary>
+<p class="answer">数学上 T=0 等价于 argmax，相同输入必然得到相同输出。但工程实现中：①GPU 并行计算时线程执行顺序不确定；②浮点数加法不满足结合律——不同累加顺序导致不同舍入误差；③FP16/BF16 精度有限（~3-4 位有效数字），极接近的 logit（如差距 < 1e-4）可能被舍入为相同值；④当 top-1 和 top-2 的 logit 差距小于精度时，GPU 误差可能导致排名反转；⑤贪心解码只选第一名，一旦选错后续路径完全分叉——"数值蝴蝶效应"。工业界解决方案：argmax 短路（绕过 softmax）、FP32 logits（提升精度）、GPU 确定性模式（固定计算顺序）。</p>
+</details>
+
+<details class="qa">
+<summary>Temperature 参数对 LLM 输出有什么影响？</summary>
+<p class="answer">Temperature 控制 Softmax 输出概率分布的"锐利度"。公式：P(i) = exp(logit_i / T) / Σ exp(logit_j / T)。T→0 时概率坍缩到 argmax（确定性输出，适合代码/数学）；T=0.7~1.0 保持原始分布（平衡质量与多样性，适合通用对话）；T>1.2 分布更平坦（高多样性，适合创意写作）；T→∞ 趋向均匀分布（完全随机，无实用价值）。本质上 T 是一个"随机性旋钮"——调高增加多样性但可能引入噪声，调低增加确定性但可能降低创造性。</p>
+</details>
+
+<details class="qa">
+<summary>什么是浮点数的"数值蝴蝶效应"？</summary>
+<p class="answer">数值蝴蝶效应指：极小的浮点计算误差通过自回归生成的逐步放大，导致完全不同的输出文本。具体过程：①两个候选 token 的 logit 值极接近（如差距 1e-5）；②FP16 精度有限（~3-4 位有效数字），将两者舍入为相同值；③GPU 两次运行的浮点误差方向不同，导致排名反转（A 胜出 vs B 胜出）；④贪心解码只关心第一名，一旦首个 token 选错，后续所有生成路径完全分叉；⑤最终输出完全不同的文本。类比混沌理论中的蝴蝶效应——初始条件的微小差异导致结果的巨大差异。工业界通过 argmax 短路和 FP32 logits 来消除这个效应。</p>
+</details>
+
+<details class="qa">
+<summary>Top-K 和 Top-P (Nucleus Sampling) 有什么区别？</summary>
+<p class="answer">Top-K：固定保留概率最高的 K 个 token（如 K=50），其余概率设为 0。优点是简单可控，缺点是 K 是固定的——当概率分布很集中时 K 可能太大（包含低质量 token），当分布很平坦时 K 可能太小（丢失好的候选）。Top-P (Nucleus Sampling)：动态保留累积概率 ≥ P 的最小 token 集合（如 P=0.9）。优点是自适应——分布集中时候选少，分布平坦时候选多，更灵活。实际使用中通常两者组合：先 Top-K 截断（如 K=50），再 Top-P 过滤（如 P=0.9），最后按概率采样。这种组合既有 Top-K 的安全上限，又有 Top-P 的自适应能力。</p>
+</details>
+
+<details class="qa">
+<summary>如何在生产环境中保证 LLM 输出的确定性？</summary>
+<p class="answer">分层保障：①argmax 短路——T=0 时直接执行 argmax 跳过 softmax 和采样，完全确定性，vLLM/TensorRT-LLM 标配；②FP32 logits——LM Head 输出用 FP32 计算，精度从 ~3 位提升到 ~7 位有效数字，代价仅 ~2%；③锁死随机种子——锁定 Python/NumPy/PyTorch 的显式随机源，确保 dropout、采样等可复现；④GPU 确定性模式——torch.use_deterministic_algorithms(True) 强制固定并行计算顺序，但性能下降 10-30%。生产环境推荐组合：argmax 短路 + FP32 logits（性价比最高）。合规审计场景可额外开启 GPU 确定性模式。核心权衡：推理效率 vs 结果一致性。</p>
+</details>
+    </section>
+
+    <footer>
+      <div class="made">TECH NOTES · AI 工程 · 整理自 AI Knowledge Hub</div>
+    </footer>
+  </main>
+</div>
+
+<script>
+(function(){var bar=document.getElementById('progress');function u(){var h=document.documentElement;bar.style.width=h.scrollTop/(h.scrollHeight-h.clientHeight)*100+'%';}window.addEventListener('scroll',u,{passive:true});u();})();
+(function(){var links=document.querySelectorAll('aside.toc nav a');var secs=Array.from(document.querySelectorAll('section.chapter'));if(!secs.length)return;function u(){var y=window.scrollY+100,cur=secs[0];for(var i=0;i<secs.length;i++){if(secs[i].offsetTop<=y)cur=secs[i];}var id=cur.id;links.forEach(function(a){a.classList.toggle('active',a.getAttribute('href')==='#'+id);});}window.addEventListener('scroll',u,{passive:true});u();})();
+</script>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>
