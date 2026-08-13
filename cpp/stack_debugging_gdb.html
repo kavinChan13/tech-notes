@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>栈溢出 · 递归 · GDB · ASan · 从 C++ 源码到寄存器与栈帧的调试串联</title>
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<style>
+  :root {
+    --bg: #0d1117; --surface: #161b22; --surface2: #1c2333; --border: #30363d;
+    --text: #e6edf3; --text-muted: #8b949e;
+    --accent-blue: #58a6ff; --accent-green: #3fb950; --accent-orange: #d29922;
+    --accent-purple: #bc8cff; --accent-red: #f85149; --accent-cyan: #39d2c0; --code-bg: #0d1117;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; background: var(--bg); color: var(--text); line-height: 1.7; }
+  h2 { font-size: 1.6em; font-weight: 600; margin-top: 8px; margin-bottom: 16px; }
+  h3 { font-size: 1.2em; font-weight: 600; margin-top: 32px; margin-bottom: 12px; color: var(--accent-blue); }
+  h4 { font-size: 1.05em; font-weight: 600; margin-top: 24px; margin-bottom: 8px; color: var(--accent-purple); }
+  p { margin-bottom: 14px; }
+  a { color: var(--accent-blue); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  strong { color: var(--text); }
+  code { font-family: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', Consolas, monospace; background: var(--surface2); padding: 2px 7px; border-radius: 4px; font-size: 0.88em; color: var(--accent-cyan); }
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 18px 20px; overflow-x: auto; margin: 14px 0 20px; font-size: 0.88em; line-height: 1.6; }
+  pre code { background: none; padding: 0; color: var(--text); }
+  .comment, .cm { color: #6a737d; }
+  .keyword, .kw { color: #ff7b72; }
+  .string, .str { color: #a5d6ff; }
+  .type { color: #79c0ff; }
+  .number, .num { color: #d2a8ff; }
+  .reg { color: var(--accent-cyan); font-weight: 600; }
+  .info-box { background: color-mix(in srgb, var(--accent-blue) 8%, var(--bg-card)); border: 1px solid color-mix(in srgb, var(--accent-blue) 25%, var(--bg-card)); border-radius: 8px; padding: 16px 20px; margin: 16px 0; font-size: 0.95em; }
+  .info-box.warning { background: color-mix(in srgb, var(--accent-orange) 10%, var(--bg-card)); border-color: color-mix(in srgb, var(--accent-orange) 30%, var(--bg-card)); }
+  .info-box.key { background: color-mix(in srgb, var(--accent-green) 8%, var(--bg-card)); border-color: color-mix(in srgb, var(--accent-green) 25%, var(--bg-card)); }
+  .info-box.danger { background: color-mix(in srgb, var(--accent-red) 10%, var(--bg-card)); border-color: color-mix(in srgb, var(--accent-red) 30%, var(--bg-card)); }
+  .info-box .title { font-weight: 600; margin-bottom: 6px; }
+  .phase-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; padding: 22px 24px 16px; margin: 22px 0; border-left: 4px solid var(--accent-blue); }
+  table { width: 100%; border-collapse: collapse; margin: 14px 0 20px; font-size: 0.92em; }
+  th { background: var(--surface2); font-weight: 600; text-align: left; padding: 10px 14px; border-bottom: 2px solid var(--border); }
+  td { padding: 9px 14px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  tr:hover td { background: color-mix(in srgb, var(--accent-blue) 5%, transparent); }
+  ul, ol { padding-left: 24px; margin-bottom: 14px; }
+  li { margin: 4px 0; }
+  .stackfig { max-width: 440px; margin: 22px auto; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; font-family: 'Cascadia Code','Fira Code',monospace; font-size: 0.84em; box-shadow: var(--shadow); }
+  .stackfig .cap { background: var(--surface2); padding: 6px 12px; font-size: 0.82em; color: var(--text-muted); text-align: center; }
+  .stackfig .srow { padding: 8px 14px; border-top: 1px solid var(--border); display: flex; justify-content: space-between; gap: 10px; align-items: center; }
+  .sf-frame { background: color-mix(in srgb, var(--accent-red) 12%, var(--bg-card)); }
+  .grow-lo { color: var(--text-muted); text-align: center; font-size: 0.78em; margin: 4px 0; }
+  .series-nav { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 26px; }
+  .series-nav a { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border-radius: 20px; border: 1px solid var(--border); background: var(--surface); font-size: 0.82em; color: var(--text); }
+  .series-nav a:hover { border-color: var(--accent-blue); text-decoration: none; }
+  .series-nav a .n { font-family: 'Cascadia Code',monospace; color: var(--accent-blue); font-weight: 700; }
+  .series-nav a.cur { background: color-mix(in srgb, var(--accent-blue) 16%, var(--bg-card)); border-color: var(--accent-blue); }
+  .myth { border-left: 4px solid var(--accent-red); background: color-mix(in srgb, var(--accent-red) 8%, var(--bg-card)); border-radius: 8px; padding: 12px 18px; margin: 12px 0; }
+  .myth .wrong { color: var(--accent-red); font-weight: 700; }
+  .myth .right { color: var(--accent-green); font-weight: 700; }
+  .qa { background: var(--bg-card); border: 1px solid var(--border); border-left: 4px solid var(--accent-cyan); border-radius: 10px; padding: 16px 20px; margin: 14px 0; }
+  .qa .q { font-weight: 700; margin-bottom: 6px; color: var(--text); }
+  .qa .lvl { font-family: 'Cascadia Code',monospace; font-size: 0.72em; color: var(--accent-cyan); border: 1px solid color-mix(in srgb, var(--accent-cyan) 40%, var(--bg-card)); border-radius: 6px; padding: 1px 7px; margin-right: 8px; }
+  .chain { max-width: 300px; margin: 18px auto; }
+  .chain .lv { border: 1px solid var(--border); border-radius: 8px; padding: 9px 14px; margin: 6px 0; text-align: center; font-family: 'Cascadia Code',monospace; font-size: 0.86em; background: var(--bg-card); }
+  .chain .ar { text-align: center; color: var(--text-muted); }
+  @media (max-width: 700px) { h2 { font-size: 1.35em; } }
+</style>
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav tn-shell-overlay">
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="modern_cpp_stl_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 22 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="progress" id="progress"></div>
+<div class="layout">
+  <aside class="toc">
+    <h2>栈溢出 / GDB · 06</h2>
+    <nav>
+      <ol>
+        <li><a href="#s1">递归为什么会 Stack Overflow</a></li>
+        <li><a href="#s2">局部变量过大：栈 vs 堆</a></li>
+        <li><a href="#s3">GDB 查看栈：bt / frame / info</a></li>
+        <li><a href="#s4">用 disassemble 把源码/汇编/寄存器串起来</a></li>
+        <li><a href="#s5">AddressSanitizer 抓栈相关内存错误</a></li>
+        <li><a href="#s6">完整调试串联：一次实战</a></li>
+        <li><a href="#s7">核心结论</a></li>
+        <li><a href="#s8">常见误区</a></li>
+        <li><a href="#s9">面试问题</a></li>
+      </ol>
+    </nav>
+  </aside>
+  <main>
+    <header class="hero">
+      <div class="badge">Under the Hood · 函数调用与底层执行 · 系列 06 / 06</div>
+      <h1>栈溢出、递归、GDB 与函数调用调试</h1>
+      <p class="sub">系列收官。前五篇建立了完整的底层模型，这一篇从<strong>真实问题</strong>出发把它用起来：递归为何撑爆栈、局部数组多大算太大、如何用 GDB 的 <code>bt / frame / info registers / disassemble</code> 把 <em>C++ 源码 → 汇编 → 寄存器 → 栈帧</em> 一线串起，以及 AddressSanitizer 如何自动逮住栈相关的内存 bug。</p>
+      <div class="meta-row">
+        <span class="pill cyan">实战篇</span>
+        <span class="pill green">阅读 ~22 min</span>
+        <span class="pill amber">前置：<a href="cpp_to_assembly.html">05 汇编实践</a></span>
+        <span class="pill red">系列收官</span>
+      </div>
+      <div class="meta">
+        <span>递归 / 大数组 → 栈溢出</span>
+        <span>bt · frame · info</span>
+        <span>disassemble 串联</span>
+        <span>ASan</span>
+      </div>
+    </header>
+
+    <nav class="series-nav" aria-label="系列导航">
+      <a href="function_call_mechanism.html"><span class="n">01</span> 函数调用发生了什么</a>
+      <a href="stack_frame_deep_dive.html"><span class="n">02</span> Stack Frame</a>
+      <a href="call_ret_internals.html"><span class="n">03</span> CALL / RET</a>
+      <a href="calling_convention_abi.html"><span class="n">04</span> Calling Convention / ABI</a>
+      <a href="cpp_to_assembly.html"><span class="n">05</span> C++ → 汇编实践</a>
+      <a class="cur" href="stack_debugging_gdb.html"><span class="n">06</span> 栈溢出 / GDB 调试</a>
+    </nav>
+
+    <!-- S1 -->
+    <section class="chapter" id="s1">
+      <div class="ch-head"><div class="num">01</div><div class="t">
+        <h2>递归为什么会 Stack Overflow</h2>
+        <p class="sub">每层递归一个栈帧，栈只增不减就会撞墙</p>
+      </div></div>
+
+      <pre><code><span class="type">void</span> foo() {
+    foo();          <span class="comment">// 无终止条件的递归</span>
+}</code></pre>
+
+      <p>结合 <a href="call_ret_internals.html">03 篇</a>的栈帧模型：每次 <code>foo()</code> 调用都压入一个新栈帧（返回地址 + 局部数据），而它永远不返回，栈只增不减：</p>
+
+      <div class="stackfig">
+        <div class="cap">高地址 ↑</div>
+        <div class="srow sf-frame"><span>foo frame #1</span></div>
+        <div class="srow sf-frame"><span>foo frame #2</span></div>
+        <div class="srow sf-frame"><span>foo frame #3</span></div>
+        <div class="srow sf-frame"><span>foo frame #4 …</span><span>← 不断向下增长</span></div>
+        <div class="cap" style="color:var(--accent-red)">低地址 ↓ 触及栈边界（guard page）→ SIGSEGV</div>
+      </div>
+      <p class="grow-lo">▲ 栈持续向低地址生长，越过保护页即崩溃</p>
+
+      <p>Linux 主线程栈默认 <strong>8 MB</strong>。栈生长到边界会撞上一个<strong>不可访问的保护页（guard page）</strong>，触发 <code>SIGSEGV</code>，程序崩溃。这就是 Stack Overflow 的物理真相。</p>
+
+      <div class="info-box"><div class="title">影响递归深度的因素</div>
+      <ul>
+        <li><strong>每帧大小</strong>：局部变量越多，单帧越大，能递归的层数越少；</li>
+        <li><strong>栈总大小</strong>：可用 <code>ulimit -s</code> 查看/调整，或线程创建时设置；</li>
+        <li><strong>尾调用优化</strong>：若写成尾递归且编译器优化（复用同一帧），可能不再溢出 —— 但<strong>不可默认依赖</strong>，C++ 不保证 TCO。</li>
+      </ul></div>
+      <div class="info-box warning"><p>工程建议：<strong>深度不可控的递归应改写为显式栈的迭代</strong>（把递归转成循环 + 手动栈），从根本上避免栈溢出，也便于设置容量上限。</p></div>
+    </section>
+
+    <!-- S2 -->
+    <section class="chapter" id="s2">
+      <div class="ch-head"><div class="num">02</div><div class="t">
+        <h2>局部变量过大：栈 vs 堆</h2>
+        <p class="sub">一个大数组就能瞬间压垮栈</p>
+      </div></div>
+
+      <pre><code><span class="type">void</span> foo() {
+    <span class="type">char</span> buffer[<span class="number">1024</span> * <span class="number">1024</span>];   <span class="comment">// 1 MB 局部数组，全在栈上！</span>
+    ...
+}</code></pre>
+
+      <p>局部数组分配在<strong>栈帧</strong>里。一个 1 MB 的 <code>buffer</code> 会让这一层栈帧直接 <code>sub rsp, 1MB</code>，几层就能耗尽 8 MB 的栈 —— 即使没有递归也会溢出。</p>
+
+      <table>
+        <thead><tr><th>维度</th><th>栈（Stack）</th><th>堆（Heap）</th></tr></thead>
+        <tbody>
+          <tr><td>分配方式</td><td>移动 RSP，几乎零成本</td><td>malloc/new，需管理器记账</td></tr>
+          <tr><td>容量</td><td>小（默认 ~8 MB）</td><td>大（受物理/虚拟内存限制）</td></tr>
+          <tr><td>生命周期</td><td>随函数返回自动回收</td><td>手动 free/delete 或智能指针</td></tr>
+          <tr><td>速度</td><td>极快</td><td>较慢（可能加锁、碎片）</td></tr>
+          <tr><td>适合</td><td>小而短命的局部对象</td><td>大对象、生命周期跨函数</td></tr>
+        </tbody>
+      </table>
+
+      <div class="info-box key"><p>经验法则：<strong>大缓冲区、大容器、生命周期不确定的对象放堆</strong>（<code>std::vector</code>、<code>new</code>、智能指针）；小而短命的放栈。把 1 MB 数组换成 <code>std::vector&lt;char&gt; buffer(1024*1024);</code>，数据就搬到堆上，栈帧只留一个几十字节的 vector 头。</p></div>
+    </section>
+
+    <!-- S3 -->
+    <section class="chapter" id="s3">
+      <div class="ch-head"><div class="num">03</div><div class="t">
+        <h2>GDB 查看栈：bt / frame / info</h2>
+        <p class="sub">把 03 篇的「返回地址链」变成看得见的命令</p>
+      </div></div>
+
+      <table>
+        <thead><tr><th>命令</th><th>作用</th></tr></thead>
+        <tbody>
+          <tr><td><code>bt</code> / <code>backtrace</code></td><td>打印完整调用栈（每层一帧）</td></tr>
+          <tr><td><code>frame N</code> / <code>f N</code></td><td>切换到第 N 层栈帧，查看它的局部/参数</td></tr>
+          <tr><td><code>info frame</code></td><td>当前帧的细节：RBP/RSP、返回地址、保存的寄存器位置</td></tr>
+          <tr><td><code>info args</code> / <code>info locals</code></td><td>当前帧的参数 / 局部变量</td></tr>
+          <tr><td><code>info registers</code> / <code>i r</code></td><td>所有寄存器当前值（RIP/RSP/RBP/RDI…）</td></tr>
+        </tbody>
+      </table>
+
+      <p>以 <code>main → foo → bar → baz</code> 为例，在 <code>baz</code> 里断下后 <code>bt</code>：</p>
+      <pre><code>(gdb) bt
+#0  baz () at demo.cpp:9
+#1  bar () at demo.cpp:6
+#2  foo () at demo.cpp:3
+#3  main () at demo.cpp:13
+
+(gdb) frame 1              <span class="comment"># 跳到 bar 那一帧</span>
+#1  bar () at demo.cpp:6
+(gdb) info frame          <span class="comment"># 看这帧的 RBP、返回地址在哪</span>
+(gdb) info locals         <span class="comment"># 看 bar 的局部变量</span></code></pre>
+
+      <div class="info-box"><p>回顾 <a href="call_ret_internals.html">03 篇</a>：这张 <code>#0…#3</code> 的表，正是 GDB 顺着<strong>栈上的返回地址链</strong>（有帧指针时用 RBP 链，否则用 DWARF CFI）逐层回溯、再用调试信息翻译出的结果。命令背后就是前面讲的机制。</p></div>
+    </section>
+
+    <!-- S4 -->
+    <section class="chapter" id="s4">
+      <div class="ch-head"><div class="num">04</div><div class="t">
+        <h2>用 disassemble 把源码/汇编/寄存器串起来</h2>
+        <p class="sub">这是整个系列的「合流点」</p>
+      </div></div>
+
+      <pre><code>(gdb) disassemble          <span class="comment"># 反汇编当前函数，标出下一条要执行的指令(=>)</span>
+(gdb) disassemble /s       <span class="comment"># 汇编与源码行交错显示，对照最直观</span>
+(gdb) x/4xg $rsp           <span class="comment"># 以 16 进制查看栈顶 4 个 8 字节（看返回地址等）</span>
+(gdb) p $rip  p $rsp  p $rbp   <span class="comment"># 打印关键寄存器</span>
+(gdb) si                   <span class="comment"># 单步一条机器指令，观察 RSP/RBP 变化</span></code></pre>
+
+      <p>把这些命令组合起来，就能亲眼见证前五篇讲的每一步：</p>
+      <div class="chain">
+        <div class="lv">C++ 源码 <span style="color:var(--text-muted)">disassemble /s</span></div>
+        <div class="ar">↓</div>
+        <div class="lv">汇编指令 <span style="color:var(--text-muted)">call / ret / sub rsp</span></div>
+        <div class="ar">↓</div>
+        <div class="lv">寄存器 <span style="color:var(--text-muted)">info registers</span></div>
+        <div class="ar">↓</div>
+        <div class="lv">Stack Frame <span style="color:var(--text-muted)">x/xg $rsp · info frame</span></div>
+      </div>
+
+      <div class="info-box key"><p>操作流：在 <code>call</code> 处 <code>si</code> 步入，观察 <span class="reg">RSP</span> 减 8（压了返回地址，<a href="call_ret_internals.html">03 篇</a>）；进入序言看 <span class="reg">RBP</span> 被建立（<a href="stack_frame_deep_dive.html">02 篇</a>）；<code>info args</code> 看参数确实来自 <span class="reg">RDI/RSI</span>（<a href="calling_convention_abi.html">04 篇</a>）。至此，抽象模型与运行现场完全对上号。</p></div>
+    </section>
+
+    <!-- S5 -->
+    <section class="chapter" id="s5">
+      <div class="ch-head"><div class="num">05</div><div class="t">
+        <h2>AddressSanitizer 抓栈相关内存错误</h2>
+        <p class="sub">很多栈问题不会立刻崩，ASan 让它们当场暴露</p>
+      </div></div>
+
+      <p>编译时加 <code>-fsanitize=address -g</code>，运行时 ASan 会在栈/堆对象周围插入<strong>红区（redzone）</strong>并监控访问，越界立刻报错并打印栈回溯。它擅长逮住三类<strong>栈相关</strong>问题：</p>
+
+      <table>
+        <thead><tr><th>错误类型</th><th>含义</th><th>典型代码</th></tr></thead>
+        <tbody>
+          <tr><td><strong>stack-buffer-overflow</strong></td><td>局部数组越界读写</td><td><code>int a[4]; a[4]=1;</code></td></tr>
+          <tr><td><strong>stack-use-after-scope</strong></td><td>用了已离开作用域的局部对象</td><td>返回/保存了块内局部变量的指针</td></tr>
+          <tr><td><strong>stack-use-after-return</strong></td><td>用了已返回函数的栈变量地址</td><td><code>int* p = f(); *p;</code>（f 返回局部地址）</td></tr>
+        </tbody>
+      </table>
+
+      <pre><code><span class="comment"># 编译并运行</span>
+g++ -fsanitize=address -g demo.cpp -o demo
+./demo
+
+<span class="comment"># 典型报错（节选）</span>
+==12345==ERROR: AddressSanitizer: stack-buffer-overflow on address 0x...
+WRITE of size 4 at 0x... thread T0
+    #0 0x... in foo() demo.cpp:5
+    #1 0x... in main demo.cpp:12
+  Address ... is located in stack of thread T0</code></pre>
+
+      <div class="info-box danger"><div class="title">为什么需要 ASan？</div><p>栈越界经常「碰巧不崩」—— 覆盖的是相邻变量或填充字节，程序继续跑，bug 潜伏很久。ASan 把「悄悄的破坏」变成「当场的报错 + 精确行号 + 栈回溯」，是排查栈内存问题的利器。代价是约 2× 运行变慢、内存增加，通常只在测试/CI 开启。</p></div>
+      <div class="info-box"><p>检测栈溢出（爆栈）本身，ASan 也能识别为 <code>stack-overflow</code>；配合 <a href="sanitizer_internals.html">Sanitizer 原理</a>一篇可深入其实现。</p></div>
+    </section>
+
+    <!-- S6 -->
+    <section class="chapter" id="s6">
+      <div class="ch-head"><div class="num">06</div><div class="t">
+        <h2>完整调试串联：一次实战</h2>
+        <p class="sub">从崩溃到定位，用上整个系列的知识</p>
+      </div></div>
+      <div class="phase-card">
+        <ol>
+          <li><strong>复现并抓崩溃</strong>：<code>ulimit -c unlimited</code> 开 core dump，或直接 <code>gdb ./demo</code> 运行到崩溃。</li>
+          <li><strong>看调用栈</strong>：<code>bt</code>。若打印出成百上千层同名帧 → 无限递归 / 栈溢出（§01）。</li>
+          <li><strong>看某帧</strong>：<code>frame N</code> + <code>info locals</code>，发现某个巨大局部数组 → 大对象爆栈（§02）。</li>
+          <li><strong>下探指令</strong>：<code>disassemble /s</code> + <code>info registers</code>，确认 <span class="reg">RSP</span> 已越界、或返回地址被写坏（§03/§04）。</li>
+          <li><strong>上 ASan 复测</strong>：<code>-fsanitize=address</code> 重新编译，让越界/悬垂当场报出精确位置（§05）。</li>
+          <li><strong>修复</strong>：大对象搬堆、递归改迭代、修正越界索引、避免返回局部地址。</li>
+        </ol>
+      </div>
+      <div class="info-box key"><p>回到系列开篇的那个问题 —— <strong>「执行 foo(a,b) 时 CPU 到底发生了什么」</strong>：现在你能从参数进寄存器、<code>call</code> 压返回地址、建立栈帧、执行、返回值进 RAX、<code>ret</code> 恢复调用者，一路讲清；并能用 <code>g++ -S</code>、<code>objdump</code>、<code>gdb</code>、<code>-O0/-O2</code>、ASan 亲手观察与验证。底层认知模型就此闭环。</p></div>
+    </section>
+
+    <!-- S7 -->
+    <section class="chapter" id="s7">
+      <div class="ch-head"><div class="num">07</div><div class="t"><h2>核心结论</h2></div></div>
+      <div class="phase-card"><ul>
+        <li><strong>递归/大局部对象都会耗栈</strong>：每帧占空间、栈只增不减到边界即 SIGSEGV。</li>
+        <li><strong>大对象放堆、深递归改迭代</strong>，是避免栈溢出的根本手段。</li>
+        <li><code>bt / frame / info frame / info registers / disassemble</code> 能把源码、汇编、寄存器、栈帧串成一条线。</li>
+        <li><strong>GDB 回溯的本质</strong>是读栈上的返回地址链 + 调试信息，与前面机制一致。</li>
+        <li><strong>ASan</strong> 把潜伏的栈越界/悬垂变成当场报错，是测试期利器。</li>
+      </ul></div>
+    </section>
+
+    <!-- S8 -->
+    <section class="chapter" id="s8">
+      <div class="ch-head"><div class="num">08</div><div class="t"><h2>常见误区</h2></div></div>
+      <div class="myth"><p><span class="wrong">❌ 尾递归一定不会栈溢出。</span> 只有编译器实施了 TCO 才复用栈帧，C++ 不保证，不能默认依赖。</p></div>
+      <div class="myth"><p><span class="wrong">❌ 局部数组多大都行。</span> 局部对象在栈上，几 MB 就可能爆掉 8 MB 的栈。</p></div>
+      <div class="myth"><p><span class="wrong">❌ 没崩就说明没有栈越界。</span> 越界常「碰巧不崩」，潜伏很久；需要 ASan 才能可靠暴露。</p></div>
+      <div class="myth"><p><span class="wrong">❌ 返回局部变量的指针/引用没问题。</span> 函数返回后其栈帧被回收，该地址悬垂，是 use-after-return。</p></div>
+      <div class="myth"><p><span class="wrong">❌ GDB backtrace 靠猜。</span> 它读取真实的返回地址链，再用 DWARF 调试信息翻译。</p></div>
+    </section>
+
+    <!-- S9 -->
+    <section class="chapter" id="s9">
+      <div class="ch-head"><div class="num">09</div><div class="t"><h2>面试问题</h2></div></div>
+      <div class="qa"><div class="q"><span class="lvl">基础</span>为什么递归可能导致 Stack Overflow？</div><p>每层递归压入一个栈帧且未返回，栈持续向低地址增长，触及线程栈边界的保护页即触发 SIGSEGV。</p></div>
+      <div class="qa"><div class="q"><span class="lvl">基础</span>栈和堆有什么区别？大对象该放哪？</div><p>栈：移动 RSP 分配、极快、容量小、随返回自动回收；堆：malloc/new、容量大、需手动或智能指针管理。大对象/长生命周期放堆。</p></div>
+      <div class="qa"><div class="q"><span class="lvl">原理</span>为什么 GDB 可以 backtrace？</div><p>调用栈上保存着每层返回地址，GDB 用帧指针链或 DWARF CFI 逐帧回溯，再用调试信息映射到函数名与源码行。</p></div>
+      <div class="qa"><div class="q"><span class="lvl">工具</span>GDB 里哪些命令能看栈帧和寄存器？</div><p>bt 看调用栈、frame N 切帧、info frame 看帧细节、info args/locals 看参数与局部、info registers 看寄存器、disassemble 反汇编。</p></div>
+      <div class="qa"><div class="q"><span class="lvl">工具</span>如何把源码、汇编、寄存器、栈帧对应起来？</div><p>disassemble /s 交错显示源码与汇编，info registers 看寄存器，x/xg $rsp 看栈内容，si 单步观察 RSP/RBP 变化。</p></div>
+      <div class="qa"><div class="q"><span class="lvl">实战</span>ASan 能发现哪些栈相关问题？</div><p>stack-buffer-overflow（局部数组越界）、stack-use-after-scope、stack-use-after-return，以及爆栈 stack-overflow，并给出精确位置与栈回溯。</p></div>
+      <div class="qa"><div class="q"><span class="lvl">进阶</span>如何避免深度不可控的递归导致崩溃？</div><p>改写为显式栈的迭代、限制递归深度、增大线程栈、或依赖可保证的尾调用优化（谨慎）。</p></div>
+      <div class="qa"><div class="q"><span class="lvl">进阶</span>返回局部变量地址为什么危险？如何定位？</div><p>函数返回后其栈帧被回收，指针悬垂，后续访问是未定义行为。用 ASan（use-after-return）或编译器 -Wreturn-local-addr 警告定位。</p></div>
+    </section>
+
+    <div style="margin-top:50px;padding-top:24px;border-top:1px solid var(--border);">
+      <div class="info-box key"><div class="title">🎓 系列完成</div><p>你已走完 <strong>C++ → 编译器 → 汇编 → ABI → 寄存器 → Stack Frame → CALL/RET → 函数执行</strong> 的完整链路。回顾：<a href="function_call_mechanism.html">01 全景</a> · <a href="stack_frame_deep_dive.html">02 栈帧</a> · <a href="call_ret_internals.html">03 CALL/RET</a> · <a href="calling_convention_abi.html">04 ABI</a> · <a href="cpp_to_assembly.html">05 汇编实践</a> · 06 调试实战。延伸阅读：<a href="compilation_guide.html">编译步骤</a>、<a href="object_model.html">对象模型</a>、<a href="sanitizer_internals.html">Sanitizer 原理</a>。</p></div>
+      <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:12px;font-size:0.9em;margin-top:14px;">
+        <a href="cpp_to_assembly.html">← 05 · 从 C++ 到汇编</a>
+        <a href="modern_cpp_stl_directory.html"><strong>返回 C++ 目录 →</strong></a>
+      </div>
+    </div>
+  </main>
+</div>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

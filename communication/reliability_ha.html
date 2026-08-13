@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>通信系统的性能、可靠性与高可用 · Latency / Jitter / HA / Fault Tolerance / Backpressure / Scalability</title>
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<link rel="stylesheet" href="../assets/page-shell.css">
+<style>
+  .ps .def { background:color-mix(in srgb,var(--ps-accent) 8%,var(--ps-card)); border:1px solid var(--ps-border);
+    border-left:4px solid var(--ps-accent); border-radius:8px; padding:12px 16px; margin:14px 0; font-size:.95em; }
+  .ps .def strong:first-child { color:var(--ps-accent); }
+</style>
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav ps tn-shell-overlay">
+
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="communication_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 22 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>性能与高可用</h2>
+    <nav>
+      <ol>
+        <li><a href="#s1">为什么通信系统更严苛</a></li>
+        <li><a href="#s2">性能指标：延迟/吞吐/抖动/丢包</a></li>
+        <li><a href="#s3">可用性与几个 9</a></li>
+        <li><a href="#s4">容错与冗余</a></li>
+        <li><a href="#s5">Retry / Timeout / Backpressure</a></li>
+        <li><a href="#s6">负载均衡与可扩展</a></li>
+        <li><a href="#s7">故障处理心法</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+
+    <header class="hero">
+      <div class="badge">Communication · Reliability · 2026</div>
+      <h1>通信系统的性能、可靠性与高可用</h1>
+      <p class="sub">通信系统为什么比普通业务系统更"斤斤计较"实时性、确定性与故障恢复？本篇讲清性能指标、可用性(几个9)、容错冗余、重试/超时/背压、负载均衡与扩展性，并给出故障处理的工程心法。</p>
+      <div class="meta-row">
+        <span class="pill cyan">Module 09</span>
+        <span class="pill green">阅读 ~22 min</span>
+        <span class="pill amber">HA / 容错</span>
+      </div>
+    </header>
+
+<section class="chapter" id="s1">
+  <div class="ch-head"><div class="num">01</div><div class="t"><h2>为什么通信系统更严苛</h2><p class="sub">和普通业务系统的差别</p></div></div>
+  <ul>
+    <li><strong>实时性/确定性</strong>：前传有 µs 级窗口，晚到的数据等于没到（不像网页慢点没事）。</li>
+    <li><strong>不可中断</strong>：基站宕几秒就是大面积掉话/断网，可用性要求极高（电信级 99.999%）。</li>
+    <li><strong>规模</strong>：一个核心网要扛海量并发用户与信令。</li>
+    <li><strong>故障必现</strong>：链路抖动、丢包、硬件失效是常态而非例外，必须设计成"故障可恢复"。</li>
+  </ul>
+  <div class="analogy">🏥 <strong>类比</strong>：普通业务系统像餐厅——慢一点、偶尔关门可接受；通信系统像医院急诊/供电——必须 7×24 不间断、响应有硬时限，出问题要能立即切备用。</div>
+</section>
+
+<section class="chapter" id="s2">
+  <div class="ch-head"><div class="num">02</div><div class="t"><h2>性能指标：延迟 / 吞吐 / 抖动 / 丢包</h2><p class="sub">四个核心度量</p></div></div>
+  <table>
+    <thead><tr><th>指标</th><th>含义</th><th>为何关键</th></tr></thead>
+    <tbody>
+      <tr><td>Latency 延迟</td><td>单程/往返耗时</td><td>前传/URLLC 有硬上限</td></tr>
+      <tr><td>Throughput 吞吐</td><td>单位时间处理量(bps/pps)</td><td>决定容量</td></tr>
+      <tr><td>Jitter 抖动</td><td>延迟的波动</td><td>实时流最怕抖动(比平均延迟更致命)</td></tr>
+      <tr><td>Packet Loss 丢包</td><td>丢失比例</td><td>影响质量/触发重传</td></tr>
+    </tbody>
+  </table>
+  <div class="def"><strong>尾延迟(p99/p999)</strong>比平均延迟更重要：平均 1ms 但 p999 达 50ms，对实时系统仍是灾难。通信系统盯的是<strong>最坏情况的确定性</strong>，不是平均值。</div>
+</section>
+
+<section class="chapter" id="s3">
+  <div class="ch-head"><div class="num">03</div><div class="t"><h2>可用性与几个 9</h2><p class="sub">电信级 = 99.999%</p></div></div>
+  <table>
+    <thead><tr><th>可用性</th><th>年停机时间</th><th>级别</th></tr></thead>
+    <tbody>
+      <tr><td>99%</td><td>~3.65 天</td><td>普通</td></tr>
+      <tr><td>99.9%</td><td>~8.77 小时</td><td>较好</td></tr>
+      <tr><td>99.99%</td><td>~52.6 分钟</td><td>高可用</td></tr>
+      <tr><td>99.999%(5个9)</td><td>~5.26 分钟</td><td><strong>电信级</strong></td></tr>
+    </tbody>
+  </table>
+  <div class="def"><strong>可用性 = MTBF / (MTBF + MTTR)</strong>。提高它要么让故障更少(MTBF↑)、要么让恢复更快(MTTR↓)。通信系统两手抓，尤其靠冗余把 MTTR 降到秒级。</div>
+</section>
+
+<section class="chapter" id="s4">
+  <div class="ch-head"><div class="num">04</div><div class="t"><h2>容错与冗余</h2><p class="sub">故障不可避免，切换要无感</p></div></div>
+  <ul>
+    <li><strong>冗余</strong>：主备(1+1)、N+1、双活。硬件、链路、进程都可冗余。</li>
+    <li><strong>故障检测</strong>：心跳/健康检查，快速发现挂掉的节点。</li>
+    <li><strong>快速切换 Failover</strong>：主挂了备立即接管，会话/状态尽量不丢。</li>
+    <li><strong>状态复制</strong>：主备同步状态(或用共享存储)，实现热备而非冷启。</li>
+    <li><strong>优雅降级</strong>：部分故障时保住核心功能，而非整体崩溃。</li>
+  </ul>
+
+  <div class="diag">
+    <svg viewBox="0 0 720 260" width="720" height="260" role="img" aria-label="主备快速切换 failover">
+      <g font-family="Inter, sans-serif" font-size="11" fill="#94a3b8">
+        <text x="360" y="20" text-anchor="middle" fill="#facc15" font-weight="700" font-size="13">主备热备 + 心跳检测 + 快速 failover</text>
+
+        <rect x="290" y="45" width="140" height="40" rx="8" fill="#0e2233" stroke="#7dd3fc"/><text x="360" y="70" text-anchor="middle" fill="#8ec8f6" font-weight="700">流量 / 客户端</text>
+
+        <!-- active -->
+        <rect x="90" y="140" width="200" height="70" rx="10" fill="#0e2a3a" stroke="#34d399"/>
+        <text x="190" y="168" text-anchor="middle" fill="#6ee7b7" font-weight="700">Active 主</text>
+        <text x="190" y="190" text-anchor="middle" font-size="10">正在处理业务</text>
+
+        <!-- standby -->
+        <rect x="430" y="140" width="200" height="70" rx="10" fill="#2a1f0d" stroke="#fb923c"/>
+        <text x="530" y="168" text-anchor="middle" fill="#fb923c" font-weight="700">Standby 备</text>
+        <text x="530" y="190" text-anchor="middle" font-size="10">热备，随时接管</text>
+
+        <path d="M330 85 V120 H190 V140" stroke="#34d399" fill="none" marker-end="url(#ha)"/>
+        <path d="M390 85 V120 H530 V140" stroke="#fb923c" fill="none" stroke-dasharray="4,3" marker-end="url(#ha2)"/>
+        <text x="235" y="112" fill="#6ee7b7" font-size="9">主路径</text>
+        <text x="470" y="112" fill="#fb923c" font-size="9">主挂→切到备</text>
+
+        <!-- heartbeat + state replication -->
+        <path d="M290 165 H430" stroke="#a78bfa" fill="none" marker-end="url(#ha3)" marker-start="url(#ha3)"/>
+        <text x="360" y="158" text-anchor="middle" fill="#d4a0ff" font-size="10">心跳 + 状态复制</text>
+        <text x="360" y="235" text-anchor="middle" fill="#facc15" font-size="10.5">目标：MTTR 压到秒级 → 可用性 = MTBF/(MTBF+MTTR) 逼近 99.999%</text>
+
+        <defs>
+          <marker id="ha" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#34d399"/></marker>
+          <marker id="ha2" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#fb923c"/></marker>
+          <marker id="ha3" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#a78bfa"/></marker>
+        </defs>
+      </g>
+    </svg>
+  </div>
+</section>
+
+<section class="chapter" id="s5">
+  <div class="ch-head"><div class="num">05</div><div class="t"><h2>Retry / Timeout / Backpressure</h2><p class="sub">面对拥塞与失败</p></div></div>
+  <div class="def"><strong>Timeout 超时</strong>：任何等待都要有上限，否则一个卡死拖垮全局。是可靠性的第一道防线。</div>
+  <div class="def"><strong>Retry 重试</strong>：瞬时失败可重试，但必须<strong>指数退避 + 上限 + 幂等</strong>，否则重试风暴会雪上加霜。</div>
+  <div class="def"><strong>Backpressure 背压</strong>：下游处理不过来时，向上游反馈"慢点发"，而不是无限堆积导致内存爆掉/延迟飙升。队列有界 + 拒绝/丢弃策略是关键。</div>
+  <div class="box warn">⚠️ 常见事故：无界队列 + 无超时 + 无退避重试 = 一点抖动就级联雪崩。三者要一起设计。</div>
+</section>
+
+<section class="chapter" id="s6">
+  <div class="ch-head"><div class="num">06</div><div class="t"><h2>负载均衡与可扩展</h2><p class="sub">从单机到集群</p></div></div>
+  <ul>
+    <li><strong>负载均衡</strong>：把流量/会话分散到多个实例，避免单点过载。</li>
+    <li><strong>水平扩展</strong>：加机器就能加容量(无状态或状态可分区最容易扩)。</li>
+    <li><strong>分区/分片</strong>：按用户/小区把状态切开，各自独立扩展。</li>
+    <li><strong>云原生 O-RAN</strong>：CU/DU 软件化后可在通用服务器上弹性伸缩，这也是 O-RAN 的动机之一。</li>
+  </ul>
+</section>
+
+<section class="chapter" id="s7">
+  <div class="ch-head"><div class="num">07</div><div class="t"><h2>故障处理心法</h2><p class="sub">设计原则</p></div></div>
+  <ul>
+    <li><strong>假设一切会失败</strong>：链路会断、进程会挂、包会丢——为故障而设计。</li>
+    <li><strong>快速失败 + 快速恢复</strong>：早发现、早切换，把 MTTR 压到最小。</li>
+    <li><strong>隔离爆炸半径</strong>：故障局部化，别让一个模块拖垮全系统(舱壁/熔断)。</li>
+    <li><strong>可观测</strong>：完善的指标/日志/告警，故障时能秒级定位。</li>
+    <li><strong>确定性优先</strong>：宁可稳定的稍慢，不要偶发的极快。</li>
+  </ul>
+
+  <div class="card">
+    <div class="card-title">🎯 本篇要点回顾</div>
+    <ul>
+      <li>通信系统重实时性/确定性/不中断，盯尾延迟而非平均</li>
+      <li>四指标：延迟/吞吐/抖动/丢包；抖动对实时流最致命</li>
+      <li>电信级 = 5个9；可用性=MTBF/(MTBF+MTTR)</li>
+      <li>冗余+故障检测+快速切换实现 HA</li>
+      <li>超时+退避重试+背压 三件套防雪崩</li>
+    </ul>
+  </div>
+
+  <div class="box tip">下一步 → <a href="capstone_system.html">一个完整通信系统案例：从管理到数据传输</a>（全主题总复习）。</div>
+</section>
+
+<div class="footer-nav">
+  <a href="comm_software_arch.html">⬅️ 通信软件架构</a>
+  <a href="capstone_system.html">➡️ 完整系统案例</a>
+  <a href="communication_directory.html">📚 目录</a>
+  <a href="../index.html">🏠 主页</a>
+</div>
+
+  </main>
+</div>
+
+<script src="../assets/page-shell.js" defer></script>
+
+<footer><p>通信系统的性能、可靠性与高可用 — Kavin Tech Notes · 2026</p></footer>
+
+<button class="back-top" id="backTop" onclick="window.scrollTo({top:0,behavior:'smooth'})">↑</button>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

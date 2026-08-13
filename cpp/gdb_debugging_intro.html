@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GDB 是什么：从 C++ 程序到可调试程序 · -g / Debug Symbols / -O0 vs -O2 / ELF</title>
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<style>
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --surface2: #1c2333;
+    --border: #30363d;
+    --text: #e6edf3;
+    --text-muted: #8b949e;
+    --accent-blue: #58a6ff;
+    --accent-green: #3fb950;
+    --accent-orange: #d29922;
+    --accent-purple: #bc8cff;
+    --accent-red: #f85149;
+    --accent-cyan: #39d2c0;
+    --code-bg: #0d1117;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.7;
+  }
+  h2 { font-size: 1.6em; font-weight: 600; margin-top: 8px; margin-bottom: 16px; }
+  h3 { font-size: 1.2em; font-weight: 600; margin-top: 32px; margin-bottom: 12px; color: var(--accent-blue); }
+  h4 { font-size: 1.05em; font-weight: 600; margin-top: 24px; margin-bottom: 8px; color: var(--accent-purple); }
+  p { margin-bottom: 14px; }
+  a { color: var(--accent-blue); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  strong { color: var(--text); }
+  code {
+    font-family: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', Consolas, monospace;
+    background: var(--surface2);
+    padding: 2px 7px;
+    border-radius: 4px;
+    font-size: 0.88em;
+    color: var(--accent-cyan);
+  }
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 18px 20px;
+    overflow-x: auto;
+    margin: 14px 0 20px;
+    font-size: 0.88em;
+    line-height: 1.6;
+  }
+  pre code { background: none; padding: 0; color: var(--text); }
+  .comment, .cm { color: #6a737d; }
+  .keyword, .kw { color: #ff7b72; }
+  .string, .str { color: #a5d6ff; }
+  .type { color: #79c0ff; }
+  .number, .num { color: #d2a8ff; }
+  .reg { color: var(--accent-cyan); font-weight: 600; }
+  .prompt { color: var(--accent-green); font-weight: 600; }
+
+  /* Info boxes */
+  .info-box { background: color-mix(in srgb, var(--accent-blue) 8%, var(--bg-card)); border: 1px solid color-mix(in srgb, var(--accent-blue) 25%, var(--bg-card)); border-radius: 8px; padding: 16px 20px; margin: 16px 0; font-size: 0.95em; }
+  .info-box.warning { background: color-mix(in srgb, var(--accent-orange) 10%, var(--bg-card)); border-color: color-mix(in srgb, var(--accent-orange) 30%, var(--bg-card)); }
+  .info-box.key { background: color-mix(in srgb, var(--accent-green) 8%, var(--bg-card)); border-color: color-mix(in srgb, var(--accent-green) 25%, var(--bg-card)); }
+  .info-box .title { font-weight: 600; margin-bottom: 6px; }
+
+  .phase-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; padding: 22px 24px 16px; margin: 22px 0; border-left: 4px solid var(--accent-blue); }
+
+  /* Tables */
+  table { width: 100%; border-collapse: collapse; margin: 14px 0 20px; font-size: 0.92em; }
+  th { background: var(--surface2); font-weight: 600; text-align: left; padding: 10px 14px; border-bottom: 2px solid var(--border); }
+  td { padding: 9px 14px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  tr:hover td { background: color-mix(in srgb, var(--accent-blue) 5%, transparent); }
+
+  /* Flow diagram */
+  .flow-diagram { display: flex; flex-direction: column; gap: 0; margin: 20px 0; align-items: center; }
+  .flow-box { background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 11px 22px; text-align: center; font-size: 0.9em; min-width: 260px; }
+  .flow-arrow-down { width: 2px; height: 18px; background: var(--text-muted); position: relative; }
+  .flow-arrow-down::after { content: '▼'; position: absolute; bottom: -8px; left: -5px; font-size: 10px; color: var(--text-muted); }
+
+  ul, ol { padding-left: 24px; margin-bottom: 14px; }
+  li { margin: 4px 0; }
+
+  /* series nav */
+  .series-nav { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 26px; }
+  .series-nav a { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border-radius: 20px; border: 1px solid var(--border); background: var(--surface); font-size: 0.82em; color: var(--text); }
+  .series-nav a:hover { border-color: var(--accent-blue); text-decoration: none; }
+  .series-nav a .n { font-family: 'Cascadia Code',monospace; color: var(--accent-blue); font-weight: 700; }
+  .series-nav a.cur { background: color-mix(in srgb, var(--accent-blue) 16%, var(--bg-card)); border-color: var(--accent-blue); }
+
+  /* myths */
+  .myth { border-left: 4px solid var(--accent-red); background: color-mix(in srgb, var(--accent-red) 8%, var(--bg-card)); border-radius: 8px; padding: 12px 18px; margin: 12px 0; }
+  .myth .wrong { color: var(--accent-red); font-weight: 700; }
+  .myth .right { color: var(--accent-green); font-weight: 700; }
+
+  /* interview card */
+  .qa { background: var(--bg-card); border: 1px solid var(--border); border-left: 4px solid var(--accent-cyan); border-radius: 10px; padding: 16px 20px; margin: 14px 0; }
+  .qa .q { font-weight: 700; margin-bottom: 6px; color: var(--text); }
+  .qa .lvl { font-family: 'Cascadia Code',monospace; font-size: 0.72em; color: var(--accent-cyan); border: 1px solid color-mix(in srgb, var(--accent-cyan) 40%, var(--bg-card)); border-radius: 6px; padding: 1px 7px; margin-right: 8px; }
+
+  @media (max-width: 700px) { h2 { font-size: 1.35em; } }
+</style>
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav tn-shell-overlay">
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="modern_cpp_stl_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 20 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="progress" id="progress"></div>
+<div class="layout">
+  <aside class="toc">
+    <h2>GDB · 01</h2>
+    <nav>
+      <ol>
+        <li><a href="#s1">GDB 是什么：一台观察程序的「显微镜」</a></li>
+        <li><a href="#s2">GDB 与编译器、运行时的三角关系</a></li>
+        <li><a href="#s3">GDB 能解决什么，不能解决什么</a></li>
+        <li><a href="#s4">Debug Build vs Release Build</a></li>
+        <li><a href="#s5">-g / Debug Symbols / ELF 里到底存了什么</a></li>
+        <li><a href="#s6">-O0 / -O2 对调试的影响</a></li>
+        <li><a href="#s7">上手：编译、启动、run / start / quit</a></li>
+        <li><a href="#s8">整体心智模型</a></li>
+        <li><a href="#s9">常见误区</a></li>
+        <li><a href="#s10">面试问题</a></li>
+      </ol>
+    </nav>
+  </aside>
+  <main>
+    <header class="hero">
+      <div class="badge">GDB 调试 C++ · 系列 01 / 06</div>
+      <h1>GDB 是什么：从 C++ 程序到可调试程序</h1>
+      <p class="sub">调试的第一步不是「记住哪个命令」，而是搞清楚 <strong>GDB 到底站在什么位置</strong>：它不修改你的程序，也不让程序「更正确」，它只是让你能<strong>观察一个正在运行的进程</strong> —— 看到寄存器、栈、内存、线程。这一篇建立整个系列的地基：GDB 与编译器、与运行时的关系，<code>-g</code> 与 Debug Symbols 到底做了什么，以及 <code>-O0</code> / <code>-O2</code> 为什么会让调试体验天差地别。</p>
+      <div class="meta-row">
+        <span class="pill cyan">系列开篇</span>
+        <span class="pill green">阅读 ~20 min</span>
+        <span class="pill amber">前置：C/C++ 基础 · Linux 基本操作</span>
+        <span class="pill violet">x86-64 Linux 为主</span>
+      </div>
+      <div class="meta">
+        <span>源码 → 可执行文件 + 调试信息 → GDB → 进程</span>
+        <span>-g / Debug Symbols / ELF</span>
+        <span>-O0 vs -O2</span>
+        <span>单文件 · 无 CDN 依赖</span>
+      </div>
+    </header>
+
+    <nav class="series-nav" aria-label="系列导航">
+      <a class="cur" href="gdb_debugging_intro.html"><span class="n">01</span> GDB 是什么</a>
+      <a href="gdb_breakpoints.html"><span class="n">02</span> 断点与执行控制</a>
+      <a href="gdb_stack_frame_variables.html"><span class="n">03</span> 栈 / 帧 / 变量</a>
+      <a href="gdb_memory_register_assembly.html"><span class="n">04</span> 内存 / 寄存器 / 汇编</a>
+      <a href="gdb_multithread_debugging.html"><span class="n">05</span> 多线程调试</a>
+      <a href="gdb_crash_debugging.html"><span class="n">06</span> Crash 实战</a>
+    </nav>
+
+    <div class="info-box">
+      <div class="title">这套系列与「函数调用与底层执行」是姊妹篇</div>
+      <p>本系列讲「怎么用 GDB 观察 C++ 程序」，会大量用到栈帧、返回地址、寄存器、ABI 这些概念。如果你想把这些底层机制彻底吃透，配合阅读 <a href="function_call_mechanism.html">函数调用发生了什么</a> → <a href="stack_frame_deep_dive.html">Stack Frame 深入</a> → <a href="call_ret_internals.html">CALL / RET</a> → <a href="calling_convention_abi.html">Calling Convention / ABI</a>。两套内容互为「原理」与「观察工具」。</p>
+    </div>
+
+    <!-- ============ S1 ============ -->
+    <section class="chapter" id="s1">
+      <div class="ch-head">
+        <div class="num">01</div>
+        <div class="t">
+          <h2>GDB 是什么：一台观察程序的「显微镜」</h2>
+          <p class="sub">先建立定位，再谈命令</p>
+        </div>
+      </div>
+
+      <p><strong>GDB（GNU Debugger）</strong>是一个<strong>源码级调试器</strong>：它接管另一个进程的执行，让你能够在任意时刻<strong>暂停程序、逐行执行、检查变量、查看调用栈、读写内存和寄存器</strong>。核心机制是操作系统提供的 <code>ptrace</code> 系统调用 —— GDB 通过它成为「被调试进程」的「父级观察者」，从而拦截信号、设置断点、读取对方地址空间。</p>
+
+      <div class="info-box key">
+        <div class="title">一句话记住 GDB 的定位</div>
+        <p>GDB <strong>不是让程序更正确的工具，而是让开发者能够观察程序运行状态的工具</strong>。它不会替你修 bug，它只把「黑盒运行」变成「可观察、可暂停、可追问」。真正定位问题的是你的假设与验证，GDB 只是验证假设的仪器。</p>
+      </div>
+
+      <div class="info-box">
+        <div class="title">生活类比：给运行中的引擎装一块观察窗</div>
+        <p>程序正常跑起来，就像一台盖着外壳的引擎 —— 你只能看到「输入」和「输出」，中间发生了什么完全是黑盒。GDB 相当于给这台引擎装了透明观察窗 + 单帧慢放 + 暂停键：你可以让它停在任意一个活塞行程，看清楚每个齿轮当前的位置。它<strong>不修理引擎</strong>，只让你看清故障现场。</p>
+      </div>
+
+      <h3>为什么 C++ 尤其需要 GDB</h3>
+      <p>C++ 是编译型、贴近硬件的语言：没有虚拟机兜底、没有自动内存管理、指针和手动生命周期无处不在。一旦出现<strong>空指针、越界、悬垂指针、栈溢出、数据竞争</strong>，程序往往直接崩溃或行为诡异，而源码本身「看上去没问题」。这时唯一可靠的办法就是<strong>回到运行现场</strong>，看当时的指针、变量、调用链究竟是什么样 —— 这正是 GDB 的主场。</p>
+    </section>
+
+    <!-- ============ S2 ============ -->
+    <section class="chapter" id="s2">
+      <div class="ch-head">
+        <div class="num">02</div>
+        <div class="t">
+          <h2>GDB 与编译器、运行时的三角关系</h2>
+          <p class="sub">GDB 从不孤立工作，它依赖编译器留下的「地图」</p>
+        </div>
+      </div>
+
+      <h3>GDB 与编译器：GDB 依赖编译器生成的调试信息</h3>
+      <p>GDB 本身<strong>不认识你的源码</strong>。它能把内存地址 <code>0x40113a</code> 翻译成「<code>main.cpp</code> 第 12 行、函数 <code>add</code>、局部变量 <code>c</code>」，靠的是<strong>编译器在编译时额外写进可执行文件的「调试信息」</strong>（DWARF 格式）。没有这份信息，GDB 只能看到裸地址和汇编，看不到行号和变量名。所以调试的前提是：<strong>用 <code>-g</code> 让编译器把这张「源码 ↔ 机器码」地图带上</strong>。</p>
+
+      <h3>GDB 与运行时：GDB 观察的是一个「进程」</h3>
+      <p>GDB 操作的对象是一个<strong>正在运行（或已经崩溃）的进程</strong>，不是源码文件。它读到的寄存器、栈、堆、线程状态，都是这个进程<strong>此时此刻</strong>的真实运行时状态。这一点非常关键：GDB 看到的是「现在内存里发生的事」，而不是「代码应该发生的事」—— 两者不一致，恰恰就是 bug 所在。</p>
+
+      <div class="flow-diagram">
+        <div class="flow-box"><strong>C++ Source</strong> &nbsp;<code>main.cpp</code></div>
+        <div class="flow-arrow-down"></div>
+        <div class="flow-box"><strong>Compiler</strong>（<code>g++ -g</code>）—— 生成机器码 + 调试信息</div>
+        <div class="flow-arrow-down"></div>
+        <div class="flow-box"><strong>Executable + Debug Information</strong>（ELF + DWARF）</div>
+        <div class="flow-arrow-down"></div>
+        <div class="flow-box"><strong>GDB</strong> —— 通过 <code>ptrace</code> 接管</div>
+        <div class="flow-arrow-down"></div>
+        <div class="flow-box"><strong>Process</strong>（被调试进程）</div>
+        <div class="flow-arrow-down"></div>
+        <div class="flow-box"><span class="reg">Registers</span> / <span class="reg">Stack</span> / <span class="reg">Memory</span> / <span class="reg">Threads</span></div>
+      </div>
+      <p class="grow-lo" style="text-align:center;color:var(--text-muted);font-size:.82em;">▲ 整个系列都围绕这条链条展开，最底层的四样东西是 GDB 真正观察的对象</p>
+    </section>
+
+    <!-- ============ S3 ============ -->
+    <section class="chapter" id="s3">
+      <div class="ch-head">
+        <div class="num">03</div>
+        <div class="t">
+          <h2>GDB 能解决什么，不能解决什么</h2>
+          <p class="sub">边界感是高级调试能力的一部分</p>
+        </div>
+      </div>
+
+      <table>
+        <thead><tr><th>✅ GDB 擅长</th><th>❌ GDB 不擅长 / 做不到</th></tr></thead>
+        <tbody>
+          <tr><td>在指定位置暂停程序，逐行/逐指令执行</td><td>自动找出 bug（它只提供现场，不下结论）</td></tr>
+          <tr><td>查看任意时刻的变量、参数、调用栈</td><td>可靠地发现<strong>内存泄漏</strong>（那是 Valgrind / ASan 的活）</td></tr>
+          <tr><td>崩溃后定位崩在哪个函数、哪一行</td><td>检测<strong>数据竞争 Data Race</strong>（需要 TSan）</td></tr>
+          <tr><td>观察多线程各自「卡在哪里」、分析死锁</td><td>捕捉「已经越界但还没崩」的隐藏内存错误（ASan 更强）</td></tr>
+          <tr><td>读写内存 / 寄存器 / 反汇编，深入底层</td><td>做统计性的 CPU 性能剖析（那是 perf）</td></tr>
+          <tr><td>用 core dump 离线复盘崩溃现场</td><td>解决「优化后变量被消除」导致看不到值的问题</td></tr>
+        </tbody>
+      </table>
+
+      <div class="info-box warning">
+        <div class="title">关键认知</div>
+        <p>GDB 是<strong>交互式、精确定位单点现场</strong>的工具，本质是「按需暂停 + 观察」。而 ASan / TSan / Valgrind 是<strong>自动化、全程监控</strong>的工具，本质是「插桩 + 全程检查」。真实工程里两者<strong>组合使用</strong>：先用 Sanitizer 大范围扫出可疑点，再用 GDB 定点复现和确认。第 06 篇会专门做工具对比。</p>
+      </div>
+    </section>
+
+    <!-- ============ S4 ============ -->
+    <section class="chapter" id="s4">
+      <div class="ch-head">
+        <div class="num">04</div>
+        <div class="t">
+          <h2>Debug Build vs Release Build</h2>
+          <p class="sub">同一份源码，两种「性格」完全不同的可执行文件</p>
+        </div>
+      </div>
+
+      <p>「Debug 版」和「Release 版」不是两份不同的源码，而是<strong>同一份源码用不同编译选项</strong>产生的两个可执行文件。它们的差异集中在两点：<strong>是否带调试信息（<code>-g</code>）</strong>，以及<strong>优化级别（<code>-O0</code> 还是 <code>-O2/-O3</code>）</strong>。</p>
+
+      <table>
+        <thead><tr><th>维度</th><th>Debug Build（典型）</th><th>Release Build（典型）</th></tr></thead>
+        <tbody>
+          <tr><td>典型选项</td><td><code>-g -O0</code></td><td><code>-O2</code>（或 <code>-O3 -DNDEBUG</code>）</td></tr>
+          <tr><td>调试信息</td><td>有，完整</td><td>常被剥离（<code>strip</code>）或不生成</td></tr>
+          <tr><td>变量可见性</td><td>基本都能查看真实值</td><td>大量 <code>&lt;optimized out&gt;</code></td></tr>
+          <tr><td>代码与源码对应</td><td>几乎一一对应</td><td>重排 / 内联 / 合并，跳来跳去</td></tr>
+          <tr><td>体积 / 速度</td><td>大、慢</td><td>小、快</td></tr>
+          <tr><td>调试友好度</td><td>高</td><td>低（但并非不能调）</td></tr>
+        </tbody>
+      </table>
+
+      <div class="myth">
+        <p><span class="wrong">❌ 误解：</span>Release 程序不能用 GDB 调试。</p>
+        <p><span class="right">✅ 正解：</span>Release 程序<strong>照样能用 GDB</strong>，也能设断点、看调用栈。只是因为优化 + 缺少调试信息，很多变量显示 <code>&lt;optimized out&gt;</code>、单步会「跳行」、调用栈可能不完整。生产环境常用的做法是 <strong><code>-O2 -g</code> 编译后单独保存符号文件</strong>，发布时 strip，出问题时再把符号加载回来调试。</p>
+      </div>
+    </section>
+
+    <!-- ============ S5 ============ -->
+    <section class="chapter" id="s5">
+      <div class="ch-head">
+        <div class="num">05</div>
+        <div class="t">
+          <h2>-g / Debug Symbols / ELF 里到底存了什么</h2>
+          <p class="sub">调试信息不是玄学，它是文件里一段可读的「翻译表」</p>
+        </div>
+      </div>
+
+      <h3><code>-g</code> 到底做了什么</h3>
+      <p><code>-g</code> 告诉编译器：<strong>在生成机器码的同时，额外写入「源码 ↔ 机器码」的对照信息</strong>。这些信息以 <strong>DWARF</strong> 格式存放在可执行文件的若干 <code>.debug_*</code> 节里。它包含：</p>
+      <ul>
+        <li><strong>行号表</strong>：地址 <code>0x40113a</code> ↔ <code>main.cpp:12</code>；</li>
+        <li><strong>变量信息</strong>：变量名、类型、它当前存在哪个寄存器或栈偏移；</li>
+        <li><strong>函数信息</strong>：函数名、参数、作用域范围；</li>
+        <li><strong>类型信息</strong>：<code>struct/class</code> 的成员布局，让 GDB 能把裸内存解释成 <code>User{ id=1, name="Tom" }</code>。</li>
+      </ul>
+
+      <div class="info-box">
+        <div class="title">Debug Symbols（调试符号）= 上面这些信息的统称</div>
+        <p>注意区分两类符号：<strong>①「链接符号表」</strong>（<code>.symtab</code>，函数/全局变量的名字与地址，即使不加 <code>-g</code> 也常有一部分）；<strong>②「调试符号」</strong>（<code>.debug_*</code>，只有 <code>-g</code> 才生成，含行号、局部变量、类型）。GDB 说「没有调试符号」，通常指后者缺失 —— 此时还能看到函数名，但看不到行号和局部变量。</p>
+      </div>
+
+      <h3>ELF 与 Debug Information 的关系</h3>
+      <p>Linux 下的可执行文件是 <strong>ELF（Executable and Linkable Format）</strong>格式，它由若干「节（section）」组成。<code>-g</code> 生成的调试信息，就是往 ELF 里额外加进 <code>.debug_info</code> / <code>.debug_line</code> / <code>.debug_str</code> 等节。你可以直接观察它们：</p>
+      <pre><code><span class="comment"># 看某个可执行文件有没有 .debug_* 节（有 → 带调试信息）</span>
+$ readelf -S ./main | grep debug
+  [28] .debug_info    PROGBITS ...
+  [29] .debug_line    PROGBITS ...
+
+<span class="comment"># file 命令能直接告诉你 stripped / not stripped</span>
+$ file ./main
+main: ELF 64-bit LSB pie executable ..., <span class="reg">with debug_info, not stripped</span></code></pre>
+      <p><code>strip ./main</code> 会把这些 <code>.debug_*</code> 和符号节删掉，文件变小，但 GDB 就此「失明」—— 这解释了为什么线上 strip 过的程序调试起来那么吃力。</p>
+    </section>
+
+    <!-- ============ S6 ============ -->
+    <section class="chapter" id="s6">
+      <div class="ch-head">
+        <div class="num">06</div>
+        <div class="t">
+          <h2>-O0 / -O2 对调试的影响</h2>
+          <p class="sub">优化不是「让代码变快」这么简单，它会改写代码与内存的对应关系</p>
+        </div>
+      </div>
+
+      <p><code>-g</code> 决定<strong>有没有</strong>调试信息，<code>-O</code> 决定这份调试信息<strong>还准不准</strong>。优化会内联函数、删除变量、重排指令、把变量常驻寄存器 —— 这些都会破坏「源码一行 ↔ 机器码一段」的整齐对应。</p>
+
+      <table>
+        <thead><tr><th>行为</th><th>-O0（不优化）</th><th>-O2（优化）</th></tr></thead>
+        <tbody>
+          <tr><td>单步 <code>next</code></td><td>稳定地一行一行走</td><td>可能来回跳、跳过某些行</td></tr>
+          <tr><td>局部变量 <code>p x</code></td><td>基本都能看到真实值</td><td>常见 <code>&lt;optimized out&gt;</code></td></tr>
+          <tr><td>函数调用栈</td><td>层次清晰完整</td><td>内联导致某些函数在栈里「消失」</td></tr>
+          <tr><td>断点落点</td><td>精确落在指定行</td><td>可能因指令重排落到附近</td></tr>
+        </tbody>
+      </table>
+
+      <div class="info-box warning">
+        <div class="title">为什么会出现 <code>&lt;optimized out&gt;</code></div>
+        <p>看例子 <code>int c = a + b; return c;</code>。<code>-O2</code> 下编译器发现 <code>c</code> 只是个中转，直接 <code>return a + b</code>，<strong>根本不给 <code>c</code> 分配存储</strong>。运行时内存里压根没有 <code>c</code> 这个东西，GDB 自然只能回答 <code>&lt;optimized out&gt;</code> —— 不是 GDB 无能，而是<strong>那个变量在物理上已经不存在了</strong>。</p>
+      </div>
+
+      <div class="info-box key">
+        <div class="title">学习期的建议</div>
+        <p>学调试、复现逻辑 bug，一律先用 <code>-g -O0</code>，让现场「所见即所得」。只有当 bug <strong>只在优化下才出现</strong>（这本身就是重要线索，往往指向 UB / 数据竞争），才切到 <code>-O2 -g</code> 去追。<strong>适用条件：以上关于 <code>&lt;optimized out&gt;</code> 与内联的描述针对 GCC/Clang 的常规优化行为；具体表现随编译器版本、目标架构而略有差异。</strong></p>
+      </div>
+    </section>
+
+    <!-- ============ S7 ============ -->
+    <section class="chapter" id="s7">
+      <div class="ch-head">
+        <div class="num">07</div>
+        <div class="t">
+          <h2>上手：编译、启动、run / start / quit</h2>
+          <p class="sub">用一段最小程序把整条链路跑通</p>
+        </div>
+      </div>
+
+      <p>贯穿本系列开篇的最小例子（可直接编译运行）：</p>
+      <pre><code><span class="comment">// main.cpp</span>
+<span class="keyword">#include</span> <span class="string">&lt;iostream&gt;</span>
+
+<span class="type">int</span> add(<span class="type">int</span> a, <span class="type">int</span> b)
+{
+    <span class="type">int</span> c = a + b;
+    <span class="keyword">return</span> c;
+}
+
+<span class="type">int</span> main()
+{
+    <span class="type">int</span> result = add(<span class="number">10</span>, <span class="number">20</span>);
+    std::cout &lt;&lt; result &lt;&lt; std::endl;
+}</code></pre>
+
+      <h3>第一步：编译出可调试版本</h3>
+      <pre><code>$ g++ -g -O0 main.cpp -o main   <span class="comment"># -g 带调试信息，-O0 不优化</span>
+$ gdb ./main                     <span class="comment"># 用 GDB 加载它（还没开始跑）</span></code></pre>
+
+      <p>进入后会看到提示符 —— 这说明 GDB 已经加载了程序和它的调试信息，但<strong>进程还没启动</strong>，正等你下命令：</p>
+      <pre><code>Reading symbols from ./main...
+<span class="prompt">(gdb)</span> </code></pre>
+
+      <div class="info-box">
+        <div class="title">GDB 里最先要会的 4 个命令</div>
+        <table style="margin:8px 0 0;">
+          <thead><tr><th>命令</th><th>作用</th><th>什么时候用</th></tr></thead>
+          <tbody>
+            <tr><td><code>run</code> / <code>r</code></td><td>从头启动程序并一直跑（除非撞上断点或崩溃）</td><td>已设好断点，想让程序自己跑到断点</td></tr>
+            <tr><td><code>start</code></td><td>启动程序并<strong>自动在 <code>main</code> 第一行暂停</strong></td><td>还没设断点，想从头开始一步步看</td></tr>
+            <tr><td><code>continue</code> / <code>c</code></td><td>从当前暂停处继续跑</td><td>看完一个断点，放行到下一个</td></tr>
+            <tr><td><code>quit</code> / <code>q</code></td><td>退出 GDB</td><td>调完了</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <pre><code><span class="prompt">(gdb)</span> start                   <span class="comment"># 等价于「在 main 设临时断点 + run」</span>
+Temporary breakpoint 1, main () at main.cpp:11
+11          int result = add(10, 20);
+<span class="prompt">(gdb)</span> run                     <span class="comment"># 或者直接 run，一路跑到底/断点/崩溃</span>
+<span class="prompt">(gdb)</span> quit                    <span class="comment"># 退出</span></code></pre>
+
+      <div class="info-box key">
+        <div class="title"><code>run</code> 与 <code>start</code> 的区别（高频面试点）</div>
+        <p><code>run</code> 直接跑，撞到断点或崩溃才停；如果一个断点都没设，它会一口气跑完。<code>start</code> = 「在 <code>main</code> 打一个<strong>临时断点</strong> + <code>run</code>」，所以它保证程序停在 <code>main</code> 入口，适合「我想从头一步步观察」。第 02 篇会系统讲断点与执行控制。</p>
+      </div>
+    </section>
+
+    <!-- ============ S8 ============ -->
+    <section class="chapter" id="s8">
+      <div class="ch-head">
+        <div class="num">08</div>
+        <div class="t"><h2>整体心智模型</h2></div>
+      </div>
+      <div class="phase-card">
+        <ul>
+          <li><strong>GDB = 观察运行现场的显微镜</strong>，不改程序、不修 bug，只让你看清进程此刻的状态。</li>
+          <li><strong>GDB 依赖编译器</strong>留下的调试信息（<code>-g</code> → DWARF），才能把地址翻译成行号、变量名、类型。</li>
+          <li><strong>GDB 观察的是一个进程</strong>：寄存器 / 栈 / 内存 / 线程 —— 这四样是后续所有篇章的对象。</li>
+          <li><strong>Debug（<code>-g -O0</code>）</strong>所见即所得；<strong>Release（<code>-O2</code>）</strong>能调但受优化干扰，出现 <code>&lt;optimized out&gt;</code>。</li>
+          <li><strong>调试链路</strong>：源码 → 编译器 → 可执行文件+调试信息 → GDB → 进程 → 寄存器/栈/内存/线程。</li>
+          <li><strong>四个入门命令</strong>：<code>run</code> / <code>start</code> / <code>continue</code> / <code>quit</code>。</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ============ S9 ============ -->
+    <section class="chapter" id="s9">
+      <div class="ch-head">
+        <div class="num">09</div>
+        <div class="t"><h2>常见误区</h2></div>
+      </div>
+      <div class="myth"><p><span class="wrong">❌ GDB 能让程序变正确。</span> GDB 只观察不修改；它帮你看清现场，改 bug 是你的事。</p></div>
+      <div class="myth"><p><span class="wrong">❌ 有 <code>-g</code> 就一定能完整调试。</span> 若同时开了 <code>-O2</code>，行号会跳、变量会 <code>&lt;optimized out&gt;</code>、函数会因内联消失。<code>-g</code> 决定「有没有信息」，<code>-O</code> 决定「信息还准不准」。</p></div>
+      <div class="myth"><p><span class="wrong">❌ Release 程序不能用 GDB。</span> 能用，只是受限。生产实践常用 <code>-O2 -g</code> + 分离/保存符号文件。</p></div>
+      <div class="myth"><p><span class="wrong">❌ GDB 能定位内存泄漏。</span> 泄漏是「该释放没释放」，程序照常运行，GDB 看不出来；那是 Valgrind / ASan-leak 的活。</p></div>
+      <div class="myth"><p><span class="wrong">❌ 调试信息藏在源码文件里。</span> 它在编译产物（ELF 的 <code>.debug_*</code> 节）里，与源码文件无关；<code>strip</code> 会删掉它。</p></div>
+    </section>
+
+    <!-- ============ S10 ============ -->
+    <section class="chapter" id="s10">
+      <div class="ch-head">
+        <div class="num">10</div>
+        <div class="t"><h2>面试问题</h2></div>
+      </div>
+      <div class="qa"><div class="q"><span class="lvl">基础</span>GDB 是什么？它解决什么问题？</div><p>GDB 是源码级调试器，通过 <code>ptrace</code> 接管一个进程，让开发者暂停程序、单步执行、查看变量/调用栈/内存/寄存器/线程。它的价值是把「黑盒运行」变成「可观察的运行现场」，用于定位崩溃、逻辑错误、卡死等问题；它本身不修改程序、也不自动找 bug。</p></div>
+      <div class="qa"><div class="q"><span class="lvl">基础</span><code>-g</code> 有什么作用？</div><p>让编译器在生成机器码时额外写入调试信息（DWARF 格式，存于 ELF 的 <code>.debug_*</code> 节），包括行号表、局部变量名/类型/存储位置、函数与类型信息。有了它，GDB 才能把地址翻译成源码行号与变量名。</p></div>
+      <div class="qa"><div class="q"><span class="lvl">原理</span><code>-O0</code> 和 <code>-O2</code> 对 GDB 调试有什么影响？</div><p><code>-O0</code> 不优化，源码与机器码几乎一一对应，单步稳定、变量可见。<code>-O2</code> 会内联、删变量、重排指令、变量常驻寄存器，导致单步跳行、函数在栈里消失、局部变量显示 <code>&lt;optimized out&gt;</code>。<code>-g</code> 管「有没有信息」，<code>-O</code> 管「信息准不准」。</p></div>
+      <div class="qa"><div class="q"><span class="lvl">原理</span>为什么优化后变量会显示 <code>&lt;optimized out&gt;</code>？</div><p>因为优化可能把变量彻底消除（如中间变量被折叠进表达式），或让它只短暂存在于某个寄存器。运行时内存里根本没有对应存储，GDB 无从读取，只能报告它被优化掉了。</p></div>
+      <div class="qa"><div class="q"><span class="lvl">工程</span>Release 版本能用 GDB 吗？生产上怎么保留可调试性？</div><p>能，但受优化和 strip 影响。常见做法：用 <code>-O2 -g</code> 编译生成含符号的产物，发布前 <code>strip</code> 或用 <code>objcopy</code> 把符号分离成独立 <code>.debug</code> 文件；线上出问题时再把符号加载回来，配合 core dump 离线分析。</p></div>
+      <div class="qa"><div class="q"><span class="lvl">进阶</span>GDB 和 ASan / Valgrind 的定位有何不同？</div><p>GDB 是交互式、按需暂停、观察单点现场的调试器；ASan/TSan/Valgrind 是自动化、全程插桩监控的检测器（分别擅长内存越界/UAF、数据竞争、泄漏与非法内存访问）。工程上先用 Sanitizer 扫面，再用 GDB 定点确认，二者互补而非替代。</p></div>
+      <div class="qa"><div class="q"><span class="lvl">进阶</span>GDB 是怎么在不改代码的情况下暂停程序的？</div><p>GDB 基于内核的 <code>ptrace</code>。软件断点的实现是：GDB 把目标地址的那条指令首字节临时替换成 <code>int3</code>（<code>0xCC</code>）陷阱指令，CPU 执行到它触发 <code>SIGTRAP</code>，控制权回到 GDB；命中后 GDB 再把原指令还原、单步执行、恢复断点。所以断点是运行时对进程内存的临时改写，不改动磁盘上的可执行文件。</p></div>
+    </section>
+
+    <div style="margin-top:50px;padding-top:20px;border-top:1px solid var(--border);display:flex;justify-content:space-between;flex-wrap:wrap;gap:12px;font-size:0.9em;">
+      <span>系列开篇 · 下一篇 →</span>
+      <a href="gdb_breakpoints.html"><strong>02 · Breakpoint：断点与程序执行控制</strong></a>
+    </div>
+  </main>
+</div>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

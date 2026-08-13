@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>二进制通信协议设计与解析 · Header / Length / Magic / TLV / 字节序 / Framing / Parser</title>
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<link rel="stylesheet" href="../assets/page-shell.css">
+<style>
+  .ps .def { background:color-mix(in srgb,var(--ps-accent) 8%,var(--ps-card)); border:1px solid var(--ps-border);
+    border-left:4px solid var(--ps-accent); border-radius:8px; padding:12px 16px; margin:14px 0; font-size:.95em; }
+  .ps .def strong:first-child { color:var(--ps-accent); }
+  .ps .pktframe { display:flex; flex-wrap:wrap; gap:0; margin:16px 0; font-family:ui-monospace,monospace; font-size:.86em; }
+  .ps .pktframe .f { border:1px solid var(--ps-border); background:var(--ps-card-2); padding:8px 12px; text-align:center; }
+  .ps .pktframe .f b { display:block; color:var(--ps-accent); font-size:.9em; }
+</style>
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav ps tn-shell-overlay">
+
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="communication_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 24 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>二进制协议设计</h2>
+    <nav>
+      <ol>
+        <li><a href="#s1">协议 = 格式 + 交互规则</a></li>
+        <li><a href="#s2">设计一个简单协议</a></li>
+        <li><a href="#s3">字节序 Endianness</a></li>
+        <li><a href="#s4">消息分帧 Framing</a></li>
+        <li><a href="#s5">TLV：可扩展的秘诀</a></li>
+        <li><a href="#s6">Parser 状态机</a></li>
+        <li><a href="#s7">设计权衡与陷阱</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+
+    <header class="hero">
+      <div class="badge">Communication · Protocol Design · 2026</div>
+      <h1>二进制通信协议设计与解析</h1>
+      <p class="sub">eCPRI、NETCONF 底层的报文、私有设备协议……本质都是"双方约定的字节格式 + 交互规则"。本篇手把手设计一个简单二进制协议，讲透 Header/Length/Magic/TLV、字节序、消息分帧与解析状态机——让你能读懂也能写出健壮的协议解析器。</p>
+      <div class="meta-row">
+        <span class="pill cyan">Module 08</span>
+        <span class="pill green">阅读 ~24 min</span>
+        <span class="pill amber">TLV / 分帧</span>
+      </div>
+    </header>
+
+<section class="chapter" id="s1">
+  <div class="ch-head"><div class="num">01</div><div class="t"><h2>协议 = 格式 + 交互规则</h2><p class="sub">回到本质</p></div></div>
+  <div class="def"><strong>通信协议</strong>本质是两部分：<strong>① 数据格式</strong>（每个字节代表什么）+ <strong>② 状态/交互规则</strong>（谁先发、怎么应答、超时怎么办）。前面所有协议——从 TCP 到 eCPRI 到 NETCONF——都逃不出这个框架。</div>
+  <p>本篇聚焦"格式"这一半，也简单带到交互规则。掌握它，你看任何协议的 RFC/规范都能抓住重点。</p>
+</section>
+
+<section class="chapter" id="s2">
+  <div class="ch-head"><div class="num">02</div><div class="t"><h2>设计一个简单协议</h2><p class="sub">从需求到报文布局</p></div></div>
+  <p>假设我们要在两个服务间传消息，设计一个定长头 + 变长体的协议：</p>
+  <div class="pktframe">
+    <div class="f"><b>Magic</b>2B<br>0xCAFE</div>
+    <div class="f"><b>Version</b>1B</div>
+    <div class="f"><b>Type</b>1B</div>
+    <div class="f"><b>Seq</b>4B</div>
+    <div class="f"><b>Length</b>4B<br>(payload长度)</div>
+    <div class="f"><b>Payload</b>N B</div>
+    <div class="f"><b>CRC</b>4B</div>
+  </div>
+  <ul>
+    <li><strong>Magic</strong>：魔数，快速识别/校验这是本协议的包（也便于错位后重新对齐）。</li>
+    <li><strong>Version</strong>：协议版本，兼容演进。</li>
+    <li><strong>Type</strong>：消息类型（请求/响应/心跳…）。</li>
+    <li><strong>Seq</strong>：序列号，用于匹配请求-响应、检测丢失。</li>
+    <li><strong>Length</strong>：Payload 字节数——分帧的关键。</li>
+    <li><strong>CRC</strong>：完整性校验。</li>
+  </ul>
+<pre><span class="cm">// C 结构体（注意对齐/pack）</span>
+#pragma pack(push, 1)
+struct MsgHeader {
+    uint16_t magic;    // 0xCAFE
+    uint8_t  version;
+    uint8_t  type;
+    uint32_t seq;
+    uint32_t length;   // payload 长度
+};
+#pragma pack(pop)</pre>
+  <div class="box warn">⚠️ <code>#pragma pack(1)</code> 很重要：不加，编译器会为对齐插入填充字节，导致收发双方结构体大小不一致。</div>
+</section>
+
+<section class="chapter" id="s3">
+  <div class="ch-head"><div class="num">03</div><div class="t"><h2>字节序 Endianness</h2><p class="sub">大端 / 小端</p></div></div>
+  <div class="def"><strong>大端(Big-Endian)</strong>：高位字节在前。网络字节序就是大端。<strong>小端(Little-Endian)</strong>：低位在前，x86/ARM 常用。</div>
+  <p>多字节字段（uint16/32/64）跨机器传输<strong>必须约定字节序</strong>，否则 <code>0x0001</code> 在一端读成 <code>0x0100</code>。惯例用网络序（大端）。</p>
+<pre>uint32_t seq_host = 12345;
+uint32_t seq_net  = htonl(seq_host);   <span class="cm">// 发送前转网络序</span>
+memcpy(buf + 4, &seq_net, 4);
+<span class="cm">// 接收端</span>
+uint32_t seq = ntohl(*(uint32_t*)(buf + 4));</pre>
+  <div class="note">eCPRI/以太网头都用大端；很多私有协议直接沿用网络序省心。单字节字段无字节序问题。</div>
+</section>
+
+<section class="chapter" id="s4">
+  <div class="ch-head"><div class="num">04</div><div class="t"><h2>消息分帧 Framing</h2><p class="sub">TCP 字节流怎么切成消息</p></div></div>
+  <p>TCP 没有消息边界（Module 02 讲的"粘包/拆包"），三种经典分帧法：</p>
+  <table>
+    <thead><tr><th>方法</th><th>做法</th><th>适用</th></tr></thead>
+    <tbody>
+      <tr><td>定长</td><td>每条消息固定字节数</td><td>字段固定的简单场景</td></tr>
+      <tr><td>分隔符</td><td>用特殊字节结束（如 \n）</td><td>文本协议(HTTP行/Redis)</td></tr>
+      <tr><td><strong>长度前缀</strong></td><td>头里带 Length，先读头再读体</td><td><strong>二进制协议首选</strong></td></tr>
+    </tbody>
+  </table>
+<pre><span class="cm">// 长度前缀分帧：先收满头，再按 length 收满体</span>
+bool read_n(int fd, void* buf, size_t n) {   <span class="cm">// 循环收满 n 字节</span>
+    size_t got = 0; char* p = (char*)buf;
+    while (got &lt; n) {
+        ssize_t r = recv(fd, p + got, n - got, 0);
+        if (r &lt;= 0) return false;            <span class="cm">// 断连/错误</span>
+        got += r;
+    }
+    return true;
+}
+struct MsgHeader h;
+read_n(fd, &h, sizeof(h));                    <span class="cm">// 1) 收满定长头</span>
+uint32_t len = ntohl(h.length);
+if (ntohs(h.magic) != 0xCAFE || len > MAX) { /* 丢弃/断连 */ }
+std::vector&lt;char&gt; body(len);
+read_n(fd, body.data(), len);                 <span class="cm">// 2) 按长度收满体</span></pre>
+</section>
+
+<section class="chapter" id="s5">
+  <div class="ch-head"><div class="num">05</div><div class="t"><h2>TLV：可扩展的秘诀</h2><p class="sub">Type-Length-Value</p></div></div>
+  <div class="def"><strong>TLV</strong>：把每个字段编码成 <code>类型(Type) + 长度(Length) + 值(Value)</code>。解析器遇到不认识的 Type 可以按 Length 跳过——<strong>天然向前兼容、可选字段友好</strong>。</div>
+  <div class="pktframe">
+    <div class="f"><b>Type</b>1-2B</div>
+    <div class="f"><b>Length</b>2B</div>
+    <div class="f"><b>Value</b>L B</div>
+    <div class="f"><b>Type</b>...</div>
+    <div class="f"><b>Length</b>...</div>
+    <div class="f"><b>Value</b>...</div>
+  </div>
+  <p>很多协议（RADIUS、Diameter、部分 3GPP 信令）用 TLV 就是为了扩展性。缺点：比紧凑定长格式多占几个字节、解析稍复杂。</p>
+</section>
+
+<section class="chapter" id="s6">
+  <div class="ch-head"><div class="num">06</div><div class="t"><h2>Parser 状态机</h2><p class="sub">健壮解析器的核心</p></div></div>
+  <p>真实收包不会一次到齐——数据是流式、分片到达的。解析器应设计成<strong>状态机</strong>，把收到的字节喂进去，攒够一个阶段就推进：</p>
+
+  <div class="diag">
+    <svg viewBox="0 0 700 240" width="700" height="240" role="img" aria-label="二进制协议解析状态机">
+      <g font-family="Inter, sans-serif" font-size="11.5" fill="#94a3b8">
+        <text x="350" y="22" text-anchor="middle" fill="#facc15" font-weight="700" font-size="13">累积缓冲 + 状态机：把字节流切成完整消息</text>
+
+        <rect x="90" y="80" width="180" height="60" rx="10" fill="#0e2233" stroke="#7dd3fc"/>
+        <text x="180" y="105" text-anchor="middle" fill="#8ec8f6" font-weight="700">WAIT_HEADER</text>
+        <text x="180" y="124" text-anchor="middle" font-size="10">攒够定长头才解析</text>
+
+        <rect x="430" y="80" width="180" height="60" rx="10" fill="#0e2a3a" stroke="#34d399"/>
+        <text x="520" y="105" text-anchor="middle" fill="#6ee7b7" font-weight="700">WAIT_BODY</text>
+        <text x="520" y="124" text-anchor="middle" font-size="10">按 length 攒够 body</text>
+
+        <!-- header ready -->
+        <path d="M270 100 H430" stroke="#7dd3fc" fill="none" marker-end="url(#bp)"/>
+        <text x="350" y="92" text-anchor="middle" fill="#8ec8f6" font-size="10">头齐 → 读出 length</text>
+
+        <!-- body ready -> dispatch -> back -->
+        <path d="M520 140 V185 H180 V140" stroke="#34d399" fill="none" marker-end="url(#bp2)"/>
+        <text x="350" y="180" text-anchor="middle" fill="#6ee7b7" font-size="10">体齐 → dispatch 完整消息 → consume → 回到等头</text>
+
+        <!-- self loops (data not enough) -->
+        <path d="M120 80 C100 50, 160 50, 150 78" stroke="#64748b" fill="none" marker-end="url(#bp3)"/>
+        <text x="130" y="48" text-anchor="middle" font-size="9">头不够→return</text>
+        <path d="M550 80 C570 50, 490 50, 500 78" stroke="#64748b" fill="none" marker-end="url(#bp3)"/>
+        <text x="560" y="48" text-anchor="middle" font-size="9">体不够→return</text>
+
+        <text x="350" y="220" text-anchor="middle" fill="#facc15" font-size="10">务必校验 length 上限，防超大值撑爆内存</text>
+
+        <defs>
+          <marker id="bp" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#7dd3fc"/></marker>
+          <marker id="bp2" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#34d399"/></marker>
+          <marker id="bp3" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#64748b"/></marker>
+        </defs>
+      </g>
+    </svg>
+  </div>
+<pre><span class="cm">// 累积缓冲 + 状态机（伪代码）</span>
+enum State { WAIT_HEADER, WAIT_BODY };
+State st = WAIT_HEADER; Buffer acc;
+
+void on_data(const char* data, size_t n) {
+    acc.append(data, n);
+    for (;;) {
+        if (st == WAIT_HEADER) {
+            if (acc.size() &lt; sizeof(MsgHeader)) return;  <span class="cm">// 头还没齐</span>
+            parse_header(acc);
+            st = WAIT_BODY;
+        }
+        if (st == WAIT_BODY) {
+            if (acc.size() &lt; sizeof(MsgHeader) + body_len) return; <span class="cm">// 体没齐</span>
+            dispatch(one_full_message);       <span class="cm">// 交付完整消息</span>
+            acc.consume(sizeof(MsgHeader) + body_len);
+            st = WAIT_HEADER;                 <span class="cm">// 继续下一条(可能已粘在后面)</span>
+        }
+    }
+}</pre>
+  <div class="note">这个"累积缓冲 + 循环切分"模式适用所有长度前缀协议，也是网络框架里 codec 的标准写法。</div>
+</section>
+
+<section class="chapter" id="s7">
+  <div class="ch-head"><div class="num">07</div><div class="t"><h2>设计权衡与陷阱</h2><p class="sub">工程视角</p></div></div>
+  <ul>
+    <li><strong>Length 上限校验</strong>：不校验会被恶意超大 length 撑爆内存（安全 + 稳定）。</li>
+    <li><strong>版本字段</strong>：预留才能平滑升级；不预留后期难改。</li>
+    <li><strong>对齐 & pack</strong>：结构体收发必须 pack(1)，否则跨平台/编译器崩。</li>
+    <li><strong>紧凑 vs 可扩展</strong>：定长省带宽、快；TLV 灵活、可选字段友好——按场景选。</li>
+    <li><strong>心跳/超时</strong>：交互规则的一部分，检测半死连接。</li>
+  </ul>
+
+  <div class="card">
+    <div class="card-title">🎯 本篇要点回顾</div>
+    <ul>
+      <li>协议 = 数据格式 + 交互规则</li>
+      <li>典型头：Magic/Version/Type/Seq/Length/CRC</li>
+      <li>多字节字段必须约定字节序（网络序=大端）</li>
+      <li>TCP 分帧首选长度前缀；TLV 换取可扩展性</li>
+      <li>解析器用累积缓冲 + 状态机，务必校验 length 上限</li>
+    </ul>
+  </div>
+
+  <div class="box tip">下一步 → <a href="high_performance.html">高性能通信：Ring Buffer / Zero Copy / Lock-Free</a>。</div>
+</section>
+
+<div class="footer-nav">
+  <a href="socket_programming.html">⬅️ Socket 编程</a>
+  <a href="high_performance.html">➡️ 高性能通信</a>
+  <a href="ecpri_deep_dive.html">📦 eCPRI 数据包</a>
+  <a href="communication_directory.html">📚 目录</a>
+  <a href="../index.html">🏠 主页</a>
+</div>
+
+  </main>
+</div>
+
+<script src="../assets/page-shell.js" defer></script>
+
+<footer><p>二进制通信协议设计与解析 — Kavin Tech Notes · 2026</p></footer>
+
+<button class="back-top" id="backTop" onclick="window.scrollTo({top:0,behavior:'smooth'})">↑</button>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

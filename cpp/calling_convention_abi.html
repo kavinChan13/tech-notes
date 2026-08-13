@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Calling Convention 与 ABI · 寄存器传参 / caller-callee saved / 栈对齐 / System V vs Win64 vs ARM64</title>
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<style>
+  :root {
+    --bg: #0d1117; --surface: #161b22; --surface2: #1c2333; --border: #30363d;
+    --text: #e6edf3; --text-muted: #8b949e;
+    --accent-blue: #58a6ff; --accent-green: #3fb950; --accent-orange: #d29922;
+    --accent-purple: #bc8cff; --accent-red: #f85149; --accent-cyan: #39d2c0; --code-bg: #0d1117;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; background: var(--bg); color: var(--text); line-height: 1.7; }
+  h2 { font-size: 1.6em; font-weight: 600; margin-top: 8px; margin-bottom: 16px; }
+  h3 { font-size: 1.2em; font-weight: 600; margin-top: 32px; margin-bottom: 12px; color: var(--accent-blue); }
+  h4 { font-size: 1.05em; font-weight: 600; margin-top: 24px; margin-bottom: 8px; color: var(--accent-purple); }
+  p { margin-bottom: 14px; }
+  a { color: var(--accent-blue); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  strong { color: var(--text); }
+  code { font-family: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', Consolas, monospace; background: var(--surface2); padding: 2px 7px; border-radius: 4px; font-size: 0.88em; color: var(--accent-cyan); }
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 18px 20px; overflow-x: auto; margin: 14px 0 20px; font-size: 0.88em; line-height: 1.6; }
+  pre code { background: none; padding: 0; color: var(--text); }
+  .comment, .cm { color: #6a737d; }
+  .keyword, .kw { color: #ff7b72; }
+  .string, .str { color: #a5d6ff; }
+  .type { color: #79c0ff; }
+  .number, .num { color: #d2a8ff; }
+  .reg { color: var(--accent-cyan); font-weight: 600; }
+  .info-box { background: color-mix(in srgb, var(--accent-blue) 8%, var(--bg-card)); border: 1px solid color-mix(in srgb, var(--accent-blue) 25%, var(--bg-card)); border-radius: 8px; padding: 16px 20px; margin: 16px 0; font-size: 0.95em; }
+  .info-box.warning { background: color-mix(in srgb, var(--accent-orange) 10%, var(--bg-card)); border-color: color-mix(in srgb, var(--accent-orange) 30%, var(--bg-card)); }
+  .info-box.key { background: color-mix(in srgb, var(--accent-green) 8%, var(--bg-card)); border-color: color-mix(in srgb, var(--accent-green) 25%, var(--bg-card)); }
+  .info-box .title { font-weight: 600; margin-bottom: 6px; }
+  .phase-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; padding: 22px 24px 16px; margin: 22px 0; border-left: 4px solid var(--accent-blue); }
+  table { width: 100%; border-collapse: collapse; margin: 14px 0 20px; font-size: 0.9em; }
+  th { background: var(--surface2); font-weight: 600; text-align: left; padding: 9px 13px; border-bottom: 2px solid var(--border); }
+  td { padding: 8px 13px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  tr:hover td { background: color-mix(in srgb, var(--accent-blue) 5%, transparent); }
+  ul, ol { padding-left: 24px; margin-bottom: 14px; }
+  li { margin: 4px 0; }
+  .stackfig { max-width: 470px; margin: 22px auto; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; font-family: 'Cascadia Code','Fira Code',monospace; font-size: 0.84em; box-shadow: var(--shadow); }
+  .stackfig .cap { background: var(--surface2); padding: 6px 12px; font-size: 0.82em; color: var(--text-muted); text-align: center; }
+  .stackfig .srow { padding: 9px 14px; border-top: 1px solid var(--border); display: flex; justify-content: space-between; gap: 10px; align-items: center; }
+  .stackfig .srow .addr { color: var(--text-muted); font-size: 0.82em; }
+  .sf-arg { background: color-mix(in srgb, var(--accent-purple) 14%, var(--bg-card)); }
+  .sf-ret { background: color-mix(in srgb, var(--accent-red) 14%, var(--bg-card)); }
+  .sf-local { background: color-mix(in srgb, var(--accent-green) 14%, var(--bg-card)); }
+  .grow-lo { color: var(--text-muted); text-align: center; font-size: 0.78em; margin: 4px 0; }
+  .series-nav { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 26px; }
+  .series-nav a { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border-radius: 20px; border: 1px solid var(--border); background: var(--surface); font-size: 0.82em; color: var(--text); }
+  .series-nav a:hover { border-color: var(--accent-blue); text-decoration: none; }
+  .series-nav a .n { font-family: 'Cascadia Code',monospace; color: var(--accent-blue); font-weight: 700; }
+  .series-nav a.cur { background: color-mix(in srgb, var(--accent-blue) 16%, var(--bg-card)); border-color: var(--accent-blue); }
+  .myth { border-left: 4px solid var(--accent-red); background: color-mix(in srgb, var(--accent-red) 8%, var(--bg-card)); border-radius: 8px; padding: 12px 18px; margin: 12px 0; }
+  .myth .wrong { color: var(--accent-red); font-weight: 700; }
+  .myth .right { color: var(--accent-green); font-weight: 700; }
+  .qa { background: var(--bg-card); border: 1px solid var(--border); border-left: 4px solid var(--accent-cyan); border-radius: 10px; padding: 16px 20px; margin: 14px 0; }
+  .qa .q { font-weight: 700; margin-bottom: 6px; color: var(--text); }
+  .qa .lvl { font-family: 'Cascadia Code',monospace; font-size: 0.72em; color: var(--accent-cyan); border: 1px solid color-mix(in srgb, var(--accent-cyan) 40%, var(--bg-card)); border-radius: 6px; padding: 1px 7px; margin-right: 8px; }
+  .regmap { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0; }
+  .regmap .cell { flex: 1; min-width: 120px; border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; background: var(--bg-card); font-family: 'Cascadia Code',monospace; font-size: 0.82em; }
+  .regmap .cell .r { color: var(--accent-cyan); font-weight: 700; font-size: 1.05em; }
+  .regmap .cell .d { color: var(--text-muted); font-size: 0.9em; }
+  .csave { background: color-mix(in srgb, var(--accent-orange) 12%, var(--bg-card)); }
+  .caller { background: color-mix(in srgb, var(--accent-blue) 12%, var(--bg-card)); }
+  @media (max-width: 700px) { h2 { font-size: 1.35em; } }
+</style>
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav tn-shell-overlay">
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="modern_cpp_stl_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 26 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="progress" id="progress"></div>
+<div class="layout">
+  <aside class="toc">
+    <h2>Calling Convention / ABI · 04</h2>
+    <nav>
+      <ol>
+        <li><a href="#s1">Calling Convention 与 ABI 是什么</a></li>
+        <li><a href="#s2">为什么 ABI 如此重要</a></li>
+        <li><a href="#s3">参数传递规则（System V x86-64）</a></li>
+        <li><a href="#s4">返回值规则</a></li>
+        <li><a href="#s5">Caller-saved 与 Callee-saved</a></li>
+        <li><a href="#s6">栈对齐（16 字节）</a></li>
+        <li><a href="#s7">参数超过寄存器数量怎么办</a></li>
+        <li><a href="#s8">平台对比：Linux / Windows / ARM64</a></li>
+        <li><a href="#s9">核心结论</a></li>
+        <li><a href="#s10">常见误区</a></li>
+        <li><a href="#s11">面试问题</a></li>
+      </ol>
+    </nav>
+  </aside>
+  <main>
+    <header class="hero">
+      <div class="badge">Under the Hood · 函数调用与底层执行 · 系列 04 / 06</div>
+      <h1>Calling Convention 与 ABI：参数为什么不一定压栈？</h1>
+      <p class="sub">前三篇里反复出现一句话：「这取决于 ABI」。本篇把这个决定一切的幕后规则讲透 —— <strong>参数放哪、返回值怎么带回、哪些寄存器谁负责保存、栈怎么对齐</strong>。我们以 <strong>x86-64 Linux System V ABI</strong> 为主线，再横向对比 Windows x64 与 ARM64，让你彻底理解：<em>同一段 C++，为何在不同平台生成完全不同的汇编</em>。</p>
+      <div class="meta-row">
+        <span class="pill cyan">核心难度 ★★★★☆</span>
+        <span class="pill green">阅读 ~26 min</span>
+        <span class="pill amber">前置：<a href="call_ret_internals.html">03 CALL/RET</a></span>
+        <span class="pill red">系列关键篇</span>
+      </div>
+      <div class="meta">
+        <span>RDI/RSI/RDX/RCX/R8/R9</span>
+        <span>返回值 RAX</span>
+        <span>caller / callee saved</span>
+        <span>System V · Win64 · AArch64</span>
+      </div>
+    </header>
+
+    <nav class="series-nav" aria-label="系列导航">
+      <a href="function_call_mechanism.html"><span class="n">01</span> 函数调用发生了什么</a>
+      <a href="stack_frame_deep_dive.html"><span class="n">02</span> Stack Frame</a>
+      <a href="call_ret_internals.html"><span class="n">03</span> CALL / RET</a>
+      <a class="cur" href="calling_convention_abi.html"><span class="n">04</span> Calling Convention / ABI</a>
+      <a href="cpp_to_assembly.html"><span class="n">05</span> C++ → 汇编实践</a>
+      <a href="stack_debugging_gdb.html"><span class="n">06</span> 栈溢出 / GDB 调试</a>
+    </nav>
+
+    <!-- S1 -->
+    <section class="chapter" id="s1">
+      <div class="ch-head"><div class="num">01</div><div class="t">
+        <h2>Calling Convention 与 ABI 是什么</h2>
+        <p class="sub">两个常被混用的词，先分清层级</p>
+      </div></div>
+
+      <table>
+        <thead><tr><th>概念</th><th>范围</th><th>规定的内容</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Calling Convention（调用约定）</strong></td><td>较窄</td><td>单次函数调用的规矩：参数放哪、返回值放哪、谁保存寄存器、栈如何清理</td></tr>
+          <tr><td><strong>ABI（Application Binary Interface）</strong></td><td>较宽</td><td>包含调用约定，还规定：数据类型大小/对齐、结构体布局、name mangling、目标文件/可执行文件格式、系统调用方式等</td></tr>
+        </tbody>
+      </table>
+
+      <p>可以理解为：<strong>调用约定是 ABI 的一个子集</strong>。ABI 是「两段独立编译的二进制如何协作」的完整合同，调用约定则是其中关于「函数怎么调」的那一章。</p>
+
+      <div class="info-box key"><div class="title">最需要记住的一句</div><p><strong>C++ 语言标准并不规定参数放哪个寄存器、返回值怎么传。</strong>这些完全由 ABI / Calling Convention / 编译器 / 平台决定。C++ 只保证「语义」（调用 <code>add(10,20)</code> 会得到 30），不保证「实现方式」。</p></div>
+    </section>
+
+    <!-- S2 -->
+    <section class="chapter" id="s2">
+      <div class="ch-head"><div class="num">02</div><div class="t">
+        <h2>为什么 ABI 如此重要</h2>
+        <p class="sub">它是「分开编译、还能拼在一起运行」的前提</p>
+      </div></div>
+
+      <p>你的程序由许多独立编译的部分组成：你的 <code>.o</code>、第三方 <code>.so</code>、C 标准库、系统内核。它们可能由不同版本编译器、甚至不同语言产出。为什么它们能互相调用？因为大家<strong>遵守同一份 ABI</strong>：</p>
+      <ul>
+        <li>调用方按 ABI 把参数放进 <span class="reg">RDI</span>/<span class="reg">RSI</span>…，被调方也按 ABI 从那里取 —— 双方无需见过对方源码；</li>
+        <li>数据类型大小、结构体布局一致，一方写的结构体另一方才能正确读；</li>
+        <li>ABI 稳定，就能<strong>只替换某个 <code>.so</code> 而不重编译整个程序</strong>。</li>
+      </ul>
+
+      <div class="info-box warning"><p><strong>ABI 不匹配的后果非常隐蔽</strong>：编译能过、链接能过，运行时却因为「一方以为参数在 RDI、另一方去 RCX 取」而读到垃圾值、栈错位、崩溃。跨语言（C/C++/Rust/Go）互调、跨平台移植时，ABI 是头号坑。稳定的 C ABI 正是各种 FFI（外部函数接口）的通用桥梁。</p></div>
+    </section>
+
+    <!-- S3 -->
+    <section class="chapter" id="s3">
+      <div class="ch-head"><div class="num">03</div><div class="t">
+        <h2>参数传递规则（System V x86-64）</h2>
+        <p class="sub">Linux / macOS / 多数 Unix 使用的调用约定</p>
+      </div></div>
+
+      <h3>整数 / 指针参数：6 个寄存器</h3>
+      <div class="regmap">
+        <div class="cell"><div class="r">RDI</div><div class="d">第 1 个参数</div></div>
+        <div class="cell"><div class="r">RSI</div><div class="d">第 2 个参数</div></div>
+        <div class="cell"><div class="r">RDX</div><div class="d">第 3 个参数</div></div>
+        <div class="cell"><div class="r">RCX</div><div class="d">第 4 个参数</div></div>
+        <div class="cell"><div class="r">R8</div><div class="d">第 5 个参数</div></div>
+        <div class="cell"><div class="r">R9</div><div class="d">第 6 个参数</div></div>
+      </div>
+      <p>浮点/向量参数走另一组 <span class="reg">XMM0–XMM7</span>（8 个），与整数寄存器<strong>独立计数</strong>。所以一个函数可以有 6 个整数 + 8 个浮点参数全部走寄存器。</p>
+
+      <pre><code><span class="type">long</span> add(<span class="type">long</span> a, <span class="type">long</span> b) {
+    <span class="keyword">return</span> a + b;
+}
+
+<span class="comment"># System V x86-64（-O2，Intel 语法）</span>
+add:
+    lea     rax, [rdi + rsi]   <span class="comment"># a 在 RDI，b 在 RSI</span>
+    ret                        <span class="comment"># 返回值在 RAX</span></code></pre>
+      <p>对应关系一目了然：<code>a → RDI</code>，<code>b → RSI</code>，<code>返回值 → RAX</code>。这就是「参数不一定压栈」最直接的证据 —— 这里根本没碰栈。</p>
+
+      <div class="info-box"><div class="title">this 指针去哪了？</div><p>C++ 成员函数的隐藏 <code>this</code> 指针，在 System V 下作为<strong>第一个参数</strong>放进 <span class="reg">RDI</span>，真实参数依次后移到 RSI、RDX…。这解释了为什么成员函数汇编里第一个参数总是 this。</p></div>
+    </section>
+
+    <!-- S4 -->
+    <section class="chapter" id="s4">
+      <div class="ch-head"><div class="num">04</div><div class="t">
+        <h2>返回值规则</h2>
+        <p class="sub">小的走寄存器，大的走隐藏指针</p>
+      </div></div>
+      <table>
+        <thead><tr><th>返回类型</th><th>放在哪</th></tr></thead>
+        <tbody>
+          <tr><td>整数 / 指针（≤ 64 位）</td><td><span class="reg">RAX</span></td></tr>
+          <tr><td>128 位整数 / 两个字段的小结构体</td><td><span class="reg">RAX</span> + <span class="reg">RDX</span></td></tr>
+          <tr><td>浮点 / double</td><td><span class="reg">XMM0</span>（+ <span class="reg">XMM1</span>）</td></tr>
+          <tr><td>大结构体（放不进寄存器）</td><td>调用者预留内存，把其地址通过隐藏指针（<span class="reg">RDI</span>）传入，被调函数直接写进去；同时返回该地址</td></tr>
+        </tbody>
+      </table>
+
+      <div class="info-box"><div class="title">大对象返回 = sret（结构体返回优化）</div><p>返回一个大 <code>struct</code> 时，编译器改写函数签名：真实的第一个参数变成「结果对象的地址」（RDI），原来的参数后移。被调函数把结果直接构造在调用者给的内存里，<strong>避免一次多余拷贝</strong>。这也是 RVO / NRVO（返回值优化）的底层实现方式之一。</p></div>
+    </section>
+
+    <!-- S5 -->
+    <section class="chapter" id="s5">
+      <div class="ch-head"><div class="num">05</div><div class="t">
+        <h2>Caller-saved 与 Callee-saved</h2>
+        <p class="sub">共用一套寄存器时，「谁负责保护谁」的分工</p>
+      </div></div>
+
+      <p>调用者和被调者共用同一套物理寄存器。ABI 把它们分成两类，约定各自的保护责任：</p>
+      <table>
+        <thead><tr><th>类别</th><th>含义</th><th>System V 寄存器</th></tr></thead>
+        <tbody>
+          <tr class="caller"><td><strong>Caller-saved（易失 / volatile）</strong></td><td>被调函数可以随意覆盖。调用者若想在调用后还用它，<strong>调用前自己先存</strong></td><td>RAX, RCX, RDX, RSI, RDI, R8–R11, XMM0–15</td></tr>
+          <tr class="csave"><td><strong>Callee-saved（非易失 / non-volatile）</strong></td><td>被调函数若要用，<strong>必须先保存、返回前恢复原值</strong>，让调用者感觉没被动过</td><td>RBX, RBP, R12–R15, RSP</td></tr>
+        </tbody>
+      </table>
+
+      <pre><code><span class="comment"># 被调函数若要用 callee-saved 的 rbx：</span>
+foo:
+    push    rbx           <span class="comment"># 先保存调用者的 rbx</span>
+    ...     <span class="comment"># 自由使用 rbx</span>
+    pop     rbx           <span class="comment"># 返回前恢复</span>
+    ret
+
+<span class="comment"># 调用者若在 call 前后要保留 caller-saved 的 rcx：</span>
+    mov     [rsp-8], rcx  <span class="comment"># 自己先存</span>
+    call    bar
+    mov     rcx, [rsp-8]  <span class="comment"># 调用后自己恢复</span></code></pre>
+
+      <div class="info-box key"><p>这套分工的意义：<strong>不必在每次调用时保存全部 16 个寄存器</strong>。只保存「确实要跨调用存活」的那些，把开销降到最低。返回值寄存器 RAX 天然是 caller-saved（本来就要被结果覆盖）。</p></div>
+    </section>
+
+    <!-- S6 -->
+    <section class="chapter" id="s6">
+      <div class="ch-head"><div class="num">06</div><div class="t">
+        <h2>栈对齐（16 字节）</h2>
+        <p class="sub">一个不遵守就可能崩溃的隐形规则</p>
+      </div></div>
+
+      <p>System V x86-64 规定：<strong>在执行 <code>call</code> 那一刻，<span class="reg">RSP</span> 必须 16 字节对齐</strong>。由于 <code>call</code> 会压入 8 字节返回地址，所以函数<em>入口处</em> <code>RSP % 16 == 8</code>。编译器据此计算序言里 <code>sub rsp, N</code> 的 N，使调用下一层前重新对齐到 16。</p>
+
+      <div class="info-box warning"><div class="title">为什么要对齐？</div><p>SSE/AVX 的对齐访存指令（如 <code>movaps</code>）要求操作数 16 字节对齐，否则触发 <code>#GP</code> 异常直接崩溃。若你手写汇编或在信号处理里破坏了对齐，常见症状就是「进某个用到 SIMD 的库函数就段错误」。ARM64 同样要求栈 16 字节对齐。</p></div>
+
+      <pre><code><span class="comment"># 典型：为了对齐而多留 8 字节</span>
+foo:
+    push    rbp           <span class="comment"># RSP 从 ...8 变 ...0（对齐）</span>
+    mov     rbp, rsp
+    sub     rsp, 16       <span class="comment"># 保持 16 对齐后再调用别人</span>
+    call    bar</code></pre>
+    </section>
+
+    <!-- S7 -->
+    <section class="chapter" id="s7">
+      <div class="ch-head"><div class="num">07</div><div class="t">
+        <h2>参数超过寄存器数量怎么办</h2>
+        <p class="sub">寄存器不够，栈来兜底</p>
+      </div></div>
+
+      <p>当整数参数超过 6 个，第 7 个起<strong>从右向左压栈</strong>。看一个 8 参数的例子：</p>
+      <pre><code><span class="type">long</span> f(<span class="type">long</span> a,<span class="type">long</span> b,<span class="type">long</span> c,<span class="type">long</span> d,<span class="type">long</span> e,<span class="type">long</span> g,<span class="type">long</span> h,<span class="type">long</span> i);
+<span class="comment">// a→RDI b→RSI c→RDX d→RCX e→R8 g→R9   h,i→压栈</span></code></pre>
+
+      <div class="stackfig">
+        <div class="cap">高地址 ↑</div>
+        <div class="srow sf-arg"><span>第 8 个参数 i</span><span class="addr">[rsp + 16]</span></div>
+        <div class="srow sf-arg"><span>第 7 个参数 h</span><span class="addr">[rsp + 8]</span></div>
+        <div class="srow sf-ret"><span>返回地址</span><span class="addr">[rsp + 0] ← call 压入</span></div>
+        <div class="cap">低地址 ↓（被调函数视角，进入时）</div>
+      </div>
+      <p class="grow-lo">▲ 超出寄存器的参数由调用者压栈，被调函数用 [rsp+N] 读取</p>
+
+      <div class="info-box"><p>从右向左压栈，使得<strong>第 7 个参数离返回地址最近</strong>、编号越大越远。这也是 C 变参函数（<code>printf</code>）能工作的部分基础。<strong>结论：栈只是寄存器不够时的补充</strong>，绝非「参数的默认归宿」。</p></div>
+    </section>
+
+    <!-- S8 -->
+    <section class="chapter" id="s8">
+      <div class="ch-head"><div class="num">08</div><div class="t">
+        <h2>平台对比：Linux / Windows / ARM64</h2>
+        <p class="sub">同一 C++，不同平台的传参规则天差地别</p>
+      </div></div>
+
+      <table>
+        <thead><tr><th>维度</th><th>x86-64 System V<br>(Linux/macOS)</th><th>x64<br>(Windows)</th><th>AArch64<br>(ARM64)</th></tr></thead>
+        <tbody>
+          <tr><td>整数参数寄存器</td><td>RDI RSI RDX RCX R8 R9（6 个）</td><td>RCX RDX R8 R9（4 个）</td><td>X0–X7（8 个）</td></tr>
+          <tr><td>浮点参数寄存器</td><td>XMM0–XMM7</td><td>XMM0–XMM3</td><td>V0–V7</td></tr>
+          <tr><td>返回值</td><td>RAX (+RDX)</td><td>RAX</td><td>X0 (+X1)</td></tr>
+          <tr><td>栈上「影子空间」</td><td>无</td><td><strong>调用者必留 32 字节 shadow space</strong></td><td>无</td></tr>
+          <tr><td>栈对齐</td><td>16 字节</td><td>16 字节</td><td>16 字节</td></tr>
+          <tr><td>典型场景</td><td>服务器 / 桌面 Linux</td><td>Windows 桌面 / 驱动</td><td>手机 / 嵌入式 / Apple Silicon</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Linux vs Windows：最直观的差异</h3>
+      <pre><code><span class="type">long</span> add(<span class="type">long</span> a, <span class="type">long</span> b) { <span class="keyword">return</span> a + b; }
+
+<span class="comment"># Linux System V：a→RDI, b→RSI</span>
+    lea     rax, [rdi + rsi]
+
+<span class="comment"># Windows x64：a→RCX, b→RDX</span>
+    lea     rax, [rcx + rdx]</code></pre>
+      <p>完全相同的 C++，寄存器分配却不同。这就是为什么<strong>直接把 Linux 编译的 <code>.o</code> 拿去 Windows 链接会出问题</strong> —— 二者 ABI 不兼容。</p>
+
+      <h3>ARM64（AArch64）：嵌入式 / 移动开发</h3>
+      <p>ARM64 用 <span class="reg">X0–X7</span> 传前 8 个整数参数，返回值在 <span class="reg">X0</span>。它有独立的链接寄存器 <span class="reg">LR (X30)</span> 保存返回地址（而非像 x86 那样压栈）—— 叶子函数因此常常连栈都不碰，非常适合低功耗场景。理解这点，看 Cortex-M / 手机 SoC 的反汇编就不再陌生。</p>
+
+      <div class="info-box key"><p><strong>核心洞见：调用约定是「平台的选择」，不是「语言的规定」。</strong>正因如此，C++ 才能在从 8 位单片机到超算的各种硬件上运行 —— 语义统一，实现各随其平台的 ABI。</p></div>
+    </section>
+
+    <!-- S9 -->
+    <section class="chapter" id="s9">
+      <div class="ch-head"><div class="num">09</div><div class="t"><h2>核心结论</h2></div></div>
+      <div class="phase-card"><ul>
+        <li><strong>调用约定 ⊂ ABI</strong>：前者管单次调用，后者管整套二进制协作合同。</li>
+        <li>System V x86-64：整数参数 <strong>RDI/RSI/RDX/RCX/R8/R9</strong>，返回值 <strong>RAX</strong>，浮点走 XMM。</li>
+        <li><strong>Caller-saved</strong> 由调用者按需保存，<strong>Callee-saved</strong> 由被调函数保存并恢复。</li>
+        <li>call 时 <strong>RSP 必须 16 字节对齐</strong>，否则 SIMD 指令可能崩溃。</li>
+        <li>参数超出寄存器才压栈；大返回值走隐藏指针（sret）。</li>
+        <li><strong>Linux / Windows / ARM64 的约定各不相同</strong>；C++ 标准对此一律不管。</li>
+      </ul></div>
+    </section>
+
+    <!-- S10 -->
+    <section class="chapter" id="s10">
+      <div class="ch-head"><div class="num">10</div><div class="t"><h2>常见误区</h2></div></div>
+      <div class="myth"><p><span class="wrong">❌ C++ 标准规定了寄存器传参规则。</span> 完全没有。这是 ABI / 平台层面的事。</p></div>
+      <div class="myth"><p><span class="wrong">❌ 所有平台参数寄存器都一样。</span> Linux 用 RDI 系列、Windows 用 RCX 系列、ARM64 用 X0 系列。</p></div>
+      <div class="myth"><p><span class="wrong">❌ 返回值总在 RAX。</span> 标量是，大对象走隐藏指针，浮点走 XMM0。</p></div>
+      <div class="myth"><p><span class="wrong">❌ 栈对齐无所谓。</span> 破坏 16 字节对齐会让 SSE/AVX 对齐访存指令直接触发异常。</p></div>
+      <div class="myth"><p><span class="wrong">❌ 每次调用都要保存全部寄存器。</span> 只有跨调用需存活的 callee-saved 才需保存，最小化开销。</p></div>
+    </section>
+
+    <!-- S11 -->
+    <section class="chapter" id="s11">
+      <div class="ch-head"><div class="num">11</div><div class="t"><h2>面试问题</h2></div></div>
+      <div class="qa"><div class="q"><span class="lvl">基础</span>什么是 Calling Convention？什么是 ABI？两者关系？</div><p>调用约定规定单次函数调用的参数/返回值/寄存器保存/栈清理规则；ABI 是更大的二进制接口合同，包含调用约定、类型布局、mangling、文件格式等。调用约定是 ABI 的子集。</p></div>
+      <div class="qa"><div class="q"><span class="lvl">基础</span>System V x86-64 前 6 个整数参数放哪？返回值放哪？</div><p>RDI、RSI、RDX、RCX、R8、R9；返回值放 RAX（大对象走隐藏指针）。</p></div>
+      <div class="qa"><div class="q"><span class="lvl">原理</span>Caller-saved 和 Callee-saved 是什么？</div><p>Caller-saved（易失）可被被调函数覆盖，调用者需要就自己先存；Callee-saved（非易失）被调函数要用必须先保存、返回前恢复。目的是最小化保存开销。</p></div>
+      <div class="qa"><div class="q"><span class="lvl">原理</span>为什么需要 16 字节栈对齐？违反会怎样？</div><p>SSE/AVX 对齐访存指令要求 16 字节对齐，违反触发 #GP。ABI 规定 call 时 RSP 16 字节对齐来保证这一点。</p></div>
+      <div class="qa"><div class="q"><span class="lvl">ABI</span>参数超过寄存器数量后怎么传？</div><p>超出部分由调用者从右向左压栈，被调函数用相对 RSP/RBP 的偏移读取。</p></div>
+      <div class="qa"><div class="q"><span class="lvl">ABI</span>C++ 成员函数的 this 指针怎么传？</div><p>System V 下作为隐藏的第一个参数放进 RDI，其余参数后移。</p></div>
+      <div class="qa"><div class="q"><span class="lvl">进阶</span>为什么 Linux 编译的目标文件不能直接给 Windows 链接？</div><p>两者 ABI/调用约定不同（寄存器分配、shadow space、对象格式 ELF vs PE），二进制层面不兼容。</p></div>
+      <div class="qa"><div class="q"><span class="lvl">进阶</span>返回一个大结构体时底层发生了什么？</div><p>编译器插入隐藏指针参数（RDI），指向调用者预留的结果内存，被调函数直接在那里构造结果，避免拷贝（RVO 的实现基础）。</p></div>
+    </section>
+
+    <div style="margin-top:50px;padding-top:20px;border-top:1px solid var(--border);display:flex;justify-content:space-between;flex-wrap:wrap;gap:12px;font-size:0.9em;">
+      <a href="call_ret_internals.html">← 03 · CALL / RET</a>
+      <a href="cpp_to_assembly.html"><strong>05 · 从 C++ 到汇编：亲手观察函数调用 →</strong></a>
+    </div>
+  </main>
+</div>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

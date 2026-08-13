@@ -533,7 +533,7 @@
     <div class="num">04</div>
     <div class="t">
       <h2>四、C++11 内存模型 (核心：多线程与原子操作)</h2>
-      <p class="sub">多线程语义 · atomic 操作 · 顺序保证 — Why Memory Model</p>
+      <p class="sub">多线程语义 · 三层重排 · 线程 vs 进程 · 共享内存 — Why Memory Model</p>
     </div>
   </div>
 
@@ -613,6 +613,196 @@
 <div class="tip">
 每个 CPU 核心有自己的缓存和 Store Buffer，写入不会立即对其他核心可见。C++ 内存模型通过 <code>std::atomic</code> 和内存序来控制这种可见性。
 </div>
+</div>
+
+<div class="card">
+<h3>4.2 内存模型到底在「管」什么？——一个会让人失眠的例子</h3>
+<p>内存模型的本质是一份<strong>契约</strong>：它规定「一个线程的写，什么时候、以什么顺序，能被另一个线程看到」。看下面这段代码——两个线程各写一个变量、各读对方的变量，凭直觉 <code>r1</code> 和 <code>r2</code> 不可能同时为 0，但在真实硬件上<strong>可能同时为 0</strong>。</p>
+
+<pre><code><span class="kw">int</span> x = <span class="num">0</span>, y = <span class="num">0</span>;
+<span class="kw">int</span> r1 = <span class="num">0</span>, r2 = <span class="num">0</span>;
+
+<span class="cm">// Thread A            // Thread B</span>
+x = <span class="num">1</span>;         <span class="cm">// ①</span>     y = <span class="num">1</span>;         <span class="cm">// ③</span>
+r1 = y;       <span class="cm">// ②</span>     r2 = x;       <span class="cm">// ④</span>
+
+<span class="cm">// 直觉：r1==0 && r2==0 不可能发生</span>
+<span class="cm">// 现实（x86/ARM 均可）：r1==0 && r2==0 会发生！</span></code></pre>
+
+<p>为什么？三层「重排」叠加，让 ① 和 ② 的<em>可见顺序</em>被打乱：</p>
+
+<div class="diagram-wrap">
+<svg width="760" height="270" viewBox="0 0 760 270">
+  <!-- Layer 1: compiler -->
+  <rect x="20" y="20" width="220" height="220" rx="10" fill="#0d1117" stroke="#c084fc"/>
+  <text x="130" y="46" text-anchor="middle" fill="#d8b4fe" font-size="14" font-weight="bold">① 编译器重排</text>
+  <text x="130" y="70" text-anchor="middle" fill="#94a3b8" font-size="11">无依赖的独立语句</text>
+  <text x="130" y="88" text-anchor="middle" fill="#94a3b8" font-size="11">可被优化器调换顺序</text>
+  <rect x="45" y="105" width="170" height="34" rx="5" fill="#2d1f3d" stroke="#c084fc"/>
+  <text x="130" y="127" text-anchor="middle" fill="#e2e8f0" font-size="11">x=1; r1=y;  →  r1=y; x=1;</text>
+  <text x="130" y="165" text-anchor="middle" fill="#facc15" font-size="11">编译期，一次性发生</text>
+  <text x="130" y="200" text-anchor="middle" fill="#94a3b8" font-size="10">防线：编译器屏障</text>
+  <text x="130" y="216" text-anchor="middle" fill="#94a3b8" font-size="10">atomic / volatile</text>
+
+  <!-- Layer 2: CPU OoO -->
+  <rect x="270" y="20" width="220" height="220" rx="10" fill="#0d1117" stroke="#38bdf8"/>
+  <text x="380" y="46" text-anchor="middle" fill="#7dd3fc" font-size="14" font-weight="bold">② CPU 乱序执行</text>
+  <text x="380" y="70" text-anchor="middle" fill="#94a3b8" font-size="11">流水线 / 推测执行</text>
+  <text x="380" y="88" text-anchor="middle" fill="#94a3b8" font-size="11">指令实际完成次序≠程序序</text>
+  <rect x="295" y="105" width="170" height="34" rx="5" fill="#1e3a5f" stroke="#38bdf8"/>
+  <text x="380" y="127" text-anchor="middle" fill="#e2e8f0" font-size="11">load y 先于 store x 完成</text>
+  <text x="380" y="165" text-anchor="middle" fill="#facc15" font-size="11">运行期，每次都可能不同</text>
+  <text x="380" y="200" text-anchor="middle" fill="#94a3b8" font-size="10">防线：CPU 内存屏障</text>
+  <text x="380" y="216" text-anchor="middle" fill="#94a3b8" font-size="10">(mfence / dmb)</text>
+
+  <!-- Layer 3: store buffer -->
+  <rect x="520" y="20" width="220" height="220" rx="10" fill="#0d1117" stroke="#fb923c"/>
+  <text x="630" y="46" text-anchor="middle" fill="#fdba74" font-size="14" font-weight="bold">③ Store Buffer</text>
+  <text x="630" y="70" text-anchor="middle" fill="#94a3b8" font-size="11">写先进本核私有缓冲</text>
+  <text x="630" y="88" text-anchor="middle" fill="#94a3b8" font-size="11">延迟刷入 Cache / 内存</text>
+  <rect x="545" y="105" width="170" height="34" rx="5" fill="#3d2d1f" stroke="#fb923c"/>
+  <text x="630" y="127" text-anchor="middle" fill="#e2e8f0" font-size="11">x=1 还在缓冲，别人读到旧值</text>
+  <text x="630" y="165" text-anchor="middle" fill="#facc15" font-size="11">这就是 x86 唯一的重排</text>
+  <text x="630" y="200" text-anchor="middle" fill="#94a3b8" font-size="10">StoreLoad 重排</text>
+  <text x="630" y="216" text-anchor="middle" fill="#94a3b8" font-size="10">seq_cst 才能挡住</text>
+</svg>
+</div>
+
+<div class="tip">
+关键认知：<strong>「一个线程内的代码怎么写」和「另一个线程看到它以什么顺序生效」是两回事。</strong>内存模型就是把这三层不可见的重排，收敛成一套你能推理的规则（happens-before）。单线程程序永远感受不到这些重排——编译器/CPU 保证「as-if-serial」：单线程结果不变。问题只在<strong>多个执行流共享同一块内存</strong>时才暴露。
+</div>
+</div>
+
+<div class="card">
+<h3>4.3 线程 vs 进程 —— 从内存视角看并发</h3>
+
+<div class="tip">
+生活类比：<strong>线程</strong>像一家人住同一套房子——共用客厅、厨房、冰箱（共享地址空间），谁往冰箱放了东西别人马上能拿；但也容易「你动了我的东西」（数据竞争）。<strong>进程</strong>像各住各家的邻居——各有各的房子（独立地址空间），互不干扰、一家着火烧不到另一家（隔离性好）；想分享东西得约到门口交接（IPC：管道、消息、共享储物间）。
+</div>
+
+<div class="diagram-wrap">
+<svg width="820" height="440" viewBox="0 0 820 440">
+  <!-- ===== Left: one process, multi threads ===== -->
+  <rect x="20" y="20" width="370" height="400" rx="12" fill="#0d1117" stroke="#38bdf8" stroke-width="1.5"/>
+  <text x="205" y="46" text-anchor="middle" fill="#38bdf8" font-size="15" font-weight="bold">单进程 · 3 个线程（共享地址空间）</text>
+
+  <!-- shared region -->
+  <rect x="45" y="62" width="320" height="120" rx="8" fill="#1a3326" stroke="#4ade80"/>
+  <text x="205" y="84" text-anchor="middle" fill="#86efac" font-size="13" font-weight="bold">共享区（所有线程可见）</text>
+  <rect x="60" y="96" width="130" height="30" rx="4" fill="#1f2d3d" stroke="#67e8f9"/>
+  <text x="125" y="116" text-anchor="middle" fill="#a5f3fc" font-size="11">代码段 .text</text>
+  <rect x="220" y="96" width="130" height="30" rx="4" fill="#3d2d1f" stroke="#fb923c"/>
+  <text x="285" y="116" text-anchor="middle" fill="#fdba74" font-size="11">全局/静态 Data/BSS</text>
+  <rect x="60" y="134" width="290" height="34" rx="4" fill="#1a3326" stroke="#4ade80"/>
+  <text x="205" y="156" text-anchor="middle" fill="#86efac" font-size="12">堆 Heap（new/malloc，跨线程共享）</text>
+
+  <!-- per-thread stacks -->
+  <text x="205" y="204" text-anchor="middle" fill="#94a3b8" font-size="11">每个线程各自私有：</text>
+  <rect x="45" y="214" width="100" height="150" rx="8" fill="#1e3a5f" stroke="#38bdf8"/>
+  <text x="95" y="236" text-anchor="middle" fill="#7dd3fc" font-size="12" font-weight="bold">线程 1</text>
+  <text x="95" y="258" text-anchor="middle" fill="#94a3b8" font-size="10">栈 Stack</text>
+  <text x="95" y="276" text-anchor="middle" fill="#94a3b8" font-size="10">寄存器</text>
+  <text x="95" y="294" text-anchor="middle" fill="#c084fc" font-size="10">TLS</text>
+  <rect x="155" y="214" width="100" height="150" rx="8" fill="#1e3a5f" stroke="#38bdf8"/>
+  <text x="205" y="236" text-anchor="middle" fill="#7dd3fc" font-size="12" font-weight="bold">线程 2</text>
+  <text x="205" y="258" text-anchor="middle" fill="#94a3b8" font-size="10">栈 Stack</text>
+  <text x="205" y="276" text-anchor="middle" fill="#94a3b8" font-size="10">寄存器</text>
+  <text x="205" y="294" text-anchor="middle" fill="#c084fc" font-size="10">TLS</text>
+  <rect x="265" y="214" width="100" height="150" rx="8" fill="#1e3a5f" stroke="#38bdf8"/>
+  <text x="315" y="236" text-anchor="middle" fill="#7dd3fc" font-size="12" font-weight="bold">线程 3</text>
+  <text x="315" y="258" text-anchor="middle" fill="#94a3b8" font-size="10">栈 Stack</text>
+  <text x="315" y="276" text-anchor="middle" fill="#94a3b8" font-size="10">寄存器</text>
+  <text x="315" y="294" text-anchor="middle" fill="#c084fc" font-size="10">TLS</text>
+  <text x="205" y="392" text-anchor="middle" fill="#facc15" font-size="11">✅ 默认共享 → 内存模型时刻在起作用</text>
+  <text x="205" y="410" text-anchor="middle" fill="#f87171" font-size="11">⚠ 一个线程崩溃 → 整个进程挂掉</text>
+
+  <!-- ===== Right: two processes ===== -->
+  <rect x="430" y="20" width="370" height="400" rx="12" fill="#0d1117" stroke="#f472b6" stroke-width="1.5"/>
+  <text x="615" y="46" text-anchor="middle" fill="#f472b6" font-size="15" font-weight="bold">两个进程（独立地址空间）</text>
+
+  <!-- process A -->
+  <rect x="450" y="62" width="150" height="150" rx="8" fill="#2d1f3d" stroke="#c084fc"/>
+  <text x="525" y="84" text-anchor="middle" fill="#d8b4fe" font-size="13" font-weight="bold">进程 A</text>
+  <text x="525" y="106" text-anchor="middle" fill="#94a3b8" font-size="10">.text / Data / BSS</text>
+  <text x="525" y="124" text-anchor="middle" fill="#94a3b8" font-size="10">堆 Heap（私有）</text>
+  <text x="525" y="142" text-anchor="middle" fill="#94a3b8" font-size="10">栈 Stack（私有）</text>
+  <text x="525" y="172" text-anchor="middle" fill="#94a3b8" font-size="10">地址 0x1000</text>
+  <text x="525" y="190" text-anchor="middle" fill="#94a3b8" font-size="10">= A 的 counter</text>
+
+  <!-- process B -->
+  <rect x="630" y="62" width="150" height="150" rx="8" fill="#3d1f2d" stroke="#f472b6"/>
+  <text x="705" y="84" text-anchor="middle" fill="#f9a8d4" font-size="13" font-weight="bold">进程 B</text>
+  <text x="705" y="106" text-anchor="middle" fill="#94a3b8" font-size="10">.text / Data / BSS</text>
+  <text x="705" y="124" text-anchor="middle" fill="#94a3b8" font-size="10">堆 Heap（私有）</text>
+  <text x="705" y="142" text-anchor="middle" fill="#94a3b8" font-size="10">栈 Stack（私有）</text>
+  <text x="705" y="172" text-anchor="middle" fill="#94a3b8" font-size="10">地址 0x1000</text>
+  <text x="705" y="190" text-anchor="middle" fill="#94a3b8" font-size="10">= B 的另一块内存</text>
+
+  <text x="615" y="236" text-anchor="middle" fill="#f87171" font-size="10">同一个虚拟地址 0x1000 → 映射到不同物理页，互不影响</text>
+
+  <!-- shared memory -->
+  <rect x="470" y="252" width="290" height="70" rx="8" fill="#1a3326" stroke="#4ade80" stroke-dasharray="5"/>
+  <text x="615" y="276" text-anchor="middle" fill="#86efac" font-size="13" font-weight="bold">共享内存 (mmap / shm)</text>
+  <text x="615" y="298" text-anchor="middle" fill="#94a3b8" font-size="10">显式申请的「共用储物间」</text>
+  <text x="615" y="314" text-anchor="middle" fill="#94a3b8" font-size="10">两进程映射到同一物理页</text>
+  <line x1="525" y1="212" x2="560" y2="252" stroke="#4ade80" stroke-width="1.5" stroke-dasharray="4"/>
+  <line x1="705" y1="212" x2="670" y2="252" stroke="#4ade80" stroke-width="1.5" stroke-dasharray="4"/>
+
+  <text x="615" y="356" text-anchor="middle" fill="#facc15" font-size="11">✅ 默认隔离 → 通信要走 IPC</text>
+  <text x="615" y="376" text-anchor="middle" fill="#4ade80" font-size="11">✅ 一个进程崩溃不影响另一个</text>
+  <text x="615" y="396" text-anchor="middle" fill="#f87171" font-size="11">⚠ 共享内存里仍需内存模型！</text>
+</svg>
+</div>
+
+<table>
+  <tr><th>维度</th><th>线程 (Thread)</th><th>进程 (Process)</th></tr>
+  <tr><td>地址空间</td><td><strong>共享</strong>同一虚拟地址空间</td><td>各自<strong>独立</strong>的虚拟地址空间</td></tr>
+  <tr><td>默认共享的内存</td><td>代码段 / 全局 / 堆 / 打开的 fd 全部共享</td><td>啥都不共享（fork 后 copy-on-write）</td></tr>
+  <tr><td>私有的内存</td><td>栈、寄存器、<code>thread_local</code> (TLS)</td><td>整个地址空间都是私有</td></tr>
+  <tr><td>通信方式</td><td>直接读写共享变量（配 atomic/锁）</td><td>IPC：共享内存、管道、消息队列、socket、信号</td></tr>
+  <tr><td>内存模型适用性</td><td><strong>无处不在</strong>——只要访问共享变量就要遵守</td><td>仅在<strong>共享内存</strong>区域内适用</td></tr>
+  <tr><td>创建/切换成本</td><td>低（共享页表，切换轻）</td><td>高（复制/建立页表，切换重）</td></tr>
+  <tr><td>隔离性 / 容错</td><td>差：一个线程写野指针可能搞崩整个进程</td><td>好：崩溃被内核隔离在单个进程内</td></tr>
+  <tr><td>典型场景</td><td>并行计算、Web 服务器工作线程、UI + 后台</td><td>浏览器多进程沙箱、Nginx worker、微服务</td></tr>
+</table>
+
+<div class="tip">
+一句话总结二者与内存模型的关系：<strong>内存模型是「共享内存并发」的规则</strong>。线程<em>默认</em>共享地址空间，所以内存模型对线程<strong>天然、全程</strong>生效；进程<em>默认</em>隔离，只有当你显式开一块共享内存时，落在那块内存里的原子变量/数据才需要——且同样需要——内存序与屏障。换句话说：<strong>是否需要内存模型，取决于「有没有共享内存」，而不是「用线程还是进程」。</strong>
+</div>
+</div>
+
+<div class="card">
+<h3>4.4 进程间共享内存，也要遵守内存模型</h3>
+<p>很多人以为「内存模型是线程的事，进程之间用共享内存直接读写就行」——这是危险的误解。两个进程通过 <code>shm_open</code> + <code>mmap</code> 映射到<strong>同一块物理内存</strong>后，它们运行在不同 CPU 核心上，同样面临 Store Buffer、Cache、乱序执行，<strong>同一套可见性/重排问题原封不动地存在</strong>。</p>
+
+<pre><code><span class="cm">// 生产者进程与消费者进程共享一段内存中的 flag+data</span>
+<span class="cm">// 关键：把 std::atomic 直接放进共享内存，并要求它 lock-free</span>
+<span class="kw">struct</span> Shared {
+    std::atomic&lt;<span class="kw">int</span>&gt; ready{<span class="num">0</span>};    <span class="cm">// 同步标志</span>
+    <span class="kw">int</span> payload;                     <span class="cm">// 被保护的数据（普通变量）</span>
+};
+
+<span class="cm">// —— 进程 A（生产者）——</span>
+sh-&gt;payload = <span class="num">42</span>;                            <span class="cm">// ① 先写数据</span>
+sh-&gt;ready.store(<span class="num">1</span>, std::memory_order_release); <span class="cm">// ② release 发布</span>
+
+<span class="cm">// —— 进程 B（消费者）——</span>
+<span class="kw">while</span> (sh-&gt;ready.load(std::memory_order_acquire) == <span class="num">0</span>) {} <span class="cm">// ③ acquire</span>
+<span class="kw">int</span> v = sh-&gt;payload;                        <span class="cm">// ④ 保证读到 42，而非旧值/半成品</span>
+
+<span class="cm">// 编译期断言：该 atomic 必须是无锁的，否则跨进程不可用</span>
+<span class="kw">static_assert</span>(std::atomic&lt;<span class="kw">int</span>&gt;::is_always_lock_free);</code></pre>
+
+<p>跨进程使用共享内存时，有几条<strong>额外</strong>的坑，是纯多线程场景不会遇到的：</p>
+<table>
+  <tr><th>陷阱</th><th>原因</th><th>正确做法</th></tr>
+  <tr><td>atomic 必须 lock-free</td><td>非 lock-free 的 atomic 内部藏了一把锁，锁的地址在<strong>本进程私有</strong>内存里，另一个进程看不到</td><td><code>static_assert(is_always_lock_free)</code>；只用 lock-free 类型</td></tr>
+  <tr><td>不能直接放普通 <code>std::mutex</code></td><td>其内部句柄绑定本进程</td><td>用 <code>pthread_mutex</code> 并设 <code>PTHREAD_PROCESS_SHARED</code>，或用命名信号量</td></tr>
+  <tr><td>不能存指针 / 引用</td><td>同一对象在两进程里的虚拟地址<strong>不一定相同</strong></td><td>存<strong>偏移量</strong>（相对共享区基址），用时再加基址</td></tr>
+  <tr><td>对象布局要一致</td><td>两端若用不同编译器/对齐/位域，解释同一块字节会错位</td><td>固定 <code>#pragma pack</code> / 明确 <code>alignas</code>，两端同一份头文件</td></tr>
+</table>
+
+<div class="warn"><b>核心结论</b>：<code>memory_order</code> / happens-before 是<strong>硬件与编译器层面</strong>的语义，只认「是不是同一块物理内存被多个执行流并发访问」，<strong>不关心访问者是线程还是进程</strong>。因此上面的 acquire-release 配对，在跨进程共享内存里和跨线程里含义完全一致。</div>
 </div>
 
 <!-- ============================================ -->

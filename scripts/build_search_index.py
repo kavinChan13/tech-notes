@@ -53,6 +53,7 @@ CATEGORY = {
     "ai-templates": "AI 模板",
     "neural-networks": "神经网络",
     "reinforcement": "强化学习",
+    "communication": "通信系统",
 }
 
 SCRIPT_RE = re.compile(r"<script\b[\s\S]*?</script>", re.I)

@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Memory / Register / Assembly：深入程序底层 · x / info registers / disassemble / RIP RSP RBP</title>
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<style>
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --surface2: #1c2333;
+    --border: #30363d;
+    --text: #e6edf3;
+    --text-muted: #8b949e;
+    --accent-blue: #58a6ff;
+    --accent-green: #3fb950;
+    --accent-orange: #d29922;
+    --accent-purple: #bc8cff;
+    --accent-red: #f85149;
+    --accent-cyan: #39d2c0;
+    --code-bg: #0d1117;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.7;
+  }
+  h2 { font-size: 1.6em; font-weight: 600; margin-top: 8px; margin-bottom: 16px; }
+  h3 { font-size: 1.2em; font-weight: 600; margin-top: 32px; margin-bottom: 12px; color: var(--accent-blue); }
+  h4 { font-size: 1.05em; font-weight: 600; margin-top: 24px; margin-bottom: 8px; color: var(--accent-purple); }
+  p { margin-bottom: 14px; }
+  a { color: var(--accent-blue); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  strong { color: var(--text); }
+  code {
+    font-family: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', Consolas, monospace;
+    background: var(--surface2);
+    padding: 2px 7px;
+    border-radius: 4px;
+    font-size: 0.88em;
+    color: var(--accent-cyan);
+  }
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 18px 20px;
+    overflow-x: auto;
+    margin: 14px 0 20px;
+    font-size: 0.88em;
+    line-height: 1.6;
+  }
+  pre code { background: none; padding: 0; color: var(--text); }
+  .comment, .cm { color: #6a737d; }
+  .keyword, .kw { color: #ff7b72; }
+  .string, .str { color: #a5d6ff; }
+  .type { color: #79c0ff; }
+  .number, .num { color: #d2a8ff; }
+  .reg { color: var(--accent-cyan); font-weight: 600; }
+  .prompt { color: var(--accent-green); font-weight: 600; }
+
+  .info-box { background: color-mix(in srgb, var(--accent-blue) 8%, var(--bg-card)); border: 1px solid color-mix(in srgb, var(--accent-blue) 25%, var(--bg-card)); border-radius: 8px; padding: 16px 20px; margin: 16px 0; font-size: 0.95em; }
+  .info-box.warning { background: color-mix(in srgb, var(--accent-orange) 10%, var(--bg-card)); border-color: color-mix(in srgb, var(--accent-orange) 30%, var(--bg-card)); }
+  .info-box.key { background: color-mix(in srgb, var(--accent-green) 8%, var(--bg-card)); border-color: color-mix(in srgb, var(--accent-green) 25%, var(--bg-card)); }
+  .info-box .title { font-weight: 600; margin-bottom: 6px; }
+
+  .phase-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; padding: 22px 24px 16px; margin: 22px 0; border-left: 4px solid var(--accent-blue); }
+
+  table { width: 100%; border-collapse: collapse; margin: 14px 0 20px; font-size: 0.92em; }
+  th { background: var(--surface2); font-weight: 600; text-align: left; padding: 10px 14px; border-bottom: 2px solid var(--border); }
+  td { padding: 9px 14px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  tr:hover td { background: color-mix(in srgb, var(--accent-blue) 5%, transparent); }
+
+  .flow-diagram { display: flex; flex-direction: column; gap: 0; margin: 20px 0; align-items: center; }
+  .flow-box { background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 11px 22px; text-align: center; font-size: 0.9em; min-width: 260px; }
+  .flow-arrow-down { width: 2px; height: 18px; background: var(--text-muted); position: relative; }
+  .flow-arrow-down::after { content: '▼'; position: absolute; bottom: -8px; left: -5px; font-size: 10px; color: var(--text-muted); }
+
+  ul, ol { padding-left: 24px; margin-bottom: 14px; }
+  li { margin: 4px 0; }
+
+  .series-nav { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 26px; }
+  .series-nav a { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border-radius: 20px; border: 1px solid var(--border); background: var(--surface); font-size: 0.82em; color: var(--text); }
+  .series-nav a:hover { border-color: var(--accent-blue); text-decoration: none; }
+  .series-nav a .n { font-family: 'Cascadia Code',monospace; color: var(--accent-blue); font-weight: 700; }
+  .series-nav a.cur { background: color-mix(in srgb, var(--accent-blue) 16%, var(--bg-card)); border-color: var(--accent-blue); }
+
+  .myth { border-left: 4px solid var(--accent-red); background: color-mix(in srgb, var(--accent-red) 8%, var(--bg-card)); border-radius: 8px; padding: 12px 18px; margin: 12px 0; }
+  .myth .wrong { color: var(--accent-red); font-weight: 700; }
+  .myth .right { color: var(--accent-green); font-weight: 700; }
+
+  .qa { background: var(--bg-card); border: 1px solid var(--border); border-left: 4px solid var(--accent-cyan); border-radius: 10px; padding: 16px 20px; margin: 14px 0; }
+  .qa .q { font-weight: 700; margin-bottom: 6px; color: var(--text); }
+  .qa .lvl { font-family: 'Cascadia Code',monospace; font-size: 0.72em; color: var(--accent-cyan); border: 1px solid color-mix(in srgb, var(--accent-cyan) 40%, var(--bg-card)); border-radius: 6px; padding: 1px 7px; margin-right: 8px; }
+
+  /* x command anatomy */
+  .xanat { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 16px 0; }
+  .xanat > div { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; background: var(--bg-card); }
+  .xanat .k { font-family:'Cascadia Code',monospace; color: var(--accent-purple); font-weight: 700; margin-bottom: 4px; }
+  @media(max-width:700px){ .xanat { grid-template-columns: 1fr; } }
+
+  @media (max-width: 700px) { h2 { font-size: 1.35em; } }
+</style>
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav tn-shell-overlay">
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="modern_cpp_stl_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 24 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="progress" id="progress"></div>
+<div class="layout">
+  <aside class="toc">
+    <h2>GDB · 04</h2>
+    <nav>
+      <ol>
+        <li><a href="#s1">为什么要下探到内存与寄存器</a></li>
+        <li><a href="#s2">x 命令：查看内存的瑞士军刀</a></li>
+        <li><a href="#s3">x/16gx $rsp：观察当前栈</a></li>
+        <li><a href="#s4">寄存器：info registers 与关键寄存器</a></li>
+        <li><a href="#s5">RIP / RSP / RBP 各代表什么</a></li>
+        <li><a href="#s6">Assembly：disassemble / layout asm</a></li>
+        <li><a href="#s7">串起来：add(a,b) 的参数→寄存器→call→ret</a></li>
+        <li><a href="#s8">核心结论 + 常见误区</a></li>
+        <li><a href="#s9">面试问题</a></li>
+      </ol>
+    </nav>
+  </aside>
+  <main>
+    <header class="hero">
+      <div class="badge">GDB 调试 C++ · 系列 04 / 06</div>
+      <h1>Memory / Register / Assembly：深入程序底层</h1>
+      <p class="sub">当变量层面看不出问题（栈损坏、优化后变量消失、崩在库函数里没有源码），就必须下探到<strong>内存、寄存器、汇编</strong>这一层。这一篇把 <code>x</code>、<code>info registers</code>、<code>disassemble</code> 三件底层利器讲清楚，并建立 <strong>C++ 代码 ↔ 汇编 ↔ 寄存器 ↔ 内存</strong> 的对应关系 —— 把前面「函数调用、栈帧、ABI」的知识，用 GDB 亲眼验证一遍。</p>
+      <div class="meta-row">
+        <span class="pill cyan">进阶 · 底层</span>
+        <span class="pill green">阅读 ~24 min</span>
+        <span class="pill amber">前置：本系列 01–03 + 栈帧/ABI 篇</span>
+        <span class="pill violet">x86-64 System V</span>
+      </div>
+      <div class="meta">
+        <span>x / info registers / disassemble</span>
+        <span>RIP / RSP / RBP</span>
+        <span>参数→寄存器→call→ret</span>
+        <span>单文件 · 无 CDN 依赖</span>
+      </div>
+    </header>
+
+    <nav class="series-nav" aria-label="系列导航">
+      <a href="gdb_debugging_intro.html"><span class="n">01</span> GDB 是什么</a>
+      <a href="gdb_breakpoints.html"><span class="n">02</span> 断点与执行控制</a>
+      <a href="gdb_stack_frame_variables.html"><span class="n">03</span> 栈 / 帧 / 变量</a>
+      <a class="cur" href="gdb_memory_register_assembly.html"><span class="n">04</span> 内存 / 寄存器 / 汇编</a>
+      <a href="gdb_multithread_debugging.html"><span class="n">05</span> 多线程调试</a>
+      <a href="gdb_crash_debugging.html"><span class="n">06</span> Crash 实战</a>
+    </nav>
+
+    <div class="info-box warning">
+      <div class="title">适用条件先说清楚</div>
+      <p>本篇几乎所有寄存器名（<span class="reg">RIP/RSP/RBP/RDI…</span>）与汇编示例都基于 <strong>x86-64 + Linux System V ABI</strong>。换到 ARM64（<span class="reg">x0–x30 / sp / pc / lr</span>）或 Windows x64，寄存器名与调用约定不同，但「代码 ↔ 汇编 ↔ 寄存器 ↔ 内存」的分析思路完全通用。寄存器分配还受编译器与优化级别影响。底层约定详见 <a href="calling_convention_abi.html">Calling Convention / ABI</a>。</p>
+    </div>
+
+    <!-- S1 -->
+    <section class="chapter" id="s1">
+      <div class="ch-head">
+        <div class="num">01</div>
+        <div class="t">
+          <h2>为什么要下探到内存与寄存器</h2>
+          <p class="sub">源码级调试失效时，机器级真相还在</p>
+        </div>
+      </div>
+      <p>大部分时间你在「变量层面」调试就够了。但有几种情况，变量层面会失灵：</p>
+      <ul>
+        <li><strong>栈被破坏</strong>：越界写、栈溢出把返回地址覆盖了，<code>bt</code> 显示乱码 —— 只能去看内存里的栈到底被写成了什么；</li>
+        <li><strong>优化后变量消失</strong>（<code>&lt;optimized out&gt;</code>）：源码里看不到，但值其实就在某个寄存器里；</li>
+        <li><strong>崩在没有源码的库函数里</strong>：只能看汇编和寄存器判断当时在干什么；</li>
+        <li><strong>怀疑是 ABI / 传参 / 对齐问题</strong>：必须核对寄存器和栈的实际内容。</li>
+      </ul>
+      <div class="info-box key">
+        <div class="title">一句话</div>
+        <p>源码是「程序应该怎么跑」，<strong>内存和寄存器是「程序此刻真的怎么跑」</strong>。当两者对不上，真相永远在后者。这一层是 C++、嵌入式、系统软件工程师的必修 —— 也是把前面栈帧/ABI 知识落地的地方。</p>
+      </div>
+      <p>沿用最小例子（<code>g++ -g -O0 addmem.cpp -o addmem</code>）：</p>
+      <pre><code><span class="type">int</span> add(<span class="type">int</span> a, <span class="type">int</span> b) { <span class="keyword">return</span> a + b; }
+<span class="type">int</span> main() { <span class="type">int</span> r = add(<span class="number">10</span>, <span class="number">20</span>); <span class="keyword">return</span> r; }</code></pre>
+    </section>
+
+    <!-- S2 -->
+    <section class="chapter" id="s2">
+      <div class="ch-head">
+        <div class="num">02</div>
+        <div class="t">
+          <h2>x 命令：查看内存的瑞士军刀</h2>
+          <p class="sub">examine —— 把任意地址的字节按你要的格式解释出来</p>
+        </div>
+      </div>
+      <p><code>x</code>（examine）是「读内存」的通用命令。它的语法核心是 <strong><code>x/NFU 地址</code></strong>：</p>
+      <div class="xanat">
+        <div><div class="k">N — 数量</div>要显示几个单位，如 <code>10</code>、<code>16</code></div>
+        <div><div class="k">F — 格式</div><code>x</code> 十六进制 / <code>d</code> 十进制 / <code>i</code> 指令 / <code>s</code> 字符串 / <code>c</code> 字符 / <code>u</code> 无符号 / <code>f</code> 浮点 / <code>a</code> 地址</div>
+        <div><div class="k">U — 单位</div><code>b</code> 字节(1) / <code>h</code> 半字(2) / <code>w</code> 字(4) / <code>g</code> 巨字(8)</div>
+      </div>
+      <pre><code><span class="prompt">(gdb)</span> x/10x &amp;arr      <span class="comment"># 从 arr 起，10 个单位，十六进制</span>
+<span class="prompt">(gdb)</span> x/10d &amp;arr      <span class="comment"># 同上，但十进制显示</span>
+<span class="prompt">(gdb)</span> x/10i $pc       <span class="comment"># 从当前指令起，反汇编 10 条指令</span>
+<span class="prompt">(gdb)</span> x/s msg         <span class="comment"># 把 msg 当 C 字符串打印</span>
+<span class="prompt">(gdb)</span> x/16gx $rsp     <span class="comment"># 从栈顶起，16 个 8 字节，十六进制（看栈常用）</span></code></pre>
+      <div class="info-box">
+        <div class="title"><code>x</code> 与 <code>print</code> 的分工</div>
+        <p><code>p</code> 面向<strong>「有类型的变量/表达式」</strong>（它知道 <code>user</code> 是个 <code>User</code>）；<code>x</code> 面向<strong>「一段裸地址的原始字节」</strong>（它不管那里是什么，按你给的格式硬解释）。排查栈损坏、看原始内存布局、反汇编时用 <code>x</code>；看具体变量值用 <code>p</code>。GDB 会记住上次的 N/F/U，直接敲 <code>x</code> 可继续往后看下一段。</p>
+      </div>
+    </section>
+
+    <!-- S3 -->
+    <section class="chapter" id="s3">
+      <div class="ch-head">
+        <div class="num">03</div>
+        <div class="t">
+          <h2>x/16gx $rsp：观察当前栈</h2>
+          <p class="sub">把这条命令拆开，你就理解了「看栈」</p>
+        </div>
+      </div>
+      <pre><code><span class="prompt">(gdb)</span> x/16gx $rsp</code></pre>
+      <table>
+        <thead><tr><th>片段</th><th>含义</th></tr></thead>
+        <tbody>
+          <tr><td><code>x</code></td><td>examine，查看内存</td></tr>
+          <tr><td><code>16</code></td><td>数量：看 16 个单位</td></tr>
+          <tr><td><code>g</code></td><td>单位：<strong>giant word = 8 字节</strong>（64 位一个「格」）</td></tr>
+          <tr><td><code>x</code></td><td>格式：十六进制</td></tr>
+          <tr><td><code>$rsp</code></td><td>起始地址：<strong>栈顶</strong>（栈指针寄存器）</td></tr>
+        </tbody>
+      </table>
+      <p>合起来就是：<strong>从栈顶开始，以 8 字节为单位，用十六进制打印 16 个格</strong> —— 也就是「把当前栈顶往下的 128 字节，按 64 位对齐排出来看」。这是查看栈布局、找返回地址、诊断栈溢出的标准动作。</p>
+      <pre><code><span class="prompt">(gdb)</span> x/16gx $rsp
+0x7fffffffe0a0: 0x0000000000000014  0x00007ffff7...   <span class="comment"># 局部/保存值</span>
+0x7fffffffe0b0: 0x00007fffffffe0d0  0x0000555555555169 <span class="comment"># 旧RBP、返回地址</span>
+...</code></pre>
+      <div class="info-box key">
+        <div class="title">看到栈内容之后怎么分析</div>
+        <p>栈里最值得关注的是<strong>返回地址</strong>（第 06 篇实战会用到）。正常情况下它应指向调用者代码段的合理地址；如果这里变成 <code>0x4141414141414141</code>（ASCII 的 <code>AAAA…</code>）或其他被写乱的值，几乎可以断定<strong>栈缓冲区溢出覆盖了返回地址</strong> —— 这类问题 <code>bt</code> 会直接崩溃或乱码，只有看内存才看得清。<code>g</code>（8 字节）是 64 位下看栈的正确单位；用 <code>w</code>（4 字节）会把地址切成两半，读起来会错乱。</p>
+      </div>
+    </section>
+
+    <!-- S4 -->
+    <section class="chapter" id="s4">
+      <div class="ch-head">
+        <div class="num">04</div>
+        <div class="t">
+          <h2>寄存器：info registers 与关键寄存器</h2>
+          <p class="sub">CPU 内部的高速工作台</p>
+        </div>
+      </div>
+      <pre><code><span class="prompt">(gdb)</span> info registers      <span class="comment"># i r —— 打印所有通用寄存器</span>
+rax  0x1e  30
+rbx  0x0   0
+...
+rip  0x555555555159  0x555555555159 &lt;add+16&gt;
+<span class="prompt">(gdb)</span> info registers rax   <span class="comment"># 只看某几个</span>
+<span class="prompt">(gdb)</span> p $rax               <span class="comment"># 也能用 p 读寄存器（$ 前缀）</span>
+<span class="prompt">(gdb)</span> p $rsp               <span class="comment"># 栈顶</span>
+<span class="prompt">(gdb)</span> p/x $rbp             <span class="comment"># 帧基址，十六进制</span></code></pre>
+      <table>
+        <thead><tr><th>寄存器</th><th>典型用途（System V ABI）</th></tr></thead>
+        <tbody>
+          <tr><td><span class="reg">RAX</span></td><td>返回值；部分指令的累加器</td></tr>
+          <tr><td><span class="reg">RBX</span></td><td>callee-saved 通用寄存器</td></tr>
+          <tr><td><span class="reg">RCX / RDX</span></td><td>第 4 / 第 3 个整型参数；部分指令专用</td></tr>
+          <tr><td><span class="reg">RDI / RSI</span></td><td>第 1 / 第 2 个整型参数</td></tr>
+          <tr><td><span class="reg">R8 / R9</span></td><td>第 5 / 第 6 个整型参数</td></tr>
+          <tr><td><span class="reg">RSP</span></td><td><strong>栈指针</strong>（指向栈顶）</td></tr>
+          <tr><td><span class="reg">RBP</span></td><td><strong>帧基址指针</strong>（指向当前栈帧基准）</td></tr>
+          <tr><td><span class="reg">RIP</span></td><td><strong>指令指针</strong>（下一条要执行的指令地址）</td></tr>
+        </tbody>
+      </table>
+      <div class="info-box">
+        <div class="title"><code>p $rax</code> 与 <code>info registers</code></div>
+        <p><code>info registers</code> 一次看全貌；<code>p $reg</code> 精确取某个、还能参与表达式（<code>p $rsp - $rbp</code> 算当前帧大小、<code>x/i $rip</code> 反汇编当前指令）。<strong>寄存器名前的 <code>$</code></strong> 是 GDB 约定，别漏写。</p>
+      </div>
+    </section>
+
+    <!-- S5 -->
+    <section class="chapter" id="s5">
+      <div class="ch-head">
+        <div class="num">05</div>
+        <div class="t">
+          <h2>RIP / RSP / RBP 各代表什么</h2>
+          <p class="sub">这三个是调试底层时最该盯的寄存器</p>
+        </div>
+      </div>
+      <div class="phase-card">
+        <p><strong><span class="reg">RIP</span>（Instruction Pointer）—— 「现在执行到哪」</strong><br>指向<strong>下一条即将执行的指令</strong>。程序崩溃时，<code>RIP</code> 就是「出事那一刻 CPU 想执行的地址」。若 <code>RIP</code> 指向一个非法/不可执行地址（如 <code>0x0</code>），通常意味着<strong>跳转目标被破坏</strong> —— 比如通过野函数指针调用、或返回地址被覆盖后 <code>ret</code> 跳飞。</p>
+      </div>
+      <div class="phase-card">
+        <p><strong><span class="reg">RSP</span>（Stack Pointer）—— 「栈顶在哪」</strong><br>始终指向<strong>当前栈顶</strong>。<code>push</code> 让它减小、<code>pop</code> 让它增大（x86-64 栈向低地址增长）。<code>call</code> 会把返回地址压入、<code>RSP</code> 自动 −8。想看当前栈就 <code>x/…gx $rsp</code>。</p>
+      </div>
+      <div class="phase-card">
+        <p><strong><span class="reg">RBP</span>（Base Pointer / Frame Pointer）—— 「当前帧的锚点」</strong><br>指向<strong>当前栈帧的基准位置</strong>，函数序言里 <code>push rbp; mov rbp, rsp</code> 建立，局部变量和参数常以 <code>RBP</code> 为基准用固定偏移访问（如 <code>[rbp-4]</code>）。它还串起「上一帧的 RBP」，让 <code>bt</code> 能逐帧回溯。<strong>注意：<code>-O2</code> 或 <code>-fomit-frame-pointer</code> 下 RBP 可能被省去当普通寄存器用</strong>，此时 GDB 靠 DWARF CFI 信息回溯栈，而非靠 RBP 链 —— 详见 <a href="stack_frame_deep_dive.html">栈帧深入</a>。</p>
+      </div>
+      <div class="flow-diagram">
+        <div class="flow-box"><span class="reg">RIP</span> → 下一条指令地址（执行到哪）</div>
+        <div class="flow-box"><span class="reg">RSP</span> → 栈顶（栈长到哪）</div>
+        <div class="flow-box"><span class="reg">RBP</span> → 当前帧基准（局部变量的锚）</div>
+      </div>
+    </section>
+
+    <!-- S6 -->
+    <section class="chapter" id="s6">
+      <div class="ch-head">
+        <div class="num">06</div>
+        <div class="t">
+          <h2>Assembly：disassemble / layout asm</h2>
+          <p class="sub">把当前函数还原成 CPU 真正执行的指令</p>
+        </div>
+      </div>
+      <pre><code><span class="prompt">(gdb)</span> disassemble         <span class="comment"># 反汇编当前函数，→ 标出当前 RIP 所在指令</span>
+Dump of assembler code for function add(int, int):
+   0x...49 &lt;+0&gt;:   push   %rbp
+   0x...4a &lt;+1&gt;:   mov    %rsp,%rbp
+   0x...4d &lt;+4&gt;:   mov    %edi,-0x4(%rbp)   <span class="comment"># a 存栈</span>
+   0x...50 &lt;+7&gt;:   mov    %esi,-0x8(%rbp)   <span class="comment"># b 存栈</span>
+=&gt; 0x...53 &lt;+10&gt;:  mov    -0x4(%rbp),%edx   <span class="comment"># => 当前执行位置</span>
+   0x...56 &lt;+13&gt;:  mov    -0x8(%rbp),%eax
+   0x...59 &lt;+16&gt;:  add    %edx,%eax        <span class="comment"># a + b</span>
+   0x...5b &lt;+18&gt;:  pop    %rbp
+   0x...5c &lt;+19&gt;:  ret
+
+<span class="prompt">(gdb)</span> disassemble /m       <span class="comment"># 源码行与汇编交错显示（/s 是新版更佳选项）</span>
+<span class="prompt">(gdb)</span> x/i $rip             <span class="comment"># 只看当前这一条指令</span>
+<span class="prompt">(gdb)</span> layout asm            <span class="comment"># TUI：开一个汇编窗口，单步时高亮跟随</span>
+<span class="prompt">(gdb)</span> layout regs           <span class="comment"># TUI：同时看寄存器窗口</span></code></pre>
+      <div class="info-box">
+        <div class="title">看汇编的正确姿势</div>
+        <p>不需要读懂每一条指令。抓三件事：<strong>①函数序言/结语</strong>（<code>push rbp</code> / <code>ret</code> 标出边界）；<strong>②内存读写</strong>（<code>mov</code> 与 <code>[rbp-x]</code> 对应局部变量）；<strong>③控制流</strong>（<code>call</code> / <code>jmp</code> / <code>je</code> 决定走向）。配合 <code>stepi</code>/<code>nexti</code> 逐指令走、<code>layout asm</code> 高亮跟随，能看清「这一行 C++ 到底编译成了哪几条指令」。</p>
+      </div>
+    </section>
+
+    <!-- S7 -->
+    <section class="chapter" id="s7">
+      <div class="ch-head">
+        <div class="num">07</div>
+        <div class="t">
+          <h2>串起来：add(a,b) 的参数→寄存器→call→ret</h2>
+          <p class="sub">用 GDB 把整套函数调用底层机制走一遍</p>
+        </div>
+      </div>
+      <p>把前面几篇的原理，用 GDB 在 <code>add(10,20)</code> 上验证成一条闭环：</p>
+      <div class="flow-diagram">
+        <div class="flow-box"><strong>参数</strong>：main 把 10→<span class="reg">EDI</span>、20→<span class="reg">ESI</span>（<code>info registers</code> 可见）</div>
+        <div class="flow-arrow-down"></div>
+        <div class="flow-box"><strong>call add</strong>：返回地址压栈，<span class="reg">RSP</span>−8，<span class="reg">RIP</span> 跳到 add</div>
+        <div class="flow-arrow-down"></div>
+        <div class="flow-box"><strong>序言</strong>：<code>push rbp; mov rbp,rsp</code> 建栈帧（<code>disassemble</code> 可见）</div>
+        <div class="flow-arrow-down"></div>
+        <div class="flow-box"><strong>执行</strong>：<code>add %edx,%eax</code>，结果进 <span class="reg">EAX</span></div>
+        <div class="flow-arrow-down"></div>
+        <div class="flow-box"><strong>返回值</strong>：<span class="reg">RAX</span>=30（<code>p $rax</code> 验证）</div>
+        <div class="flow-arrow-down"></div>
+        <div class="flow-box"><strong>ret</strong>：从栈弹出返回地址→<span class="reg">RIP</span>，<span class="reg">RSP</span> 复原，回到 main</div>
+      </div>
+      <pre><code><span class="comment"># 一次完整观察脚本</span>
+<span class="prompt">(gdb)</span> break add
+<span class="prompt">(gdb)</span> run
+<span class="prompt">(gdb)</span> info registers rdi rsi   <span class="comment"># 看传进来的参数（低 32 位 edi/esi = 10/20）</span>
+<span class="prompt">(gdb)</span> x/gx $rsp                 <span class="comment"># 栈顶就是刚压入的返回地址</span>
+<span class="prompt">(gdb)</span> disassemble               <span class="comment"># 看 add 的指令，找到 ret</span>
+<span class="prompt">(gdb)</span> finish                    <span class="comment"># 执行完，观察返回值</span>
+Run till exit from #0 add (a=10, b=20)
+Value returned is $1 = 30           <span class="comment"># 就是 RAX 里的值</span>
+<span class="prompt">(gdb)</span> p $rax
+$2 = 30</code></pre>
+      <div class="info-box key">
+        <div class="title">这就是把知识「串起来」</div>
+        <p>到这里，<a href="function_call_mechanism.html">函数调用发生了什么</a>、<a href="stack_frame_deep_dive.html">栈帧</a>、<a href="call_ret_internals.html">CALL/RET</a>、<a href="calling_convention_abi.html">ABI</a> 四篇讲的抽象机制，都能在 GDB 里被你<strong>亲手观测出来</strong>：参数确实在 RDI/RSI，返回地址确实在栈顶，返回值确实在 RAX。<strong>调试底层的终极价值，就是把「书上说的」变成「我看到的」。</strong></p>
+      </div>
+    </section>
+
+    <!-- S8 -->
+    <section class="chapter" id="s8">
+      <div class="ch-head">
+        <div class="num">08</div>
+        <div class="t"><h2>核心结论 + 常见误区</h2></div>
+      </div>
+      <div class="phase-card">
+        <ul>
+          <li><strong><code>x/NFU 地址</code></strong>：N 数量、F 格式、U 单位；看裸内存用 <code>x</code>，看有类型变量用 <code>p</code>。</li>
+          <li><strong><code>x/16gx $rsp</code></strong> = 从栈顶起、16 个 8 字节、十六进制，看栈的标准动作。</li>
+          <li><strong>三个关键寄存器</strong>：<span class="reg">RIP</span> 执行到哪、<span class="reg">RSP</span> 栈顶、<span class="reg">RBP</span> 帧基准。</li>
+          <li><strong><code>disassemble</code> + <code>stepi</code> + <code>layout asm</code></strong> 看清一行 C++ 对应的指令。</li>
+          <li><strong>能用 GDB 验证</strong>：参数在 RDI/RSI、返回地址在栈顶、返回值在 RAX。</li>
+        </ul>
+      </div>
+      <div class="myth"><p><span class="wrong">❌ 看栈用 <code>x/16wx</code>（4 字节单位）。</span> 64 位下地址是 8 字节，应该用 <code>g</code>；用 <code>w</code> 会把每个地址劈成两半，读起来全错。</p></div>
+      <div class="myth"><p><span class="wrong">❌ RBP 一定指向帧基址。</span> <code>-O2</code> / <code>-fomit-frame-pointer</code> 下 RBP 可能被当普通寄存器用，此时靠 DWARF CFI 回溯栈。</p></div>
+      <div class="myth"><p><span class="wrong">❌ RIP 就是「当前正在执行的指令」。</span> 严格说它指向<strong>下一条</strong>将执行的指令。</p></div>
+      <div class="myth"><p><span class="wrong">❌ 寄存器名不用加 <code>$</code>。</span> GDB 里必须写 <code>$rax</code> / <code>$rsp</code>，否则会被当成程序里的符号。</p></div>
+    </section>
+
+    <!-- S9 -->
+    <section class="chapter" id="s9">
+      <div class="ch-head">
+        <div class="num">09</div>
+        <div class="t"><h2>面试问题</h2></div>
+      </div>
+      <div class="qa"><div class="q"><span class="lvl">基础</span>如何查看寄存器？</div><p><code>info registers</code>（缩写 <code>i r</code>）打印全部通用寄存器；<code>info registers rax rsp</code> 看指定的；也可用 <code>p $rax</code> 读单个并参与表达式。寄存器名前要加 <code>$</code>。</p></div>
+      <div class="qa"><div class="q"><span class="lvl">基础</span>如何查看当前栈？<code>x/10gx $rsp</code> 怎么理解？</div><p>用 <code>x</code> 从栈顶 <code>$rsp</code> 开始读内存。<code>x/10gx $rsp</code> = 显示 10 个（<code>10</code>）8 字节单位（<code>g</code>）、十六进制（<code>x</code>），即从栈顶往下 80 字节按 64 位对齐排列，用于查看栈布局、返回地址、诊断栈溢出。</p></div>
+      <div class="qa"><div class="q"><span class="lvl">基础</span>如何查看汇编？</div><p><code>disassemble</code> 反汇编当前函数并用 <code>=&gt;</code> 标出当前指令；<code>disassemble /s</code> 源码与汇编交错；<code>x/i $rip</code> 看当前单条指令；<code>layout asm</code> 开 TUI 汇编窗口单步跟随。</p></div>
+      <div class="qa"><div class="q"><span class="lvl">原理</span>RIP、RSP、RBP 分别代表什么？</div><p>RIP 是指令指针，指向下一条将执行的指令；RSP 是栈指针，始终指向栈顶；RBP 是帧基址指针，指向当前栈帧基准，局部变量常以它为基准偏移访问，并串起栈帧回溯链。</p></div>
+      <div class="qa"><div class="q"><span class="lvl">原理</span><code>x</code> 和 <code>print</code> 有什么区别？</div><p><code>print</code> 按变量/表达式的类型语义打印（知道对象结构）；<code>x</code> 把一段地址的原始字节按你指定的 N/F/U 硬解释，不关心类型。看具体变量用 <code>p</code>，看裸内存/栈/反汇编用 <code>x</code>。</p></div>
+      <div class="qa"><div class="q"><span class="lvl">进阶</span>怎么用 GDB 验证「参数走寄存器、返回值在 RAX」？</div><p>在函数入口断点，<code>info registers rdi rsi</code> 看到前两个整型参数；<code>x/gx $rsp</code> 看到 call 压入的返回地址；<code>finish</code> 或 <code>p $rax</code> 看到返回值。这样把 System V ABI 的传参/返回约定实测一遍。</p></div>
+      <div class="qa"><div class="q"><span class="lvl">进阶</span>崩溃时 RIP 指向 <code>0x0</code> 或乱码说明什么？</div><p>说明控制流被破坏：可能是空/野函数指针调用，或返回地址被栈溢出覆盖后 <code>ret</code> 跳到非法地址。此时结合 <code>x/gx $rsp</code> 看栈顶返回地址是否被写乱，往往能定位是哪次越界写破坏了栈。</p></div>
+    </section>
+
+    <div style="margin-top:50px;padding-top:20px;border-top:1px solid var(--border);display:flex;justify-content:space-between;flex-wrap:wrap;gap:12px;font-size:0.9em;">
+      <a href="gdb_stack_frame_variables.html">← 03 · Stack / Frame / Variable</a>
+      <a href="gdb_multithread_debugging.html"><strong>05 · Multi-thread Debugging →</strong></a>
+    </div>
+  </main>
+</div>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

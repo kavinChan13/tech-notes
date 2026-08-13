@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Stack / Frame / Variable：分析 C++ 调用过程 · bt / frame / up / down / print / info locals</title>
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<style>
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --surface2: #1c2333;
+    --border: #30363d;
+    --text: #e6edf3;
+    --text-muted: #8b949e;
+    --accent-blue: #58a6ff;
+    --accent-green: #3fb950;
+    --accent-orange: #d29922;
+    --accent-purple: #bc8cff;
+    --accent-red: #f85149;
+    --accent-cyan: #39d2c0;
+    --code-bg: #0d1117;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.7;
+  }
+  h2 { font-size: 1.6em; font-weight: 600; margin-top: 8px; margin-bottom: 16px; }
+  h3 { font-size: 1.2em; font-weight: 600; margin-top: 32px; margin-bottom: 12px; color: var(--accent-blue); }
+  h4 { font-size: 1.05em; font-weight: 600; margin-top: 24px; margin-bottom: 8px; color: var(--accent-purple); }
+  p { margin-bottom: 14px; }
+  a { color: var(--accent-blue); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  strong { color: var(--text); }
+  code {
+    font-family: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', Consolas, monospace;
+    background: var(--surface2);
+    padding: 2px 7px;
+    border-radius: 4px;
+    font-size: 0.88em;
+    color: var(--accent-cyan);
+  }
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 18px 20px;
+    overflow-x: auto;
+    margin: 14px 0 20px;
+    font-size: 0.88em;
+    line-height: 1.6;
+  }
+  pre code { background: none; padding: 0; color: var(--text); }
+  .comment, .cm { color: #6a737d; }
+  .keyword, .kw { color: #ff7b72; }
+  .string, .str { color: #a5d6ff; }
+  .type { color: #79c0ff; }
+  .number, .num { color: #d2a8ff; }
+  .reg { color: var(--accent-cyan); font-weight: 600; }
+  .prompt { color: var(--accent-green); font-weight: 600; }
+
+  .info-box { background: color-mix(in srgb, var(--accent-blue) 8%, var(--bg-card)); border: 1px solid color-mix(in srgb, var(--accent-blue) 25%, var(--bg-card)); border-radius: 8px; padding: 16px 20px; margin: 16px 0; font-size: 0.95em; }
+  .info-box.warning { background: color-mix(in srgb, var(--accent-orange) 10%, var(--bg-card)); border-color: color-mix(in srgb, var(--accent-orange) 30%, var(--bg-card)); }
+  .info-box.key { background: color-mix(in srgb, var(--accent-green) 8%, var(--bg-card)); border-color: color-mix(in srgb, var(--accent-green) 25%, var(--bg-card)); }
+  .info-box .title { font-weight: 600; margin-bottom: 6px; }
+
+  .phase-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; padding: 22px 24px 16px; margin: 22px 0; border-left: 4px solid var(--accent-blue); }
+
+  table { width: 100%; border-collapse: collapse; margin: 14px 0 20px; font-size: 0.92em; }
+  th { background: var(--surface2); font-weight: 600; text-align: left; padding: 10px 14px; border-bottom: 2px solid var(--border); }
+  td { padding: 9px 14px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  tr:hover td { background: color-mix(in srgb, var(--accent-blue) 5%, transparent); }
+
+  ul, ol { padding-left: 24px; margin-bottom: 14px; }
+  li { margin: 4px 0; }
+
+  .series-nav { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 26px; }
+  .series-nav a { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border-radius: 20px; border: 1px solid var(--border); background: var(--surface); font-size: 0.82em; color: var(--text); }
+  .series-nav a:hover { border-color: var(--accent-blue); text-decoration: none; }
+  .series-nav a .n { font-family: 'Cascadia Code',monospace; color: var(--accent-blue); font-weight: 700; }
+  .series-nav a.cur { background: color-mix(in srgb, var(--accent-blue) 16%, var(--bg-card)); border-color: var(--accent-blue); }
+
+  .myth { border-left: 4px solid var(--accent-red); background: color-mix(in srgb, var(--accent-red) 8%, var(--bg-card)); border-radius: 8px; padding: 12px 18px; margin: 12px 0; }
+  .myth .wrong { color: var(--accent-red); font-weight: 700; }
+  .myth .right { color: var(--accent-green); font-weight: 700; }
+
+  .qa { background: var(--bg-card); border: 1px solid var(--border); border-left: 4px solid var(--accent-cyan); border-radius: 10px; padding: 16px 20px; margin: 14px 0; }
+  .qa .q { font-weight: 700; margin-bottom: 6px; color: var(--text); }
+  .qa .lvl { font-family: 'Cascadia Code',monospace; font-size: 0.72em; color: var(--accent-cyan); border: 1px solid color-mix(in srgb, var(--accent-cyan) 40%, var(--bg-card)); border-radius: 6px; padding: 1px 7px; margin-right: 8px; }
+
+  /* frame stack figure */
+  .framefig { max-width: 460px; margin: 22px auto; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; font-family: 'Cascadia Code','Fira Code',monospace; font-size: 0.86em; }
+  .framefig .cap { background: var(--surface2); padding: 6px 12px; font-size: 0.82em; color: var(--text-muted); text-align: center; }
+  .framefig .frow { padding: 10px 14px; border-top: 1px solid var(--border); display: flex; justify-content: space-between; gap: 10px; align-items: center; }
+  .framefig .frow .lv { color: var(--accent-blue); font-weight: 700; }
+  .framefig .cur { background: color-mix(in srgb, var(--accent-cyan) 14%, var(--bg-card)); }
+
+  @media (max-width: 700px) { h2 { font-size: 1.35em; } }
+</style>
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav tn-shell-overlay">
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="modern_cpp_stl_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 24 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="progress" id="progress"></div>
+<div class="layout">
+  <aside class="toc">
+    <h2>GDB · 03</h2>
+    <nav>
+      <ol>
+        <li><a href="#s1">从「停在哪」到「怎么走到这的」</a></li>
+        <li><a href="#s2">bt / backtrace：一眼看清调用链</a></li>
+        <li><a href="#s3">#0 #1 #2 到底是什么</a></li>
+        <li><a href="#s4">frame / up / down：在栈帧间穿梭</a></li>
+        <li><a href="#s5">info locals / info args：看局部变量与参数</a></li>
+        <li><a href="#s6">print / display：查看任意表达式</a></li>
+        <li><a href="#s7">C++ 对象、指针、引用怎么看</a></li>
+        <li><a href="#s8">STL 容器调试：vector / string / 智能指针</a></li>
+        <li><a href="#s9">核心结论 + 常见误区</a></li>
+        <li><a href="#s10">面试问题</a></li>
+      </ol>
+    </nav>
+  </aside>
+  <main>
+    <header class="hero">
+      <div class="badge">GDB 调试 C++ · 系列 03 / 06</div>
+      <h1>Stack / Frame / Variable：如何分析 C++ 调用过程</h1>
+      <p class="sub">程序停下来之后，第一个要回答的问题往往不是「这里是什么」，而是<strong>「它是怎么走到这里的」</strong>。这一篇把 GDB 里最常用、也最能救命的一组能力讲透：用 <code>bt</code> 看调用链、用 <code>frame</code>/<code>up</code>/<code>down</code> 在栈帧间穿梭、用 <code>print</code>/<code>info locals</code>/<code>info args</code> 检查变量 —— 并专门处理 C++ 特有的指针、引用、STL 容器怎么在 GDB 里看清楚。</p>
+      <div class="meta-row">
+        <span class="pill cyan">调用链分析</span>
+        <span class="pill green">阅读 ~24 min</span>
+        <span class="pill amber">前置：本系列 01–02</span>
+        <span class="pill violet">栈帧 / 变量</span>
+      </div>
+      <div class="meta">
+        <span>bt / frame / up / down</span>
+        <span>print / info locals / info args</span>
+        <span>指针 / 引用 / STL</span>
+        <span>单文件 · 无 CDN 依赖</span>
+      </div>
+    </header>
+
+    <nav class="series-nav" aria-label="系列导航">
+      <a href="gdb_debugging_intro.html"><span class="n">01</span> GDB 是什么</a>
+      <a href="gdb_breakpoints.html"><span class="n">02</span> 断点与执行控制</a>
+      <a class="cur" href="gdb_stack_frame_variables.html"><span class="n">03</span> 栈 / 帧 / 变量</a>
+      <a href="gdb_memory_register_assembly.html"><span class="n">04</span> 内存 / 寄存器 / 汇编</a>
+      <a href="gdb_multithread_debugging.html"><span class="n">05</span> 多线程调试</a>
+      <a href="gdb_crash_debugging.html"><span class="n">06</span> Crash 实战</a>
+    </nav>
+
+    <div class="info-box">
+      <div class="title">原理在姊妹篇，这里讲「怎么观察」</div>
+      <p>本篇是 <a href="stack_frame_deep_dive.html">Stack Frame 深入</a>、<a href="call_ret_internals.html">CALL / RET</a> 两篇的「实操验证版」：那里讲栈帧为什么长这样、返回地址如何工作，这里教你用 GDB 亲眼看到它。建议交叉阅读。</p>
+    </div>
+
+    <!-- S1 -->
+    <section class="chapter" id="s1">
+      <div class="ch-head">
+        <div class="num">01</div>
+        <div class="t">
+          <h2>从「停在哪」到「怎么走到这的」</h2>
+          <p class="sub">构造一条清晰的调用链</p>
+        </div>
+      </div>
+      <p>用一段能直接编译运行的递进调用来贯穿本篇：</p>
+      <pre><code><span class="comment">// call_chain.cpp — g++ -g -O0 call_chain.cpp -o call_chain</span>
+<span class="keyword">#include</span> <span class="string">&lt;iostream&gt;</span>
+<span class="keyword">#include</span> <span class="string">&lt;string&gt;</span>
+<span class="keyword">#include</span> <span class="string">&lt;vector&gt;</span>
+<span class="keyword">#include</span> <span class="string">&lt;memory&gt;</span>
+
+<span class="keyword">struct</span> User {
+    <span class="type">int</span> id;
+    std::string name;
+};
+
+<span class="type">int</span> baz(<span class="type">int</span> n)            { <span class="keyword">return</span> n * n; }
+<span class="type">int</span> bar(<span class="type">int</span> n)            { <span class="keyword">return</span> baz(n) + <span class="number">1</span>; }
+<span class="type">int</span> foo(<span class="type">int</span> n)            { <span class="keyword">return</span> bar(n) - <span class="number">1</span>; }
+
+<span class="type">int</span> main() {
+    User u{<span class="number">7</span>, <span class="string">"Kavin"</span>};
+    User* p = &amp;u;
+    std::vector&lt;<span class="type">int</span>&gt; v{<span class="number">10</span>, <span class="number">20</span>, <span class="number">30</span>};
+    <span class="keyword">auto</span> sp = std::make_shared&lt;User&gt;(User{<span class="number">99</span>, <span class="string">"SP"</span>});
+    <span class="type">int</span> r = foo(<span class="number">5</span>);        <span class="comment">// main → foo → bar → baz</span>
+    std::cout &lt;&lt; r &lt;&lt; <span class="string">" "</span> &lt;&lt; p-&gt;name &lt;&lt; <span class="string">" "</span> &lt;&lt; v[<span class="number">0</span>] &lt;&lt; <span class="string">" "</span> &lt;&lt; sp-&gt;name &lt;&lt; <span class="string">"\n"</span>;
+}</code></pre>
+      <p>在最深的 <code>baz</code> 打断点，让程序停在调用链最底部：</p>
+      <pre><code>$ gdb ./call_chain
+<span class="prompt">(gdb)</span> break baz
+<span class="prompt">(gdb)</span> run
+Breakpoint 1, baz (n=5) at call_chain.cpp:12</code></pre>
+    </section>
+
+    <!-- S2 -->
+    <section class="chapter" id="s2">
+      <div class="ch-head">
+        <div class="num">02</div>
+        <div class="t">
+          <h2>bt / backtrace：一眼看清调用链</h2>
+          <p class="sub">调试里被敲得最多的命令，没有之一</p>
+        </div>
+      </div>
+      <p><code>bt</code>（<code>backtrace</code> 的缩写，等价还有 <code>where</code>）打印<strong>当前线程从崩溃点/暂停点一路回溯到 <code>main</code> 的完整调用链</strong>。停在 <code>baz</code> 时：</p>
+      <pre><code><span class="prompt">(gdb)</span> bt
+#0  baz (n=5) at call_chain.cpp:12
+#1  0x... in bar (n=5) at call_chain.cpp:13
+#2  0x... in foo (n=5) at call_chain.cpp:14
+#3  0x... in main () at call_chain.cpp:22</code></pre>
+      <p>一行就还原了整个「谁调用了谁」：</p>
+      <div class="flow-diagram" style="margin:16px 0;">
+        <div class="flow-box">main()</div>
+        <div class="flow-arrow-down"></div>
+        <div class="flow-box">foo(5)</div>
+        <div class="flow-arrow-down"></div>
+        <div class="flow-box">bar(5)</div>
+        <div class="flow-arrow-down"></div>
+        <div class="flow-box"><strong>baz(5) ← 现在停在这里（#0）</strong></div>
+      </div>
+      <div class="info-box">
+        <div class="title">常用变体</div>
+        <ul>
+          <li><code>bt</code>：完整调用栈；</li>
+          <li><code>bt 3</code>：只看最里面 3 层（栈很深时）；</li>
+          <li><code>bt -3</code>：只看最外面 3 层；</li>
+          <li><code>bt full</code>：每一帧连同它的<strong>局部变量</strong>一起打印（信息量大，排查利器）。</li>
+        </ul>
+      </div>
+      <div class="info-box key">
+        <div class="title">看到 <code>bt</code> 之后该怎么分析</div>
+        <p><code>bt</code> 回答两个关键问题：<strong>①「现在在哪个函数？」</strong>（看 <code>#0</code>）<strong>②「是经过怎样一条路径调过来的？」</strong>（看 <code>#0</code> 往下）。崩溃调试里，<code>#0</code> 是<strong>崩溃发生的现场</strong>，往下逐层是它的<strong>调用来源</strong> —— 真正的 bug 未必在 <code>#0</code>，常常在某一层传进来的错误参数里。这条链就是你后面「逐帧排查」的路线图。</p>
+      </div>
+    </section>
+
+    <!-- S3 -->
+    <section class="chapter" id="s3">
+      <div class="ch-head">
+        <div class="num">03</div>
+        <div class="t">
+          <h2>#0 #1 #2 到底是什么</h2>
+          <p class="sub">这些编号不是「行号」，是「栈帧编号」</p>
+        </div>
+      </div>
+      <p>每一层函数调用在栈上都占一块<strong>栈帧（stack frame）</strong>。GDB 给它们编号，<strong><code>#0</code> 永远是最内层（当前正在执行的那一帧），编号越大越靠近 <code>main</code>（越「外层/越早」）</strong>。</p>
+
+      <div class="framefig">
+        <div class="cap">栈帧编号（frame number）</div>
+        <div class="frow cur"><span><span class="lv">#0</span> baz</span><span>最内层 · 当前帧</span></div>
+        <div class="frow"><span><span class="lv">#1</span> bar</span><span>baz 的调用者</span></div>
+        <div class="frow"><span><span class="lv">#2</span> foo</span><span>bar 的调用者</span></div>
+        <div class="frow"><span><span class="lv">#3</span> main</span><span>最外层 · 起点</span></div>
+      </div>
+
+      <div class="info-box warning">
+        <div class="title">关键：编号是「层级」不是「时间」</div>
+        <p>很多人误以为 <code>#0</code> 是「最先执行的」。恰恰相反：<code>#0</code> 是<strong>最后进入、最内层、当前正在跑</strong>的那个函数；<code>#3</code>（<code>main</code>）才是最早开始的。这正是栈「后进先出」的体现 —— 最后压栈的帧编号最小、离栈顶最近。GDB 里所有「查看变量」的命令，<strong>默认都作用在<code>#0</code> 这一帧</strong>，除非你切换过去。</p>
+      </div>
+
+      <p>为什么栈能这样被逐层回溯出来？因为每一帧都保存了「返回地址」和上一帧的帧指针，GDB 顺着这条链一路往回爬 —— 底层机制见 <a href="call_ret_internals.html">CALL / RET 深入</a>。</p>
+    </section>
+
+    <!-- S4 -->
+    <section class="chapter" id="s4">
+      <div class="ch-head">
+        <div class="num">04</div>
+        <div class="t">
+          <h2>frame / up / down：在栈帧间穿梭</h2>
+          <p class="sub">切到哪一帧，「当前上下文」就变成哪一帧</p>
+        </div>
+      </div>
+      <table>
+        <thead><tr><th>命令</th><th>作用</th></tr></thead>
+        <tbody>
+          <tr><td><code>frame 2</code> / <code>f 2</code></td><td>直接切到 <code>#2</code> 帧（foo）</td></tr>
+          <tr><td><code>up</code></td><td>往「外层」走一帧（#0→#1→#2…，朝 main 方向）</td></tr>
+          <tr><td><code>up 2</code></td><td>一次往外走 2 帧</td></tr>
+          <tr><td><code>down</code></td><td>往「内层」走一帧（朝 #0 方向）</td></tr>
+          <tr><td><code>info frame</code></td><td>打印当前帧的底层细节：帧地址、返回地址、保存的寄存器位置</td></tr>
+        </tbody>
+      </table>
+      <pre><code><span class="prompt">(gdb)</span> up                 <span class="comment"># 从 baz(#0) 切到 bar(#1)</span>
+#1  0x... in bar (n=5) at call_chain.cpp:13
+13      int bar(int n) { return baz(n) + 1; }
+<span class="prompt">(gdb)</span> frame 3            <span class="comment"># 直接跳到 main</span>
+#3  main () at call_chain.cpp:22
+<span class="prompt">(gdb)</span> info args          <span class="comment"># 现在看的是 main 的上下文</span></code></pre>
+
+      <div class="info-box key">
+        <div class="title">为什么要切帧</div>
+        <p>切换栈帧的意义在于：<strong>把「当前上下文」搬到你想检查的那一层</strong>。停在 <code>baz</code> 时想看 <code>main</code> 里那个 <code>User u</code>？必须先 <code>frame 3</code>，否则 <code>p u</code> 会因为「当前帧（baz）里没有 <code>u</code>」而报错。这是新手最常见的困惑 —— 变量明明存在却说找不到，多半是<strong>站错帧</strong>了。</p>
+      </div>
+
+      <p><code>info frame</code> 展示的是这一帧的「解剖图」：帧基址（对应 <span class="reg">RBP</span>）、栈顶（<span class="reg">RSP</span>）、返回地址存在哪、哪些被调用者保存寄存器被压在这一帧里。这些字段与 <a href="stack_frame_deep_dive.html">02 篇栈帧</a>里讲的一一对应，第 04 篇会结合寄存器进一步展开。</p>
+    </section>
+
+    <!-- S5 -->
+    <section class="chapter" id="s5">
+      <div class="ch-head">
+        <div class="num">05</div>
+        <div class="t">
+          <h2>info locals / info args：看局部变量与参数</h2>
+          <p class="sub">一次性把当前帧的「家底」倒出来</p>
+        </div>
+      </div>
+      <pre><code><span class="prompt">(gdb)</span> frame 3            <span class="comment"># 切到 main</span>
+<span class="prompt">(gdb)</span> info args          <span class="comment"># main 没参数，显示 No arguments.</span>
+<span class="prompt">(gdb)</span> info locals        <span class="comment"># main 的所有局部变量</span>
+u = {id = 7, name = "Kavin"}
+p = 0x7fffffffe010
+v = std::vector of length 3, capacity 3 = {10, 20, 30}
+sp = std::shared_ptr&lt;User&gt; (use count 1, weak count 0) = {...}
+r = 0</code></pre>
+      <table>
+        <thead><tr><th>命令</th><th>看什么</th><th>什么时候用</th></tr></thead>
+        <tbody>
+          <tr><td><code>info args</code></td><td>当前帧的<strong>函数参数</strong></td><td>怀疑「是不是传进来的参数就错了」</td></tr>
+          <tr><td><code>info locals</code></td><td>当前帧的<strong>所有局部变量</strong></td><td>快速扫一遍这个函数内部的状态</td></tr>
+        </tbody>
+      </table>
+      <div class="info-box">
+        <div class="title">调试直觉</div>
+        <p>拿到崩溃现场后的高效动作：<code>bt</code> 看链 → 逐帧 <code>up</code>，每到一帧就 <code>info args</code> + <code>info locals</code> 扫一眼，找「哪一层的数据开始不对劲」。<strong>参数在这一层还是对的、到下一层就错了</strong>，问题就锁定在这两层之间。</p>
+      </div>
+    </section>
+
+    <!-- S6 -->
+    <section class="chapter" id="s6">
+      <div class="ch-head">
+        <div class="num">06</div>
+        <div class="t">
+          <h2>print / display：查看任意表达式</h2>
+          <p class="sub">不止看变量，还能算表达式、调函数、改值</p>
+        </div>
+      </div>
+      <pre><code><span class="prompt">(gdb)</span> print n            <span class="comment"># p n —— 查看变量 n</span>
+$1 = 5
+<span class="prompt">(gdb)</span> p n * n           <span class="comment"># 直接算表达式</span>
+$2 = 25
+<span class="prompt">(gdb)</span> p/x 255           <span class="comment"># 以十六进制显示：$3 = 0xff</span>
+<span class="prompt">(gdb)</span> p sizeof(User)    <span class="comment"># 甚至能算 sizeof</span>
+<span class="prompt">(gdb)</span> set var n = 42    <span class="comment"># 修改运行中的变量值</span></code></pre>
+      <p><code>print</code> 的表达式能力非常强：算术、比较、解引用、成员访问、数组下标、类型转换、甚至<strong>在被调试进程里调用一个函数</strong>（<code>p some_func(3)</code>）。<code>p/FMT</code> 可指定输出格式：<code>/x</code> 十六进制、<code>/d</code> 十进制、<code>/t</code> 二进制、<code>/c</code> 字符、<code>/a</code> 地址、<code>/f</code> 浮点。</p>
+
+      <h3>display：每次停下来自动打印</h3>
+      <pre><code><span class="prompt">(gdb)</span> display n          <span class="comment"># 之后每次暂停都自动显示 n</span>
+<span class="prompt">(gdb)</span> display/x sum      <span class="comment"># 带格式的自动显示</span>
+<span class="prompt">(gdb)</span> info display       <span class="comment"># 查看已注册的自动显示项</span>
+<span class="prompt">(gdb)</span> undisplay 1        <span class="comment"># 取消 1 号自动显示</span></code></pre>
+      <div class="info-box">
+        <div class="title"><code>print</code> vs <code>display</code></div>
+        <p><code>print</code> 是<strong>「看一次」</strong>；<code>display</code> 是<strong>「盯着看」</strong> —— 单步调试循环时，把关心的几个变量 <code>display</code> 出来，之后每走一步它们的最新值都自动刷新，省去反复敲 <code>p</code>。</p>
+      </div>
+    </section>
+
+    <!-- S7 -->
+    <section class="chapter" id="s7">
+      <div class="ch-head">
+        <div class="num">07</div>
+        <div class="t">
+          <h2>C++ 对象、指针、引用怎么看</h2>
+          <p class="sub">C++ 的间接层多，看变量要先想清楚「你在看指针还是它指向的东西」</p>
+        </div>
+      </div>
+      <pre><code><span class="prompt">(gdb)</span> frame 3
+<span class="prompt">(gdb)</span> p u                <span class="comment"># 整个对象</span>
+$1 = {id = 7, name = "Kavin"}
+<span class="prompt">(gdb)</span> p u.id             <span class="comment"># 成员</span>
+$2 = 7
+<span class="prompt">(gdb)</span> p u.name
+$3 = "Kavin"
+
+<span class="prompt">(gdb)</span> p p                <span class="comment"># p 是指针 → 打印的是地址</span>
+$4 = (User *) 0x7fffffffe010
+<span class="prompt">(gdb)</span> p *p               <span class="comment"># 解引用 → 打印指向的对象</span>
+$5 = {id = 7, name = "Kavin"}
+<span class="prompt">(gdb)</span> p p-&gt;name           <span class="comment"># 通过指针访问成员</span>
+$6 = "Kavin"</code></pre>
+      <div class="info-box warning">
+        <div class="title">指针调试的第一性原理</div>
+        <p><code>p ptr</code> 给你的是<strong>地址</strong>，<code>p *ptr</code> 给你的是<strong>内容</strong>。崩溃排查时这两步缺一不可：先 <code>p ptr</code> 看地址是否是 <code>0x0</code>（空指针）或一个明显不合理的值（野指针）；地址看起来正常，再 <code>p *ptr</code> 看内容是否是垃圾（可能是悬垂指针指向已释放内存）。第 06 篇会把这套流程用在真实崩溃上。</p>
+      </div>
+      <h4>数组与引用</h4>
+      <pre><code><span class="prompt">(gdb)</span> p arr[0]           <span class="comment"># 数组下标</span>
+<span class="prompt">(gdb)</span> p *arr@5           <span class="comment"># 把 arr 起始的 5 个元素当数组打印（@ 语法）</span>
+<span class="prompt">(gdb)</span> p ref              <span class="comment"># 引用在 GDB 里透明：直接显示被引用对象</span></code></pre>
+      <p><code>@</code> 是很实用的技巧：<code>p *data@len</code> 能把一段裸内存/动态数组按 <code>len</code> 个元素打印出来，弥补「指针不知道自己指向多少元素」的问题。</p>
+    </section>
+
+    <!-- S8 -->
+    <section class="chapter" id="s8">
+      <div class="ch-head">
+        <div class="num">08</div>
+        <div class="t">
+          <h2>STL 容器调试：vector / string / 智能指针</h2>
+          <p class="sub">现代 GDB 带 pretty-printer，STL 看起来很友好 —— 但要知道它靠什么</p>
+        </div>
+      </div>
+      <p>现代 GDB 通常随发行版附带一套 <strong>Python pretty-printer</strong>（libstdc++/libc++ 的打印插件），它把 STL 对象的内部结构翻译成人类可读形式：</p>
+      <pre><code><span class="prompt">(gdb)</span> p v
+$1 = std::vector of length 3, capacity 3 = {10, 20, 30}
+<span class="prompt">(gdb)</span> p v[1]             <span class="comment"># 甚至支持下标</span>
+$2 = 20
+
+<span class="prompt">(gdb)</span> p str
+$3 = "hello world"
+
+<span class="prompt">(gdb)</span> p up               <span class="comment"># unique_ptr</span>
+$4 = std::unique_ptr&lt;User&gt; = {get() = 0x55...}
+<span class="prompt">(gdb)</span> p *up.get()        <span class="comment"># 取出被管理的对象</span>
+
+<span class="prompt">(gdb)</span> p sp               <span class="comment"># shared_ptr：能看到引用计数</span>
+$5 = std::shared_ptr&lt;User&gt; (use count 1, weak count 0) = {get()=0x55...}</code></pre>
+      <table>
+        <thead><tr><th>类型</th><th>看什么</th><th>技巧</th></tr></thead>
+        <tbody>
+          <tr><td><code>std::string</code></td><td>直接显示字符串内容</td><td>乱码常意味着对象已损坏/越界</td></tr>
+          <tr><td><code>std::vector</code></td><td>length / capacity / 元素</td><td><code>p vec[i]</code>、<code>p *vec._M_impl._M_start@n</code></td></tr>
+          <tr><td><code>unique_ptr</code></td><td>底层裸指针</td><td><code>p *ptr</code> 或 <code>p *ptr.get()</code></td></tr>
+          <tr><td><code>shared_ptr</code></td><td><strong>use count / weak count</strong></td><td>排查循环引用、生命周期问题的关键</td></tr>
+        </tbody>
+      </table>
+      <div class="info-box warning">
+        <div class="title">适用条件：pretty-printer 不一定总在</div>
+        <p>友好的 STL 显示<strong>依赖 pretty-printer 被正确加载</strong>。若你在<strong>精简容器、交叉编译目标、或标准库版本不匹配</strong>的环境里调试，pretty-printer 可能缺失，此时 <code>p v</code> 会暴露 <code>std::vector</code> 的原始内部字段（<code>_M_start</code> / <code>_M_finish</code>）。这时改用底层办法：<code>p *v._M_impl._M_start@(v._M_impl._M_finish - v._M_impl._M_start)</code> 手动展开。可用 <code>info pretty-printer</code> 查看是否加载。</p>
+      </div>
+      <div class="info-box">
+        <div class="title">shared_ptr 的 use count 是宝藏</div>
+        <p>排查「对象被提前释放」或「循环引用内存不降」时，<code>p sp</code> 显示的 <strong>use count</strong> 直接告诉你现在有几个 <code>shared_ptr</code> 持有它。计数异常偏高 → 可能循环引用；该释放却仍 &gt; 0 → 有地方多持有了一份。配合 <a href="smart_pointers_deep_dive.html">智能指针深度指南</a>一起看。</p>
+      </div>
+    </section>
+
+    <!-- S9 -->
+    <section class="chapter" id="s9">
+      <div class="ch-head">
+        <div class="num">09</div>
+        <div class="t"><h2>核心结论 + 常见误区</h2></div>
+      </div>
+      <div class="phase-card">
+        <ul>
+          <li><strong><code>bt</code> 还原调用链</strong>：<code>#0</code> 是当前/最内层，编号越大越靠近 <code>main</code>。</li>
+          <li><strong><code>frame</code>/<code>up</code>/<code>down</code> 切换当前帧</strong>；看不到变量常因为「站错帧」。</li>
+          <li><strong><code>info args</code> / <code>info locals</code></strong> 一次性倒出当前帧的参数与局部变量。</li>
+          <li><strong><code>print</code> 看一次、<code>display</code> 持续盯</strong>；<code>p *ptr</code> 看内容、<code>p ptr</code> 看地址。</li>
+          <li><strong>STL 靠 pretty-printer 友好显示</strong>，缺失时需手动展开内部字段。</li>
+        </ul>
+      </div>
+      <div class="myth"><p><span class="wrong">❌ #0 是最先执行的函数。</span> 恰好相反，<code>#0</code> 是最内层、最后进入、当前正在跑的帧；<code>main</code> 编号最大。</p></div>
+      <div class="myth"><p><span class="wrong">❌ 变量查不到就是没这个变量。</span> 多半是当前帧不对，<code>frame N</code> 切到定义它的那一层再看。</p></div>
+      <div class="myth"><p><span class="wrong">❌ p ptr 就能看到对象。</span> 那只是地址；要看内容得 <code>p *ptr</code>。</p></div>
+      <div class="myth"><p><span class="wrong">❌ bt 一定能拿到完整调用栈。</span> 优化内联、缺帧指针、栈被破坏时，<code>bt</code> 可能不完整或错乱（第 06 篇详述）。</p></div>
+    </section>
+
+    <!-- S10 -->
+    <section class="chapter" id="s10">
+      <div class="ch-head">
+        <div class="num">10</div>
+        <div class="t"><h2>面试问题</h2></div>
+      </div>
+      <div class="qa"><div class="q"><span class="lvl">基础</span><code>bt</code>（backtrace）是什么？</div><p>打印当前线程从暂停/崩溃点回溯到 <code>main</code> 的完整调用链，每一层是一个栈帧。它回答「现在在哪个函数」以及「经由怎样的调用路径到达这里」，是崩溃排查的第一步。</p></div>
+      <div class="qa"><div class="q"><span class="lvl">基础</span><code>bt</code> 里的 <code>#0 #1 #2</code> 是什么意思？</div><p>栈帧编号。<code>#0</code> 是最内层、当前正在执行的帧，编号越大越靠外、越接近程序起点 <code>main</code>。它体现栈的 LIFO：最后压栈的帧编号最小。</p></div>
+      <div class="qa"><div class="q"><span class="lvl">基础</span>如何查看当前函数的局部变量和参数？</div><p><code>info locals</code> 看当前帧所有局部变量，<code>info args</code> 看函数参数；单个变量或表达式用 <code>print</code>/<code>p</code>。注意这些命令都作用在「当前帧」，必要时先用 <code>frame N</code> 切换。</p></div>
+      <div class="qa"><div class="q"><span class="lvl">原理</span>停在最内层函数，怎么查看调用者里的变量？</div><p>用 <code>up</code> 或 <code>frame N</code> 切到调用者那一帧，「当前上下文」随之改变，再 <code>info locals</code>/<code>p 变量</code> 即可。不切帧直接看会报「找不到变量」，因为它不在当前帧作用域内。</p></div>
+      <div class="qa"><div class="q"><span class="lvl">原理</span><code>p ptr</code> 和 <code>p *ptr</code> 有什么区别？崩溃排查怎么用？</div><p><code>p ptr</code> 打印指针本身（地址），<code>p *ptr</code> 打印它指向的内容。排查时先看地址是否为 <code>0x0</code>（空指针）或异常值（野指针），地址正常再看内容是否为垃圾（悬垂指针）。</p></div>
+      <div class="qa"><div class="q"><span class="lvl">进阶</span>GDB 怎么把 <code>std::vector</code> 显示成可读形式？没有这种显示时怎么办？</div><p>靠标准库配套的 Python pretty-printer 把内部结构翻译成 length/capacity/元素。若 pretty-printer 缺失（交叉编译、版本不匹配等），需手动展开：<code>p *v._M_impl._M_start@N</code>。可用 <code>info pretty-printer</code> 确认是否加载。</p></div>
+      <div class="qa"><div class="q"><span class="lvl">进阶</span>用 GDB 怎么排查 <code>shared_ptr</code> 循环引用或提前释放？</div><p><code>p sp</code> 能看到 use count / weak count。use count 异常偏高、内存不释放，往往是循环引用（应改用 <code>weak_ptr</code> 打破环）；对象本应存活却 use count 归零导致悬垂，则说明持有关系设计有误。</p></div>
+    </section>
+
+    <div style="margin-top:50px;padding-top:20px;border-top:1px solid var(--border);display:flex;justify-content:space-between;flex-wrap:wrap;gap:12px;font-size:0.9em;">
+      <a href="gdb_breakpoints.html">← 02 · Breakpoint</a>
+      <a href="gdb_memory_register_assembly.html"><strong>04 · Memory / Register / Assembly →</strong></a>
+    </div>
+  </main>
+</div>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

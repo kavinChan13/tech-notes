@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>网络中的常见机制：VLAN / QoS / 路由 / ARP / IPv4-IPv6 / MTU · 一个数据包在真实网络中怎么走</title>
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<link rel="stylesheet" href="../assets/page-shell.css">
+<style>
+  .ps .def { background:color-mix(in srgb,var(--ps-accent) 8%,var(--ps-card)); border:1px solid var(--ps-border);
+    border-left:4px solid var(--ps-accent); border-radius:8px; padding:12px 16px; margin:14px 0; font-size:.95em; }
+  .ps .def strong:first-child { color:var(--ps-accent); }
+</style>
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav ps tn-shell-overlay">
+
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="communication_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 26 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>网络常见机制</h2>
+    <nav>
+      <ol>
+        <li><a href="#s1">主线：一个包怎么走完全程</a></li>
+        <li><a href="#s2">ARP：从 IP 找 MAC</a></li>
+        <li><a href="#s3">路由：跨网段转发</a></li>
+        <li><a href="#s4">VLAN：切分广播域</a></li>
+        <li><a href="#s5">QoS：谁先走</a></li>
+        <li><a href="#s6">MTU 与分片</a></li>
+        <li><a href="#s7">IPv4 vs IPv6</a></li>
+        <li><a href="#s8">串起来：端到端追踪</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+
+    <header class="hero">
+      <div class="badge">Communication · Network Mechanisms · 2026</div>
+      <h1>网络中的常见机制：VLAN / QoS / 路由 / 数据包</h1>
+      <p class="sub">前两篇讲了"协议是什么、四层怎么配合"。这一篇回答一个更具体的问题：<strong>一个数据包在真实网络里到底是怎么一跳一跳走到目的地的？</strong>沿途会遇到 ARP、路由、VLAN、QoS、MTU 这些机制——它们也是理解 5G 传输网（前传/中传/后传承载网）的基础。</p>
+      <div class="meta-row">
+        <span class="pill cyan">Module 01</span>
+        <span class="pill green">阅读 ~26 min</span>
+        <span class="pill amber">端到端追踪</span>
+      </div>
+    </header>
+
+<section class="chapter" id="s1">
+  <div class="ch-head"><div class="num">01</div><div class="t"><h2>主线：一个包怎么走完全程</h2><p class="sub">先看全景，再逐个机制拆解</p></div></div>
+
+  <p>假设主机 A（192.168.1.10）要访问另一个网段的服务器 B（10.0.0.5）。这个包不是"直达"的，而是被一台台设备接力：</p>
+
+  <div class="diag">
+    <svg viewBox="0 0 720 200" width="720" height="200" role="img" aria-label="数据包端到端路径">
+      <g font-family="Inter, sans-serif" font-size="11" fill="#94a3b8">
+        <rect x="20" y="70" width="90" height="50" rx="8" fill="#0e2a3a" stroke="#34d399"/><text x="65" y="92" text-anchor="middle" fill="#6ee7b7" font-weight="700">主机 A</text><text x="65" y="108" text-anchor="middle" font-size="9">192.168.1.10</text>
+        <rect x="170" y="70" width="90" height="50" rx="8" fill="#2a1f0d" stroke="#fb923c"/><text x="215" y="92" text-anchor="middle" fill="#fb923c" font-weight="700">交换机</text><text x="215" y="108" text-anchor="middle" font-size="9">看 MAC（L2）</text>
+        <rect x="320" y="70" width="90" height="50" rx="8" fill="#0e2233" stroke="#7dd3fc"/><text x="365" y="92" text-anchor="middle" fill="#8ec8f6" font-weight="700">路由器</text><text x="365" y="108" text-anchor="middle" font-size="9">看 IP（L3）</text>
+        <rect x="470" y="70" width="90" height="50" rx="8" fill="#0e2233" stroke="#7dd3fc"/><text x="515" y="92" text-anchor="middle" fill="#8ec8f6" font-weight="700">路由器…</text><text x="515" y="108" text-anchor="middle" font-size="9">逐跳转发</text>
+        <rect x="620" y="70" width="90" height="50" rx="8" fill="#0e2a3a" stroke="#34d399"/><text x="665" y="92" text-anchor="middle" fill="#6ee7b7" font-weight="700">服务器 B</text><text x="665" y="108" text-anchor="middle" font-size="9">10.0.0.5</text>
+        <path d="M110 95 H170 M260 95 H320 M410 95 H470 M560 95 H620" stroke="#475569" marker-end="url(#a3)"/>
+        <text x="360" y="160" text-anchor="middle" fill="#facc15" font-size="10.5" font-weight="700">目的 IP 全程不变；目的 MAC 每一跳都在变（下一跳的 MAC）</text>
+        <defs><marker id="a3" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#475569"/></marker></defs>
+      </g>
+    </svg>
+  </div>
+
+  <div class="box star">最重要的直觉：<strong>IP 地址是"最终目的地"，全程不变；MAC 地址是"下一跳交给谁"，每经过一个路由器就被改写。</strong>交换机看 MAC 在同网段内转发，路由器看 IP 在网段间转发。理解这一点，整个网络世界豁然开朗。</div>
+</section>
+
+<section class="chapter" id="s2">
+  <div class="ch-head"><div class="num">02</div><div class="t"><h2>ARP：从 IP 找 MAC</h2><p class="sub">L3 地址与 L2 地址之间的桥</p></div></div>
+
+  <p>主机 A 知道要发给某个 IP，但链路层投递需要 <strong>MAC 地址</strong>。谁来把"IP → MAC"翻译出来？答案是 <strong>ARP（Address Resolution Protocol）</strong>。</p>
+
+  <div class="def"><strong>ARP</strong>：在本地链路上广播"谁是 192.168.1.1？把你的 MAC 告诉我"，持有该 IP 的设备单播回复自己的 MAC。结果缓存在 ARP 表里（<code>arp -a</code> 可查），避免每次都问。</div>
+
+  <ul>
+    <li>目标在<strong>同网段</strong> → 直接 ARP 出对方 MAC，帧的目的 MAC = 对方。</li>
+    <li>目标在<strong>不同网段</strong> → ARP 出<strong>默认网关</strong>的 MAC，帧先交给网关（路由器）。</li>
+  </ul>
+
+  <div class="box tip">这解释了"目的 MAC 逐跳改写"：A 发给 B（跨网段）时，帧的目的 MAC 其实是<strong>网关</strong>的 MAC，而不是 B 的。到了网关，路由器查路由表、把帧的目的 MAC 换成下一跳的 MAC，如此接力。</div>
+</section>
+
+<section class="chapter" id="s3">
+  <div class="ch-head"><div class="num">03</div><div class="t"><h2>路由：跨网段转发</h2><p class="sub">路由器如何决定"往哪个口送"</p></div></div>
+
+  <p>路由器的核心工作是查<strong>路由表</strong>：根据目的 IP，用"最长前缀匹配"找到对应的下一跳和出接口。</p>
+
+<pre>目的网段          下一跳          出接口
+10.0.0.0/8       10.0.0.1        eth1
+192.168.1.0/24   直连            eth0
+0.0.0.0/0        203.0.113.1     eth2   ← 默认路由（其他都走这）</pre>
+
+  <div class="grid-2">
+    <div class="panel accent"><h4>交换（L2）vs 路由（L3）</h4><p><strong>交换机</strong>在一个网段内按 MAC 转发（学习 MAC 表）；<strong>路由器</strong>连接不同网段，按 IP 转发。5G 传输网里，前传/中传/后传本质就是不同规模的 L2/L3 承载网。</p></div>
+    <div class="panel purple"><h4>静态 vs 动态路由</h4><p>小网用静态路由手工配；大网用 OSPF/BGP 等协议自动学习拓扑、算最优路径。运营商核心网大量使用动态路由 + MPLS/SR 做流量工程。</p></div>
+  </div>
+</section>
+
+<section class="chapter" id="s4">
+  <div class="ch-head"><div class="num">04</div><div class="t"><h2>VLAN：在一根线上切分广播域</h2><p class="sub">逻辑隔离，不用为每个网络单独拉线</p></div></div>
+
+  <p>默认情况下，一个交换机下的所有口在同一个广播域——广播风暴、安全隔离都成问题。<strong>VLAN（Virtual LAN）</strong>用一个 12 位的 <strong>VLAN ID</strong>（802.1Q 标签）把一台物理交换机<strong>逻辑切分</strong>成多个互相隔离的网络。</p>
+
+<pre>带 VLAN 标签的以太网帧（802.1Q）：
++---------+---------+-----------+--------+---------+-------+
+| 目的MAC | 源MAC   | 802.1Q Tag| 类型   | Payload | CRC   |
++---------+---------+-----------+--------+---------+-------+
+                     ↑ 4 字节，含 VLAN ID + 优先级(PCP)</pre>
+
+  <div class="grid-2">
+    <div class="card green"><h4>VLAN 解决什么</h4><ul><li><strong>隔离</strong>：不同 VLAN 间默认不能直接通信（要经路由）</li><li><strong>缩小广播域</strong>：抑制广播风暴</li><li><strong>灵活</strong>：按业务/租户划分，不受物理位置限制</li></ul></div>
+    <div class="card amber"><h4>通信系统里的应用</h4><ul><li>用 VLAN 把<strong>管理面 / 用户面 / 同步</strong>流量隔离在不同虚网</li><li>O-RAN 前传网常用 VLAN + 优先级区分 C/U/S/M 平面流量</li></ul></div>
+  </div>
+  <div class="box tip">注意 802.1Q Tag 里还有 3 位 <strong>PCP（优先级）</strong>——这就衔接到下一个机制 QoS。前传网靠它保证实时流量优先。</div>
+</section>
+
+<section class="chapter" id="s5">
+  <div class="ch-head"><div class="num">05</div><div class="t"><h2>QoS：拥塞时谁先走</h2><p class="sub">带宽有限，就得排优先级</p></div></div>
+
+  <p><strong>QoS（Quality of Service）</strong>是一组"在网络拥塞时按重要性区别对待流量"的机制。没有 QoS，语音包和下载包平等排队——语音就会卡。</p>
+
+  <table>
+    <thead><tr><th>层次</th><th>标记字段</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td>L2（以太网）</td><td>802.1p PCP（3 位）</td><td>VLAN 标签里的优先级，0~7</td></tr>
+      <tr><td>L3（IP）</td><td>DSCP（6 位，在 IP 头）</td><td>DiffServ，跨路由器的端到端优先级</td></tr>
+    </tbody>
+  </table>
+
+  <p>QoS 的典型手段：<strong>分类（classification）→ 标记（marking）→ 排队/调度（queuing）→ 整形/限速（shaping/policing）</strong>。核心是"关键流量走高优先级队列，优先调度、优先保带宽"。</p>
+
+  <div class="box star"><strong>为什么前传网对 QoS 极度依赖？</strong>前传上同时跑着超低延迟的实时用户面（eCPRI IQ 数据）、时间同步（PTP）、和管理面（NETCONF）。它们的延迟/丢包容忍度天差地别，必须靠 VLAN + QoS 严格隔离并优先保障同步与用户面。这条线索会在 <a href="oran_planes.html">O-RAN 三平面</a> 里再次出现。</div>
+</section>
+
+<section class="chapter" id="s6">
+  <div class="ch-head"><div class="num">06</div><div class="t"><h2>MTU 与分片</h2><p class="sub">一个帧最多能装多少，装不下怎么办</p></div></div>
+
+  <div class="def"><strong>MTU（Maximum Transmission Unit）</strong>：链路层一帧能承载的最大载荷，标准以太网是 <strong>1500 字节</strong>。数据中心/传输网常开 <strong>Jumbo Frame（~9000 字节）</strong>以降低开销、提升吞吐。</div>
+
+  <ul>
+    <li>IP 包超过 MTU → 需要<strong>分片（fragmentation）</strong>，到目的地再重组；分片会增加开销、放大丢包影响，通常尽量避免。</li>
+    <li><strong>Path MTU Discovery</strong>：探测端到端路径上最小的 MTU，按它来发，避免中途分片。</li>
+    <li>TCP 用 <strong>MSS</strong>（= MTU − IP头 − TCP头）协商每段最大数据量。</li>
+  </ul>
+
+  <div class="box tip">前传承载常用 Jumbo Frame：eCPRI 承载大带宽 IQ 数据，大帧能显著降低"每帧固定开销"的占比，提升有效吞吐。这也是"带宽效率"话题的一部分（见 <a href="fronthaul_evolution.html">CPRI/eCPRI 演进</a>）。</div>
+</section>
+
+<section class="chapter" id="s7">
+  <div class="ch-head"><div class="num">07</div><div class="t"><h2>IPv4 vs IPv6</h2><p class="sub">地址耗尽与协议简化</p></div></div>
+
+  <table>
+    <thead><tr><th>维度</th><th>IPv4</th><th>IPv6</th></tr></thead>
+    <tbody>
+      <tr><td>地址长度</td><td>32 位（~43 亿）</td><td>128 位（几乎无限）</td></tr>
+      <tr><td>表示</td><td><code>192.168.1.1</code></td><td><code>2001:db8::1</code></td></tr>
+      <tr><td>头部</td><td>可变、含校验和</td><td>定长、更简洁、无校验和（交给上层）</td></tr>
+      <tr><td>分片</td><td>路由器可分片</td><td>只在源端分片（路由器不分片）</td></tr>
+      <tr><td>配置</td><td>DHCP / 手工</td><td>支持 SLAAC 无状态自动配置</td></tr>
+      <tr><td>NAT</td><td>普遍需要（地址不够）</td><td>地址充足，弱化 NAT</td></tr>
+    </tbody>
+  </table>
+  <div class="note">5G 核心网与现代传输网大量采用 IPv6（及 SRv6 做流量工程）。理解 IPv6 的"头部简化、源端分片"有助于后面理解低开销承载的设计取向。</div>
+</section>
+
+<section class="chapter" id="s8">
+  <div class="ch-head"><div class="num">08</div><div class="t"><h2>串起来：一次端到端追踪</h2><p class="sub">把所有机制放回同一个故事</p></div></div>
+
+  <p>现在把本篇机制串成一个完整故事——A（192.168.1.10）访问 B（10.0.0.5）：</p>
+  <ol>
+    <li>A 发现 B 不在本网段 → <strong>ARP</strong> 出<strong>默认网关</strong>的 MAC。</li>
+    <li>封装帧：目的 IP=B，目的 MAC=网关。若走 <strong>VLAN</strong>，打上 VLAN 标签 + <strong>QoS</strong> 优先级。</li>
+    <li><strong>交换机</strong>按 MAC 把帧送到网关口。</li>
+    <li><strong>路由器</strong>查<strong>路由表</strong>，确定下一跳；若包超 <strong>MTU</strong> 则分片；改写目的 MAC 为下一跳，转发出去。</li>
+    <li>逐跳重复，直到最后一跳路由器 ARP 出 B 的 MAC，投递给 B。</li>
+    <li>B 收到 → 逐层<strong>解封装</strong>（去以太网头 → 去 IP 头 → 去 TCP 头）→ 交给应用。</li>
+  </ol>
+
+  <div class="card">
+    <div class="card-title">🎯 本篇要点回顾</div>
+    <ul>
+      <li>IP 全程不变（送到哪），MAC 逐跳改写（这跳交给谁）</li>
+      <li>ARP 把 IP 翻译成 MAC；交换机看 MAC、路由器看 IP</li>
+      <li>VLAN 逻辑切分广播域，QoS 在拥塞时按优先级区别对待</li>
+      <li>MTU 限制帧大小，超了要分片；传输网常用 Jumbo Frame</li>
+      <li>这些机制正是 5G 前传/中传/后传承载网的地基</li>
+    </ul>
+  </div>
+
+  <div class="box tip">Module 01 到此结束。你已经打好了"网络基础"这块地基。下一步进入无线世界 → <a href="wireless_cellular_overview.html">无线通信与蜂窝网络概览</a>，开始理解 UE / RAN / Core 与 4G/5G 的整体架构。</div>
+</section>
+
+<div class="footer-nav">
+  <a href="network_fundamentals.html">⬅️ Ethernet/IP/TCP/UDP</a>
+  <a href="wireless_cellular_overview.html">➡️ 无线与蜂窝网络</a>
+  <a href="communication_directory.html">📚 通信主题目录</a>
+  <a href="../system/networking_guide.html">🌐 Linux 网络编程</a>
+  <a href="../index.html">🏠 主页</a>
+</div>
+
+  </main>
+</div>
+
+<script src="../assets/page-shell.js" defer></script>
+
+<footer><p>网络中的常见机制 — Kavin Tech Notes · 2026</p></footer>
+
+<button class="back-top" id="backTop" onclick="window.scrollTo({top:0,behavior:'smooth'})">↑</button>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

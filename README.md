@@ -89,6 +89,7 @@ npx serve .
 | **大数据 / 数据工程** | [`bigdata/`](./bigdata) | 大数据全景、数据建模与数仓、Spark/Flink、湖仓与 OLAP、数据治理、NoSQL 与在线服务、数据 × AI 与端到端实战 |
 | **AI-Native 工程** | [`ai-native/`](./ai-native) · [`ai-infra/`](./ai-infra) | AI-Native 实践、Prompt 工程、Agent 架构、LLMOps、AI Safety + AI 基础设施 |
 | **嵌入式 / 实时 / 车端** | [`embedded-realtime/`](./embedded-realtime) | PREEMPT_RT、AUTOSAR AP、ISO 26262、车端网络 |
+| **通信系统与协议** | [`communication/`](./communication) | TCP/IP、以太网、无线与 4G/5G、RAN（CU/DU/RU）、前传/中传/后传、OBSAI/CPRI/eCPRI、O-RAN、Open Fronthaul、O1/E2/A1/F1、NETCONF/YANG、TLS/SSH、PTP/SyncE、C/C++ 通信编程与系统设计 |
 | **工程管理 & EM** | [`management/`](./management) | 研发管理、管理知识体系、Senior EM、AI-Native EM、组织设计、EM 模板库 |
 | **PM 双线** | [`pm/`](./pm) | PgM × PdM 能力地图、EVM、A/B 测试、干系人、JTBD、PRD、PMBOK + PM 模板库 |
 | **面试** | [`interview/`](./interview) | Tech Lead 长文 + C++ / 架构师 / EM / PM 四套交互式卡片应用 + AI 系统设计 + 大数据系统设计 12 经典题 |
@@ -107,6 +108,7 @@ npx serve .
 - [vLLM 推理深潜](https://kavinchan13.github.io/tech-notes/ai-infra/inference_serving.html) —— PagedAttention、Continuous Batching、源码导览（C++ 老兵转 AI Infra 的最大杠杆点）
 - [AI 工程师 30/60/90 学习路径](https://kavinchan13.github.io/tech-notes/interview/ai_study_path.html) —— 周-by-周计划，3 轨可选（AI Infra / LLM App / ML Research）
 - [EM 模板库](https://kavinchan13.github.io/tech-notes/management/em-templates/) —— 1on1、周报、Postmortem、招聘 Scorecard 等可直接复用的模板
+- [通信系统与协议 · 学习路径](https://kavinchan13.github.io/tech-notes/communication/communication_study_path.html) —— 从 TCP/IP 到 5G RAN、eCPRI、O-RAN、NETCONF/YANG 的完整知识地图，含快速面试路线
 
 ## 🚀 部署
 

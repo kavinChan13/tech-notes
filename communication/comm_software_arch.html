@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>通信软件架构：Data / Control / Management Plane · Event / State Machine / Worker / Queue / IPC</title>
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<link rel="stylesheet" href="../assets/page-shell.css">
+<style>
+  .ps .def { background:color-mix(in srgb,var(--ps-accent) 8%,var(--ps-card)); border:1px solid var(--ps-border);
+    border-left:4px solid var(--ps-accent); border-radius:8px; padding:12px 16px; margin:14px 0; font-size:.95em; }
+  .ps .def strong:first-child { color:var(--ps-accent); }
+  .ps .flow { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin:18px 0; }
+  .ps .flow .node { background:var(--ps-card-2); border:1px solid var(--ps-border); border-radius:8px;
+    padding:9px 13px; font-weight:600; font-size:.9em; }
+  .ps .flow .arr { color:var(--ps-accent); font-weight:700; }
+</style>
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav ps tn-shell-overlay">
+
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="communication_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 22 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>通信软件架构</h2>
+    <nav>
+      <ol>
+        <li><a href="#s1">三个平面的软件映射</a></li>
+        <li><a href="#s2">Data Plane 设计</a></li>
+        <li><a href="#s3">Control Plane 与状态机</a></li>
+        <li><a href="#s4">Management Plane</a></li>
+        <li><a href="#s5">线程/队列/IPC 模型</a></li>
+        <li><a href="#s6">模块协同实例</a></li>
+        <li><a href="#s7">架构原则</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+
+    <header class="hero">
+      <div class="badge">Communication · Architecture · 2026</div>
+      <h1>通信软件架构：Data / Control / Management Plane</h1>
+      <p class="sub">前面从协议角度看过三平面，本篇换<strong>软件工程视角</strong>：数据面/控制面/管理面在代码里如何分工、事件与状态机怎么组织、worker/queue/IPC 如何协同，并把 eCPRI、NETCONF、O-RAN 落到具体模块。这是把前面所有知识"落成一个系统"的桥梁。</p>
+      <div class="meta-row">
+        <span class="pill cyan">Module 09</span>
+        <span class="pill green">阅读 ~22 min</span>
+        <span class="pill amber">软件架构</span>
+      </div>
+    </header>
+
+<section class="chapter" id="s1">
+  <div class="ch-head"><div class="num">01</div><div class="t"><h2>三个平面的软件映射</h2><p class="sub">从协议平面到代码模块</p></div></div>
+  <p><a href="oran_planes.html">O-RAN 四平面</a>是协议视角；从软件看，一个通信网元（如 DU）的代码通常也按平面分层，各有截然不同的设计目标：</p>
+  <table>
+    <thead><tr><th>平面</th><th>软件目标</th><th>典型实现</th><th>关联协议</th></tr></thead>
+    <tbody>
+      <tr><td>Data Plane 数据面</td><td>极致吞吐/低延迟</td><td>无锁、零拷贝、绑核轮询</td><td>eCPRI/以太网</td></tr>
+      <tr><td>Control Plane 控制面</td><td>正确性/实时决策</td><td>状态机、消息驱动</td><td>信令、E2</td></tr>
+      <tr><td>Management Plane 管理面</td><td>可靠/安全/可维护</td><td>事务、配置库、审计</td><td>NETCONF/O1</td></tr>
+    </tbody>
+  </table>
+  <div class="diag">
+    <svg viewBox="0 0 760 280" width="760" height="280" role="img" aria-label="通信软件三平面架构">
+      <g font-family="Inter, sans-serif" font-size="11" fill="#94a3b8">
+        <text x="380" y="20" text-anchor="middle" fill="#facc15" font-weight="700" font-size="13">同一网元里三个平面各自的软件设计取向</text>
+
+        <rect x="30" y="45" width="220" height="150" rx="10" fill="#2a1f0d" stroke="#fb923c"/>
+        <text x="140" y="70" text-anchor="middle" fill="#fb923c" font-weight="700">Management Plane</text>
+        <text x="140" y="90" text-anchor="middle" font-size="10">目标：可靠 · 安全 · 可维护</text>
+        <text x="140" y="120" text-anchor="middle" font-size="10">NETCONF/YANG · 事务</text>
+        <text x="140" y="140" text-anchor="middle" font-size="10">配置库 · 审计 · mTLS</text>
+        <text x="140" y="170" text-anchor="middle" font-size="9.5" fill="#fb923c">慢变 · 低频 · 高一致</text>
+
+        <rect x="270" y="45" width="220" height="150" rx="10" fill="#251338" stroke="#a78bfa"/>
+        <text x="380" y="70" text-anchor="middle" fill="#d4a0ff" font-weight="700">Control Plane</text>
+        <text x="380" y="90" text-anchor="middle" font-size="10">目标：正确 · 实时决策</text>
+        <text x="380" y="120" text-anchor="middle" font-size="10">事件驱动状态机</text>
+        <text x="380" y="140" text-anchor="middle" font-size="10">调度 · 信令 · E2</text>
+        <text x="380" y="170" text-anchor="middle" font-size="9.5" fill="#d4a0ff">覆盖超时/异常路径</text>
+
+        <rect x="510" y="45" width="220" height="150" rx="10" fill="#0e2a3a" stroke="#34d399"/>
+        <text x="620" y="70" text-anchor="middle" fill="#6ee7b7" font-weight="700">Data Plane</text>
+        <text x="620" y="90" text-anchor="middle" font-size="10">目标：极致吞吐 · 低延迟</text>
+        <text x="620" y="120" text-anchor="middle" font-size="10">无锁 · 零拷贝 · 绑核轮询</text>
+        <text x="620" y="140" text-anchor="middle" font-size="10">eCPRI / 以太网</text>
+        <text x="620" y="170" text-anchor="middle" font-size="9.5" fill="#6ee7b7">热路径极简 · 确定性</text>
+
+        <text x="380" y="235" text-anchor="middle" fill="#facc15" font-size="11">配置下发 ↓　　　调度指挥 ↓　　　数据搬运 ⇄</text>
+        <path d="M140 195 V220 H620 V195" stroke="#475569" fill="none" stroke-dasharray="4,3"/>
+        <text x="380" y="262" text-anchor="middle" font-size="10">管理面配好 → 控制面指挥 → 数据面搬数据（模块间用消息队列解耦）</text>
+      </g>
+    </svg>
+  </div>
+
+  <div class="box star">核心洞察：<strong>不同平面对"好"的定义不同</strong>——数据面要快、管理面要稳、控制面要对。所以它们的线程模型、错误处理、数据结构都不该用同一套。</div>
+</section>
+
+<section class="chapter" id="s2">
+  <div class="ch-head"><div class="num">02</div><div class="t"><h2>Data Plane 设计</h2><p class="sub">快就是一切</p></div></div>
+  <ul>
+    <li>用 <a href="high_performance.html">Ring Buffer + 无锁队列 + 零拷贝</a>，专用线程<strong>绑核轮询</strong>，不睡不切换。</li>
+    <li>热路径上<strong>不 malloc、不加锁、不打日志、不抛异常</strong>——一切影响确定性的操作都挪走。</li>
+    <li>处理逻辑做成流水线（收→解析→处理→发），每级尽量无状态或状态本地化。</li>
+  </ul>
+  <div class="flow">
+    <span class="node">RX</span><span class="arr">→</span><span class="node">Parse</span><span class="arr">→</span><span class="node">Process</span><span class="arr">→</span><span class="node">TX</span>
+  </div>
+</section>
+
+<section class="chapter" id="s3">
+  <div class="ch-head"><div class="num">03</div><div class="t"><h2>Control Plane 与状态机</h2><p class="sub">用事件驱动管理复杂交互</p></div></div>
+  <p>控制面处理连接建立、切换、协商等有"过程"的逻辑，天然适合<strong>状态机 + 事件</strong>建模。</p>
+  <div class="def"><strong>事件驱动状态机</strong>：系统处于某个 State，收到 Event 时根据 (State, Event) 转移到新 State 并执行动作。把复杂的"如果…那么…"整理成清晰的转移表，避免 if 地狱。</div>
+<pre><span class="cm">// 连接状态机示意</span>
+enum State { IDLE, CONNECTING, CONNECTED, CLOSING };
+State on_event(State s, Event e) {
+    switch (s) {
+      case IDLE:       if (e==CONNECT_REQ)  return CONNECTING; break;
+      case CONNECTING: if (e==HANDSHAKE_OK) return CONNECTED;
+                       if (e==TIMEOUT)      return IDLE;       break;
+      case CONNECTED:  if (e==CLOSE_REQ)    return CLOSING;    break;
+      case CLOSING:    if (e==CLOSED)       return IDLE;       break;
+    }
+    return s;
+}</pre>
+  <div class="note">配合超时(Timeout)事件处理异常路径——通信协议的可靠性很大程度就是"每个状态都想清楚超时/异常怎么办"。</div>
+</section>
+
+<section class="chapter" id="s4">
+  <div class="ch-head"><div class="num">04</div><div class="t"><h2>Management Plane</h2><p class="sub">稳与安全优先</p></div></div>
+  <ul>
+    <li>对接 <a href="netconf_engineering.html">NETCONF/YANG</a>：配置校验 → 事务提交 → 生效，出错能回滚（candidate/commit）。</li>
+    <li>维护配置库（running）、上报状态/告警/遥测给 SMO。</li>
+    <li>慢变、低频，但要<strong>高可靠、可审计、强安全（mTLS）</strong>——和数据面完全不同的取向。</li>
+  </ul>
+</section>
+
+<section class="chapter" id="s5">
+  <div class="ch-head"><div class="num">05</div><div class="t"><h2>线程 / 队列 / IPC 模型</h2><p class="sub">模块怎么串起来</p></div></div>
+  <ul>
+    <li><strong>线程分工</strong>：数据面独占核轮询；控制面/管理面用普通线程 + 事件循环。</li>
+    <li><strong>队列解耦</strong>：模块间用消息队列（无锁 SPSC/MPMC）传递，避免直接调用带来的耦合与锁。</li>
+    <li><strong>IPC</strong>：进程间用共享内存(最快)、Unix socket、消息总线；跨机用网络。</li>
+    <li><strong>消息 vs 共享状态</strong>：优先"传消息不共享内存"降低竞态；必须共享时用无锁或分区。</li>
+  </ul>
+  <div class="def"><strong>Message Passing 架构</strong>：每个模块是一个"处理消息的黑盒"，只通过队列收发消息。天然可测试、可扩展、易并行——telecom 软件的常见范式（类 Actor 模型）。</div>
+</section>
+
+<section class="chapter" id="s6">
+  <div class="ch-head"><div class="num">06</div><div class="t"><h2>模块协同实例</h2><p class="sub">一个 O-DU 的软件视图</p></div></div>
+  <div class="flow">
+    <span class="node">SMO(NETCONF)</span><span class="arr">→ M面</span>
+    <span class="node">配置管理模块</span><span class="arr">下发</span>
+    <span class="node">控制面(状态机)</span><span class="arr">调度</span>
+    <span class="node">数据面(eCPRI 收发)</span>
+  </div>
+  <ul>
+    <li><strong>管理模块</strong>收到 SMO 的 NETCONF 配置 → 校验 → 更新运行参数。</li>
+    <li><strong>控制面</strong>依据配置和实时信令做调度决策，驱动数据面。</li>
+    <li><strong>数据面</strong>按 <a href="oran_planes.html">C/U 平面</a>时序，通过 eCPRI 与 RU 收发 IQ，受 <a href="ptp_synce.html">PTP</a> 同步约束。</li>
+  </ul>
+</section>
+
+<section class="chapter" id="s7">
+  <div class="ch-head"><div class="num">07</div><div class="t"><h2>架构原则</h2><p class="sub">通用心法</p></div></div>
+  <ul>
+    <li><strong>按平面分治</strong>：不同目标不同设计，别用一套线程模型套所有。</li>
+    <li><strong>解耦</strong>：消息队列隔离模块，减少共享状态与锁。</li>
+    <li><strong>热路径极简</strong>：数据面剥离一切非必要操作。</li>
+    <li><strong>显式状态机</strong>：控制逻辑用状态机，覆盖超时/异常。</li>
+    <li><strong>可观测</strong>：日志/指标/追踪放在非热路径，别拖慢数据面。</li>
+  </ul>
+
+  <div class="card">
+    <div class="card-title">🎯 本篇要点回顾</div>
+    <ul>
+      <li>数据面求快、控制面求对、管理面求稳，设计取向不同</li>
+      <li>数据面：无锁+零拷贝+绑核+热路径极简</li>
+      <li>控制面：事件驱动状态机，覆盖超时异常</li>
+      <li>管理面：NETCONF 事务 + 安全 + 可审计</li>
+      <li>模块用消息队列解耦（Actor/消息传递范式）</li>
+    </ul>
+  </div>
+
+  <div class="box tip">下一步 → <a href="reliability_ha.html">通信系统的性能、可靠性与高可用</a>。</div>
+</section>
+
+<div class="footer-nav">
+  <a href="high_performance.html">⬅️ 高性能通信</a>
+  <a href="reliability_ha.html">➡️ 可靠性与高可用</a>
+  <a href="oran_planes.html">🧩 四平面</a>
+  <a href="communication_directory.html">📚 目录</a>
+  <a href="../index.html">🏠 主页</a>
+</div>
+
+  </main>
+</div>
+
+<script src="../assets/page-shell.js" defer></script>
+
+<footer><p>通信软件架构：Data / Control / Management Plane — Kavin Tech Notes · 2026</p></footer>
+
+<button class="back-top" id="backTop" onclick="window.scrollTo({top:0,behavior:'smooth'})">↑</button>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

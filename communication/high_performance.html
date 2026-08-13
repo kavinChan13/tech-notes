@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>高性能通信：Ring Buffer / Zero Copy / Lock-Free · Producer-Consumer / Memory Pool / Batch / Cache</title>
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<link rel="stylesheet" href="../assets/page-shell.css">
+<style>
+  .ps .def { background:color-mix(in srgb,var(--ps-accent) 8%,var(--ps-card)); border:1px solid var(--ps-border);
+    border-left:4px solid var(--ps-accent); border-radius:8px; padding:12px 16px; margin:14px 0; font-size:.95em; }
+  .ps .def strong:first-child { color:var(--ps-accent); }
+  .ps .flow { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin:18px 0; }
+  .ps .flow .node { background:var(--ps-card-2); border:1px solid var(--ps-border); border-radius:8px;
+    padding:9px 13px; font-weight:600; font-size:.9em; }
+  .ps .flow .arr { color:var(--ps-accent); font-weight:700; }
+</style>
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav ps tn-shell-overlay">
+
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="communication_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 24 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>高性能通信</h2>
+    <nav>
+      <ol>
+        <li><a href="#s1">为什么普通写法不够快</a></li>
+        <li><a href="#s2">Ring Buffer 环形缓冲</a></li>
+        <li><a href="#s3">Lock-Free 无锁队列</a></li>
+        <li><a href="#s4">Zero Copy 零拷贝</a></li>
+        <li><a href="#s5">Memory Pool 内存池</a></li>
+        <li><a href="#s6">Batch & Cache 友好</a></li>
+        <li><a href="#s7">收发全链路</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+
+    <header class="hero">
+      <div class="badge">Communication · Performance · 2026</div>
+      <h1>高性能通信：Ring Buffer / Zero Copy / Lock-Free</h1>
+      <p class="sub">前传每秒要处理海量 IQ 数据、核心网要扛百万 PPS。本篇讲通信软件的性能利器：环形缓冲、无锁队列、零拷贝、内存池、批处理与 Cache 友好，并串成一条 NIC→处理→发送的高性能收发链路。面向 C/C++ 与嵌入式。</p>
+      <div class="meta-row">
+        <span class="pill cyan">Module 08</span>
+        <span class="pill green">阅读 ~24 min</span>
+        <span class="pill amber">低延迟 / 高吞吐</span>
+      </div>
+    </header>
+
+<section class="chapter" id="s1">
+  <div class="ch-head"><div class="num">01</div><div class="t"><h2>为什么普通写法不够快</h2><p class="sub">性能杀手清单</p></div></div>
+  <ul>
+    <li><strong>频繁内存分配</strong>：每包 malloc/free → 碎片 + 锁争用 + 不确定延迟。</li>
+    <li><strong>数据拷贝</strong>：内核↔用户态、层层 memcpy → 浪费 CPU 和内存带宽。</li>
+    <li><strong>锁争用</strong>：多线程抢一把锁 → 上下文切换、串行化。</li>
+    <li><strong>Cache miss</strong>：数据结构不友好 → CPU 空等内存（几百周期）。</li>
+    <li><strong>逐包系统调用</strong>：每包一次 syscall → 开销大。</li>
+  </ul>
+  <div class="note">通信系统追求的是<strong>低延迟 + 确定性 + 高吞吐</strong>，上面每一项都要针对性优化。下面逐个拆。</div>
+</section>
+
+<section class="chapter" id="s2">
+  <div class="ch-head"><div class="num">02</div><div class="t"><h2>Ring Buffer 环形缓冲</h2><p class="sub">生产者-消费者的基石</p></div></div>
+  <div class="def"><strong>Ring Buffer</strong>：固定大小的数组，用读/写两个下标（head/tail）循环使用。写到末尾就绕回开头。<strong>预分配、无需动态内存、天然生产者-消费者</strong>。</div>
+  <p>网卡驱动收包用的就是 RX ring；应用内部线程间传消息也常用它。容量取 2 的幂，下标用位与取模，极快。</p>
+<pre><span class="cm">// 单生产者单消费者 (SPSC) 环形队列骨架</span>
+template&lt;typename T, size_t N&gt;  <span class="cm">// N 为 2 的幂</span>
+struct RingSPSC {
+    T buf[N];
+    std::atomic&lt;size_t&gt; head{0}, tail{0};   <span class="cm">// 生产写 tail, 消费读 head</span>
+    bool push(const T& v) {
+        size_t t = tail.load(std::memory_order_relaxed);
+        if (((t + 1) & (N-1)) == head.load(std::memory_order_acquire))
+            return false;                     <span class="cm">// 满</span>
+        buf[t & (N-1)] = v;
+        tail.store(t + 1, std::memory_order_release);
+        return true;
+    }
+    bool pop(T& out) {
+        size_t h = head.load(std::memory_order_relaxed);
+        if (h == tail.load(std::memory_order_acquire)) return false; <span class="cm">// 空</span>
+        out = buf[h & (N-1)];
+        head.store(h + 1, std::memory_order_release);
+        return true;
+    }
+};</pre>
+</section>
+
+<section class="chapter" id="s3">
+  <div class="ch-head"><div class="num">03</div><div class="t"><h2>Lock-Free 无锁队列</h2><p class="sub">用原子操作代替锁</p></div></div>
+  <p>上面的 SPSC ring 已经是无锁的——靠 <code>atomic</code> + 内存序（acquire/release）保证可见性，避免互斥锁的开销和阻塞。</p>
+  <div class="def"><strong>Lock-Free</strong>：多个线程并发操作，无需互斥锁，靠 CAS(compare-and-swap)/原子变量协调。优点：无锁竞争阻塞、延迟确定；缺点：难写易错（ABA 问题、内存序）。</div>
+  <ul>
+    <li><strong>SPSC</strong>（单生产单消费）最简单最快，前传/网卡场景常用。</li>
+    <li><strong>MPMC</strong>（多生产多消费）复杂，一般用成熟库（如 moodycamel、DPDK rte_ring）。</li>
+    <li>关键：正确的 <code>memory_order</code>，以及避免<strong>伪共享</strong>（head/tail 放不同 cache line）。</li>
+  </ul>
+</section>
+
+<section class="chapter" id="s4">
+  <div class="ch-head"><div class="num">04</div><div class="t"><h2>Zero Copy 零拷贝</h2><p class="sub">别搬数据</p></div></div>
+  <div class="def"><strong>Zero Copy</strong>：减少/消除数据在内核态与用户态、各缓冲区之间的拷贝，让数据"原地"被处理或直接 DMA 到目的地。</div>
+  <ul>
+    <li><strong>内核技术</strong>：<code>sendfile</code>、<code>splice</code>、<code>mmap</code> —— 文件/socket 间直接传，不经用户态。</li>
+    <li><strong>用户态网络栈</strong>：<strong>DPDK / RDMA</strong> 把网卡数据直接 DMA 到用户态大页内存，绕过内核协议栈，是前传/高频交易的常用手段。</li>
+    <li><strong>做法</strong>：传指针/偏移而非拷贝内容；用引用计数管理共享缓冲。</li>
+  </ul>
+  <div class="note">前传/核心网转发面为了极致吞吐常用 DPDK：内核旁路 + 轮询 + 大页 + 零拷贝，单核就能转发数百万包/秒。</div>
+</section>
+
+<section class="chapter" id="s5">
+  <div class="ch-head"><div class="num">05</div><div class="t"><h2>Memory Pool 内存池</h2><p class="sub">预分配复用</p></div></div>
+  <div class="def"><strong>Memory Pool</strong>：启动时一次性分配一大块内存，切成固定大小的块，运行期从池里"借还"而非 malloc/free。消除运行时分配的延迟抖动与碎片。</div>
+  <p>配合 Ring Buffer 用：包缓冲从内存池取，处理完归还。DPDK 的 mbuf pool 就是这个思路。</p>
+</section>
+
+<section class="chapter" id="s6">
+  <div class="ch-head"><div class="num">06</div><div class="t"><h2>Batch & Cache 友好</h2><p class="sub">摊薄开销 + 榨干 CPU</p></div></div>
+  <ul>
+    <li><strong>批处理 Batch</strong>：一次收/发/处理一批包（如 recvmmsg、批量出队），把 syscall/同步开销摊到多个包上。</li>
+    <li><strong>Cache 友好</strong>：结构体紧凑、按 cache line(64B) 对齐、避免伪共享；顺序访问优于随机；热数据聚在一起。</li>
+    <li><strong>预取 Prefetch</strong>：提前把下一个要处理的包拉进 cache（<code>__builtin_prefetch</code>）。</li>
+    <li><strong>CPU 亲和 + NUMA</strong>：线程绑核、内存就近分配，避免跨 NUMA 访问。</li>
+  </ul>
+</section>
+
+<section class="chapter" id="s7">
+  <div class="ch-head"><div class="num">07</div><div class="t"><h2>收发全链路</h2><p class="sub">把技术串起来</p></div></div>
+  <div class="diag">
+    <svg viewBox="0 0 760 260" width="760" height="260" role="img" aria-label="高性能收发流水线">
+      <g font-family="Inter, sans-serif" font-size="10.5" fill="#94a3b8">
+        <text x="380" y="20" text-anchor="middle" fill="#facc15" font-weight="700" font-size="13">NIC → Ring → Parser → 队列 → Worker → TX 收发流水线</text>
+
+        <rect x="20"  y="70" width="100" height="46" rx="8" fill="#2a1414" stroke="#f87171"/><text x="70"  y="90" text-anchor="middle" fill="#ff9090" font-weight="700">NIC 收包</text><text x="70" y="106" text-anchor="middle" font-size="9">DMA 零拷贝</text>
+        <rect x="150" y="70" width="100" height="46" rx="8" fill="#0e2233" stroke="#7dd3fc"/><text x="200" y="90" text-anchor="middle" fill="#8ec8f6" font-weight="700">RX Ring</text><text x="200" y="106" text-anchor="middle" font-size="9">环形缓冲</text>
+        <rect x="280" y="70" width="100" height="46" rx="8" fill="#0e2a3a" stroke="#34d399"/><text x="330" y="90" text-anchor="middle" fill="#6ee7b7" font-weight="700">Parser</text><text x="330" y="106" text-anchor="middle" font-size="9">批量分帧</text>
+        <rect x="410" y="70" width="110" height="46" rx="8" fill="#251338" stroke="#a78bfa"/><text x="465" y="90" text-anchor="middle" fill="#d4a0ff" font-weight="700">Lock-Free 队列</text><text x="465" y="106" text-anchor="middle" font-size="9">无锁解耦</text>
+        <rect x="550" y="70" width="100" height="46" rx="8" fill="#2a1f0d" stroke="#fb923c"/><text x="600" y="90" text-anchor="middle" fill="#fb923c" font-weight="700">Worker</text><text x="600" y="106" text-anchor="middle" font-size="9">处理逻辑</text>
+        <rect x="550" y="150" width="100" height="46" rx="8" fill="#0e2233" stroke="#7dd3fc"/><text x="600" y="170" text-anchor="middle" fill="#8ec8f6" font-weight="700">TX Ring</text>
+        <rect x="680" y="150" width="70" height="46" rx="8" fill="#2a1414" stroke="#f87171"/><text x="715" y="170" text-anchor="middle" fill="#ff9090" font-weight="700">NIC</text><text x="715" y="186" text-anchor="middle" font-size="9">发包</text>
+
+        <path d="M120 93 H150" stroke="#475569" fill="none" marker-end="url(#hp)"/>
+        <path d="M250 93 H280" stroke="#475569" fill="none" marker-end="url(#hp)"/>
+        <path d="M380 93 H410" stroke="#475569" fill="none" marker-end="url(#hp)"/>
+        <path d="M520 93 H550" stroke="#475569" fill="none" marker-end="url(#hp)"/>
+        <path d="M600 116 V150" stroke="#475569" fill="none" marker-end="url(#hp)"/>
+        <path d="M650 173 H680" stroke="#475569" fill="none" marker-end="url(#hp)"/>
+
+        <rect x="20" y="150" width="500" height="46" rx="8" fill="none" stroke="#facc15" stroke-dasharray="5,3"/>
+        <text x="270" y="170" text-anchor="middle" fill="#facc15" font-size="10.5">全程支撑：内存池预分配 · 批处理 · Cache 对齐 · 线程绑核 · 零拷贝</text>
+        <text x="270" y="186" text-anchor="middle" font-size="9">→ 不 malloc、不加锁、少拷贝，实现确定性低延迟</text>
+
+        <defs><marker id="hp" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#475569"/></marker></defs>
+      </g>
+    </svg>
+  </div>
+  <ul>
+    <li>网卡 DMA 把包写进 RX ring（<strong>零拷贝</strong>，缓冲来自<strong>内存池</strong>）。</li>
+    <li>收包线程<strong>批量</strong>取出、按 <a href="binary_protocol.html">协议分帧</a>，通过<strong>无锁队列</strong>交给 worker。</li>
+    <li>worker 处理后放 TX ring，网卡 DMA 发出。全程<strong>不 malloc、不加锁、少拷贝</strong>。</li>
+  </ul>
+  <div class="box star">这正是 DPDK/前传转发面的经典架构：Ring + Pool + Lock-Free + Zero Copy + Batch + Cache 友好，共同实现<strong>低延迟、高吞吐、确定性</strong>。</div>
+
+  <div class="card">
+    <div class="card-title">🎯 本篇要点回顾</div>
+    <ul>
+      <li>性能杀手：分配、拷贝、锁、cache miss、逐包 syscall</li>
+      <li>Ring Buffer：预分配、生产者-消费者基石</li>
+      <li>Lock-Free：原子操作代替锁，SPSC 最简；防伪共享</li>
+      <li>Zero Copy：sendfile/splice、DPDK/RDMA 内核旁路</li>
+      <li>内存池 + 批处理 + cache 对齐 + 绑核 = 确定性低延迟</li>
+    </ul>
+  </div>
+
+  <div class="box tip">Module 08 完。下一步 → Module 09 <a href="comm_software_arch.html">通信软件架构：Data / Control / Management Plane</a>。</div>
+</section>
+
+<div class="footer-nav">
+  <a href="binary_protocol.html">⬅️ 二进制协议设计</a>
+  <a href="comm_software_arch.html">➡️ 通信软件架构</a>
+  <a href="socket_programming.html">🔌 Socket 编程</a>
+  <a href="communication_directory.html">📚 目录</a>
+  <a href="../index.html">🏠 主页</a>
+</div>
+
+  </main>
+</div>
+
+<script src="../assets/page-shell.js" defer></script>
+
+<footer><p>高性能通信：Ring Buffer / Zero Copy / Lock-Free — Kavin Tech Notes · 2026</p></footer>
+
+<button class="back-top" id="backTop" onclick="window.scrollTo({top:0,behavior:'smooth'})">↑</button>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>
