@@ -47,7 +47,12 @@
       <li><a href="#s3">future / promise / async</a></li>
       <li><a href="#s4">shared_mutex 读写锁</a></li>
       <li><a href="#s5">call_once / latch / barrier</a></li>
-      <li><a href="#s6">线程池完整实现</a></li>
+      <li><a href="#s6">线程池完整实现</a>
+        <ol>
+          <li><a href="#s6-2">V2 submit（返回值 + 异常）</a></li>
+          <li><a href="#s6-2-1">为什么这里 forward、那里 move</a></li>
+        </ol>
+      </li>
       <li><a href="#s7">Producer-Consumer</a></li>
       <li><a href="#s8">Reader-Writer 模式</a></li>
       <li><a href="#s9">Pipeline 流水线</a></li>
@@ -678,7 +683,7 @@ data_ready.<span class="fn">acquire</span>();
     <div class="num">06</div>
     <div class="t">
       <h2>线程池 — 完整实现演化 ⭐⭐⭐</h2>
-      <p class="sub">— 最简线程池（不能返结果） · — 支持返回值 + 异常透传 (生产级) · — 关键设计要点 · 线程池大小选择公式</p>
+      <p class="sub">最简线程池 · 返回值 + 异常透传 · forward vs move · 关键设计要点 · 线程池大小</p>
     </div>
   </div>
 
@@ -789,7 +794,65 @@ data_ready.<span class="fn">acquire</span>();
 
 <span class="kw">int</span> r = f1.<span class="fn">get</span>();             <span class="cm">// = 3</span>
 <span class="kw">try</span> { f2.<span class="fn">get</span>(); }
-<span class="kw">catch</span> (<span class="kw">const</span> std::exception&amp; e) { LOG(<span class="str">"task failed: {}"</span>, e.<span class="fn">what</span>()); }</pre>
+<span class="kw">catch</span> (<span class="kw">const</span> std::exception&amp; e) { LOG(<span class="str">"task failed: {}"</span>, e.<span class="fn">what</span>()); }
+
+<span class="cm">// 独占缓冲：调用方交出所有权，worker 里 encode 才能拿走 unique_ptr</span>
+<span class="kw">auto</span> fut = pool.<span class="fn">submit</span>(&amp;encode, std::<span class="fn">move</span>(payload), quality);</pre>
+
+  <h3 id="s6-2-1">6.2.1 为什么这里 <code>forward</code>、那里 <code>move</code></h3>
+
+  <p>上面那三行看起来像「到处搬对象」，其实是<strong>两段寿命、两种授权</strong>。口诀：<strong>forward = 条件移动（听调用方）; move = 无条件抢走（已拥有且确定用完）</strong>。</p>
+
+  <div class="box tip">
+    生活类比：快递分拨。上门收件时看运单——寄件人说「原件寄走」才搬走（<code>forward</code> 听值类别）；货已经进了你仓库、确定今晚发出，就无条件装车（<code>move</code>）。把仓库货位写成「暂借原件人的抽屉」（<code>forward_as_tuple</code>）→ 人走了抽屉空了 → 异步悬挂。
+  </div>
+
+  <h4>① 进闭包：<code>F&amp;&amp;</code> / <code>Args&amp;&amp;...</code> 是转发引用，必须 <code>std::forward</code></h4>
+  <p>形参写成 <code>F&amp;&amp; f, Args&amp;&amp;... args</code> 时，这是<strong>万能引用</strong>（见值类别 §3.2）：调用方传左值，<code>F</code> 推成左值引用；传右值，推成右值引用。这里只能 <code>std::forward</code>：</p>
+  <ul>
+    <li>调用方写 <code>pool.submit(fn, payload)</code>（左值）→ 拷进 tuple，调用方对象完好。</li>
+    <li>调用方写 <code>pool.submit(&amp;encode, std::move(payload), quality)</code> → <code>payload</code> 移进 tuple，独占所有权交给任务。</li>
+  </ul>
+  <p><code>std::make_tuple(std::forward&lt;Args&gt;(args)...)</code> 存的是<strong>值</strong>（decay 后的对象）。若写成 <code>std::forward_as_tuple</code>，tuple 里是<strong>引用</strong>——<code>submit</code> 返回后调用方栈上的实参已经结束，worker 稍后解引用 → 悬挂。异步边界上必须把对象「拷/移进闭包」，不能只记地址。</p>
+
+  <div class="box danger">
+    ❌ 一律 <code>std::move(f)</code> / <code>std::move(args)</code>：调用方传入的左值也会被掏空，等于静默偷走用户还要用的对象。<br>
+    ❌ <code>forward_as_tuple</code>：异步场景把引用装进 tuple → 必悬空。
+  </div>
+
+  <h4>② 闭包里执行：<code>f</code>、<code>tup</code> 是具名成员，默认是 lvalue</h4>
+  <p>init-capture 之后，<code>f</code> 和 <code>args</code> 是 lambda 的<strong>有名字的成员</strong>。有名字 → 表达式是 lvalue（见值类别 §3）。<code>std::apply(f, args)</code> 会按左值去调 <code>encode</code>，<code>unique_ptr</code> 形参接不住。这个 lambda <strong>只跑一次</strong>，跑完成员就没用了，所以：</p>
+<pre><span class="kw">return</span> std::<span class="fn">apply</span>(std::move(f), std::move(args));  <span class="cm">// 无条件抢走，unique_ptr 才能交给 encode</span></pre>
+  <p>这里的 <code>move</code> 不是「再转发一次」，而是「我已经拥有、确定用完，授权移动构造/按值形参把资源拿走」。</p>
+
+  <h4>③ <code>[task]</code> 拷 <code>shared_ptr</code> 是共享所有权，不是漏了 move</h4>
+  <p><code>packaged_task</code> 本身不可拷。用 <code>make_shared</code> 包一层后，投递队列的 lambda 写 <code>[task]{ (*task)(); }</code> 是<strong>拷贝 shared_ptr</strong>（引用计数 +1），好让 <code>get_future()</code> 那边和 worker 这边同时活着。这不是忘了 <code>std::move</code>。</p>
+
+  <table>
+    <tr><th>位置</th><th>写法</th><th>为什么</th></tr>
+    <tr><td>进闭包</td><td><code>std::forward&lt;F&gt;(f)</code> / <code>make_tuple(forward&lt;Args&gt;(args)...)</code></td><td>听调用方：左值拷、右值移；存值不存引用</td></tr>
+    <tr><td>闭包内 apply</td><td><code>apply(std::move(f), std::move(args))</code></td><td>具名成员是 lvalue；lambda 只跑一次，必须抢走</td></tr>
+    <tr><td>投递队列</td><td><code>[task]{ (*task)(); }</code></td><td>拷贝 <code>shared_ptr</code>，共享 packaged_task 所有权</td></tr>
+  </table>
+
+  <p class="qa-hint">点击每道题展开参考答案（先自测，再对照）。</p>
+  <ol class="qa-list">
+    <li><details class="qa">
+      <summary><span class="lvl mid">中级</span>线程池 <code>submit</code> 里为何不能一律 <code>std::move</code>？</summary>
+      <div class="ans">
+        <p><code>F&amp;&amp;</code> / <code>Args&amp;&amp;...</code> 是转发引用。一律 <code>move</code> 会把调用方的<strong>左值</strong>也掏空：<code>pool.submit(fn, payload)</code> 之后 <code>payload</code> 变成 moved-from，调用方若还要用就是逻辑 bug。</p>
+        <p><code>std::forward</code> 才是「条件移动」：左值保持左值（拷进 tuple），右值才移进 tuple。闭包<strong>里面</strong>才该无条件 <code>move</code>——那时对象已经是闭包的具名成员，且 lambda 只执行一次。</p>
+        <div class="point"><div class="label">口诀</div><div>forward 听调用方；move 抢已拥有且确定用完的东西。</div></div>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl mid">中级</span>为什么这里必须 <code>make_tuple</code> 而不能 <code>forward_as_tuple</code>？</summary>
+      <div class="ans">
+        <p><code>forward_as_tuple</code> 存的是<strong>引用</strong>（<code>tuple&lt;Args&amp;&amp;...&gt;</code>）。<code>submit</code> 返回后，调用方实参的寿命已经结束，worker 线程稍后 <code>apply</code> 解引用 → 悬挂 / UAF。</p>
+        <p><code>make_tuple(std::forward&lt;Args&gt;(args)...)</code> 把对象<strong>拷或移进 tuple 的值成员</strong>，寿命跟闭包走，这才是异步边界该做的事。</p>
+      </div>
+    </details></li>
+  </ol>
 
   <h3 id="s6-3">6.3 V3 — 关键设计要点</h3>
 
@@ -1572,7 +1635,7 @@ Task&lt;<span class="type">int</span>&gt; <span class="fn">orchestrate</span>() 
     <tr><th>库</th><th>定位</th><th>状态</th></tr>
     <tr><td><a href="https://github.com/NVIDIA/stdexec" style="color:var(--accent)"><b>NVIDIA stdexec</b></a></td><td>P2300 的参考实现，C++20 即可用</td><td>活跃，与 CUDA / GPU 整合</td></tr>
     <tr><td><a href="https://github.com/facebookexperimental/libunifex" style="color:var(--accent)"><b>libunifex</b></a></td><td>Eric Niebler 在 Meta 的原型，P2300 的灵感来源</td><td>稳定但 API 略老</td></tr>
-    <tr><td><a href="https://github.com/chriskohlhoff/asio" style="color:var(--accent)"><b>Asio</b> (1.30+)</td><td>已实验性支持 sender 适配器（<code>asio::experimental::use_sender</code>）</td><td>逐步对齐 P2300</td></tr>
+    <tr><td><a href="https://github.com/chriskohlhoff/asio" style="color:var(--accent)"><b>Asio</b> (1.30+)</a></td><td>已实验性支持 sender 适配器（<code>asio::experimental::use_sender</code>）</td><td>逐步对齐 P2300</td></tr>
     <tr><td>libc++ / libstdc++</td><td>C++26 标准实现</td><td>跟踪中，~2026 进入主干</td></tr>
   </table>
 

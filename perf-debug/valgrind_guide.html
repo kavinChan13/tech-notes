@@ -959,9 +959,9 @@ write(sock, &amp;h, <span class="k">sizeof</span> h);
         <div class="svg-caption">图 2.4 · Memcheck 性能开销分解。<strong>结论</strong>：3 + 4 项是 dominate 因素（V-bit 检查 + shadow 访问），加起来 ~ 12-15×。这也意味着<em>关掉 origin tracking、减小 --num-callers、用 None tool 来跑都能加速 30%+</em>。</div>
       </div>
 
-      <details class="qa">
-        <summary><span class="lvl" style="background:rgba(167,139,250,.2);color:var(--accent-2)">L5 MID</span> <strong>"动态翻译"具体翻什么？为什么不像 QEMU 那么慢？</strong></summary>
-        <div class="a">
+      <details class="qa standalone">
+        <summary><span class="lvl mid">L5 中级</span><strong>"动态翻译"具体翻什么？为什么不像 QEMU 那么慢？</strong></summary>
+        <div class="ans">
           <div class="point"><span class="label">答案</span><div>QEMU 是<em>跨架构</em>翻译（x86 → ARM 等），需要语义对齐每条指令；Valgrind 是<em>同架构</em>翻译（x86 → x86），只是中间套一层 IR 让 tool 插桩。<strong>所以 QEMU 慢 50-100×，Valgrind 只慢 4-5×（不带 tool）</strong>。Memcheck 多出来的减速来自插桩本身。</div></div>
           <div class="point deep"><span class="label">深挖</span><div>Valgrind 与 DynamoRIO / Pin 的对比：DynamoRIO 是 Hewlett-Packard 的产品，在线生成 trace 比 Valgrind 快（~ 2× native + tool overhead）；但 DynamoRIO 没有 IR 抽象，写新 tool 比 Valgrind 难。<em>Valgrind 选了"易扩展"的工程取舍</em>。</div></div>
         </div>
@@ -1023,9 +1023,9 @@ valgrind \
   --suppressions=valgrind.supp \   <span class="c"># 抑制规则文件</span>
   --gen-suppressions=all           <span class="c"># 把每个错误的 suppression 模板打印出来（写规则用）</span></code></pre>
 
-      <details class="qa">
+      <details class="qa standalone">
         <summary><strong>常用环境变量</strong> · <code>VALGRIND_OPTS</code> 与 <code>.valgrindrc</code></summary>
-        <div class="a">
+        <div class="ans">
           <div class="point"><span class="label">VALGRIND_OPTS</span><div>把全套参数写到环境变量，CI 复用：<code>export VALGRIND_OPTS="--leak-check=full --error-exitcode=1"</code></div></div>
           <div class="point"><span class="label">.valgrindrc</span><div>3 处会被读取：<code>~/.valgrindrc</code>（用户级）、<code>./.valgrindrc</code>（项目级）、命令行参数（最高优先级）。建议项目根放 <code>.valgrindrc</code> 写共用参数。</div></div>
         </div>
@@ -2488,115 +2488,115 @@ valgrind --leak-check=full \
 
       <h3 id="s10-1">10.1 L4 · 初级（4 题）"会用、知道是什么"</h3>
 
-      <details class="qa">
-        <summary><span class="lvl" style="background:rgba(125,211,252,.2);color:var(--accent)">L4 INIT</span> <strong>Q1. 一句话讲 Valgrind 是什么、最常用是哪个工具？</strong></summary>
-        <div class="a">
-          <div class="point"><span class="label">答案</span><div>Valgrind 是<strong>动态二进制翻译框架</strong>（DBT），自带 6 个工具，不需要重编。最常用的是 <strong>Memcheck</strong>（默认工具），查内存错误和泄漏。其他 5 个：Helgrind/DRD（race）、Massif（heap profile）、Callgrind/Cachegrind（perf 分析）。</div></div>
-          <div class="point deep"><span class="label">深挖</span><div>"DBT 框架"具体什么意思？→ 把客户机指令翻译成 VEX IR，让 tool 插桩，再降回 host 指令在合成 CPU 上跑。这层抽象让"加新工具"成本极低（写组 callback 就行）。</div></div>
-        </div>
-      </details>
-
-      <details class="qa">
-        <summary><span class="lvl" style="background:rgba(125,211,252,.2);color:var(--accent)">L4 INIT</span> <strong>Q2. 怎么用 Memcheck 查泄漏？典型命令是？</strong></summary>
-        <div class="a">
-          <div class="point"><span class="label">答案</span><div><code>valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes --num-callers=30 ./prog</code>。结果关注 "definitely lost"（必修）+ "indirectly lost"（连带）；"possibly lost" 通常误报；"still reachable" 通常忽略。</div></div>
-          <div class="point deep"><span class="label">深挖</span><div>4 类 leak 怎么区分？→ definitely=丢指针没 free；indirectly=父亲丢了连带儿子；possibly=指针偏到块中间（多继承 vtable）；reachable=还指着但程序退出没释放（leaky singleton）。</div></div>
-        </div>
-      </details>
-
-      <details class="qa">
-        <summary><span class="lvl" style="background:rgba(125,211,252,.2);color:var(--accent)">L4 INIT</span> <strong>Q3. <code>--track-origins=yes</code> 干什么用、为什么不默认开？</strong></summary>
-        <div class="a">
-          <div class="point"><span class="label">答案</span><div>追溯"未初始化值"<em>来源</em>。报告里会多一行 "Uninitialised value was created by a stack/heap allocation at..."，告诉你这个 uninit 数据是从哪行代码冒出来的，不只告诉你"哪里读到了"。</div></div>
-          <div class="point deep"><span class="label">深挖</span><div>不默认开是因为<u>性能开销 ~ 50%</u>。Memcheck 内部要给每 4 字节再附一个 32-bit origin tag（指向分配栈），赋值/算术时跟着流动。</div></div>
-        </div>
-      </details>
-
-      <details class="qa">
-        <summary><span class="lvl" style="background:rgba(125,211,252,.2);color:var(--accent)">L4 INIT</span> <strong>Q4. ASan / TSan 出来之后，Valgrind 还有用吗？</strong></summary>
-        <div class="a">
-          <div class="point"><span class="label">答案</span><div>有。ASan 杀掉了 Valgrind 在 CI / 日常开发的位置（快 10×），但<strong>"不能重编"的场景仍然只能 Valgrind</strong>：① 第三方闭源 .so；② 嵌入式 / 老 toolchain；③ 想跑可重现的 cache 模拟。</div></div>
-          <div class="point deep"><span class="label">深挖</span><div>2026 年 Valgrind 的"独占主场"6 类：闭源 .so / 老 toolchain / MSan 不可用 / Cachegrind 可重现指标 / production-like 数据 sanity check / ASan 漏抓的双重保险。</div></div>
-        </div>
-      </details>
+      <p class="qa-hint">点击每道题展开参考答案（先自测，再对照）。</p>
+<ol class="qa-list">
+  <li><details class="qa">
+    <summary><span class="lvl basic">L4 初级</span>一句话讲 Valgrind 是什么、最常用是哪个工具？</summary>
+    <div class="ans">
+      <div class="point"><span class="label">答案</span><div>Valgrind 是<strong>动态二进制翻译框架</strong>（DBT），自带 6 个工具，不需要重编。最常用的是 <strong>Memcheck</strong>（默认工具），查内存错误和泄漏。其他 5 个：Helgrind/DRD（race）、Massif（heap profile）、Callgrind/Cachegrind（perf 分析）。</div></div>
+      <div class="point deep"><span class="label">深挖</span><div>"DBT 框架"具体什么意思？→ 把客户机指令翻译成 VEX IR，让 tool 插桩，再降回 host 指令在合成 CPU 上跑。这层抽象让"加新工具"成本极低（写组 callback 就行）。</div></div>
+    </div>
+  </details></li>
+  <li><details class="qa">
+    <summary><span class="lvl basic">L4 初级</span>怎么用 Memcheck 查泄漏？典型命令是？</summary>
+    <div class="ans">
+      <div class="point"><span class="label">答案</span><div><code>valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes --num-callers=30 ./prog</code>。结果关注 "definitely lost"（必修）+ "indirectly lost"（连带）；"possibly lost" 通常误报；"still reachable" 通常忽略。</div></div>
+      <div class="point deep"><span class="label">深挖</span><div>4 类 leak 怎么区分？→ definitely=丢指针没 free；indirectly=父亲丢了连带儿子；possibly=指针偏到块中间（多继承 vtable）；reachable=还指着但程序退出没释放（leaky singleton）。</div></div>
+    </div>
+  </details></li>
+  <li><details class="qa">
+    <summary><span class="lvl basic">L4 初级</span><code>--track-origins=yes</code> 干什么用、为什么不默认开？</summary>
+    <div class="ans">
+      <div class="point"><span class="label">答案</span><div>追溯"未初始化值"<em>来源</em>。报告里会多一行 "Uninitialised value was created by a stack/heap allocation at..."，告诉你这个 uninit 数据是从哪行代码冒出来的，不只告诉你"哪里读到了"。</div></div>
+      <div class="point deep"><span class="label">深挖</span><div>不默认开是因为<u>性能开销 ~ 50%</u>。Memcheck 内部要给每 4 字节再附一个 32-bit origin tag（指向分配栈），赋值/算术时跟着流动。</div></div>
+    </div>
+  </details></li>
+  <li><details class="qa">
+    <summary><span class="lvl basic">L4 初级</span>ASan / TSan 出来之后，Valgrind 还有用吗？</summary>
+    <div class="ans">
+      <div class="point"><span class="label">答案</span><div>有。ASan 杀掉了 Valgrind 在 CI / 日常开发的位置（快 10×），但<strong>"不能重编"的场景仍然只能 Valgrind</strong>：① 第三方闭源 .so；② 嵌入式 / 老 toolchain；③ 想跑可重现的 cache 模拟。</div></div>
+      <div class="point deep"><span class="label">深挖</span><div>2026 年 Valgrind 的"独占主场"6 类：闭源 .so / 老 toolchain / MSan 不可用 / Cachegrind 可重现指标 / production-like 数据 sanity check / ASan 漏抓的双重保险。</div></div>
+    </div>
+  </details></li>
+</ol>
 
       <h3 id="s10-2">10.2 L5 · 中级（4 题）"懂原理"</h3>
 
-      <details class="qa">
-        <summary><span class="lvl" style="background:rgba(167,139,250,.2);color:var(--accent-2)">L5 MID</span> <strong>Q5. 为什么 Memcheck 慢 10-30×？</strong></summary>
-        <div class="a">
-          <div class="point"><span class="label">答案</span><div>开销叠乘：① 合成 CPU 解释 ~ 4×；② V-bit 检查（每个 load/store 查 shadow） ~ 7×；③ shadow memory 自己访存挤掉 cache ~ 2×；④ stacktrace 抓取 ~ 1.2×；⑤ IR 翻译（cache 命中后接近 0）。乘起来理论 100×，实测 10-30× 是因为 I/O / sleep 等被减速少。</div></div>
-          <div class="point deep"><span class="label">深挖</span><div>对比 ASan：ASan 编译期插桩，每次访存只多 1-2 条 host 指令检查 shadow（cache friendly），所以 2-3×。<u>Valgrind 慢主要不是因为"翻译"，而是因为"插桩太多 + shadow 抖 cache"</u>。</div></div>
-        </div>
-      </details>
-
-      <details class="qa">
-        <summary><span class="lvl" style="background:rgba(167,139,250,.2);color:var(--accent-2)">L5 MID</span> <strong>Q6. Memcheck 的 shadow memory 怎么工作？为什么能查 uninit？</strong></summary>
-        <div class="a">
-          <div class="point"><span class="label">答案</span><div>对每一字节用户内存，shadow 维护：1 个 <strong>A-bit</strong>（是否可寻址）+ 8 个 <strong>V-bits</strong>（每位是否已定义）。malloc → A=1, V=undef；写入 → V=defined；free → A=0；读 → 检查 A=1 ∧ V=defined。位级精度。</div></div>
-          <div class="point deep"><span class="label">深挖</span><div>① 内存开销：每用户字节多 9 位 → 总 ~ 2-3× 内存。<br>② 对比 ASan：ASan shadow 是 1B/8B 粒度，<u>不能查 uninit</u>（只查 addressable + redzone）。MSan 才补回了 V-bit 模型。<br>③ 为什么 V-bits 是 1 字节用 8 位？因为 C/C++ 允许位操作（如 bitfield、union），需要位级追踪。</div></div>
-        </div>
-      </details>
-
-      <details class="qa">
-        <summary><span class="lvl" style="background:rgba(167,139,250,.2);color:var(--accent-2)">L5 MID</span> <strong>Q7. Helgrind 跟 TSan 的区别？什么时候用 Helgrind 而不是 TSan？</strong></summary>
-        <div class="a">
-          <div class="point"><span class="label">答案</span><div>① Helgrind 是 DBT，不需要重编；TSan 编译期插桩，必须重编。② Helgrind 慢 20-100×；TSan 5-15×。③ Helgrind 用 lockset + happens-before 混合算法，能<u>独家查锁序反转</u>；TSan 用 vector clock (FastTrack) 只查 race。④ TSan 信任程序员的 atomic mem-order，Helgrind 不信任，对 lock-free 更"偏执"。</div></div>
-          <div class="point deep"><span class="label">深挖</span><div>什么时候选 Helgrind：① 不能重编（第三方 .so）；② 想抓 lock-free 算法的 mem-order bug（Helgrind 偏执反成优点）；③ 想查锁序反转（TSan 不查）。<br>什么时候选 DRD：cv / atomic 同步多 → DRD 误报少。</div></div>
-        </div>
-      </details>
-
-      <details class="qa">
-        <summary><span class="lvl" style="background:rgba(167,139,250,.2);color:var(--accent-2)">L5 MID</span> <strong>Q8. Memcheck 能查栈越界吗？为什么？</strong></summary>
-        <div class="a">
-          <div class="point"><span class="label">答案</span><div><strong>不能</strong>（绝大多数情况）。栈是 OS 一次性分给进程的合法内存，Memcheck 只能从 A-bit 看到"整页 mapped"。栈帧之间没有"redzone"，越界 1 个 int 写到了相邻局部变量上 → A=1, V=defined → Memcheck 看不出问题。</div></div>
-          <div class="point deep"><span class="label">深挖</span><div>ASan 能查栈越界，因为它在编译期给每个栈对象前后插入 redzone（典型 32B），用 shadow 标 poison。这是"DBT 抓不到、需要编译期信息"的典型场景。<br>Memcheck 能查的栈相关错误：use-after-return（栈帧析构后某些场景能抓）、栈整体越界（栈溢出 SIGSEGV）。</div></div>
-        </div>
-      </details>
+<ol class="qa-list" start="5">
+  <li><details class="qa">
+    <summary><span class="lvl mid">L5 中级</span>为什么 Memcheck 慢 10-30×？</summary>
+    <div class="ans">
+      <div class="point"><span class="label">答案</span><div>开销叠乘：① 合成 CPU 解释 ~ 4×；② V-bit 检查（每个 load/store 查 shadow） ~ 7×；③ shadow memory 自己访存挤掉 cache ~ 2×；④ stacktrace 抓取 ~ 1.2×；⑤ IR 翻译（cache 命中后接近 0）。乘起来理论 100×，实测 10-30× 是因为 I/O / sleep 等被减速少。</div></div>
+      <div class="point deep"><span class="label">深挖</span><div>对比 ASan：ASan 编译期插桩，每次访存只多 1-2 条 host 指令检查 shadow（cache friendly），所以 2-3×。<u>Valgrind 慢主要不是因为"翻译"，而是因为"插桩太多 + shadow 抖 cache"</u>。</div></div>
+    </div>
+  </details></li>
+  <li><details class="qa">
+    <summary><span class="lvl mid">L5 中级</span>Memcheck 的 shadow memory 怎么工作？为什么能查 uninit？</summary>
+    <div class="ans">
+      <div class="point"><span class="label">答案</span><div>对每一字节用户内存，shadow 维护：1 个 <strong>A-bit</strong>（是否可寻址）+ 8 个 <strong>V-bits</strong>（每位是否已定义）。malloc → A=1, V=undef；写入 → V=defined；free → A=0；读 → 检查 A=1 ∧ V=defined。位级精度。</div></div>
+      <div class="point deep"><span class="label">深挖</span><div>① 内存开销：每用户字节多 9 位 → 总 ~ 2-3× 内存。<br>② 对比 ASan：ASan shadow 是 1B/8B 粒度，<u>不能查 uninit</u>（只查 addressable + redzone）。MSan 才补回了 V-bit 模型。<br>③ 为什么 V-bits 是 1 字节用 8 位？因为 C/C++ 允许位操作（如 bitfield、union），需要位级追踪。</div></div>
+    </div>
+  </details></li>
+  <li><details class="qa">
+    <summary><span class="lvl mid">L5 中级</span>Helgrind 跟 TSan 的区别？什么时候用 Helgrind 而不是 TSan？</summary>
+    <div class="ans">
+      <div class="point"><span class="label">答案</span><div>① Helgrind 是 DBT，不需要重编；TSan 编译期插桩，必须重编。② Helgrind 慢 20-100×；TSan 5-15×。③ Helgrind 用 lockset + happens-before 混合算法，能<u>独家查锁序反转</u>；TSan 用 vector clock (FastTrack) 只查 race。④ TSan 信任程序员的 atomic mem-order，Helgrind 不信任，对 lock-free 更"偏执"。</div></div>
+      <div class="point deep"><span class="label">深挖</span><div>什么时候选 Helgrind：① 不能重编（第三方 .so）；② 想抓 lock-free 算法的 mem-order bug（Helgrind 偏执反成优点）；③ 想查锁序反转（TSan 不查）。<br>什么时候选 DRD：cv / atomic 同步多 → DRD 误报少。</div></div>
+    </div>
+  </details></li>
+  <li><details class="qa">
+    <summary><span class="lvl mid">L5 中级</span>Memcheck 能查栈越界吗？为什么？</summary>
+    <div class="ans">
+      <div class="point"><span class="label">答案</span><div><strong>不能</strong>（绝大多数情况）。栈是 OS 一次性分给进程的合法内存，Memcheck 只能从 A-bit 看到"整页 mapped"。栈帧之间没有"redzone"，越界 1 个 int 写到了相邻局部变量上 → A=1, V=defined → Memcheck 看不出问题。</div></div>
+      <div class="point deep"><span class="label">深挖</span><div>ASan 能查栈越界，因为它在编译期给每个栈对象前后插入 redzone（典型 32B），用 shadow 标 poison。这是"DBT 抓不到、需要编译期信息"的典型场景。<br>Memcheck 能查的栈相关错误：use-after-return（栈帧析构后某些场景能抓）、栈整体越界（栈溢出 SIGSEGV）。</div></div>
+    </div>
+  </details></li>
+</ol>
 
       <h3 id="s10-3">10.3 L6 · 高级（3 题）"懂设计 + 工程化"</h3>
 
-      <details class="qa">
-        <summary><span class="lvl" style="background:rgba(52,211,153,.2);color:var(--accent-3)">L6 SR</span> <strong>Q9. VEX IR 是什么？为什么 Valgrind 要专门做一个 IR？</strong></summary>
-        <div class="a">
-          <div class="point"><span class="label">答案</span><div>VEX 是 Valgrind 自己定义的<strong>体系结构无关中间表示</strong>。每条 host 指令翻成多条 VEX IR statement（Get/Put/WrTmp/Store/Dirty 等），每个 statement 只读/写一次。这层抽象让 tool 写在 IR 上，<u>不用懂 x86/ARM/RISC-V 细节</u>，加新 ISA 只要写前后端。</div></div>
-          <div class="point deep"><span class="label">深挖</span><div>VEX vs LLVM IR：① VEX 设计目标是"<em>方便插桩</em>"，不是"优化"；② VEX 比 LLVM IR 更接近物理指令（保留 EFLAGS 等），翻译保真；③ VEX 更小，能在线翻译快速生成。<br>VEX vs Pin / DynamoRIO：Pin 直接在 host 指令上加 hook（无 IR），写 tool 难；Valgrind 选了"易扩展"取舍。</div></div>
-        </div>
-      </details>
-
-      <details class="qa">
-        <summary><span class="lvl" style="background:rgba(52,211,153,.2);color:var(--accent-3)">L6 SR</span> <strong>Q10. 怎么把 Valgrind 集成到 CI 里？suppression 怎么治理？</strong></summary>
-        <div class="a">
-          <div class="point"><span class="label">答案</span><div>① CI 命令：<code>valgrind --error-exitcode=1 --suppressions=project.supp --xml=yes ...</code>；② 把 suppression 拆成业务自己的 + 第三方库的两份文件，每条加注释（来源 / 为什么是误报）；③ 季度 review，因为库升级会失效；④ <u>同时跑 <code>--gen-suppressions=all</code></u>，PR diff 检查是否新增可疑 suppression。</div></div>
-          <div class="point deep"><span class="label">深挖</span><div>反模式 5 条：① 用 <code>...</code> 通配符吃掉一大段栈（容易误吃真 bug）；② 名字都叫 fix-later；③ 把项目自己代码的 leak 也压（应该修）；④ 不写注释；⑤ 把 suppression 写在源码 #pragma 里（不能版本管理）。</div></div>
-        </div>
-      </details>
-
-      <details class="qa">
-        <summary><span class="lvl" style="background:rgba(52,211,153,.2);color:var(--accent-3)">L6 SR</span> <strong>Q11. 自己写了个 pool allocator，Memcheck 看不到 UAF。怎么办？</strong></summary>
-        <div class="a">
-          <div class="point"><span class="label">答案</span><div>用 <strong>Client Requests 宏</strong>。在 alloc 路径调 <code>VALGRIND_MEMPOOL_ALLOC(pool, p, size)</code>，dealloc 路径调 <code>VALGRIND_MEMPOOL_FREE(pool, p)</code>。这样 Memcheck 把 pool 的整块底层 mmap 看成 NoAccess，只在程序"实际拿到"slot 时才标 Defined → 用户在 dealloc 后还访问就能被抓到。</div></div>
-          <div class="point deep"><span class="label">深挖</span><div>① 性能成本：Client Request 宏在 native 跑就是几条 NOP-like 指令，&lt; 1ns 开销，可以放生产代码不需要 #ifdef。<br>② 同类宏 helgrind 也有：<code>ANNOTATE_RWLOCK_ACQUIRED/RELEASED</code> 让 Helgrind 认识自己实现的同步原语。<br>③ 实现原理：宏展开成"魔法 x86 序列"（一组特殊的 ROL 指令组合），native CPU 执行就是 NOP，但 Valgrind 翻译时识别为 client request 转走。</div></div>
-        </div>
-      </details>
+<ol class="qa-list" start="9">
+  <li><details class="qa">
+    <summary><span class="lvl adv">L6 高级</span>VEX IR 是什么？为什么 Valgrind 要专门做一个 IR？</summary>
+    <div class="ans">
+      <div class="point"><span class="label">答案</span><div>VEX 是 Valgrind 自己定义的<strong>体系结构无关中间表示</strong>。每条 host 指令翻成多条 VEX IR statement（Get/Put/WrTmp/Store/Dirty 等），每个 statement 只读/写一次。这层抽象让 tool 写在 IR 上，<u>不用懂 x86/ARM/RISC-V 细节</u>，加新 ISA 只要写前后端。</div></div>
+      <div class="point deep"><span class="label">深挖</span><div>VEX vs LLVM IR：① VEX 设计目标是"<em>方便插桩</em>"，不是"优化"；② VEX 比 LLVM IR 更接近物理指令（保留 EFLAGS 等），翻译保真；③ VEX 更小，能在线翻译快速生成。<br>VEX vs Pin / DynamoRIO：Pin 直接在 host 指令上加 hook（无 IR），写 tool 难；Valgrind 选了"易扩展"取舍。</div></div>
+    </div>
+  </details></li>
+  <li><details class="qa">
+    <summary><span class="lvl adv">L6 高级</span>怎么把 Valgrind 集成到 CI 里？suppression 怎么治理？</summary>
+    <div class="ans">
+      <div class="point"><span class="label">答案</span><div>① CI 命令：<code>valgrind --error-exitcode=1 --suppressions=project.supp --xml=yes ...</code>；② 把 suppression 拆成业务自己的 + 第三方库的两份文件，每条加注释（来源 / 为什么是误报）；③ 季度 review，因为库升级会失效；④ <u>同时跑 <code>--gen-suppressions=all</code></u>，PR diff 检查是否新增可疑 suppression。</div></div>
+      <div class="point deep"><span class="label">深挖</span><div>反模式 5 条：① 用 <code>...</code> 通配符吃掉一大段栈（容易误吃真 bug）；② 名字都叫 fix-later；③ 把项目自己代码的 leak 也压（应该修）；④ 不写注释；⑤ 把 suppression 写在源码 #pragma 里（不能版本管理）。</div></div>
+    </div>
+  </details></li>
+  <li><details class="qa">
+    <summary><span class="lvl adv">L6 高级</span>自己写了个 pool allocator，Memcheck 看不到 UAF。怎么办？</summary>
+    <div class="ans">
+      <div class="point"><span class="label">答案</span><div>用 <strong>Client Requests 宏</strong>。在 alloc 路径调 <code>VALGRIND_MEMPOOL_ALLOC(pool, p, size)</code>，dealloc 路径调 <code>VALGRIND_MEMPOOL_FREE(pool, p)</code>。这样 Memcheck 把 pool 的整块底层 mmap 看成 NoAccess，只在程序"实际拿到"slot 时才标 Defined → 用户在 dealloc 后还访问就能被抓到。</div></div>
+      <div class="point deep"><span class="label">深挖</span><div>① 性能成本：Client Request 宏在 native 跑就是几条 NOP-like 指令，&lt; 1ns 开销，可以放生产代码不需要 #ifdef。<br>② 同类宏 helgrind 也有：<code>ANNOTATE_RWLOCK_ACQUIRED/RELEASED</code> 让 Helgrind 认识自己实现的同步原语。<br>③ 实现原理：宏展开成"魔法 x86 序列"（一组特殊的 ROL 指令组合），native CPU 执行就是 NOP，但 Valgrind 翻译时识别为 client request 转走。</div></div>
+    </div>
+  </details></li>
+</ol>
 
       <h3 id="s10-4">10.4 L7 · 专家（2 题）"系统设计 + 边界条件"</h3>
 
-      <details class="qa">
-        <summary><span class="lvl" style="background:rgba(251,191,36,.2);color:var(--accent-4)">L7 EXPERT</span> <strong>Q12. 在嵌入式 ARMv7 + 1GB RAM 上跑 Valgrind，会遇到什么问题？怎么解决？</strong></summary>
-        <div class="a">
-          <div class="point"><span class="label">答案（开放设计题）</span><div>4 个问题 + 解法：<br>① <strong>Memory 2-3×</strong>：原本 200MB 服务变 600MB → 接近 1GB 限制，OOM。<em>解</em>：缩小 testcase；或者跑 None tool（只测核心 DBT 开销）；或者只对部分进程开。<br>② <strong>性能 10-30×</strong>：原本 10s 测试变 5min。<em>解</em>：缩小输入；或并行多个小 testcase。<br>③ <strong>ARMv7 syscall 支持</strong>：定制内核新 syscall Valgrind 可能不识别。<em>解</em>：升级到 valgrind 3.21+；或者 fallback 到不用该 syscall 的代码路径测。<br>④ <strong>编译 cross-toolchain</strong>：要 yocto / buildroot recipe，或自己编。<em>解</em>：用 yocto 自带 recipe，或预编好的 bin。</div></div>
-          <div class="point deep"><span class="label">考察</span><div>是否真的在嵌入式上跑过，是否懂多约束工程权衡。<br>额外加分：知道 valgrind 在 ARMv5 / MIPS / PowerPC 这类老架构上仍然<u>是少数能用的工具</u>，是 vendor 集成测试的"最后一道防线"。</div></div>
-        </div>
-      </details>
-
-      <details class="qa">
-        <summary><span class="lvl" style="background:rgba(251,191,36,.2);color:var(--accent-4)">L7 EXPERT</span> <strong>Q13. 设计：怎么给团队建一套"渐进式" Valgrind 误报治理流程？让团队从不愿用到日常用？</strong></summary>
-        <div class="a">
-          <div class="point"><span class="label">答案（开放设计题）</span><div>4 阶段渐进：<br>① <strong>Phase 1 · Baseline</strong> · 跑一次完整 valgrind，<u>把<em>所有当前</em>的报告全部转成 suppression</u>（Big Bang）。CI 从 0 开始，<em>新增任何错误才 fail</em>。<br>② <strong>Phase 2 · Differential</strong> · 每月 review 一次 suppression list，挑 top 10 重复出现的真 bug 修掉，suppression 数量净减少。<br>③ <strong>Phase 3 · Per-team</strong> · 拆 suppression 文件按子模块归属，谁的代码谁负责。<br>④ <strong>Phase 4 · Mature</strong> · 把 Valgrind 替换成 ASan + LSan 跑 CI（快 10×），保留 Valgrind 作为夜间深度扫描 + 第三方 .so 专项检查。<br><br><strong>关键</strong>：不要一上来就要求 0 suppression，那必死；先稳住边界，再慢慢往里收。</div></div>
-          <div class="point deep"><span class="label">考察</span><div>① 工程领导力 —— 怎么推动一个"高摩擦工具"在团队里落地。<br>② 是否懂 suppression 的<em>双面性</em>：既是治理利器，也是"债务沉淀池"。<br>③ 是否能把 Valgrind 放在大工具栈里看 —— 它<u>不是终态</u>，是过渡阶段，最终被 ASan + eBPF 替代到边缘场景。</div></div>
-        </div>
-      </details>
+<ol class="qa-list" start="12">
+  <li><details class="qa">
+    <summary><span class="lvl expert">L7 专家</span>在嵌入式 ARMv7 + 1GB RAM 上跑 Valgrind，会遇到什么问题？怎么解决？</summary>
+    <div class="ans">
+      <div class="point"><span class="label">答案（开放设计题）</span><div>4 个问题 + 解法：<br>① <strong>Memory 2-3×</strong>：原本 200MB 服务变 600MB → 接近 1GB 限制，OOM。<em>解</em>：缩小 testcase；或者跑 None tool（只测核心 DBT 开销）；或者只对部分进程开。<br>② <strong>性能 10-30×</strong>：原本 10s 测试变 5min。<em>解</em>：缩小输入；或并行多个小 testcase。<br>③ <strong>ARMv7 syscall 支持</strong>：定制内核新 syscall Valgrind 可能不识别。<em>解</em>：升级到 valgrind 3.21+；或者 fallback 到不用该 syscall 的代码路径测。<br>④ <strong>编译 cross-toolchain</strong>：要 yocto / buildroot recipe，或自己编。<em>解</em>：用 yocto 自带 recipe，或预编好的 bin。</div></div>
+      <div class="point deep"><span class="label">考察</span><div>是否真的在嵌入式上跑过，是否懂多约束工程权衡。<br>额外加分：知道 valgrind 在 ARMv5 / MIPS / PowerPC 这类老架构上仍然<u>是少数能用的工具</u>，是 vendor 集成测试的"最后一道防线"。</div></div>
+    </div>
+  </details></li>
+  <li><details class="qa">
+    <summary><span class="lvl expert">L7 专家</span>设计：怎么给团队建一套"渐进式" Valgrind 误报治理流程？让团队从不愿用到日常用？</summary>
+    <div class="ans">
+      <div class="point"><span class="label">答案（开放设计题）</span><div>4 阶段渐进：<br>① <strong>Phase 1 · Baseline</strong> · 跑一次完整 valgrind，<u>把<em>所有当前</em>的报告全部转成 suppression</u>（Big Bang）。CI 从 0 开始，<em>新增任何错误才 fail</em>。<br>② <strong>Phase 2 · Differential</strong> · 每月 review 一次 suppression list，挑 top 10 重复出现的真 bug 修掉，suppression 数量净减少。<br>③ <strong>Phase 3 · Per-team</strong> · 拆 suppression 文件按子模块归属，谁的代码谁负责。<br>④ <strong>Phase 4 · Mature</strong> · 把 Valgrind 替换成 ASan + LSan 跑 CI（快 10×），保留 Valgrind 作为夜间深度扫描 + 第三方 .so 专项检查。<br><br><strong>关键</strong>：不要一上来就要求 0 suppression，那必死；先稳住边界，再慢慢往里收。</div></div>
+      <div class="point deep"><span class="label">考察</span><div>① 工程领导力 —— 怎么推动一个"高摩擦工具"在团队里落地。<br>② 是否懂 suppression 的<em>双面性</em>：既是治理利器，也是"债务沉淀池"。<br>③ 是否能把 Valgrind 放在大工具栈里看 —— 它<u>不是终态</u>，是过渡阶段，最终被 ASan + eBPF 替代到边缘场景。</div></div>
+    </div>
+  </details></li>
+</ol>
 
       <div class="kmap" style="margin-top:32px">
         <div class="kmap-title">学习闭环 · 你现在应该能做的事</div>

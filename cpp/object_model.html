@@ -261,9 +261,11 @@
   <tr><td><code>char</code></td><td>1</td><td>1</td></tr>
   <tr><td><code>short</code></td><td>2</td><td>2</td></tr>
   <tr><td><code>int</code> / <code>float</code></td><td>4</td><td>4</td></tr>
+  <tr><td><code>long</code></td><td>4（Win LLP64）/ 8（Linux LP64）</td><td>同大小</td></tr>
   <tr><td><code>double</code> / <code>long long</code> / pointer</td><td>8</td><td>8</td></tr>
   <tr><td><code>long double</code> (x86)</td><td>12 / 16</td><td>4 / 16</td></tr>
 </table>
+<p style="font-size:.9em;color:var(--text-dim)"><code>long</code> 的大小是跨平台陷阱：Windows 64 位 LLP64 上仍是 4 字节。宽度与 <code>INT_MAX</code> / <code>LONG_MAX</code> 详见 <a href="type_conversions_guide.html#s7-2b">类型转换 · 整型宽度</a>。</p>
 </div>
 
 <!-- =========================================================== -->
@@ -1477,101 +1479,112 @@ $ nm v.o | grep init                  <span class="cmt"># 看 mangled</span>
 
 <h3 id="s14-10">14.10 高频面试 Q&amp;A</h3>
 
-<div class="card">
-<h4>Q1: sizeof 空类为什么是 1 不是 0？</h4>
-<p>C++ 要求不同对象有不同地址。如果 <code>sizeof(Empty) == 0</code>，数组 <code>Empty a[10]</code> 里所有元素地址相同、指针算术失效。作为<strong>基类</strong>时不受此限制，故有 EBO。</p>
-</div>
-
-<div class="card">
-<h4>Q2: vptr 放对象首部还是尾部？为什么？</h4>
-<p>放<strong>首部</strong>（Itanium ABI）。原因：</p>
-<ul>
-<li>单继承时 <code>Base*</code> 和 <code>Derived*</code> 指同一地址——<strong>指针零调整</strong>，性能好</li>
-<li>派生类增加成员只影响尾部，不改 vptr 位置</li>
-<li>但多继承下，非 primary base 的 vptr 必然在对象中间</li>
-</ul>
-</div>
-
-<div class="card">
-<h4>Q3: 为什么构造函数中调虚函数不触发多态？</h4>
-<p>每层构造函数执行时，<strong>vptr 正被设置为该层自己的 vtable</strong>。若基类构造中调虚函数，此时派生类对象的派生部分还没构造，vptr 指向基类 vtable，调用的是<strong>基类版本</strong>。析构同理（反方向）。<br>
-<strong>推论</strong>：永远不要在构造/析构中调虚函数，改用两阶段初始化。</p>
-</div>
-
-<div class="card">
-<h4>Q4: 虚函数有多少运行时开销？现代 CPU 能优化吗？</h4>
-<ul>
-<li>每次调用：一次内存读（vptr）+ 一次内存读（vtable 项）+ 一次间接跳转</li>
-<li>间接跳转对 CPU <strong>分支预测</strong>不友好，但现代 CPU 的 <b>indirect branch predictor</b> 对稳定类型能预测准确</li>
-<li>编译器的<strong>去虚化 (devirtualization)</strong> 可消除：final 类/方法、LTO 能看到唯一派生、constexpr 等场景</li>
-</ul>
-<p>实测：热路径 virtual 调用比直接调用慢 10-30%，冷路径几乎看不出。</p>
-</div>
-
-<div class="card">
-<h4>Q5: final 关键字对性能有影响吗？</h4>
-<p>✅ 有。<code>final</code> 告诉编译器该类/方法不会再被继承/覆盖，编译器可以<strong>静态解析</strong>虚调用为直接调用（devirtualization），避免 vtable 查找。LTO 下效果更好。</p>
-<pre><code><span class="kw">class</span> Impl <span class="kw">final</span> : <span class="kw">public</span> Interface { ... };
+<p class="qa-hint">点击每道题展开参考答案（先自测，再对照）。</p>
+<ol class="qa-list">
+  <li><details class="qa">
+    <summary><span class="lvl basic">基础</span>sizeof 空类为什么是 1 不是 0？</summary>
+    <div class="ans">
+  <p>C++ 要求不同对象有不同地址。如果 <code>sizeof(Empty) == 0</code>，数组 <code>Empty a[10]</code> 里所有元素地址相同、指针算术失效。作为<strong>基类</strong>时不受此限制，故有 EBO。</p>
+    </div>
+  </details></li>
+  <li><details class="qa">
+    <summary><span class="lvl mid">中级</span>vptr 放对象首部还是尾部？为什么？</summary>
+    <div class="ans">
+  <p>放<strong>首部</strong>（Itanium ABI）。原因：</p>
+  <ul>
+  <li>单继承时 <code>Base*</code> 和 <code>Derived*</code> 指同一地址——<strong>指针零调整</strong>，性能好</li>
+  <li>派生类增加成员只影响尾部，不改 vptr 位置</li>
+  <li>但多继承下，非 primary base 的 vptr 必然在对象中间</li>
+  </ul>
+    </div>
+  </details></li>
+  <li><details class="qa">
+    <summary><span class="lvl basic">基础</span>为什么构造函数中调虚函数不触发多态？</summary>
+    <div class="ans">
+  <p>每层构造函数执行时，<strong>vptr 正被设置为该层自己的 vtable</strong>。若基类构造中调虚函数，此时派生类对象的派生部分还没构造，vptr 指向基类 vtable，调用的是<strong>基类版本</strong>。析构同理（反方向）。<br>
+  <strong>推论</strong>：永远不要在构造/析构中调虚函数，改用两阶段初始化。</p>
+    </div>
+  </details></li>
+  <li><details class="qa">
+    <summary><span class="lvl mid">中级</span>虚函数有多少运行时开销？现代 CPU 能优化吗？</summary>
+    <div class="ans">
+  <ul>
+  <li>每次调用：一次内存读（vptr）+ 一次内存读（vtable 项）+ 一次间接跳转</li>
+  <li>间接跳转对 CPU <strong>分支预测</strong>不友好，但现代 CPU 的 <b>indirect branch predictor</b> 对稳定类型能预测准确</li>
+  <li>编译器的<strong>去虚化 (devirtualization)</strong> 可消除：final 类/方法、LTO 能看到唯一派生、constexpr 等场景</li>
+  </ul>
+  <p>实测：热路径 virtual 调用比直接调用慢 10-30%，冷路径几乎看不出。</p>
+    </div>
+  </details></li>
+  <li><details class="qa">
+    <summary><span class="lvl mid">中级</span>final 关键字对性能有影响吗？</summary>
+    <div class="ans">
+  <p>✅ 有。<code>final</code> 告诉编译器该类/方法不会再被继承/覆盖，编译器可以<strong>静态解析</strong>虚调用为直接调用（devirtualization），避免 vtable 查找。LTO 下效果更好。</p>
+  <pre><code><span class="kw">class</span> Impl <span class="kw">final</span> : <span class="kw">public</span> Interface { ... };
 Interface* p = <span class="kw">new</span> Impl;
 p-&gt;foo();   <span class="cmt">// 编译器可直接调 Impl::foo，无 vtable</span></code></pre>
-</div>
-
-<div class="card">
-<h4>Q6: 为什么基类析构函数一般要 virtual？什么时候可以不 virtual？</h4>
-<p>通过基类指针 delete 派生对象时，若 ~Base 非 virtual 则只调 Base 析构 → 派生部分资源泄漏。<br>
-<strong>可以不 virtual</strong> 的情况：</p>
-<ul>
-<li>基类设计为<strong>永不被 delete by pointer</strong>（如 CRTP 静态多态的基类）</li>
-<li>通过 <code>protected</code> 析构 + 禁止派生类 delete 的方式控制</li>
-<li>标准库的 <code>std::enable_shared_from_this</code> 等</li>
-</ul>
-</div>
-
-<div class="card">
-<h4>Q7: struct 和 class 有区别吗？</h4>
-<p><strong>语法层面仅 2 点</strong>：① 默认访问权限（struct=public, class=private）；② 默认继承权限同上。<br>
-内存布局、虚函数、模板参数推导等<strong>完全相同</strong>。惯例：纯数据用 struct，有不变式 / 封装的用 class。</p>
-</div>
-
-<div class="card">
-<h4>Q8: 如何查看一个类的真实内存布局？</h4>
-<ul>
-<li><b>Clang</b>: <code>clang -Xclang -fdump-record-layouts -c foo.cpp</code> — 最友好</li>
-<li><b>GCC</b>: <code>g++ -fdump-lang-class foo.cpp</code> 产出 <code>.class</code> 文件</li>
-<li><b>MSVC</b>: <code>/d1 reportSingleClassLayoutClassName</code></li>
-<li><b>pahole</b>（依赖 DWARF）：<code>pahole -C MyClass a.out</code>，直接显示 offset、hole、padding</li>
-<li><b>GDB</b>：<code>ptype /o MyClass</code>（新版支持）或 <code>print &amp;obj.member - (char*)&amp;obj</code></li>
-</ul>
-</div>
-
-<div class="card">
-<h4>Q9: 为什么 std::vector&lt;bool&gt; 被视为设计失误？</h4>
-<p>标准规定它为节省空间特化为<strong>位打包</strong>——每个 bool 占 1 bit。但带来：</p>
-<ul>
-<li><code>operator[]</code> 返回<strong>代理对象</strong>而非 <code>bool&amp;</code>，<code>auto&amp; b = v[0];</code> 不是你想的</li>
-<li>不能取 <code>&amp;v[0]</code> 作为 <code>bool*</code></li>
-<li>非 thread-safe：并发修改相邻 bool 会<strong>冲突写同一 byte</strong>（word tearing）</li>
-<li>违反 Container concept</li>
-</ul>
-<p>替代：<code>std::vector&lt;char&gt;</code>、<code>std::bitset</code>、<code>boost::dynamic_bitset</code>。</p>
-</div>
-
-<div class="card">
-<h4>Q10: 什么是 layout-compatible？有什么用？</h4>
-<p>两个 struct 如果成员序列的类型一一对应兼容，它们是 <strong>layout-compatible</strong>。可以通过 <code>union</code> 共同访问或 <code>reinterpret_cast</code> 合法转换——C++ 标准特别允许此时<strong>读共同初始序列</strong>不是 UB。</p>
-<pre><code><span class="kw">struct</span> Base   { <span class="kw">int</span> tag; };
+    </div>
+  </details></li>
+  <li><details class="qa">
+    <summary><span class="lvl basic">基础</span>为什么基类析构函数一般要 virtual？什么时候可以不 virtual？</summary>
+    <div class="ans">
+  <p>通过基类指针 delete 派生对象时，若 ~Base 非 virtual 则只调 Base 析构 → 派生部分资源泄漏。<br>
+  <strong>可以不 virtual</strong> 的情况：</p>
+  <ul>
+  <li>基类设计为<strong>永不被 delete by pointer</strong>（如 CRTP 静态多态的基类）</li>
+  <li>通过 <code>protected</code> 析构 + 禁止派生类 delete 的方式控制</li>
+  <li>标准库的 <code>std::enable_shared_from_this</code> 等</li>
+  </ul>
+    </div>
+  </details></li>
+  <li><details class="qa">
+    <summary><span class="lvl basic">基础</span>struct 和 class 有区别吗？</summary>
+    <div class="ans">
+  <p><strong>语法层面仅 2 点</strong>：① 默认访问权限（struct=public, class=private）；② 默认继承权限同上。<br>
+  内存布局、虚函数、模板参数推导等<strong>完全相同</strong>。惯例：纯数据用 struct，有不变式 / 封装的用 class。</p>
+    </div>
+  </details></li>
+  <li><details class="qa">
+    <summary><span class="lvl mid">中级</span>如何查看一个类的真实内存布局？</summary>
+    <div class="ans">
+  <ul>
+  <li><b>Clang</b>: <code>clang -Xclang -fdump-record-layouts -c foo.cpp</code> — 最友好</li>
+  <li><b>GCC</b>: <code>g++ -fdump-lang-class foo.cpp</code> 产出 <code>.class</code> 文件</li>
+  <li><b>MSVC</b>: <code>/d1 reportSingleClassLayoutClassName</code></li>
+  <li><b>pahole</b>（依赖 DWARF）：<code>pahole -C MyClass a.out</code>，直接显示 offset、hole、padding</li>
+  <li><b>GDB</b>：<code>ptype /o MyClass</code>（新版支持）或 <code>print &amp;obj.member - (char*)&amp;obj</code></li>
+  </ul>
+    </div>
+  </details></li>
+  <li><details class="qa">
+    <summary><span class="lvl mid">中级</span>为什么 std::vector&lt;bool&gt; 被视为设计失误？</summary>
+    <div class="ans">
+  <p>标准规定它为节省空间特化为<strong>位打包</strong>——每个 bool 占 1 bit。但带来：</p>
+  <ul>
+  <li><code>operator[]</code> 返回<strong>代理对象</strong>而非 <code>bool&amp;</code>，<code>auto&amp; b = v[0];</code> 不是你想的</li>
+  <li>不能取 <code>&amp;v[0]</code> 作为 <code>bool*</code></li>
+  <li>非 thread-safe：并发修改相邻 bool 会<strong>冲突写同一 byte</strong>（word tearing）</li>
+  <li>违反 Container concept</li>
+  </ul>
+  <p>替代：<code>std::vector&lt;char&gt;</code>、<code>std::bitset</code>、<code>boost::dynamic_bitset</code>。</p>
+    </div>
+  </details></li>
+  <li><details class="qa">
+    <summary><span class="lvl adv">高级</span>什么是 layout-compatible？有什么用？</summary>
+    <div class="ans">
+  <p>两个 struct 如果成员序列的类型一一对应兼容，它们是 <strong>layout-compatible</strong>。可以通过 <code>union</code> 共同访问或 <code>reinterpret_cast</code> 合法转换——C++ 标准特别允许此时<strong>读共同初始序列</strong>不是 UB。</p>
+  <pre><code><span class="kw">struct</span> Base   { <span class="kw">int</span> tag; };
 <span class="kw">struct</span> Msg1   { <span class="kw">int</span> tag; <span class="kw">int</span> payload; };
 <span class="kw">struct</span> Msg2   { <span class="kw">int</span> tag; <span class="kw">double</span> payload; };
 <span class="cmt">// 通过读 tag 决定用哪个类型 — C 风格 tagged union</span>
 <span class="kw">union</span> U { Msg1 m1; Msg2 m2; } u;
 <span class="kw">if</span> (u.m1.tag == <span class="num">0</span>) ...   <span class="cmt">// 合法：Msg1 和 Msg2 的初始公共序列是 { int tag; }</span></code></pre>
-</div>
-
+    </div>
+  </details></li>
+</ol>
 <div style="text-align:center;margin-top:3rem;color:var(--dim);font-size:.9rem">
   <p>C++ Object Model Visualization · 2026 · Senior Edition</p>
 </div>
-
-</div><!-- .container -->
 
 <script>
 /* Tabs */

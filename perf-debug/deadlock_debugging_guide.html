@@ -126,7 +126,6 @@
     <div class="t">
       <h2>死锁的四个必要条件 (Coffman Conditions, 1971)</h2>
       <p class="sub">死锁 (Deadlock) 是指两个或多个线程互相持有对方所需的资源，且都不释放，从而进入永久阻塞状态</p>
-      <div class="sub"></div>
     </div>
   </div>
 
@@ -761,8 +760,8 @@ T3     cond_wait           cv_lock                 (信号 from T1/T2)
 <div class="card">
 <h3 id="s4-4">4.4 strace -f -e futex 实时跟踪</h3>
 <pre><span class="prompt">$</span> sudo strace -f -e trace=futex -tt -T -p <span class="num">12345</span> <span class="num">2</span>&gt;&amp;<span class="num">1</span> | head -<span class="num">30</span>
-<span class="out">12345 14:23:45.001234 futex(0x7ffd...mA, FUTEX_WAIT_PRIVATE, 2, NULL <unfinished ...>
-12346 14:23:45.001340 futex(0x7ffd...mB, FUTEX_WAIT_PRIVATE, 2, NULL <unfinished ...>
+<span class="out">12345 14:23:45.001234 futex(0x7ffd...mA, FUTEX_WAIT_PRIVATE, 2, NULL &lt;unfinished ...&gt;
+12346 14:23:45.001340 futex(0x7ffd...mB, FUTEX_WAIT_PRIVATE, 2, NULL &lt;unfinished ...&gt;
                                                                        ↑
                                        一直 unfinished、没有匹配的 FUTEX_WAKE
                                        → 强烈死锁迹象</span></pre>
@@ -982,7 +981,6 @@ HierarchicalMutex low_ (<span class="num">3000</span>);
     <div class="t">
       <h2>C++ 标准库锁机制对比表</h2>
       <p class="sub">性能 &amp; 选型决策树</p>
-      <div class="sub"></div>
     </div>
   </div>
 
@@ -1135,81 +1133,87 @@ HierarchicalMutex low_ (<span class="num">3000</span>);
     <div class="num">07</div>
     <div class="t">
       <h2>面试高频问题与解答</h2>
-      <p class="sub">它实现的是&amp;ldquo</p>
-      <div class="sub"></div>
+      <p class="sub">Coffman 四条件 · 锁层级 · 条件变量谓词 · 线上死锁定位 · 无锁语义</p>
     </div>
   </div>
 
-<div class="card">
-
-<details>
-<summary>Q1. 死锁的四个必要条件是什么？打破任意一个的具体做法？</summary>
-<ul>
-<li><b>互斥</b>：用无锁数据结构（lock-free queue）、不可变对象 (immutable)、RCU；读多写少改用 <code>shared_mutex</code>。</li>
-<li><b>持有并等待</b>：<code>std::lock</code> / <code>std::scoped_lock</code> 一次性原子获取所有锁。</li>
-<li><b>不可抢占</b>：<code>try_lock</code> + 随机退避；<code>timed_mutex::try_lock_for</code> 超时返回。</li>
-<li><b>循环等待</b>：建立全局锁层级 (Lock Hierarchy)，规定从低到高单调申请。</li>
-</ul>
-</details>
-
-<details>
-<summary>Q2. std::lock 是怎么避免死锁的？</summary>
-<p>它实现的是&ldquo;<b>try-and-back-off</b>&rdquo;算法：先 <code>lock()</code> 第一个 mutex，然后对其余的 <code>try_lock()</code>。
-若任何一个 try 失败，就把已经持有的全部 <code>unlock()</code>，等一个非常短的随机时间后重新选起点。
-直到一次能把所有 mutex 都获取成功才返回。这相当于&ldquo;原子获取多锁&rdquo;的语义，无论多个线程以什么顺序调用 <code>std::lock(mA, mB)</code> 都不会死锁。</p>
-</details>
-
-<details>
-<summary>Q3. lock_guard 和 unique_lock 有什么区别？什么时候用哪个？</summary>
-<table>
-<tr><th></th><th>lock_guard</th><th>unique_lock</th></tr>
-<tr><td>构造时自动 lock</td><td>是</td><td>可选 (defer/try/adopt)</td></tr>
-<tr><td>析构时自动 unlock</td><td>是</td><td>是</td></tr>
-<tr><td>可手动 unlock/lock</td><td>否</td><td>是</td></tr>
-<tr><td>可移动</td><td>否</td><td>是</td></tr>
-<tr><td>性能开销</td><td>极低</td><td>多一个 bool 状态</td></tr>
-<tr><td>能配 cv 用</td><td>否</td><td>是 (cv 需要 unlock 等待)</td></tr>
-</table>
-<p>默认用 <code>lock_guard</code>；需要手控解锁、配合 cv、或与 <code>std::lock</code>+<code>defer_lock</code> 配合时改用 <code>unique_lock</code>；需要锁多个 mutex 用 <code>scoped_lock</code>。</p>
-</details>
-
-<details>
-<summary>Q4. std::recursive_mutex 解决什么问题？为什么不推荐？</summary>
-<p>解决&ldquo;同一线程在持锁期间需要再次进入加锁路径&rdquo;的问题（典型如递归算法、回调）。
-不推荐的原因：<br>
-① 性能比普通 mutex 慢 ~1.5× ~ 2×（要维护 owner 和 count）；<br>
-② <strong>掩盖设计问题</strong>——通常说明加锁粒度过大、或者公私接口没有分离；<br>
-③ 让&ldquo;到底持锁多少次&rdquo;变得不可读，不利于审查；<br>
-④ 与 condition_variable 配合复杂（必须用 condition_variable_any）。<br>
-更好做法：把临界区抽成 <code>fooLocked()</code> 私有版本（无锁），公开 <code>foo()</code> 加锁后调用 <code>fooLocked()</code>。</p>
-</details>
-
-<details>
-<summary>Q5. 死锁和活锁 (Livelock) / 饥饿 (Starvation) 的区别？</summary>
-<ul>
-<li><b>死锁</b>：线程<strong>都不动了</strong>，CPU 0%，互相等待，永久阻塞。</li>
-<li><b>活锁</b>：线程都<strong>在动</strong>，CPU 100%，但不断互相让步、永远完不成工作。典型：朴素 <code>try_lock</code> 循环、TCP 电梯效应。解：随机退避。</li>
-<li><b>饥饿</b>：某些线程<strong>永远轮不上锁</strong>，但其他线程在正常工作。典型：写者在大量读者中拿不到 <code>shared_mutex</code> 的写锁。解：公平队列锁、写者优先策略。</li>
-</ul>
-</details>
-
-<details>
-<summary>Q6. 在生产环境怎么定位一个线上死锁？</summary>
-<ol>
-<li><b>监控报警</b>：心跳超时 / RPS 跌零；<code>top -H</code> 看线程是否全部 D/S 状态。</li>
-<li><b>取现场</b>：<code>sudo gcore -o /tmp/core $PID</code>，不杀进程。如果服务无法继续，<code>kill -SIGABRT $PID</code> 触发 systemd-coredump。</li>
-<li><b>下载符号</b>：把 <code>.so</code> 调试符号、<code>core</code>、二进制本身一起 sync 到分析机。</li>
-<li><b>GDB 分析</b>：<code>thread apply all bt full</code>，<code>p mutex.__data.__owner</code> 画 wait-for 图。</li>
-<li><b>修复</b>：调整锁序、改 <code>scoped_lock</code>、缩小临界区、或拆模块用消息队列。</li>
-<li><b>预防</b>：CI 跑 TSan；引入 lock hierarchy；上线前压测。</li>
-</ol>
-</details>
-
-<details>
-<summary>Q7. 条件变量为什么必须配合谓词使用？什么是虚假唤醒 (Spurious Wakeup)？</summary>
-<p><b>虚假唤醒</b>：POSIX 标准规定 <code>pthread_cond_wait</code> 可能在没有任何 <code>signal/broadcast</code> 的情况下返回——这是底层为了实现简单（<code>futex</code> 可能因信号、超时、被错误唤醒）。<br>
-因此<strong>必须用 while 循环</strong>检查条件，而不是 if：</p>
-<pre><span class="bad cmt">// ✗ 错</span>
+<p class="qa-hint">点击每道题展开参考答案（建议先自己复述一遍，再对照）。</p>
+<ol class="qa-list">
+  <li><details class="qa">
+    <summary><span class="lvl basic">基础</span>死锁的四个必要条件是什么？打破任意一个的具体做法？</summary>
+    <div class="ans">
+      <ul>
+      <li><b>互斥</b>：用无锁数据结构（lock-free queue）、不可变对象 (immutable)、RCU；读多写少改用 <code>shared_mutex</code>。</li>
+      <li><b>持有并等待</b>：<code>std::lock</code> / <code>std::scoped_lock</code> 一次性原子获取所有锁。</li>
+      <li><b>不可抢占</b>：<code>try_lock</code> + 随机退避；<code>timed_mutex::try_lock_for</code> 超时返回。</li>
+      <li><b>循环等待</b>：建立全局锁层级 (Lock Hierarchy)，规定从低到高单调申请。</li>
+      </ul>
+    </div>
+  </details></li>
+  <li><details class="qa">
+    <summary><span class="lvl mid">中级</span>std::lock 是怎么避免死锁的？</summary>
+    <div class="ans">
+      <p>它实现的是&ldquo;<b>try-and-back-off</b>&rdquo;算法：先 <code>lock()</code> 第一个 mutex，然后对其余的 <code>try_lock()</code>。
+      若任何一个 try 失败，就把已经持有的全部 <code>unlock()</code>，等一个非常短的随机时间后重新选起点。
+      直到一次能把所有 mutex 都获取成功才返回。这相当于&ldquo;原子获取多锁&rdquo;的语义，无论多个线程以什么顺序调用 <code>std::lock(mA, mB)</code> 都不会死锁。</p>
+    </div>
+  </details></li>
+  <li><details class="qa">
+    <summary><span class="lvl basic">基础</span>lock_guard 和 unique_lock 有什么区别？什么时候用哪个？</summary>
+    <div class="ans">
+      <table>
+      <tr><th></th><th>lock_guard</th><th>unique_lock</th></tr>
+      <tr><td>构造时自动 lock</td><td>是</td><td>可选 (defer/try/adopt)</td></tr>
+      <tr><td>析构时自动 unlock</td><td>是</td><td>是</td></tr>
+      <tr><td>可手动 unlock/lock</td><td>否</td><td>是</td></tr>
+      <tr><td>可移动</td><td>否</td><td>是</td></tr>
+      <tr><td>性能开销</td><td>极低</td><td>多一个 bool 状态</td></tr>
+      <tr><td>能配 cv 用</td><td>否</td><td>是 (cv 需要 unlock 等待)</td></tr>
+      </table>
+      <p>默认用 <code>lock_guard</code>；需要手控解锁、配合 cv、或与 <code>std::lock</code>+<code>defer_lock</code> 配合时改用 <code>unique_lock</code>；需要锁多个 mutex 用 <code>scoped_lock</code>。</p>
+    </div>
+  </details></li>
+  <li><details class="qa">
+    <summary><span class="lvl mid">中级</span>std::recursive_mutex 解决什么问题？为什么不推荐？</summary>
+    <div class="ans">
+      <p>解决&ldquo;同一线程在持锁期间需要再次进入加锁路径&rdquo;的问题（典型如递归算法、回调）。
+      不推荐的原因：<br>
+      ① 性能比普通 mutex 慢 ~1.5× ~ 2×（要维护 owner 和 count）；<br>
+      ② <strong>掩盖设计问题</strong>——通常说明加锁粒度过大、或者公私接口没有分离；<br>
+      ③ 让&ldquo;到底持锁多少次&rdquo;变得不可读，不利于审查；<br>
+      ④ 与 condition_variable 配合复杂（必须用 condition_variable_any）。<br>
+      更好做法：把临界区抽成 <code>fooLocked()</code> 私有版本（无锁），公开 <code>foo()</code> 加锁后调用 <code>fooLocked()</code>。</p>
+    </div>
+  </details></li>
+  <li><details class="qa">
+    <summary><span class="lvl basic">基础</span>死锁和活锁 (Livelock) / 饥饿 (Starvation) 的区别？</summary>
+    <div class="ans">
+      <ul>
+      <li><b>死锁</b>：线程<strong>都不动了</strong>，CPU 0%，互相等待，永久阻塞。</li>
+      <li><b>活锁</b>：线程都<strong>在动</strong>，CPU 100%，但不断互相让步、永远完不成工作。典型：朴素 <code>try_lock</code> 循环、TCP 电梯效应。解：随机退避。</li>
+      <li><b>饥饿</b>：某些线程<strong>永远轮不上锁</strong>，但其他线程在正常工作。典型：写者在大量读者中拿不到 <code>shared_mutex</code> 的写锁。解：公平队列锁、写者优先策略。</li>
+      </ul>
+    </div>
+  </details></li>
+  <li><details class="qa">
+    <summary><span class="lvl adv">高级</span>在生产环境怎么定位一个线上死锁？</summary>
+    <div class="ans">
+      <ol>
+      <li><b>监控报警</b>：心跳超时 / RPS 跌零；<code>top -H</code> 看线程是否全部 D/S 状态。</li>
+      <li><b>取现场</b>：<code>sudo gcore -o /tmp/core $PID</code>，不杀进程。如果服务无法继续，<code>kill -SIGABRT $PID</code> 触发 systemd-coredump。</li>
+      <li><b>下载符号</b>：把 <code>.so</code> 调试符号、<code>core</code>、二进制本身一起 sync 到分析机。</li>
+      <li><b>GDB 分析</b>：<code>thread apply all bt full</code>，<code>p mutex.__data.__owner</code> 画 wait-for 图。</li>
+      <li><b>修复</b>：调整锁序、改 <code>scoped_lock</code>、缩小临界区、或拆模块用消息队列。</li>
+      <li><b>预防</b>：CI 跑 TSan；引入 lock hierarchy；上线前压测。</li>
+      </ol>
+    </div>
+  </details></li>
+  <li><details class="qa">
+    <summary><span class="lvl mid">中级</span>条件变量为什么必须配合谓词使用？什么是虚假唤醒 (Spurious Wakeup)？</summary>
+    <div class="ans">
+      <p><b>虚假唤醒</b>：POSIX 标准规定 <code>pthread_cond_wait</code> 可能在没有任何 <code>signal/broadcast</code> 的情况下返回——这是底层为了实现简单（<code>futex</code> 可能因信号、超时、被错误唤醒）。<br>
+      因此<strong>必须用 while 循环</strong>检查条件，而不是 if：</p>
+      <pre><span class="bad cmt">// ✗ 错</span>
 <span class="kw">if</span> (!ready) cv.wait(lk);
 
 <span class="good cmt">// ✓ 对（手写循环）</span>
@@ -1217,57 +1221,62 @@ HierarchicalMutex low_ (<span class="num">3000</span>);
 
 <span class="good cmt">// ✓ 推荐（lambda 谓词版本，标准库内部就是 while）</span>
 cv.wait(lk, []{ <span class="kw">return</span> ready; });</pre>
-<p>另外，谓词还能防止 <b>lost signal</b>：如果 producer 在 consumer 进入 <code>wait()</code> 前就 <code>notify_one()</code>，没谓词就会丢失信号；带谓词时 consumer 进 wait 前先检查谓词，已满足就直接跳过等待。</p>
-</details>
-
-<details>
-<summary>Q8. 怎么在编码阶段就预防死锁？</summary>
-<ul>
-<li><strong>规范</strong>：约定全局锁序文档，锁名带层级前缀（如 <code>l1_config_mu_</code>）。</li>
-<li><strong>禁手写</strong>：禁用裸 <code>lock()/unlock()</code>，code review 自动拒绝。</li>
-<li><strong>scoped_lock 优先</strong>：但凡 ≥ 2 把锁，强制 <code>std::scoped_lock</code>。</li>
-<li><strong>临界区原则</strong>：① 不在锁内做 I/O；② 不在锁内回调用户函数；③ 不在锁内发送消息或申请其他锁。</li>
-<li><strong>不变量审查</strong>：每个共享数据结构标注 &ldquo;guarded by mutex_xxx&rdquo;（GCC <code>__attribute__((guarded_by(mu)))</code> 或 Clang Thread Safety Analysis）。</li>
-<li><strong>测试</strong>：CI 跑 TSan，发版前压测 24h+。</li>
-</ul>
-</details>
-
-<details>
-<summary>Q9. 什么是 Lock-free / Wait-free / Obstruction-free？</summary>
-<ul>
-<li><b>Obstruction-free</b>：任意线程在没有竞争时能在有限步内完成。最弱保证，不能保证整体进度。</li>
-<li><b>Lock-free</b>：<strong>系统整体</strong>能在有限步内取得进度，但单个线程可能永远饥饿。例如 CAS 循环算法。</li>
-<li><b>Wait-free</b>：<strong>每个线程</strong>都能在有限步内完成。最强保证，工程实现极难。</li>
-</ul>
-<p>从 Lock-free 到死锁免疫并不等同——lock-free 不会死锁，但可能 livelock（无限重试）。</p>
-</details>
-
-<details>
-<summary>Q10. shared_mutex 为什么容易死锁？</summary>
-<p>三种典型陷阱：</p>
-<ol>
-<li><b>读升写死锁</b>：N 个线程持读锁后<strong>同时</strong>申请写锁——所有人都等其他人释放读锁。</li>
-<li><b>写者饥饿</b>：读者源源不断进入，写者永远拿不到写锁。需要公平队列锁实现 (gcc 11+ 已部分修复)。</li>
-<li><b>嵌套读读死锁</b>：某些 <code>shared_mutex</code> 实现不允许同线程递归 <code>lock_shared()</code>，会死锁；规范未严格定义。</li>
-</ol>
-<p>建议：除非读写比 &gt; 10:1 且临界区耗时 &gt; 1µs，否则 <code>std::mutex</code> 已足够；性能更易预测。</p>
-</details>
-
-<details>
-<summary>Q11. Linux 下 mutex 是怎么实现的？为什么死锁时 CPU 占用是 0？</summary>
-<p>glibc 的 <code>pthread_mutex</code> 基于 <strong>futex</strong> (fast userspace mutex)：</p>
-<ul>
-<li>无竞争时，<code>lock()</code> 仅是一次 <code>cmpxchg</code>（原子指令），完全在用户态完成，开销 ~10ns。</li>
-<li>有竞争时，调用 <code>futex(FUTEX_WAIT)</code> 系统调用让线程进入<strong>内核睡眠队列</strong>。</li>
-<li>持有者 <code>unlock()</code> 时调 <code>futex(FUTEX_WAKE)</code> 唤醒一个等待者。</li>
-</ul>
-<p>因此死锁时所有线程都阻塞在内核 <code>futex_wait_queue_me</code>，CPU 调度器给它们 0 时间片——表现为 CPU 0%、进程仍存活。这也是为什么 <code>strace -e futex</code> 是诊断利器。</p>
-</details>
-
-<details>
-<summary>Q12. 用 C++ 实现一个简单的 DeadlockDetector 思路？</summary>
-<p>核心：维护一张全局 <strong>有向图</strong>「线程 → 等待的锁 → 锁的持有者 → ...」，每次 <code>lock()</code> 加边、检查是否成环。</p>
-<pre><span class="kw">class</span> <span class="type">DeadlockDetectingMutex</span> {
+      <p>另外，谓词还能防止 <b>lost signal</b>：如果 producer 在 consumer 进入 <code>wait()</code> 前就 <code>notify_one()</code>，没谓词就会丢失信号；带谓词时 consumer 进 wait 前先检查谓词，已满足就直接跳过等待。</p>
+    </div>
+  </details></li>
+  <li><details class="qa">
+    <summary><span class="lvl mid">中级</span>怎么在编码阶段就预防死锁？</summary>
+    <div class="ans">
+      <ul>
+      <li><strong>规范</strong>：约定全局锁序文档，锁名带层级前缀（如 <code>l1_config_mu_</code>）。</li>
+      <li><strong>禁手写</strong>：禁用裸 <code>lock()/unlock()</code>，code review 自动拒绝。</li>
+      <li><strong>scoped_lock 优先</strong>：但凡 ≥ 2 把锁，强制 <code>std::scoped_lock</code>。</li>
+      <li><strong>临界区原则</strong>：① 不在锁内做 I/O；② 不在锁内回调用户函数；③ 不在锁内发送消息或申请其他锁。</li>
+      <li><strong>不变量审查</strong>：每个共享数据结构标注 &ldquo;guarded by mutex_xxx&rdquo;（GCC <code>__attribute__((guarded_by(mu)))</code> 或 Clang Thread Safety Analysis）。</li>
+      <li><strong>测试</strong>：CI 跑 TSan，发版前压测 24h+。</li>
+      </ul>
+    </div>
+  </details></li>
+  <li><details class="qa">
+    <summary><span class="lvl adv">高级</span>什么是 Lock-free / Wait-free / Obstruction-free？</summary>
+    <div class="ans">
+      <ul>
+      <li><b>Obstruction-free</b>：任意线程在没有竞争时能在有限步内完成。最弱保证，不能保证整体进度。</li>
+      <li><b>Lock-free</b>：<strong>系统整体</strong>能在有限步内取得进度，但单个线程可能永远饥饿。例如 CAS 循环算法。</li>
+      <li><b>Wait-free</b>：<strong>每个线程</strong>都能在有限步内完成。最强保证，工程实现极难。</li>
+      </ul>
+      <p>从 Lock-free 到死锁免疫并不等同——lock-free 不会死锁，但可能 livelock（无限重试）。</p>
+    </div>
+  </details></li>
+  <li><details class="qa">
+    <summary><span class="lvl adv">高级</span>shared_mutex 为什么容易死锁？</summary>
+    <div class="ans">
+      <p>三种典型陷阱：</p>
+      <ol>
+      <li><b>读升写死锁</b>：N 个线程持读锁后<strong>同时</strong>申请写锁——所有人都等其他人释放读锁。</li>
+      <li><b>写者饥饿</b>：读者源源不断进入，写者永远拿不到写锁。需要公平队列锁实现 (gcc 11+ 已部分修复)。</li>
+      <li><b>嵌套读读死锁</b>：某些 <code>shared_mutex</code> 实现不允许同线程递归 <code>lock_shared()</code>，会死锁；规范未严格定义。</li>
+      </ol>
+      <p>建议：除非读写比 &gt; 10:1 且临界区耗时 &gt; 1µs，否则 <code>std::mutex</code> 已足够；性能更易预测。</p>
+    </div>
+  </details></li>
+  <li><details class="qa">
+    <summary><span class="lvl adv">高级</span>Linux 下 mutex 是怎么实现的？为什么死锁时 CPU 占用是 0？</summary>
+    <div class="ans">
+      <p>glibc 的 <code>pthread_mutex</code> 基于 <strong>futex</strong> (fast userspace mutex)：</p>
+      <ul>
+      <li>无竞争时，<code>lock()</code> 仅是一次 <code>cmpxchg</code>（原子指令），完全在用户态完成，开销 ~10ns。</li>
+      <li>有竞争时，调用 <code>futex(FUTEX_WAIT)</code> 系统调用让线程进入<strong>内核睡眠队列</strong>。</li>
+      <li>持有者 <code>unlock()</code> 时调 <code>futex(FUTEX_WAKE)</code> 唤醒一个等待者。</li>
+      </ul>
+      <p>因此死锁时所有线程都阻塞在内核 <code>futex_wait_queue_me</code>，CPU 调度器给它们 0 时间片——表现为 CPU 0%、进程仍存活。这也是为什么 <code>strace -e futex</code> 是诊断利器。</p>
+    </div>
+  </details></li>
+  <li><details class="qa">
+    <summary><span class="lvl adv">高级</span>用 C++ 实现一个简单的 DeadlockDetector 思路？</summary>
+    <div class="ans">
+      <p>核心：维护一张全局 <strong>有向图</strong>「线程 → 等待的锁 → 锁的持有者 → ...」，每次 <code>lock()</code> 加边、检查是否成环。</p>
+      <pre><span class="kw">class</span> <span class="type">DeadlockDetectingMutex</span> {
     <span class="type">std::mutex</span> internal_;
     std::atomic&lt;<span class="type">std::thread::id</span>&gt; owner_{};
 <span class="kw">public</span>:
@@ -1286,10 +1295,10 @@ cv.wait(lk, []{ <span class="kw">return</span> ready; });</pre>
         internal_.unlock();
     }
 };</pre>
-<p>真实库：<a style="color:var(--accent)" href="https://www.boost.org/doc/libs/release/doc/html/thread/synchronization.html">Boost.Thread</a> 的实验性 <code>strict_lock</code>、<a style="color:var(--accent)" href="https://github.com/google/abseil-cpp">Abseil</a> 的 <code>Mutex</code> 自带死锁检测、Folly 的 <code>folly::SharedMutex</code>。</p>
-</details>
-
-</div>
+      <p>真实库：<a style="color:var(--accent)" href="https://www.boost.org/doc/libs/release/doc/html/thread/synchronization.html">Boost.Thread</a> 的实验性 <code>strict_lock</code>、<a style="color:var(--accent)" href="https://github.com/google/abseil-cpp">Abseil</a> 的 <code>Mutex</code> 自带死锁检测、Folly 的 <code>folly::SharedMutex</code>。</p>
+    </div>
+  </details></li>
+</ol>
 
 <!-- ============================================================== -->
 <!-- SECTION 8 -->

@@ -172,7 +172,6 @@
     <div class="t">
       <h2>Crash 信号分类</h2>
       <p class="sub">信号产生的内核流程示意 · 哪些信号会产生 core dump?</p>
-      <div class="sub"></div>
     </div>
   </div>
 
@@ -1096,150 +1095,139 @@ CHECK(mutex_.try_lock_for(<span class="num">5</span>s));    <span class="cm">// 
     <div class="num">07</div>
     <div class="t">
       <h2>面试高频问题与解答</h2>
-      <p class="sub">SIGSEGV：访问的虚拟地址没有合法的 VMA 映射，或访问权限不符（如写只读段）</p>
-      <div class="sub"></div>
+      <p class="sub">信号辨析 · core 取证 · 多线程定位肇事线程 · 偶发 crash 的系统化排查</p>
     </div>
   </div>
 
-<div class="card">
-
-<details>
-<summary>Q1：SIGSEGV 和 SIGBUS 有什么区别？</summary>
-<div>
-<p><b>SIGSEGV</b>：访问的虚拟地址<b>没有合法的 VMA 映射</b>，或访问权限不符（如写只读段）。最常见就是空指针/野指针解引用。</p>
-<p><b>SIGBUS</b>：虚拟地址<b>有合法 VMA</b>，但物理上无法满足。典型场景：<br>
-&nbsp;&nbsp;1) <code>mmap</code> 文件后文件被 <code>truncate</code>，再访问超出文件长度的页面；<br>
-&nbsp;&nbsp;2) 在 ARM/SPARC 等严格对齐架构上未对齐访问 (<code>load</code> 一个未 4 字节对齐的 int)；<br>
-&nbsp;&nbsp;3) 写入磁盘已满的 mmap。</p>
-</div>
-</details>
-
-<details>
-<summary>Q2：Core dump 文件里有哪些关键信息？为什么有时调试看到 ?? ??</summary>
-<div>
-<p>Core 文件是 <b>ELF Core 类型</b>，包含 <code>PT_NOTE</code>（NT_PRSTATUS 寄存器、NT_PRPSINFO 进程信息、NT_SIGINFO 出错地址、NT_FILE mmap 表、NT_AUXV 辅助向量、NT_FPREGSET 浮点寄存器）和 <code>PT_LOAD</code>（按 <code>coredump_filter</code> 选择的内存段：栈、堆、数据、可选的代码段）。</p>
-<p>看到 <code>?? ??</code> 通常因为：<br>
-&nbsp;&nbsp;1) 二进制 / .so 不带调试符号（被 <code>strip</code>）；<br>
-&nbsp;&nbsp;2) build-id 不匹配；<br>
-&nbsp;&nbsp;3) 栈被破坏，回溯失败（<code>bt</code> 找不到 frame）；<br>
-&nbsp;&nbsp;4) JIT / 动态生成代码（如 V8、JVM）。</p>
-</div>
-</details>
-
-<details>
-<summary>Q3：怎么区分 "double free" 和 "use-after-free"？</summary>
-<div>
-<p>都触发 SIGABRT，但报错文案不同：</p>
-<ul>
-  <li><b>double free</b>：glibc 报 <code>double free or corruption</code>，在 <code>free()</code> 检查 fastbin/tcache 链表时发现刚刚释放过的 chunk。</li>
-  <li><b>use-after-free</b>：glibc 不一定报错；表现为 SIGSEGV（地址被 unmap）、随机崩溃、数据错乱。要靠 ASan / Valgrind 才能精确定位。</li>
-</ul>
-<p>定位首选 ASan：<code>-fsanitize=address</code>，会同时给出"分配栈 / 释放栈 / 访问栈"三条调用栈。</p>
-</div>
-</details>
-
-<details>
-<summary>Q4：在多线程程序里 GDB 看到 main 线程在 abort，怎么找真正的肇事线程？</summary>
-<div>
-<p>步骤：</p>
-<ol>
-  <li><code>info threads</code> 列所有线程</li>
-  <li><code>thread apply all bt</code> 拿到所有线程栈快照</li>
-  <li>在所有栈里搜：<code>__cxa_throw</code>、<code>std::terminate</code>、<code>__assert_fail</code>、<code>__stack_chk_fail</code>、<code>raise</code>、<code>__libc_message</code>、应用层 panic 函数</li>
-  <li>找到栈顶位于这些"陷阱函数"的线程，那就是肇事者</li>
-  <li>切过去 <code>thread N</code>，沿 <code>frame</code> 向上看业务代码</li>
-</ol>
-<p>注意：很多场景肇事线程触发同步信号后<b>异步通知</b>了主线程 / signal handler 线程，主线程上看到的 <code>abort</code> 不是真正的源头。</p>
-</div>
-</details>
-
-<details>
-<summary>Q5：std::shared_ptr 是线程安全的吗？</summary>
-<div>
-<p>分两层：</p>
-<ul>
-  <li><b>控制块（引用计数）</b>：<b>线程安全</b>。多个线程对<b>不同 shared_ptr 实例</b>但指向同一对象的拷贝/赋值/析构是安全的。</li>
-  <li><b>同一个 shared_ptr 实例</b>：<b>不是</b>线程安全。两个线程同时对同一个对象 reset/赋值，需要外部同步，或者使用 <code>std::atomic&lt;std::shared_ptr&lt;T&gt;&gt;</code> (C++20) / <code>std::atomic_load/store</code> (旧)。</li>
-  <li><b>指向的对象</b>：和普通对象一样，需要业务自己保证线程安全。</li>
-</ul>
-</div>
-</details>
-
-<details>
-<summary>Q6：noexcept 的真正含义是什么？写错有什么后果？</summary>
-<div>
-<p><code>noexcept</code> 是<b>承诺</b>该函数不会抛异常。如果违反：</p>
-<ul>
-  <li>编译器可生成<b>更优代码</b>（不需要异常清理路径，move 操作可被容器优先选择）</li>
-  <li>真抛了：直接调用 <code>std::terminate</code> → SIGABRT，<b>不进行栈展开</b>，析构函数也不跑</li>
-</ul>
-<p>典型规则：</p>
-<ul>
-  <li>析构函数默认 <code>noexcept(true)</code>，绝不要在析构里抛</li>
-  <li>移动构造 / 移动赋值标 <code>noexcept</code>（否则 vector 扩容时会退化为 copy）</li>
-  <li>swap / 简单 getter 标 <code>noexcept</code></li>
-</ul>
-</div>
-</details>
-
-<details>
-<summary>Q7：Stack Overflow 在 Linux 上是怎么被检测到的？</summary>
-<div>
-<p>Linux 在每个线程栈的最低端放一个或多个 <b>guard page</b>（<code>PROT_NONE</code>）。当栈增长触到这页：</p>
-<ol>
-  <li>CPU 触发 page fault</li>
-  <li>内核 <code>do_page_fault</code> 检查 VMA 是 <code>PROT_NONE</code></li>
-  <li>对栈段还会判断 <code>expand_stack</code> 是否能扩展；若已到上限则发 <code>SIGSEGV</code></li>
-</ol>
-<p>编译器加 <code>-fstack-protector-strong</code> 后，函数 prologue 在栈上放 canary，epilogue 检查；被破坏则调用 <code>__stack_chk_fail</code> → SIGABRT。</p>
-<p>线程栈大小通过 <code>pthread_attr_setstacksize</code> 或 <code>ulimit -s</code> 调整。</p>
-</div>
-</details>
-
-<details>
-<summary>Q8：什么时候应该用 std::atomic 而不是 mutex？</summary>
-<div>
-<ul>
-  <li><b>单一标志位 / 计数器</b>：用 atomic（如 <code>running_</code>、<code>refcount</code>）</li>
-  <li><b>读多写少 / 单生产单消费</b>：atomic 配合正确的 memory_order，无锁队列</li>
-  <li><b>多字段需要保持一致</b>：必须用 mutex，原子操作只能是单一变量</li>
-  <li><b>需要等待事件</b>：condition_variable + mutex；atomic 配 <code>wait()</code> (C++20) 也可以</li>
-</ul>
-<p>误区：以为 atomic 一定比 mutex 快。实际上：高竞争下 mutex 让线程睡眠节省 CPU；atomic 自旋反而浪费。 总线锁 (LOCK 前缀) 也不便宜，约 10-100ns。</p>
-</div>
-</details>
-
-<details>
-<summary>Q9：condition_variable 的 spurious wakeup 怎么处理？</summary>
-<div>
-<p>POSIX 允许 <code>pthread_cond_wait</code> 在没有 notify 时也唤醒。所以必须在 while 循环中检查谓词：</p>
-<pre><code>std::unique_lock lk(m);
+<p class="qa-hint">点击每道题展开参考答案（建议先自己复述一遍，再对照）。</p>
+<ol class="qa-list">
+  <li><details class="qa">
+    <summary><span class="lvl basic">基础</span>SIGSEGV 和 SIGBUS 有什么区别？</summary>
+    <div class="ans">
+      <p><b>SIGSEGV</b>：访问的虚拟地址<b>没有合法的 VMA 映射</b>，或访问权限不符（如写只读段）。最常见就是空指针/野指针解引用。</p>
+      <p><b>SIGBUS</b>：虚拟地址<b>有合法 VMA</b>，但物理上无法满足。典型场景：<br>
+      &nbsp;&nbsp;1) <code>mmap</code> 文件后文件被 <code>truncate</code>，再访问超出文件长度的页面；<br>
+      &nbsp;&nbsp;2) 在 ARM/SPARC 等严格对齐架构上未对齐访问 (<code>load</code> 一个未 4 字节对齐的 int)；<br>
+      &nbsp;&nbsp;3) 写入磁盘已满的 mmap。</p>
+    </div>
+  </details></li>
+  <li><details class="qa">
+    <summary><span class="lvl basic">基础</span>Core dump 文件里有哪些关键信息？为什么有时调试看到 ?? ??</summary>
+    <div class="ans">
+      <p>Core 文件是 <b>ELF Core 类型</b>，包含 <code>PT_NOTE</code>（NT_PRSTATUS 寄存器、NT_PRPSINFO 进程信息、NT_SIGINFO 出错地址、NT_FILE mmap 表、NT_AUXV 辅助向量、NT_FPREGSET 浮点寄存器）和 <code>PT_LOAD</code>（按 <code>coredump_filter</code> 选择的内存段：栈、堆、数据、可选的代码段）。</p>
+      <p>看到 <code>?? ??</code> 通常因为：<br>
+      &nbsp;&nbsp;1) 二进制 / .so 不带调试符号（被 <code>strip</code>）；<br>
+      &nbsp;&nbsp;2) build-id 不匹配；<br>
+      &nbsp;&nbsp;3) 栈被破坏，回溯失败（<code>bt</code> 找不到 frame）；<br>
+      &nbsp;&nbsp;4) JIT / 动态生成代码（如 V8、JVM）。</p>
+    </div>
+  </details></li>
+  <li><details class="qa">
+    <summary><span class="lvl mid">中级</span>怎么区分 "double free" 和 "use-after-free"？</summary>
+    <div class="ans">
+      <p>都触发 SIGABRT，但报错文案不同：</p>
+      <ul>
+        <li><b>double free</b>：glibc 报 <code>double free or corruption</code>，在 <code>free()</code> 检查 fastbin/tcache 链表时发现刚刚释放过的 chunk。</li>
+        <li><b>use-after-free</b>：glibc 不一定报错；表现为 SIGSEGV（地址被 unmap）、随机崩溃、数据错乱。要靠 ASan / Valgrind 才能精确定位。</li>
+      </ul>
+      <p>定位首选 ASan：<code>-fsanitize=address</code>，会同时给出"分配栈 / 释放栈 / 访问栈"三条调用栈。</p>
+    </div>
+  </details></li>
+  <li><details class="qa">
+    <summary><span class="lvl mid">中级</span>在多线程程序里 GDB 看到 main 线程在 abort，怎么找真正的肇事线程？</summary>
+    <div class="ans">
+      <p>步骤：</p>
+      <ol>
+        <li><code>info threads</code> 列所有线程</li>
+        <li><code>thread apply all bt</code> 拿到所有线程栈快照</li>
+        <li>在所有栈里搜：<code>__cxa_throw</code>、<code>std::terminate</code>、<code>__assert_fail</code>、<code>__stack_chk_fail</code>、<code>raise</code>、<code>__libc_message</code>、应用层 panic 函数</li>
+        <li>找到栈顶位于这些"陷阱函数"的线程，那就是肇事者</li>
+        <li>切过去 <code>thread N</code>，沿 <code>frame</code> 向上看业务代码</li>
+      </ol>
+      <p>注意：很多场景肇事线程触发同步信号后<b>异步通知</b>了主线程 / signal handler 线程，主线程上看到的 <code>abort</code> 不是真正的源头。</p>
+    </div>
+  </details></li>
+  <li><details class="qa">
+    <summary><span class="lvl mid">中级</span>std::shared_ptr 是线程安全的吗？</summary>
+    <div class="ans">
+      <p>分两层：</p>
+      <ul>
+        <li><b>控制块（引用计数）</b>：<b>线程安全</b>。多个线程对<b>不同 shared_ptr 实例</b>但指向同一对象的拷贝/赋值/析构是安全的。</li>
+        <li><b>同一个 shared_ptr 实例</b>：<b>不是</b>线程安全。两个线程同时对同一个对象 reset/赋值，需要外部同步，或者使用 <code>std::atomic&lt;std::shared_ptr&lt;T&gt;&gt;</code> (C++20) / <code>std::atomic_load/store</code> (旧)。</li>
+        <li><b>指向的对象</b>：和普通对象一样，需要业务自己保证线程安全。</li>
+      </ul>
+    </div>
+  </details></li>
+  <li><details class="qa">
+    <summary><span class="lvl mid">中级</span>noexcept 的真正含义是什么？写错有什么后果？</summary>
+    <div class="ans">
+      <p><code>noexcept</code> 是<b>承诺</b>该函数不会抛异常。如果违反：</p>
+      <ul>
+        <li>编译器可生成<b>更优代码</b>（不需要异常清理路径，move 操作可被容器优先选择）</li>
+        <li>真抛了：直接调用 <code>std::terminate</code> → SIGABRT，<b>不进行栈展开</b>，析构函数也不跑</li>
+      </ul>
+      <p>典型规则：</p>
+      <ul>
+        <li>析构函数默认 <code>noexcept(true)</code>，绝不要在析构里抛</li>
+        <li>移动构造 / 移动赋值标 <code>noexcept</code>（否则 vector 扩容时会退化为 copy）</li>
+        <li>swap / 简单 getter 标 <code>noexcept</code></li>
+      </ul>
+    </div>
+  </details></li>
+  <li><details class="qa">
+    <summary><span class="lvl adv">高级</span>Stack Overflow 在 Linux 上是怎么被检测到的？</summary>
+    <div class="ans">
+      <p>Linux 在每个线程栈的最低端放一个或多个 <b>guard page</b>（<code>PROT_NONE</code>）。当栈增长触到这页：</p>
+      <ol>
+        <li>CPU 触发 page fault</li>
+        <li>内核 <code>do_page_fault</code> 检查 VMA 是 <code>PROT_NONE</code></li>
+        <li>对栈段还会判断 <code>expand_stack</code> 是否能扩展；若已到上限则发 <code>SIGSEGV</code></li>
+      </ol>
+      <p>编译器加 <code>-fstack-protector-strong</code> 后，函数 prologue 在栈上放 canary，epilogue 检查；被破坏则调用 <code>__stack_chk_fail</code> → SIGABRT。</p>
+      <p>线程栈大小通过 <code>pthread_attr_setstacksize</code> 或 <code>ulimit -s</code> 调整。</p>
+    </div>
+  </details></li>
+  <li><details class="qa">
+    <summary><span class="lvl mid">中级</span>什么时候应该用 std::atomic 而不是 mutex？</summary>
+    <div class="ans">
+      <ul>
+        <li><b>单一标志位 / 计数器</b>：用 atomic（如 <code>running_</code>、<code>refcount</code>）</li>
+        <li><b>读多写少 / 单生产单消费</b>：atomic 配合正确的 memory_order，无锁队列</li>
+        <li><b>多字段需要保持一致</b>：必须用 mutex，原子操作只能是单一变量</li>
+        <li><b>需要等待事件</b>：condition_variable + mutex；atomic 配 <code>wait()</code> (C++20) 也可以</li>
+      </ul>
+      <p>误区：以为 atomic 一定比 mutex 快。实际上：高竞争下 mutex 让线程睡眠节省 CPU；atomic 自旋反而浪费。 总线锁 (LOCK 前缀) 也不便宜，约 10-100ns。</p>
+    </div>
+  </details></li>
+  <li><details class="qa">
+    <summary><span class="lvl mid">中级</span>condition_variable 的 spurious wakeup 怎么处理？</summary>
+    <div class="ans">
+      <p>POSIX 允许 <code>pthread_cond_wait</code> 在没有 notify 时也唤醒。所以必须在 while 循环中检查谓词：</p>
+      <pre><code>std::unique_lock lk(m);
 cv.wait(lk, [&amp;]{ <span class="kw">return</span> ready; });   <span class="cm">// 等价 while (!ready) cv.wait(lk);</span></code></pre>
-<p>另一个常见 bug：notify 之前没在持锁状态下修改谓词，导致 notify 在 wait 之前发生（lost wakeup）。正确做法：</p>
-<pre><code>{
+      <p>另一个常见 bug：notify 之前没在持锁状态下修改谓词，导致 notify 在 wait 之前发生（lost wakeup）。正确做法：</p>
+      <pre><code>{
     std::lock_guard lk(m);
     ready = <span class="kw">true</span>;          <span class="cm">// 持锁修改</span>
 }
 cv.notify_one();           <span class="cm">// 释放锁后通知（可优化等待者唤醒后立刻拿锁）</span></code></pre>
-</div>
-</details>
-
-<details>
-<summary>Q10：生产环境进程偶发 crash，如何系统化排查？</summary>
-<div>
-<ol>
-  <li><b>取证</b>：保存 core 文件 + 二进制 + 所有 .so + dmesg + journalctl + 业务日志（同一时间窗）</li>
-  <li><b>初判</b>：<code>file core</code>、<code>readelf -n core | grep PRSTATUS</code> 看信号；<code>dmesg</code> 看 segfault 行</li>
-  <li><b>定栈</b>：gdb + <code>thread apply all bt</code>；用 build-id 对齐符号；区分崩溃线程</li>
-  <li><b>分类</b>：根据信号 + 栈顶函数划归 4.x 节中的某一类（空指针 / UAF / 越界 / race / 栈溢 / 异常）</li>
-  <li><b>复现</b>：在测试机用 ASan/TSan 重新编译；输入回放 / fuzz / 压测</li>
-  <li><b>修复</b>：明确根因后改代码；写回归用例</li>
-  <li><b>加固</b>：在该路径加 contract 检查、metric、超时；添加 sanitizer CI；把 core_pattern + ulimit 检查加进部署 healthcheck</li>
+    </div>
+  </details></li>
+  <li><details class="qa">
+    <summary><span class="lvl adv">高级</span>生产环境进程偶发 crash，如何系统化排查？</summary>
+    <div class="ans">
+      <ol>
+        <li><b>取证</b>：保存 core 文件 + 二进制 + 所有 .so + dmesg + journalctl + 业务日志（同一时间窗）</li>
+        <li><b>初判</b>：<code>file core</code>、<code>readelf -n core | grep PRSTATUS</code> 看信号；<code>dmesg</code> 看 segfault 行</li>
+        <li><b>定栈</b>：gdb + <code>thread apply all bt</code>；用 build-id 对齐符号；区分崩溃线程</li>
+        <li><b>分类</b>：根据信号 + 栈顶函数划归 4.x 节中的某一类（空指针 / UAF / 越界 / race / 栈溢 / 异常）</li>
+        <li><b>复现</b>：在测试机用 ASan/TSan 重新编译；输入回放 / fuzz / 压测</li>
+        <li><b>修复</b>：明确根因后改代码；写回归用例</li>
+        <li><b>加固</b>：在该路径加 contract 检查、metric、超时；添加 sanitizer CI；把 core_pattern + ulimit 检查加进部署 healthcheck</li>
+      </ol>
+    </div>
+  </details></li>
 </ol>
-</div>
-</details>
-
-</div>
 
 <!-- =========================================== -->
 <!-- SECTION 8 -->

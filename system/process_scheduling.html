@@ -71,7 +71,11 @@
     <li><a href="#ch3">CFS 完全公平调度</a></li>
     <li><a href="#ch4">EEVDF：CFS 的继任者</a></li>
     <li><a href="#ch5">实时调度与 PREEMPT_RT</a></li>
-    <li><a href="#ch6">多核负载均衡</a></li>
+    <li><a href="#ch6">多核负载均衡</a>
+      <ol>
+        <li><a href="#ch6-affinity">默认不可控、可以绑核</a></li>
+      </ol>
+    </li>
     <li><a href="#ch7">抢占与上下文切换</a></li>
     <li><a href="#ch8">调优与观测</a></li>
     <li><a href="#ch9">checklist</a></li>
@@ -102,7 +106,7 @@
         <p>CPU 核是<strong>医生</strong>，线程是<strong>病人</strong>。分诊台（调度器）不能简单先到先看：急诊（实时任务）要插队，普通门诊（普通任务）按公平排，但也不能让谁一直排不上（防饿死）。医生频繁换病人（上下文切换）会浪费时间在「重新了解病情」（刷新 cache / TLB），所以也不能切太勤。调度器就是这个既要公平、又要救急、还要高效的分诊台。</p>
         <div class="map">映射：<b>医生</b>=CPU 核 · <b>病人</b>=线程 · <b>急诊插队</b>=实时优先级 · <b>换病人成本</b>=上下文切换</div>
       </div>
-      <div class="intuition">调度器的核心难题是「<strong>公平</strong>」和「<strong>响应性</strong>」的矛盾：交互任务（键盘、鼠标）需要立刻响应但只占很少 CPU；批处理任务（编译、渲染）想吃满 CPU。好的调度器让交互任务感觉「秒响应」，同时批任务照样跑满——CFS/EEVDF 就是为此设计的。</p>
+      <div class="intuition">调度器的核心难题是「<strong>公平</strong>」和「<strong>响应性</strong>」的矛盾：交互任务（键盘、鼠标）需要立刻响应但只占很少 CPU；批处理任务（编译、渲染）想吃满 CPU。好的调度器让交互任务感觉「秒响应」，同时批任务照样跑满——CFS/EEVDF 就是为此设计的。</div>
     </section>
 
     <section class="chapter" id="ch2">
@@ -195,6 +199,35 @@
         </ul>
       </div>
       <p>NUMA 感知调度与内存本地性见 <a href="./numa_memory_advanced.html">NUMA + 高级内存</a>。</p>
+
+      <h3 id="ch6-affinity">默认不可控、可以绑核</h3>
+      <p>调度对象是<strong>线程</strong>不是进程。默认是 <strong>soft affinity</strong>：尽量留在原核保热缓存，该核忙了就 migrate。对应用是黑盒——这次核 2，下次可能核 5 → false sharing / 多核内存序 bug 会<strong>时有时无</strong>。</p>
+      <div class="diagram-wrap" style="overflow-x:auto;margin:1rem 0">
+        <svg viewBox="0 0 640 90" width="640" height="90" role="img" aria-label="线程从核0迁移到核3">
+          <rect x="8" y="18" width="88" height="36" rx="6" fill="var(--bg-card)" stroke="var(--accent)"/>
+          <text x="52" y="41" text-anchor="middle" fill="var(--text)" font-size="12">核0</text>
+          <rect x="108" y="18" width="88" height="36" rx="6" fill="var(--bg-card)" stroke="var(--accent)"/>
+          <text x="152" y="41" text-anchor="middle" fill="var(--text)" font-size="12">核0</text>
+          <rect x="220" y="18" width="70" height="36" rx="6" fill="color-mix(in srgb, var(--yellow) 20%, var(--bg-card))" stroke="var(--yellow)"/>
+          <text x="255" y="41" text-anchor="middle" fill="var(--yellow)" font-size="11">迁移</text>
+          <rect x="314" y="18" width="88" height="36" rx="6" fill="var(--bg-card)" stroke="var(--green)"/>
+          <text x="358" y="41" text-anchor="middle" fill="var(--text)" font-size="12">核3</text>
+          <text x="320" y="78" text-anchor="middle" fill="var(--text-dim)" font-size="11">同一线程；换核后 L1 是冷的，MESI 拓扑也变了</text>
+        </svg>
+      </div>
+      <div class="tool-card green">
+        <h4>硬亲和：把线程钉死在某组核上</h4>
+        <ul>
+          <li>Linux：<code>taskset</code> / <code>sched_setaffinity</code> / <code>pthread_setaffinity_np</code></li>
+          <li>Windows：<code>SetThreadAffinityMask</code> / <code>SetProcessAffinityMask</code>（本库偏 Linux，知道对位即可）</li>
+        </ul>
+      </div>
+      <table>
+        <tr><th></th><th>好处</th><th>副作用</th></tr>
+        <tr><td>绑核</td><td>可复现、保热缓存、隔离干扰</td><td>不能借闲核，可能饿死；负载不均</td></tr>
+        <tr><td>不绑（默认）</td><td>调度器借闲核，吞吐更好</td><td>核号不可控，多核 bug 难复现</td></tr>
+      </table>
+      <div class="intuition">绑核<strong>不取消数据竞争</strong>：只改变「跑在哪」，不改变「要不要锁 / atomic」。单核绑死仍会交错（见 <a href="./os_fundamentals.html#s1-5">OS 基础 · 单核不是一进程</a>、<a href="../cpp/memory_model.html#s8-1">内存模型 §8.1</a>）。</div>
     </section>
 
     <section class="chapter" id="ch7">
