@@ -1,0 +1,721 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>协议状态机：从 TCP / RRC / NETCONF 到可维护的 FSM · 状态转移表 / State 模式 / variant FSM / 时间轮 / HSM / run-to-completion</title>
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<link rel="stylesheet" href="../assets/page-shell.css">
+<style>
+  .ps .def { background:color-mix(in srgb,var(--ps-accent) 8%,var(--ps-card)); border:1px solid var(--ps-border);
+    border-left:4px solid var(--ps-accent); border-radius:8px; padding:12px 16px; margin:14px 0; font-size:.95em; }
+  .ps .def strong:first-child { color:var(--ps-accent); }
+  .ps .analogy { background:color-mix(in srgb,var(--ps-orange) 10%,var(--ps-card)); border:1px solid var(--ps-border);
+    border-left:4px solid var(--ps-orange); border-radius:8px; padding:12px 16px; margin:16px 0; }
+  .ps .analogy strong { color:var(--ps-orange); }
+  .ps .cmp { display:grid; grid-template-columns:1fr; gap:12px; margin:16px 0; }
+  @media(min-width:960px){ .ps .cmp { grid-template-columns:1fr 1fr; } }
+  .ps .cmp > div { border:1px solid var(--ps-border); border-radius:8px; padding:10px 13px; background:var(--ps-card-2); }
+  .ps .cmp > div.bad { border-left:4px solid var(--ps-red); }
+  .ps .cmp > div.good { border-left:4px solid var(--ps-green); }
+  .ps .cmp h5 { margin:0 0 6px; font-size:.92em; font-weight:700; }
+  .ps .cmp > div.bad h5 { color:var(--ps-red); }
+  .ps .cmp > div.good h5 { color:var(--ps-green); }
+  .ps .cmp pre { margin:0; font-size:.86em; }
+  .ps .stack { display:flex; flex-direction:column; gap:6px; margin:18px 0; }
+  .ps .stack-row { display:flex; gap:12px; align-items:flex-start; background:var(--ps-card-2);
+    border:1px solid var(--ps-border); border-radius:8px; padding:11px 14px; }
+  .ps .stack-tag { min-width:150px; font-weight:700; font-size:.9em; color:var(--ps-accent); }
+  .ps .rule { border:1px solid var(--ps-border); border-left:4px solid var(--ps-yellow);
+    background:color-mix(in srgb,var(--ps-yellow) 10%,var(--ps-card)); border-radius:8px; padding:12px 16px; margin:14px 0; }
+  .ps .rule b { color:var(--ps-yellow); }
+  .ps .scope { border:1px solid var(--ps-border); border-left:4px solid var(--ps-accent);
+    background:color-mix(in srgb,var(--ps-accent) 10%,var(--ps-card)); border-radius:8px; padding:14px 18px; margin:18px 0; }
+  .ps .scope b { color:var(--ps-accent); }
+  /* 交互演示 */
+  .ps .demo { border:1px solid var(--ps-border); border-radius:10px; padding:16px 18px; margin:18px 0;
+    background:color-mix(in srgb,var(--ps-purple) 8%,var(--ps-card)); }
+  .ps .demo-title { font-weight:700; color:var(--ps-purple); margin-bottom:10px; font-size:.98em; }
+  .ps .fsm-states { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:12px; }
+  .ps .fsm-state { flex:1 1 130px; text-align:center; padding:10px 8px; border-radius:8px; font-weight:700;
+    font-size:.92em; border:1px solid var(--ps-border); background:var(--ps-card-2); color:var(--ps-text-dim);
+    transition:background .18s, color .18s, border-color .18s; }
+  .ps .fsm-state.on { border-color:var(--ps-green); color:var(--ps-green);
+    background:color-mix(in srgb,var(--ps-green) 18%,var(--ps-card)); }
+  .ps .fsm-state small { display:block; font-weight:400; font-size:.82em; margin-top:3px; opacity:.85; }
+  .ps .fsm-btns { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px; }
+  .ps .fsm-btns button { font:inherit; font-size:.86em; padding:6px 11px; border-radius:6px; cursor:pointer;
+    border:1px solid var(--ps-border); background:var(--ps-card-2); color:var(--ps-text); }
+  .ps .fsm-btns button:hover { border-color:var(--ps-accent); color:var(--ps-accent); }
+  .ps .fsm-btns button.reset { border-color:var(--ps-border-soft); color:var(--ps-text-dim); }
+  .ps .fsm-log { font-family:var(--ps-mono); font-size:.8em; line-height:1.6; background:var(--ps-card-2);
+    border:1px solid var(--ps-border); border-radius:8px; padding:10px 12px; max-height:190px; overflow:auto; }
+  .ps .fsm-log div { padding:1px 0; }
+  .ps .fsm-log .ok  { color:var(--ps-green); }
+  .ps .fsm-log .rej { color:var(--ps-red); }
+  .ps .fsm-log .tmr { color:var(--ps-yellow); }
+</style>
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav ps tn-shell-overlay">
+
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="communication_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 28 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>协议状态机</h2>
+    <nav>
+      <ol>
+        <li><a href="#s1">为什么到处是状态机</a></li>
+        <li><a href="#s2">四个真实状态机</a></li>
+        <li><a href="#s3">四种实现手法对比</a></li>
+        <li><a href="#s4">定时器与超时</a></li>
+        <li><a href="#s5">分层状态机 HSM</a></li>
+        <li><a href="#s6">事件队列与可重入</a></li>
+        <li><a href="#s7">并发与状态机</a></li>
+        <li><a href="#s8">可测试与可观测</a></li>
+        <li><a href="#s9">动手：交互式 FSM</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+
+    <header class="hero">
+      <div class="badge">Communication · State Machine · 2026</div>
+      <h1>协议状态机：从 TCP / RRC / NETCONF 到可维护的 FSM</h1>
+      <p class="sub"><a href="comm_software_arch.html">通信软件架构</a>的 §03 提到"控制面就是一堆状态机"，本篇把它展开：协议状态机在真实协议里长什么样、四种实现手法各自适合什么规模、定时器怎么管才不悬垂、以及怎么让状态机变成可测试、可观测的东西而不是一坨 switch。</p>
+      <div class="meta-row">
+        <span class="pill cyan">Module 09</span>
+        <span class="pill green">阅读 ~28 min</span>
+        <span class="pill amber">含交互演示</span>
+      </div>
+    </header>
+
+<section class="chapter" id="s1">
+  <div class="ch-head"><div class="num">01</div><div class="t"><h2>为什么通信软件到处是状态机</h2><p class="sub">协议的定义本身就是一台状态机</p></div></div>
+
+  <p>翻开任何一份协议规范，核心内容几乎总是这四样东西：<strong>有哪些状态</strong>、<strong>会收到哪些事件</strong>、<strong>什么状态收到什么事件迁移到哪</strong>、<strong>各状态下哪些定时器在跑</strong>。换句话说：</p>
+
+  <div class="def"><strong>协议 = 状态 × 事件 × 迁移 × 定时器</strong>。这四个维度缺一个都不成立：没有状态就无法表达"握手做到哪一步了"；没有事件就无法响应对端；没有明确的迁移就会对同一消息做出不一致的反应；<strong>没有定时器，任何一次对端不回应都会让你永远卡住</strong>——分布式系统里"对端沉默"和"对端很慢"无法区分，只能靠超时来判定。</div>
+
+  <div class="analogy">🚇 <strong>类比</strong>：地铁闸机。状态只有"关闭 / 已验票待通过 / 开启"，事件是"刷卡 / 通过感应 / 超时"。你刷了卡但不走，5 秒后闸机自己关回去（定时器）；你在闸机关闭时硬挤，它不理你（非法事件被拒绝）。它绝不会"因为你刷了两次卡就开两倍宽"——<strong>状态机的价值就是把"系统在任意时刻只能处于一个明确状态、且只接受该状态允许的输入"这件事变成结构而不是靠人记住</strong>。通信协议之所以离不开它，是因为对端是不可信的：畸形的、乱序的、重复的、恶意的消息都会来，你需要一个能对任何输入给出确定反应的东西。</div>
+
+  <p>反过来说，通信软件里凡是"用一堆 <code>bool</code> 标志位表达进度"的地方，几乎都是一个没被识别出来的状态机。<code>is_connected</code>、<code>hello_sent</code>、<code>auth_done</code>、<code>closing</code> 四个标志位理论上表达 16 种组合，其中<strong>合法的可能只有 5 种</strong>——剩下 11 种是"不该出现但代码里可以出现"的状态，也就是 bug 的藏身处。把它们收敐成一个显式的枚举状态，非法组合在类型层面就消失了。</p>
+
+  <div class="box star"><strong>面试里怎么答"你怎么判断该不该引入状态机"</strong>：数一数表达"进度"的布尔标志位。超过两个、并且它们之间存在"A 为真时 B 必须为假"这类隐含约束，就该换成显式状态机。这个判据比"代码行数"或"看起来复杂"都靠得住。</div>
+</section>
+
+<section class="chapter" id="s2">
+  <div class="ch-head"><div class="num">02</div><div class="t"><h2>四个真实状态机</h2><p class="sub">从最经典的到最工程化的</p></div></div>
+
+  <h3 id="s2-1">2.1 TCP 连接状态机</h3>
+
+  <p>最经典的例子。它值得看的不是"有 11 个状态"，而是<strong>为什么需要 TIME_WAIT 这个看似多余的状态</strong>——那是状态机设计里"为不可靠网络留余量"的典范。</p>
+
+  <div class="diag">
+    <svg viewBox="0 0 760 330" width="760" height="330" role="img" aria-label="TCP 连接状态机主要路径">
+      <g font-family="Inter, sans-serif" font-size="10.5">
+        <text x="380" y="18" text-anchor="middle" fill="#fcd34d" font-weight="700" font-size="12.5">TCP 状态机（主动关闭一侧的主路径）</text>
+
+        <rect x="316" y="34" width="128" height="30" rx="6" fill="#131a2b" stroke="#64748b"/><text x="380" y="54" text-anchor="middle" fill="#e2e8f0" font-weight="700">CLOSED</text>
+        <rect x="316" y="92" width="128" height="30" rx="6" fill="#0f1e33" stroke="#0ea5e9"/><text x="380" y="112" text-anchor="middle" fill="#7dd3fc" font-weight="700">SYN_SENT</text>
+        <rect x="316" y="150" width="128" height="30" rx="6" fill="#10231f" stroke="#10b981"/><text x="380" y="170" text-anchor="middle" fill="#6ee7b7" font-weight="700">ESTABLISHED</text>
+        <rect x="316" y="208" width="128" height="30" rx="6" fill="#1e1633" stroke="#8b5cf6"/><text x="380" y="228" text-anchor="middle" fill="#d8b4fe" font-weight="700">FIN_WAIT_1</text>
+        <rect x="316" y="252" width="128" height="26" rx="6" fill="#1e1633" stroke="#8b5cf6"/><text x="380" y="270" text-anchor="middle" fill="#d8b4fe" font-weight="700">FIN_WAIT_2</text>
+        <rect x="316" y="292" width="128" height="28" rx="6" fill="#2a2010" stroke="#f59e0b"/><text x="380" y="311" text-anchor="middle" fill="#fcd34d" font-weight="700">TIME_WAIT</text>
+
+        <line x1="380" y1="64" x2="380" y2="90" stroke="#0ea5e9" marker-end="url(#sm1)"/>
+        <text x="392" y="82" fill="#7dd3fc" font-size="9.5">connect / 发 SYN</text>
+        <line x1="380" y1="122" x2="380" y2="148" stroke="#10b981" marker-end="url(#sm2)"/>
+        <text x="392" y="140" fill="#6ee7b7" font-size="9.5">收 SYN+ACK / 发 ACK</text>
+        <line x1="380" y1="180" x2="380" y2="206" stroke="#8b5cf6" marker-end="url(#sm3)"/>
+        <text x="392" y="198" fill="#d8b4fe" font-size="9.5">close / 发 FIN</text>
+        <line x1="380" y1="238" x2="380" y2="250" stroke="#8b5cf6" marker-end="url(#sm3)"/>
+        <text x="392" y="248" fill="#d8b4fe" font-size="9.5">收 ACK</text>
+        <line x1="380" y1="278" x2="380" y2="290" stroke="#f59e0b" marker-end="url(#sm4)"/>
+        <text x="392" y="288" fill="#fcd34d" font-size="9.5">收 FIN / 发 ACK</text>
+
+        <!-- timers on the left -->
+        <rect x="24" y="92" width="250" height="46" rx="6" fill="#2a1418" stroke="#ef4444"/>
+        <text x="36" y="110" fill="#fca5a5" font-size="10">定时器：SYN 重传（指数退避）</text>
+        <text x="36" y="126" fill="#e2e8f0" font-size="9.5">超时次数用尽 → 回 CLOSED，报 ETIMEDOUT</text>
+        <line x1="274" y1="112" x2="312" y2="112" stroke="#ef4444" stroke-dasharray="3,3"/>
+
+        <rect x="24" y="150" width="250" height="46" rx="6" fill="#2a1418" stroke="#ef4444"/>
+        <text x="36" y="168" fill="#fca5a5" font-size="10">定时器：Keepalive / 重传 / 保活探测</text>
+        <text x="36" y="184" fill="#e2e8f0" font-size="9.5">同一状态里可以有多个定时器并行</text>
+        <line x1="274" y1="170" x2="312" y2="170" stroke="#ef4444" stroke-dasharray="3,3"/>
+
+        <rect x="490" y="286" width="246" height="40" rx="6" fill="#2a2010" stroke="#f59e0b"/>
+        <text x="502" y="303" fill="#fcd34d" font-size="10">TIME_WAIT = 2×MSL 定时器</text>
+        <text x="502" y="318" fill="#e2e8f0" font-size="9.5">等迷路的旧包死掉，防止污染新连接</text>
+        <line x1="444" y1="306" x2="486" y2="306" stroke="#f59e0b" stroke-dasharray="3,3"/>
+
+        <rect x="490" y="34" width="246" height="88" rx="6" fill="#131a2b" stroke="#64748b"/>
+        <text x="502" y="52" fill="#fcd34d" font-size="10.5" font-weight="700">这张图要读出的三件事</text>
+        <text x="502" y="70" fill="#e2e8f0" font-size="9.5">① 每个状态都有配套定时器，没有例外</text>
+        <text x="502" y="86" fill="#e2e8f0" font-size="9.5">② TIME_WAIT 不是"多余"，它为网络的</text>
+        <text x="514" y="100" fill="#e2e8f0" font-size="9.5">不可靠留余量：状态机要容忍迟到的包</text>
+        <text x="502" y="116" fill="#e2e8f0" font-size="9.5">③ 同时关闭等罕见路径才是 bug 高发处</text>
+
+        <defs>
+          <marker id="sm1" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#0ea5e9"/></marker>
+          <marker id="sm2" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#10b981"/></marker>
+          <marker id="sm3" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#8b5cf6"/></marker>
+          <marker id="sm4" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#f59e0b"/></marker>
+        </defs>
+      </g>
+    </svg>
+  </div>
+
+  <h3 id="s2-2">2.2 5G RRC：IDLE / INACTIVE / CONNECTED</h3>
+
+  <p>RRC 状态机只有三个状态，但它体现了一个 TCP 没有的设计动机：<strong>用中间状态换功耗与信令量</strong>。</p>
+
+  <div class="diag">
+    <svg viewBox="0 0 760 250" width="760" height="250" role="img" aria-label="5G RRC 三态状态机与 NETCONF 会话状态机">
+      <g font-family="Inter, sans-serif" font-size="10.5">
+        <text x="380" y="18" text-anchor="middle" fill="#fcd34d" font-weight="700" font-size="12.5">上：5G RRC 三态；下：NETCONF 会话生命周期</text>
+
+        <rect x="40" y="42" width="140" height="34" rx="8" fill="#131a2b" stroke="#64748b"/>
+        <text x="110" y="58" text-anchor="middle" fill="#e2e8f0" font-weight="700">RRC_IDLE</text>
+        <text x="110" y="71" text-anchor="middle" fill="#94a3b8" font-size="9">无上下文，最省电</text>
+
+        <rect x="310" y="42" width="150" height="34" rx="8" fill="#2a2010" stroke="#f59e0b"/>
+        <text x="385" y="58" text-anchor="middle" fill="#fcd34d" font-weight="700">RRC_INACTIVE</text>
+        <text x="385" y="71" text-anchor="middle" fill="#94a3b8" font-size="9">上下文保留在 RAN</text>
+
+        <rect x="590" y="42" width="150" height="34" rx="8" fill="#10231f" stroke="#10b981"/>
+        <text x="665" y="58" text-anchor="middle" fill="#6ee7b7" font-weight="700">RRC_CONNECTED</text>
+        <text x="665" y="71" text-anchor="middle" fill="#94a3b8" font-size="9">可收发数据</text>
+
+        <path d="M180 52 H306" stroke="#64748b" stroke-dasharray="3,3"/>
+        <text x="243" y="46" text-anchor="middle" fill="#94a3b8" font-size="9">（不直接迁移）</text>
+        <path d="M180 66 Q385 118 586 66" fill="none" stroke="#10b981" marker-end="url(#sm2b)"/>
+        <text x="383" y="106" text-anchor="middle" fill="#6ee7b7" font-size="9.5">RRC Setup：完整建立，信令最多</text>
+        <path d="M460 52 H586" stroke="#10b981" marker-end="url(#sm2b)"/>
+        <text x="523" y="38" text-anchor="middle" fill="#6ee7b7" font-size="9.5">RRC Resume：几条消息</text>
+        <path d="M590 76 Q525 96 462 70" fill="none" stroke="#f59e0b" marker-end="url(#sm4b)"/>
+        <text x="524" y="98" text-anchor="middle" fill="#fcd34d" font-size="9.5">Release(suspend)</text>
+        <path d="M586 90 Q385 152 182 82" fill="none" stroke="#ef4444" marker-end="url(#sm5b)"/>
+        <text x="383" y="142" text-anchor="middle" fill="#fca5a5" font-size="9.5">Release / T310 超时（无线链路失败）</text>
+
+        <text x="40" y="170" fill="#e2e8f0" font-size="10">INACTIVE 存在的唯一理由：<tspan fill="#fcd34d" font-weight="700">让"经常小量收发"的终端不必每次付完整建立的代价</tspan>，同时不像 CONNECTED 那样耗电。</text>
+
+        <!-- NETCONF -->
+        <rect x="40" y="190" width="118" height="30" rx="6" fill="#131a2b" stroke="#64748b"/><text x="99" y="209" text-anchor="middle" fill="#e2e8f0" font-size="10" font-weight="700">TCP 已连</text>
+        <rect x="188" y="190" width="118" height="30" rx="6" fill="#0f1e33" stroke="#0ea5e9"/><text x="247" y="209" text-anchor="middle" fill="#7dd3fc" font-size="10" font-weight="700">hello 交换</text>
+        <rect x="336" y="190" width="130" height="30" rx="6" fill="#2a2010" stroke="#f59e0b"/><text x="401" y="209" text-anchor="middle" fill="#fcd34d" font-size="10" font-weight="700">能力协商完成</text>
+        <rect x="496" y="190" width="118" height="30" rx="6" fill="#10231f" stroke="#10b981"/><text x="555" y="209" text-anchor="middle" fill="#6ee7b7" font-size="10" font-weight="700">RPC 服务中</text>
+        <rect x="644" y="190" width="96" height="30" rx="6" fill="#2a1418" stroke="#ef4444"/><text x="692" y="209" text-anchor="middle" fill="#fca5a5" font-size="10" font-weight="700">closed</text>
+        <line x1="158" y1="205" x2="184" y2="205" stroke="#64748b" marker-end="url(#sm6b)"/>
+        <line x1="306" y1="205" x2="332" y2="205" stroke="#64748b" marker-end="url(#sm6b)"/>
+        <line x1="466" y1="205" x2="492" y2="205" stroke="#64748b" marker-end="url(#sm6b)"/>
+        <line x1="614" y1="205" x2="640" y2="205" stroke="#64748b" marker-end="url(#sm6b)"/>
+        <text x="380" y="240" text-anchor="middle" fill="#94a3b8" font-size="9.5">线性但每步都有超时；任一步失败都必须回到 closed 并释放 datastore 锁与订阅</text>
+
+        <defs>
+          <marker id="sm2b" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#10b981"/></marker>
+          <marker id="sm4b" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#f59e0b"/></marker>
+          <marker id="sm5b" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#ef4444"/></marker>
+          <marker id="sm6b" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#64748b"/></marker>
+        </defs>
+      </g>
+    </svg>
+  </div>
+
+  <div class="box tip"><strong>RRC 的 INACTIVE 是"状态机换成本"的教科书案例</strong>：加一个状态、加一套上下文保留与 RAN 寻呼机制，换来的是海量间歇性小流量终端（IoT、后台推送）不必反复付完整建立的信令代价。设计状态机时值得反复问的问题就是这个——<strong>加一个状态，能省下什么？</strong></div>
+
+  <h3 id="s2-3">2.3 NETCONF 会话</h3>
+
+  <p>上图下半部分。它形状简单（近似线性），难点在<strong>失败清理</strong>：会话在"持有 candidate 配置 + 持有 datastore 锁 + 有活跃通知订阅"的状态下断开，这三样都必须被回收。<a href="netconf_engineering.html">NETCONF 工程实践</a>讲了 datastore 与 commit 语义；这里要强调的是状态机视角：<strong>每个"已获取的资源"都应该绑定到某个状态的进入/退出动作上</strong>，而不是散落在各个消息处理函数里靠人配平。</p>
+
+  <h3 id="s2-4">2.4 O-RU M-plane 启动流程</h3>
+
+  <p>这是一个"工程化到不像教科书"的状态机：<a href="oran_interfaces.html">O-RAN 接口</a>里 O-RU 上电到可服务的完整过程。它的特点是<strong>状态多、每步都可能失败、失败后的退避与重试策略各不相同</strong>。</p>
+
+  <div class="stack">
+    <div class="stack-row"><span class="stack-tag">① 上电自检</span><span>硬件自检、加载固件。失败 → 点告警灯，不重试（需人工）。</span></div>
+    <div class="stack-row"><span class="stack-tag">② 获取管理 IP</span><span>DHCP 或静态。失败 → 持续重试并指数退避，因为网络可能还没就绪。</span></div>
+    <div class="stack-row"><span class="stack-tag">③ 发现控制器</span><span>通过 DHCP 选项 / mDNS 找到 SMO/NETCONF 客户端的地址。这一步的超时值直接决定"网络慢时能不能起来"。</span></div>
+    <div class="stack-row"><span class="stack-tag">④ 建立 NETCONF 会话</span><span>Call Home（O-RU 主动连出）+ SSH/TLS。证书不匹配 → 明确的告警而不是无声重试。</span></div>
+    <div class="stack-row"><span class="stack-tag">⑤ 能力与模型协商</span><span>交换 hello、比对 YANG 模型版本。不兼容 → 上报并停在此状态，别硬着头皮往下走。</span></div>
+    <div class="stack-row"><span class="stack-tag">⑥ 接受配置</span><span>SMO 下发载波、天线、C/U 平面参数。事务性：部分失败要整体回滚。</span></div>
+    <div class="stack-row"><span class="stack-tag">⑦ 同步锁定</span><span>等 <a href="ptp_synce.html">PTP</a> 达到要求的时钟类别。<strong>没锁定绝不能开始发射</strong>——这是硬性前置条件，也是最常见的"卡在这一步"现场。</span></div>
+    <div class="stack-row"><span class="stack-tag">⑧ 载波激活 / 服务中</span><span>开始收发 <a href="ecpri_deep_dive.html">eCPRI</a> 用户面。之后任何一步的前置条件破坏（PTP 失锁）都要退回相应状态。</span></div>
+  </div>
+
+  <div class="rule"><b>这个例子最值得学的一点：状态机必须能"往回走"。</b>⑦ 里 PTP 失锁之后，正确行为是停止发射并退回等同步状态，而不是继续发射错误的信号（那会干扰邻区）。很多真实 bug 就是<strong>只实现了前进路径，忘了实现"前置条件被破坏时的回退"</strong>。写状态机时的自查方法：对每个状态，列出它成立所依赖的前置条件，再确认每个条件失效时都有对应的退出迁移。</div>
+</section>
+
+<section class="chapter" id="s3">
+  <div class="ch-head"><div class="num">03</div><div class="t"><h2>四种实现手法对比</h2><p class="sub">从 switch 到类型安全 FSM</p></div></div>
+
+  <div class="scope"><b>边界声明。</b>GoF 的 State 模式本体（类图、与 Strategy 的区别、C++ 实现细节）见 <a href="../stl/design_patterns_ppt.html">设计模式（C++ 视角）</a>；这里只比较四种手法在<strong>协议状态机这个具体场景</strong>下的表现。</div>
+
+  <table>
+    <thead><tr><th>手法</th><th>可读性</th><th>可测性</th><th>性能</th><th>扩展性</th><th>抗状态爆炸</th></tr></thead>
+    <tbody>
+      <tr><td><strong>switch-case 嵌套</strong></td><td>★☆☆ 状态多了就是几百行</td><td>★★☆ 好测，但要构造内部状态</td><td>★★★ 最快，编译成跳转表</td><td>★☆☆ 加状态要改所有 switch</td><td>★☆☆ 极差</td></tr>
+      <tr><td><strong>状态转移表</strong></td><td>★★★ 表 = 规范，一眼对照</td><td>★★★ 表本身可直接断言</td><td>★★★ 两次数组索引</td><td>★★★ 加一行数据</td><td>★★☆ 表会变稀疏</td></tr>
+      <tr><td><strong>GoF State 模式</strong></td><td>★★☆ 每状态一个类，跳转要翻文件</td><td>★★★ 每状态独立可测</td><td>★★☆ 虚调用 + 可能的堆分配</td><td>★★★ 加一个类，不动旧代码</td><td>★★☆ 类数量线性增长</td></tr>
+      <tr><td><strong>variant + visit</strong></td><td>★★☆ 需要熟悉模板</td><td>★★★ 迁移是纯函数，最好测</td><td>★★☆ 双分派有间接跳转</td><td>★★★ 加类型即编译期检查</td><td>★★★ 非法组合编译期消失</td></tr>
+    </tbody>
+  </table>
+
+  <div class="box star"><strong>怎么选（这是面试高频题）</strong>：状态 ≤ 5 且逻辑简单 → <strong>switch</strong>，别过度设计；状态 5–20、规范里本来就有一张迁移表 → <strong>状态转移表</strong>，这是通信软件里性价比最高的选择；每个状态有大量独有行为与私有数据 → <strong>State 模式</strong>；<strong>希望"非法的(状态,事件)组合根本无法编译"</strong> → <strong>variant FSM</strong>。核心判据不是性能（四者在信令面差别可忽略），而是<strong>规范演进时改动的局部性</strong>。</div>
+
+  <h3 id="s3-1">3.1 状态转移表：通信软件的默认选择</h3>
+
+<pre><span class="cm">// 表的每一行就是规范里的一行，评审时可以逐行对照</span>
+enum class St : uint8_t { Idle, Inactive, Connected, N };
+enum class Ev : uint8_t { Setup, Suspend, Resume, Release, T310, N };
+
+struct Tr { St next; void (*action)(Ctx&amp;); };
+constexpr Tr kNo{St::N, nullptr};                 <span class="cm">// 非法迁移</span>
+
+constexpr Tr kTable[(int)St::N][(int)Ev::N] = {
+<span class="cm">/*            Setup            Suspend  Resume                Release          T310   */</span>
+<span class="cm">/*Idle     */</span>{{St::Connected,&amp;do_setup}, kNo, kNo, kNo, kNo},
+<span class="cm">/*Inactive */</span>{kNo, kNo, {St::Connected,&amp;do_resume}, {St::Idle,&amp;do_rel}, kNo},
+<span class="cm">/*Connected*/</span>{kNo, {St::Inactive,&amp;do_susp}, kNo, {St::Idle,&amp;do_rel}, {St::Idle,&amp;do_rlf}},
+};
+
+void Fsm::feed(Ev e, Ctx&amp; c) {
+  const Tr&amp; t = kTable[(int)st_][(int)e];
+  if (t.next == St::N) {                          <span class="cm">// 统一处理非法事件</span>
+    ++stats_.illegal[(int)st_][(int)e];           <span class="cm">// 打点，别静默丢</span>
+    return;
+  }
+  if (t.action) t.action(c);
+  log_transition(st_, e, t.next);                 <span class="cm">// 一处埋点覆盖全部迁移</span>
+  st_ = t.next;
+}
+</pre>
+
+  <div class="def"><strong>转移表的隐藏收益：横切关注点只写一遍。</strong>非法事件计数、迁移日志、进入/退出动作、状态驻留时间统计——在 switch 实现里这些要在每个 case 里重复；在表驱动实现里只在 <code>feed()</code> 里写一次。通信软件的可观测性需求很重（现场排障全靠迁移日志），这一点的价值往往超过性能考虑。</div>
+
+  <h3 id="s3-2">3.2 variant FSM：让非法组合无法编译</h3>
+
+  <p>完整的可编译小例子。核心思路：<strong>状态是不同的类型</strong>（而不是同一个枚举的不同取值），迁移函数按 (状态类型, 事件类型) 重载，<code>std::visit</code> 做双分派。</p>
+
+<pre><span class="cm">// ---- 状态：每个状态携带自己的数据，别的状态访问不到 ----</span>
+struct Idle      { };
+struct Inactive  { std::uint32_t i_rnti; std::chrono::steady_clock::time_point since; };
+struct Connected { std::uint32_t c_rnti; int drb_count; };
+using State = std::variant&lt;Idle, Inactive, Connected&gt;;
+
+<span class="cm">// ---- 事件 ----</span>
+struct Setup   { std::uint32_t rnti; };
+struct Suspend { std::uint32_t i_rnti; };
+struct Resume  { std::uint32_t i_rnti; };
+struct Release { };
+struct T310    { };                       <span class="cm">// 无线链路失败</span>
+using Event = std::variant&lt;Setup, Suspend, Resume, Release, T310&gt;;
+
+<span class="cm">// ---- 迁移：只为合法组合写重载 ----</span>
+struct Transition {
+  Log&amp; log;
+
+  State operator()(Idle,            const Setup&amp; e) const {
+    log.info("Idle -&gt; Connected");  return Connected{e.rnti, 0};
+  }
+  State operator()(const Connected&amp; s, const Suspend&amp; e) const {
+    log.info("Connected -&gt; Inactive"); (void)s;
+    return Inactive{e.i_rnti, std::chrono::steady_clock::now()};
+  }
+  State operator()(const Inactive&amp; s, const Resume&amp;) const {
+    log.info("Inactive -&gt; Connected"); return Connected{s.i_rnti, 0};
+  }
+  State operator()(const Connected&amp;, const Release&amp;) const { return Idle{}; }
+  State operator()(const Inactive&amp;,  const Release&amp;) const { return Idle{}; }
+  State operator()(const Connected&amp;, const T310&amp;)    const {
+    log.warn("radio link failure"); return Idle{};
+  }
+
+  <span class="cm">// 兜底：所有未列出的 (状态,事件) 组合走这里 —— 非法事件</span>
+  template &lt;class S, class E&gt;
+  State operator()(const S&amp; s, const E&amp;) const {
+    log.warn("illegal event in current state");  <span class="cm">// 打点 + 保持原状态</span>
+    return s;
+  }
+};
+
+<span class="cm">// ---- 驱动 ----</span>
+class Fsm {
+ public:
+  void feed(const Event&amp; ev) {
+    st_ = std::visit(Transition{log_}, st_, ev);   <span class="cm">// 双分派</span>
+  }
+  bool connected() const { return std::holds_alternative&lt;Connected&gt;(st_); }
+ private:
+  State st_{Idle{}};
+  Log   log_;
+};
+</pre>
+
+  <div class="rule"><b>这个写法的三个真实好处。</b>① <strong>状态数据被状态本身守住</strong>：<code>c_rnti</code> 只存在于 <code>Connected</code> 里，处于 <code>Idle</code> 时代码根本拿不到它——这消灭了"用了一个当前状态下无意义的字段"这一整类 bug（在枚举 + 大结构体的写法里非常常见）。② <strong>迁移是纯函数</strong>：输入 (状态, 事件)，输出新状态，没有隐藏的副作用，单元测试可以直接构造任意状态。③ <strong>删掉兜底模板，非法组合就变成编译错误</strong>——如果你的协议要求穷尽处理，这是最强的保证。<br><b>代价也要说清</b>：编译期变长、错误信息难读、双分派的跳转表在每包热路径上要实测。它属于"控制面首选、数据面慎用"。</div>
+</section>
+
+<section class="chapter" id="s4">
+  <div class="ch-head"><div class="num">04</div><div class="t"><h2>定时器与超时</h2><p class="sub">状态机一半的复杂度在这里</p></div></div>
+
+  <table>
+    <thead><tr><th></th><th>最小堆（priority_queue）</th><th>时间轮（timing wheel）</th></tr></thead>
+    <tbody>
+      <tr><td>插入</td><td>O(log n)</td><td><strong>O(1)</strong></td></tr>
+      <tr><td>取消</td><td>O(log n)（或懒删除，堆会膨胀）</td><td><strong>O(1)</strong>（从槽链表摘除）</td></tr>
+      <tr><td>取最早</td><td>O(1) 查看，O(log n) 弹出</td><td>O(1) 推进指针</td></tr>
+      <tr><td>精度</td><td>任意精度</td><td>受槽粒度限制（如 1 ms/槽）</td></tr>
+      <tr><td>长时限</td><td>天然支持</td><td>需分层轮（秒轮/分轮/时轮）</td></tr>
+      <tr><td>适合</td><td>定时器少、时限跨度大、需要高精度</td><td><strong>海量同类定时器</strong>（每连接/每会话，时限相近）</td></tr>
+    </tbody>
+  </table>
+
+  <div class="box star"><strong>为什么通信软件几乎都用时间轮</strong>：<a href="core_network_evolution.html">核心网</a>那篇算过，百万级 UE × 每 UE 若干定时器 = 千万级定时器，而且<strong>绝大多数定时器会被取消而不是到期</strong>（收到回应就取消重传定时器）。最小堆在这种"高频插入 + 高频取消"的模式下会被 O(log n) 和懒删除导致的堆膨胀拖死；时间轮的插入与取消都是 O(1)，且时限集中在几个固定值上（协议规定的 T300/T310 等），正好落进少量槽里。这不是"时间轮更高级"，而是<strong>负载特征决定的选择</strong>。</div>
+
+  <h3 id="s4-1">4.1 经典竞态：定时器回调触发时对象已析构</h3>
+
+  <p>这是通信软件里最高发的 UAF（use-after-free）来源，没有例外。</p>
+
+  <div class="cmp">
+    <div class="bad">
+      <h5>❌ 定时器捕获裸 this</h5>
+<pre>class Session {
+  void arm_retransmit() {
+    timer_.after(500ms, [this] {   <span class="cm">// ⚠️ 裸 this</span>
+      this-&gt;retransmit();
+    });
+  }
+  ~Session() { }                   <span class="cm">// 忘了 / 无法可靠取消</span>
+};
+
+<span class="cm">// 时序：</span>
+<span class="cm">// t0  会话 arm 了 500ms 重传定时器</span>
+<span class="cm">// t1  对端发来 Release，会话对象被销毁</span>
+<span class="cm">// t2  定时器线程到期，回调执行 → 悬垂 this → UAF</span>
+<span class="cm">// 即使在析构里调 timer_.cancel()，仍有窗口：</span>
+<span class="cm">// 回调已被定时器线程取出、正要执行，cancel 已经来不及</span></pre>
+    </div>
+    <div class="good">
+      <h5>✅ weak_ptr 提升 / 取消令牌</h5>
+<pre>class Session : public std::enable_shared_from_this&lt;Session&gt; {
+  void arm_retransmit() {
+    timer_.after(500ms,
+      [w = weak_from_this()] {
+        if (auto self = w.lock())  <span class="cm">// 对象还活着才执行</span>
+          self-&gt;retransmit();
+        <span class="cm">// 否则什么都不做：竞态被结构性消除</span>
+      });
+  }
+};
+
+<span class="cm">// 另一种：取消令牌（不想引入 shared_ptr 时）</span>
+struct Token { std::atomic&lt;bool&gt; cancelled{false}; };
+
+timer_.after(500ms, [tok = tok_, this] {
+  if (tok-&gt;cancelled.load(std::memory_order_acquire)) return;
+  retransmit();          <span class="cm">// 前提：回调与析构在同一线程/同一 actor</span>
+});
+~Session() { tok_-&gt;cancelled.store(true, std::memory_order_release); }</pre>
+    </div>
+  </div>
+
+  <div class="rule"><b>注意两种方案的适用前提不同，这一点常被忽略。</b><code>weak_ptr</code> 方案本身就线程安全（<code>lock()</code> 是原子的），代价是会话必须由 <code>shared_ptr</code> 管理、且回调期间对象被延长生命周期。<strong>取消令牌方案只有在"回调执行与对象析构发生在同一线程（或同一 actor 的消息循环）"时才安全</strong>——否则"检查 cancelled 为 false"和"执行 retransmit"之间仍有窗口，对象可能在这个窗口里被析构。跨线程场景请用 <code>weak_ptr</code>，或者干脆把定时器到期也做成一个投递给该会话的<strong>消息</strong>（见第 6、7 节），这样根本不存在跨线程回调。<code>shared_ptr</code>/<code>weak_ptr</code> 的所有权语义细节见 <a href="../cpp/smart_pointers_deep_dive.html">智能指针深入</a>。</div>
+
+  <p><strong>重传与指数退避</strong>：协议定时器几乎都要退避。三个容易写错的地方——① 必须有<strong>上限</strong>（不然退避到几分钟，故障恢复后要等很久）；② 必须加<strong>随机抖动</strong>（否则一次网络闪断后所有会话在同一毫秒重试，制造自己的信令风暴）；③ 退避计数要在<strong>成功后重置</strong>，忘了重置会导致长期运行的连接越来越迟钝。</p>
+</section>
+
+<section class="chapter" id="s5">
+  <div class="ch-head"><div class="num">05</div><div class="t"><h2>分层状态机 HSM</h2><p class="sub">治理状态爆炸</p></div></div>
+
+  <p>扁平状态机的状态数会乘性爆炸。举个真实例子：一个会话有"连接状态"（3 种）× "配置事务状态"（4 种）× "同步状态"（2 种），扁平展开是 24 个状态，而且大量迁移是重复的（"任何状态下收到 Release 都回 Idle"这条规则要写 24 遍）。</p>
+
+  <div class="def"><strong>HSM（Hierarchical State Machine）</strong>：状态可以嵌套。子状态未处理的事件会<strong>冒泡</strong>到父状态处理。于是"任何连接子状态下收到 Release 都断开"这条规则只在父状态 <code>Connected</code> 里写一次，所有子状态自动继承。这就是把 24 条重复迁移压缩成 1 条的机制。</div>
+
+  <div class="diag">
+    <svg viewBox="0 0 760 280" width="760" height="280" role="img" aria-label="分层状态机与正交区域">
+      <g font-family="Inter, sans-serif" font-size="10.5">
+        <text x="380" y="18" text-anchor="middle" fill="#fcd34d" font-weight="700" font-size="12.5">左：事件冒泡消除重复迁移；右：正交区域避免乘性展开</text>
+
+        <rect x="24" y="36" width="330" height="220" rx="10" fill="#10231f" stroke="#10b981" stroke-width="1.6"/>
+        <text x="40" y="56" fill="#6ee7b7" font-weight="700">父状态 Connected</text>
+        <text x="40" y="72" fill="#94a3b8" font-size="9.5">在此层处理：Release / T310 / 心跳超时</text>
+
+        <rect x="44" y="84" width="128" height="42" rx="7" fill="#0f1e33" stroke="#0ea5e9"/>
+        <text x="108" y="101" text-anchor="middle" fill="#7dd3fc" font-size="10" font-weight="700">Idle(子)</text>
+        <text x="108" y="116" text-anchor="middle" fill="#94a3b8" font-size="9">无事务进行中</text>
+
+        <rect x="200" y="84" width="134" height="42" rx="7" fill="#0f1e33" stroke="#0ea5e9"/>
+        <text x="267" y="101" text-anchor="middle" fill="#7dd3fc" font-size="10" font-weight="700">Editing(子)</text>
+        <text x="267" y="116" text-anchor="middle" fill="#94a3b8" font-size="9">candidate 已修改</text>
+
+        <rect x="44" y="140" width="128" height="42" rx="7" fill="#0f1e33" stroke="#0ea5e9"/>
+        <text x="108" y="157" text-anchor="middle" fill="#7dd3fc" font-size="10" font-weight="700">Committing(子)</text>
+        <text x="108" y="172" text-anchor="middle" fill="#94a3b8" font-size="9">等确认，有超时</text>
+
+        <rect x="200" y="140" width="134" height="42" rx="7" fill="#0f1e33" stroke="#0ea5e9"/>
+        <text x="267" y="157" text-anchor="middle" fill="#7dd3fc" font-size="10" font-weight="700">Confirmed(子)</text>
+        <text x="267" y="172" text-anchor="middle" fill="#94a3b8" font-size="9">待 confirm 或回滚</text>
+
+        <line x1="172" y1="105" x2="196" y2="105" stroke="#0ea5e9" marker-end="url(#hs1)"/>
+        <line x1="267" y1="126" x2="267" y2="138" stroke="#0ea5e9" marker-end="url(#hs1)"/>
+        <line x1="196" y1="161" x2="176" y2="161" stroke="#0ea5e9" marker-end="url(#hs1)"/>
+
+        <rect x="44" y="196" width="290" height="48" rx="7" fill="#2a2010" stroke="#f59e0b"/>
+        <text x="56" y="214" fill="#fcd34d" font-size="10">Release 事件：4 个子状态都不处理 →</text>
+        <text x="56" y="230" fill="#e2e8f0" font-size="10">冒泡到父状态 → 统一执行"回滚未提交事务 +</text>
+        <text x="56" y="242" fill="#e2e8f0" font-size="10">释放锁 + 断开"。规则只写一遍。</text>
+
+        <!-- orthogonal -->
+        <rect x="390" y="36" width="346" height="220" rx="10" fill="#1e1633" stroke="#8b5cf6" stroke-width="1.6"/>
+        <text x="406" y="56" fill="#d8b4fe" font-weight="700">同一会话的三个正交区域</text>
+        <text x="406" y="72" fill="#94a3b8" font-size="9.5">各自独立演进，不做笛卡尔积</text>
+
+        <rect x="408" y="84" width="308" height="36" rx="6" fill="#131a2b" stroke="#64748b"/>
+        <text x="420" y="100" fill="#e2e8f0" font-size="10">区域 A · 连接：Idle / Inactive / Connected</text>
+        <text x="420" y="114" fill="#94a3b8" font-size="9">由 RRC 消息驱动</text>
+
+        <rect x="408" y="128" width="308" height="36" rx="6" fill="#131a2b" stroke="#64748b"/>
+        <text x="420" y="144" fill="#e2e8f0" font-size="10">区域 B · 配置事务：Idle / Editing / Committing / Confirmed</text>
+        <text x="420" y="158" fill="#94a3b8" font-size="9">由 NETCONF RPC 驱动</text>
+
+        <rect x="408" y="172" width="308" height="36" rx="6" fill="#131a2b" stroke="#64748b"/>
+        <text x="420" y="188" fill="#e2e8f0" font-size="10">区域 C · 同步：Locked / Holdover / Unlocked</text>
+        <text x="420" y="202" fill="#94a3b8" font-size="9">由 PTP 状态驱动</text>
+
+        <rect x="408" y="216" width="308" height="30" rx="6" fill="#2a1418" stroke="#ef4444"/>
+        <text x="420" y="234" fill="#fca5a5" font-size="10">扁平化 = 3×4×3 = 36 状态；正交化 = 3+4+3 = 10</text>
+
+        <defs><marker id="hs1" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#0ea5e9"/></marker></defs>
+      </g>
+    </svg>
+  </div>
+
+  <div class="box danger"><strong>正交区域不是免费的。</strong>它成立的前提是<strong>各区域之间真的正交</strong>。一旦出现"同步失锁时不允许提交配置"这种跨区域约束，就必须显式建模成"区域间的守卫条件（guard）"，否则约束会变成散落在各处的 <code>if (ptp_locked_)</code> 检查，退化成最初那堆布尔标志位的问题。<strong>实践建议：区域数量控制在 3 个以内，跨区域约束集中写在一处并列成表。</strong></div>
+</section>
+
+<section class="chapter" id="s6">
+  <div class="ch-head"><div class="num">06</div><div class="t"><h2>事件队列与可重入</h2><p class="sub">run-to-completion 是不可谈判的</p></div></div>
+
+  <div class="def"><strong>Run-to-completion（RTC）语义</strong>：状态机处理一个事件必须<strong>完整执行完</strong>（包括退出动作、迁移、进入动作）之后，才能开始处理下一个事件。这是所有状态机形式化模型的基础假设。违反它的直接后果是：迁移过程中状态变量处于中间态，此时若被重入，你会观察到一个"不存在于状态图上的状态"。</div>
+
+  <div class="cmp">
+    <div class="bad">
+      <h5>❌ 迁移动作里直接递归投喂事件</h5>
+<pre>void Fsm::feed(Ev e) {
+  ...
+  st_ = next;
+  action(ctx);            <span class="cm">// action 内部：</span>
+}
+
+void do_setup(Ctx&amp; c) {
+  c.fsm.feed(Ev::Ready);  <span class="cm">// ⚠️ 递归重入</span>
+  <span class="cm">// 回来时 st_ 已被内层改过，外层后续逻辑基于过期假设</span>
+  c.notify_upper();
+}
+<span class="cm">// 症状：迁移日志里出现不可能的顺序；栈深不可控；</span>
+<span class="cm">// 严重时无限递归爆栈</span></pre>
+    </div>
+    <div class="good">
+      <h5>✅ 内部事件入队，由同一个循环串行消费</h5>
+<pre>void Fsm::post(Ev e) { q_.push_back(e); }   <span class="cm">// 只入队</span>
+
+void Fsm::run() {
+  if (running_) return;         <span class="cm">// 防重入闸门</span>
+  running_ = true;
+  while (!q_.empty()) {
+    Ev e = q_.front(); q_.pop_front();
+    step(e);                    <span class="cm">// 一次完整迁移</span>
+  }
+  running_ = false;
+}
+
+void do_setup(Ctx&amp; c) {
+  c.fsm.post(Ev::Ready);        <span class="cm">// 排到当前事件之后</span>
+  c.notify_upper();             <span class="cm">// 本次迁移正常收尾</span>
+}</pre>
+    </div>
+  </div>
+
+  <div class="rule"><b>三条配套规则。</b><br>① <strong>迁移里绝不做阻塞 IO</strong>。同步读文件、同步 DNS 查询、同步等锁都会把整个状态机（乃至整个事件循环上的所有会话）停住。要访问外部资源就<strong>发起异步请求 + 迁移到 Waiting 状态 + 挂一个超时定时器</strong>，回来时作为一个新事件。<br>② <strong>队列必须有界</strong>。内部事件可以由外部事件产生，无界队列在过载时会吃光内存。满了要有明确策略（丢弃低优先级、拒绝新连接），这与 <a href="reliability_ha.html">背压设计</a>是同一件事。<br>③ <strong>区分内部事件与外部事件的优先级</strong>。内部事件（迁移产生的后继动作）通常应优先于新的外部事件，否则会话会长期停在中间状态。实现上用两个队列，内部队列先清空。</div>
+</section>
+
+<section class="chapter" id="s7">
+  <div class="ch-head"><div class="num">07</div><div class="t"><h2>并发与状态机</h2><p class="sub">"单线程持有状态 + 消息传递" vs "共享加锁"</p></div></div>
+
+  <table>
+    <thead><tr><th>维度</th><th>共享状态 + 加锁</th><th>单线程持有 + 消息传递</th></tr></thead>
+    <tbody>
+      <tr><td>竞态风险</td><td>高：每个成员都可能被并发访问，靠人配平锁</td><td><strong>结构性消除</strong>：状态只被一个线程碰</td></tr>
+      <tr><td>RTC 语义</td><td>要靠锁 + 防重入标志手工保证</td><td>天然成立（消息串行消费）</td></tr>
+      <tr><td>定时器悬垂</td><td>要 <code>weak_ptr</code> / 令牌</td><td>定时器到期也是消息，投递到同一队列即可，悬垂问题消失</td></tr>
+      <tr><td>吞吐</td><td>锁竞争随核数增加而恶化</td><td>按会话分片可线性扩展</td></tr>
+      <tr><td>单会话时延</td><td>可能更低（无入队开销）</td><td>多一次入队 + 唤醒（几百纳秒到几微秒）</td></tr>
+      <tr><td>跨会话操作</td><td>直接加两把锁（有锁序风险）</td><td><strong>更麻烦</strong>：要设计请求-应答消息，异步化</td></tr>
+      <tr><td>调试</td><td>难：需要重现线程交织</td><td>易：消息序列可录制回放</td></tr>
+    </tbody>
+  </table>
+
+  <div class="box star"><strong>通信软件的主流答案是后者</strong>，理由不是性能而是<strong>可推理性</strong>。状态机的正确性论证依赖 RTC；共享加锁的实现里 RTC 靠人保证，而"人保证"在几十万行代码和多年迭代之后必然失效。把状态机做成 Actor（一个会话 = 一个邮箱 + 一个状态机 + 一个拥有它的线程），RTC 和"定时器回调悬垂"两个问题同时消失。代价是跨会话操作必须异步化，这需要在架构早期就想清楚。Actor / 线程池等通用并发模式见 <a href="../stl/concurrency_patterns_guide.html">并发模式指南</a>；在通信软件里的具体落法（Active Object 改造）见 <a href="comm_design_patterns.html">通信软件设计模式</a>。</div>
+</section>
+
+<section class="chapter" id="s8">
+  <div class="ch-head"><div class="num">08</div><div class="t"><h2>可测试与可观测</h2><p class="sub">状态机是最容易做到"现场可诊断"的组件</p></div></div>
+
+  <div class="stack">
+    <div class="stack-row"><span class="stack-tag">迁移日志</span><span>每次迁移打一行 <code>(会话ID, 旧状态, 事件, 新状态, 耗时)</code>。这是现场排障的第一手材料，且成本可控（信令面每秒几万行是可承受的，必要时按会话采样）。</span></div>
+    <div class="stack-row"><span class="stack-tag">状态快照</span><span>提供一个"dump 所有会话当前状态的直方图"的运维接口。<strong>"3000 个会话卡在 Committing"</strong>这一个数字往往比几个小时的日志分析更快定位问题。</span></div>
+    <div class="stack-row"><span class="stack-tag">非法迁移断言</span><span>开发/测试构建下断言并中止；生产构建下计数 + 采样日志。<strong>千万不要静默丢弃</strong>——非法事件计数的突增通常意味着对端版本不匹配或有攻击。</span></div>
+    <div class="stack-row"><span class="stack-tag">状态驻留时间</span><span>每个状态的驻留时长直方图。中间状态（Committing、Waiting）的 P99 驻留时间是最灵敏的健康指标，比 CPU 使用率有用得多。</span></div>
+    <div class="stack-row"><span class="stack-tag">模糊测试</span><span>状态机的输入是"事件序列"，天生适合 fuzz：随机生成畸形/乱序/重复的事件序列，断言"不崩溃、不泄漏、最终能回到 Idle"。这比对单个报文做 fuzz 更能找出状态相关的 bug。</span></div>
+    <div class="stack-row"><span class="stack-tag">从代码导出状态图</span><span>转移表实现的额外红利：写十几行代码把 <code>kTable</code> 导出成 DOT/Mermaid，就得到一张<strong>永远和代码一致</strong>的状态图。手工维护的架构图三个月后一定是错的，自动生成的不会。</span></div>
+  </div>
+
+  <div class="box tip"><strong>录制回放是状态机最强的调试武器。</strong>因为迁移是纯函数（第 3.2 节）、事件是串行消费的（第 6 节），你可以把现场的事件序列录下来，在开发机上完全确定性地重放，得到一模一样的迁移轨迹。这把"偶发的现场问题"变成"可重复的本地问题"——这一步做到了，剩下的调试就是常规工作。这也是为什么值得为 RTC 语义和消息传递付那点入队开销。</div>
+
+  <div class="card">
+    <div class="card-title">🎯 本篇要点回顾</div>
+    <ul>
+      <li>协议 = 状态 × 事件 × 迁移 × 定时器；两个以上互相约束的布尔标志位就该换成显式状态机</li>
+      <li>四个真实例子的启示：TCP 的 TIME_WAIT（为不可靠留余量）、RRC 的 INACTIVE（加状态换成本）、NETCONF 的失败清理（资源绑定到状态）、O-RU 启动（必须能往回走）</li>
+      <li>实现手法选型看"规范演进时改动的局部性"：≤5 状态用 switch，5–20 用转移表（通信软件默认），状态有大量独有行为用 State 模式，要编译期穷尽用 variant FSM</li>
+      <li>转移表的隐藏收益是横切关注点只写一遍：非法计数、迁移日志、驻留统计</li>
+      <li>定时器用时间轮不是因为更高级，而是"高频插入 + 高频取消 + 时限集中"的负载特征决定的</li>
+      <li>定时器悬垂 this：<code>weak_ptr</code> 跨线程安全，取消令牌只在同线程/同 actor 下安全</li>
+      <li>HSM 用事件冒泡消除重复迁移，正交区域把乘法变加法，但跨区域约束必须显式集中管理</li>
+      <li>RTC 不可谈判：内部事件入队而非递归，迁移里不做阻塞 IO，队列必须有界</li>
+      <li>单线程持有 + 消息传递的价值是可推理性，顺带消灭定时器悬垂；代价是跨会话操作要异步化</li>
+    </ul>
+  </div>
+</section>
+
+<section class="chapter" id="s9">
+  <div class="ch-head"><div class="num">09</div><div class="t"><h2>动手：交互式 FSM</h2><p class="sub">点事件按钮，看合法迁移与被拒绝的非法事件</p></div></div>
+
+  <p>下面是第 3.2 节那台 RRC 状态机的可交互版本。试着做三件事：① 在 <code>RRC_IDLE</code> 状态下点"恢复请求"，看它被拒绝；② 走 <code>IDLE → CONNECTED → INACTIVE → CONNECTED</code>，注意 Resume 比 Setup 少走多少步；③ 在 <code>CONNECTED</code> 下点 "T310 超时"，观察无线链路失败如何把你打回 <code>IDLE</code>。</p>
+
+  <div class="demo">
+    <div class="demo-title">🎛 RRC 状态机演示</div>
+    <div class="fsm-states">
+      <div class="fsm-state on" data-st="IDLE">RRC_IDLE<small>无上下文 · 最省电</small></div>
+      <div class="fsm-state" data-st="INACTIVE">RRC_INACTIVE<small>上下文留在 RAN</small></div>
+      <div class="fsm-state" data-st="CONNECTED">RRC_CONNECTED<small>可收发数据</small></div>
+    </div>
+    <div class="fsm-btns">
+      <button type="button" data-ev="Setup">建立请求 Setup</button>
+      <button type="button" data-ev="Suspend">释放并挂起 Suspend</button>
+      <button type="button" data-ev="Resume">恢复请求 Resume</button>
+      <button type="button" data-ev="Release">释放 Release</button>
+      <button type="button" data-ev="T310">T310 超时</button>
+      <button type="button" data-ev="Paging">寻呼 Paging</button>
+      <button type="button" class="reset" data-ev="__reset">重置</button>
+    </div>
+    <div class="fsm-log" id="fsmLog" aria-live="polite"></div>
+  </div>
+
+  <div class="box tip">注意日志里非法事件也被<strong>记了一行</strong>而不是静默忽略——这正是第 8 节强调的做法。真实系统里这一行对应一个按 (状态, 事件) 二维打点的计数器，它的突增是"对端版本不匹配"最早的信号。</div>
+
+  <div class="box tip">Module 09 继续 → <a href="comm_design_patterns.html">通信软件设计模式：Reactor / Proactor / Active Object / Pipeline</a>，把状态机放进完整的软件骨架里。</div>
+</section>
+
+<div class="footer-nav">
+  <a href="cpp_modern_in_comm.html">⬅️ 现代 C++ 落地</a>
+  <a href="comm_design_patterns.html">➡️ 通信设计模式</a>
+  <a href="comm_software_arch.html">🏗 通信软件架构</a>
+  <a href="communication_directory.html">📚 目录</a>
+  <a href="../index.html">🏠 主页</a>
+</div>
+
+  </main>
+</div>
+
+<script src="../assets/page-shell.js" defer></script>
+
+<script>
+(function () {
+  var TABLE = {
+    IDLE:      { Setup:   ['CONNECTED', 'RRC Setup：完整建立（RA → RRCSetupRequest → Setup → SetupComplete）'],
+                 Paging:  ['IDLE',      'CN 寻呼：仍在 IDLE，由上层决定是否发起建立'] },
+    INACTIVE:  { Resume:  ['CONNECTED', 'RRC Resume：复用保留的上下文，信令明显少于 Setup'],
+                 Release: ['IDLE',      '释放：丢弃 RAN 侧保留的上下文'],
+                 Paging:  ['CONNECTED', 'RAN 寻呼：触发 Resume 流程恢复连接'] },
+    CONNECTED: { Suspend: ['INACTIVE',  'Release(suspendConfig)：保留上下文进入省电态'],
+                 Release: ['IDLE',      '正常释放：清理承载与上下文'],
+                 T310:    ['IDLE',      'T310 到期 = 无线链路失败，必须回落到 IDLE 重建'] }
+  };
+  var LABEL = { Setup: '建立请求', Suspend: '释放并挂起', Resume: '恢复请求',
+                Release: '释放', T310: 'T310 超时', Paging: '寻呼' };
+
+  var demo = document.querySelector('.demo');
+  if (!demo) return;
+  var log = document.getElementById('fsmLog');
+  var cells = demo.querySelectorAll('.fsm-state');
+  var cur = 'IDLE', n = 0;
+
+  function paint() {
+    for (var i = 0; i < cells.length; i++)
+      cells[i].classList.toggle('on', cells[i].getAttribute('data-st') === cur);
+  }
+  function line(cls, text) {
+    var d = document.createElement('div');
+    d.className = cls;
+    d.textContent = text;
+    log.appendChild(d);
+    log.scrollTop = log.scrollHeight;
+  }
+  function reset() {
+    cur = 'IDLE'; n = 0; log.textContent = '';
+    paint();
+    line('tmr', '· 已重置到 RRC_IDLE');
+  }
+  function feed(ev) {
+    if (ev === '__reset') { reset(); return; }
+    var row = TABLE[cur] || {};
+    var tr = row[ev];
+    var tag = '#' + (++n).toString().padStart(2, '0');
+    if (!tr) {
+      line('rej', tag + ' ✗ 非法事件：' + cur + ' 状态不接受 ' + LABEL[ev]
+                + '（计数 illegal[' + cur + '][' + ev + ']++，状态保持不变）');
+      return;
+    }
+    var from = cur;
+    cur = tr[0];
+    paint();
+    if (from === cur) line('tmr', tag + ' ○ ' + from + ' —' + LABEL[ev] + '→ ' + cur + '（自迁移）：' + tr[1]);
+    else              line('ok',  tag + ' ✓ ' + from + ' —' + LABEL[ev] + '→ ' + cur + '：' + tr[1]);
+  }
+
+  var btns = demo.querySelectorAll('.fsm-btns button');
+  for (var i = 0; i < btns.length; i++) {
+    btns[i].addEventListener('click', function () { feed(this.getAttribute('data-ev')); });
+  }
+  reset();
+})();
+</script>
+
+<footer><p>协议状态机：从 TCP / RRC / NETCONF 到可维护的 FSM — Kavin Tech Notes · 2026</p></footer>
+
+<button class="back-top" id="backTop" onclick="window.scrollTo({top:0,behavior:'smooth'})">↑</button>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

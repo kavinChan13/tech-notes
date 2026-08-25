@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>通信软件的内存与竞态排查实战 · ASan / TSan / Valgrind 选型 / 实时节点约束 / 三个复盘案例 / soak 测试</title>
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<link rel="stylesheet" href="../assets/page-shell.css">
+<style>
+  .ps .def { background:color-mix(in srgb,var(--ps-accent) 8%,var(--ps-card)); border:1px solid var(--ps-border);
+    border-left:4px solid var(--ps-accent); border-radius:8px; padding:12px 16px; margin:14px 0; font-size:.95em; }
+  .ps .def strong:first-child { color:var(--ps-accent); }
+  .ps .analogy { background:color-mix(in srgb,var(--ps-orange) 10%,var(--ps-card)); border:1px solid var(--ps-border);
+    border-left:4px solid var(--ps-orange); border-radius:8px; padding:12px 16px; margin:16px 0; }
+  .ps .analogy strong { color:var(--ps-orange); }
+  .ps .stack { display:flex; flex-direction:column; gap:6px; margin:18px 0; }
+  .ps .stack-row { display:flex; gap:12px; align-items:center; background:var(--ps-card-2);
+    border:1px solid var(--ps-border); border-radius:8px; padding:11px 14px; }
+  .ps .stack-tag { min-width:120px; font-weight:700; font-size:.9em; color:var(--ps-accent); }
+  .ps .cmp { display:grid; grid-template-columns:1fr; gap:12px; margin:16px 0; }
+  @media(min-width:960px){ .ps .cmp { grid-template-columns:1fr 1fr; } }
+  .ps .cmp > div { border:1px solid var(--ps-border); border-radius:8px; padding:10px 13px; background:var(--ps-card-2); }
+  .ps .cmp > div.bad { border-left:4px solid var(--ps-red); }
+  .ps .cmp > div.good { border-left:4px solid var(--ps-green); }
+  .ps .cmp h5 { margin:0 0 6px; font-size:.92em; font-weight:700; }
+  .ps .cmp > div.bad h5 { color:var(--ps-red); }
+  .ps .cmp > div.good h5 { color:var(--ps-green); }
+  .ps .cmp pre { margin:0; font-size:.86em; }
+  .ps .rule { border:1px solid var(--ps-border); border-left:4px solid var(--ps-yellow);
+    background:color-mix(in srgb,var(--ps-yellow) 10%,var(--ps-card)); border-radius:8px; padding:12px 16px; margin:14px 0; }
+  .ps .rule b { color:var(--ps-yellow); }
+  .ps .scope { border:1px solid var(--ps-border); border-left:4px solid var(--ps-accent);
+    background:color-mix(in srgb,var(--ps-accent) 10%,var(--ps-card)); border-radius:8px; padding:14px 18px; margin:18px 0; }
+  .ps .scope b { color:var(--ps-accent); }
+  .ps .bug { display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:10px; margin:18px 0; }
+  .ps .bug-cell { background:var(--ps-card-2); border:1px solid var(--ps-border); border-radius:8px;
+    border-top:3px solid var(--ps-red); padding:12px 14px; }
+  .ps .bug-cell b { display:block; color:var(--ps-red); margin-bottom:4px; font-size:.95em; }
+  .ps .bug-cell span { font-size:.88em; color:var(--ps-text-dim); }
+</style>
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav ps tn-shell-overlay">
+
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="communication_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 28 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc">
+    <h2>内存与竞态排查</h2>
+    <nav>
+      <ol>
+        <li><a href="#s1">四类高发缺陷</a></li>
+        <li><a href="#s2">工具选型矩阵</a></li>
+        <li><a href="#s3">为什么实时节点不能上 Valgrind</a></li>
+        <li><a href="#s4">三个复盘案例</a></li>
+        <li><a href="#s5">长稳测试怎么设计</a></li>
+        <li><a href="#s6">不能上工具时的生产手段</a></li>
+        <li><a href="#s7">把排查前移</a></li>
+      </ol>
+    </nav>
+  </aside>
+
+  <main>
+
+    <header class="hero">
+      <div class="badge">Communication · Debugging · 2026</div>
+      <h1>通信软件的内存与竞态排查实战</h1>
+      <p class="sub">通信软件的缺陷分布很有特色：<strong>畸形报文</strong>打的是解析器，<strong>会话销毁</strong>撞的是工作线程回调，<strong>7×24 长稳</strong>照的是每连接泄漏，<strong>多把锁</strong>换来的是死锁。本篇不重讲工具用法，只讲通信场景里<strong>怎么选工具、能不能在设备上跑、以及三个从报告读到根因的完整复盘</strong>。</p>
+      <div class="meta-row">
+        <span class="pill cyan">Module 11</span>
+        <span class="pill green">阅读 ~28 min</span>
+        <span class="pill amber">3 个复盘案例</span>
+      </div>
+    </header>
+
+<section class="chapter" id="s1">
+  <div class="ch-head"><div class="num">01</div><div class="t"><h2>四类高发缺陷</h2><p class="sub">通信软件的缺陷分布不是随机的</p></div></div>
+
+  <div class="scope"><b>边界。</b>Memcheck / Helgrind / Massif 的<strong>完整用法</strong>见 <a href="../perf-debug/valgrind_guide.html">Valgrind 全套指南</a>；Sanitizer 的选项与内部实现见 <a href="../perf-debug/sanitizers_guide.html">Sanitizers 指南</a> 与 <a href="../cpp/sanitizer_internals.html">Sanitizer 内部原理</a>；泄漏治理、死锁调试、崩溃调试的通用方法见 <a href="../perf-debug/memory_leak_guide.html">内存泄漏治理</a>、<a href="../perf-debug/deadlock_debugging_guide.html">死锁调试</a>、<a href="../perf-debug/crash_debugging_guide.html">崩溃调试</a>。<strong>本篇只讲通信场景特有的部分</strong>：设备上能不能跑、时序约束怎么绕、以及这四类 bug 的固定形状。</div>
+
+  <div class="bug">
+    <div class="bug-cell"><b>① 畸形报文 → 解析越界</b><span>长度字段没校验就当偏移用、TLV 嵌套没限深度、可选字段缺失时仍按固定偏移读。<strong>唯一一类既是稳定性问题又是安全漏洞的缺陷</strong>，因为输入完全由外部控制。</span></div>
+    <div class="bug-cell"><b>② 会话销毁 vs 回调 → UAF</b><span>会话 teardown 时，定时器回调、工作线程、通知推送可能仍持有裸指针。表现为悬垂 <code>this</code>。<strong>触发条件是"正好在这个时刻断链"，所以永远是偶发</strong>。</span></div>
+    <div class="bug-cell"><b>③ 每连接泄漏 → 长稳 RSS 上扬</b><span>单次泄漏几 KB，功能测试完全看不见；7×24 跑一周、几十万次连接后 RSS 涨几个 G，被 OOM killer 收走或触发倒换。</span></div>
+    <div class="bug-cell"><b>④ 锁序不一致 → 死锁</b><span>会话锁与管理器锁的加锁顺序在不同路径上相反。通信软件里尤其容易，因为"从会话找管理器"和"从管理器遍历会话"两个方向都天然存在。</span></div>
+  </div>
+
+  <div class="analogy">🏗️ <strong>类比：这四类缺陷像建筑的四种病</strong>。① <strong>解析越界</strong>是<em>大门没验票</em>——任何人递张假票就能进后台，是唯一会被人主动攻击的一类。② <strong>UAF</strong> 是<em>拆房时还有人在里面</em>——拆迁队和住户各按自己的时间表行动，平时错开，偶尔撞上就是事故。③ <strong>泄漏</strong>是<em>每天掉一点墙皮</em>——今天看不出来，一年后地下室堆满。④ <strong>死锁</strong>是<em>两条单行道对开</em>——路修好那天就注定了，只是要等两辆车恰好同时来。<br>四种病要用四种不同的检查手段，用错了就是"体检全过但楼在塌"。</div>
+
+  <div class="box star"><strong>为什么强调"分布不是随机的"？</strong>因为它决定了资源该往哪投。通信软件的输入是不可信的字节流、生命周期是并发拆除的会话、运行时长以年计——这三件事直接生成了前三类缺陷，而普通业务软件（输入受控、对象生命周期由请求边界界定、进程天天重启）对它们的敏感度低得多。<strong>所以通信项目的质量投入应当集中在：解析器 fuzz、会话生命周期的所有权模型、长稳趋势告警。</strong>把力气均摊到所有代码上是低效的。</div>
+</section>
+
+<section class="chapter" id="s2">
+  <div class="ch-head"><div class="num">02</div><div class="t"><h2>工具选型矩阵</h2><p class="sub">开销量级决定了它能跑在哪</p></div></div>
+
+  <table>
+    <thead><tr><th>工具</th><th>抓什么</th><th>速度损耗</th><th>内存开销</th><th>能上带实时/同步约束的节点？</th><th>CI 里怎么排</th></tr></thead>
+    <tbody>
+      <tr><td><strong>ASan</strong></td><td>堆/栈越界、UAF、double-free</td><td><strong>~2x</strong></td><td>~2–3x（红区 + 隔离区）</td><td>⚠️ 实验室节点降速可行；生产不建议</td><td><strong>必备门禁</strong>：单测 + 集成测试全跑</td></tr>
+      <tr><td><strong>TSan</strong></td><td>数据竞争、锁序问题</td><td><strong>~5–15x</strong></td><td>~5–10x（影子内存）</td><td>❌ 基本不可能</td><td><strong>必备门禁</strong>：并发相关测试专跑一轮</td></tr>
+      <tr><td><strong>UBSan</strong></td><td>未定义行为（非对齐、溢出、无效枚举）</td><td><strong>~1.2x</strong></td><td>可忽略</td><td>✅ 开销最小，可长期开着</td><td><strong>全量开</strong>，成本几乎为零</td></tr>
+      <tr><td><strong>LSan</strong></td><td>内存泄漏（进程退出时快照）</td><td>~1x（含在 ASan 里）</td><td>低</td><td>✅ 但要能<strong>正常退出</strong>才出报告</td><td>随 ASan 一起；注意"退出前清理"要真做</td></tr>
+      <tr><td><strong>Memcheck</strong></td><td>越界、UAF、未初始化读、泄漏（最全）</td><td><strong>10–50x</strong></td><td>高</td><td>❌ <strong>绝对不能</strong>（见 §03）</td><td>夜间任务跑关键模块单测</td></tr>
+      <tr><td><strong>Helgrind</strong></td><td>数据竞争 + 锁序（含 happens-before）</td><td><strong>20–100x</strong></td><td>很高</td><td>❌</td><td>只跑抽出来的小规模复现用例</td></tr>
+      <tr><td><strong>DRD</strong></td><td>数据竞争（比 Helgrind 轻，报告更少噪声）</td><td><strong>~20x</strong></td><td>中</td><td>❌</td><td>Helgrind 噪声太大时的替代</td></tr>
+      <tr><td><strong>Massif</strong></td><td>堆使用<strong>快照曲线</strong>（谁占的内存）</td><td>~5–20x</td><td>中</td><td>❌ 但可在实验室低负载跑</td><td>长稳后分析用，不适合门禁</td></tr>
+      <tr><td><strong>Callgrind</strong></td><td>指令级 profile / 调用图</td><td><strong>~50x</strong></td><td>中</td><td>❌</td><td>不进 CI，人工分析用</td></tr>
+      <tr><td><strong>heaptrack / tcmalloc-prof</strong></td><td>堆分配来源与增长趋势</td><td><strong>~1.1–1.5x</strong></td><td>中</td><td>✅ <strong>可以上生产</strong></td><td>长稳环境常开，定期导快照</td></tr>
+    </tbody>
+  </table>
+
+  <div class="rule"><b>选型口诀：先按"能跑在哪"筛，再按"抓什么"选。</b>通信软件的现实约束是：<strong>大部分 bug 只在真实负载、真实对端、真实时序下才出现</strong>，而能承受真实负载的工具只有 UBSan、heaptrack 这一档（1–1.5x）；ASan（2x）在实验室降速环境勉强可用；TSan 与 Valgrind 全家只能跑"抽出来的模块 + 构造的用例"。<br>所以正确的工作流是：<strong>把可疑模块从设备里抽出来，在 x86 开发机上用最狠的工具（TSan + Memcheck）跑构造的用例</strong>，而不是想办法把 Valgrind 塞进设备。<strong>"抽得出来"本身就是一项架构要求</strong>——解析器、状态机、会话表都应该能脱离硬件独立编译与测试。</div>
+
+  <div class="box tip"><strong>ASan 与 TSan 不能同时开</strong>（影子内存布局冲突），必须跑两轮。CI 里的推荐排布：① <strong>每次提交</strong>：普通构建 + UBSan 全量单测（几乎不加时间）；② <strong>每次 PR</strong>：ASan 一轮（单测 + 集成）；③ <strong>每晚</strong>：TSan 一轮（并发测试，跑够时长与并发度）+ 解析器 fuzz 增量；④ <strong>每周</strong>：Memcheck 跑核心模块 + 7 天长稳的趋势复核。具体流水线写法见 <a href="../perf-debug/cmake_ci_guide.html">CMake / CI 指南</a>。</div>
+</section>
+
+<section class="chapter" id="s3">
+  <div class="ch-head"><div class="num">03</div><div class="t"><h2>为什么实时节点不能上 Valgrind</h2><p class="sub">它不只是"慢"，它会掩盖真 bug 并制造假 bug</p></div></div>
+
+  <div class="def"><strong>Valgrind 的工作方式</strong>：它是一个<strong>动态二进制翻译</strong>框架——把你的机器码翻译成中间表示、插入检查、再重新生成执行。所以它<strong>不是采样、也不是插桩后原速运行</strong>，而是<em>整个程序都在解释执行</em>。这决定了它的两个特性：检查极其彻底（连未初始化读都能抓），以及<strong>时序被整体拉长 10–50 倍且不均匀</strong>。</div>
+
+  <p>"不均匀"是关键。ASan 的 2x 开销大致均匀分布，程序的相对时序基本保持；Valgrind 的开销集中在访存与分支密集处，<strong>不同代码路径被拉长的倍数完全不同</strong>。对通信软件来说，这会造成三类后果：</p>
+
+  <div class="stack">
+    <div class="stack-row"><span class="stack-tag">制造假 bug</span><span>协议超时被击穿：对端 200 ms 没收到回应就重传/断链，于是你看到的是"一堆重传与断链"，而不是原本要查的问题。<strong>心跳丢失 → 对端判死 → 触发倒换 → 会话重建</strong>，整个测试变成在观测超时机制而不是原 bug。更糟的是<strong>看门狗复位</strong>：带硬实时约束的设备（O-DU 的 slot 处理）有硬件看门狗，喂狗线程被拖慢就直接重启，你连日志都拿不到。</span></div>
+    <div class="stack-row"><span class="stack-tag">掩盖真 bug</span><span>竞态的触发窗口通常是几十到几百纳秒。Valgrind 下所有操作都变慢，但<strong>相对时序被打乱</strong>——原本"恰好同时"的两个操作现在被拉开了，竞态<strong>不再复现</strong>。你跑了三天 Memcheck 干干净净，回到原速环境 bug 依旧。这是最浪费时间的一种情形。</span></div>
+    <div class="stack-row"><span class="stack-tag">与同步机制冲突</span><span>带 <a href="ptp_synce.html">PTP</a> 的节点上，<code>ptp4l</code> / <code>phc2sys</code> 靠精确的收发时间戳做伺服。整个进程被拖慢会让时间戳质量崩坏，PTP 状态机可能判定失锁并进入 holdover——这时候设备的所有时序行为都变了，测出来的东西没有参考价值。</span></div>
+  </div>
+
+  <div class="box danger"><strong>这是"观测行为改变被观测对象"的教科书案例，而通信软件对它格外敏感</strong>，因为通信软件的正确性大量依赖<strong>时间</strong>（超时、重传、心跳、slot 边界、PTP 伺服）。一个纯计算程序放慢 50 倍只是慢，一个协议栈放慢 50 倍就是<strong>换了一套完全不同的运行条件</strong>。</div>
+
+  <h3 id="s3-1">3.1 四条可行的替代路径</h3>
+
+  <div class="stack">
+    <div class="stack-row"><span class="stack-tag">① 抓包离线重放</span><span><strong>首选</strong>。在生产/实验室用 <code>tcpdump</code> / 端口镜像抓下故障时段的报文，然后在开发机上把这段 pcap <strong>喂给抽出来的协议栈模块</strong>，此时可以随便上 Memcheck / ASan / TSan。优点是输入完全真实且<strong>可重复</strong>——这是排查解析类 bug 的最快路径。<strong>前提是模块能脱离硬件运行</strong>（回到 §02 那句架构要求）。</span></div>
+    <div class="stack-row"><span class="stack-tag">② 模块抽出做单测</span><span>把解析器、状态机、会话表做成不依赖硬件与网络的库，用构造的用例（含畸形报文、乱序事件、并发 teardown）跑最狠的工具。<strong>竞态类 bug 要在单测里主动加压</strong>：多线程反复"建会话—发消息—拆会话"几百万次，配 TSan。</span></div>
+    <div class="stack-row"><span class="stack-tag">③ 实验室降速跑</span><span>如果必须在设备上跑：把负载降到 1/50、<strong>同步把所有协议超时按同样倍数放大</strong>（这一步最常被漏掉——只降负载不改超时，一样会被超时机制淹没）、关掉看门狗、把 PTP 相关测试单独隔离。能查泄漏与越界，<strong>查不了竞态</strong>。</span></div>
+    <div class="stack-row"><span class="stack-tag">④ 上低开销工具</span><span>非要在真实负载下观测：<strong>UBSan</strong>（1.2x，可长期开）+ <strong>heaptrack / tcmalloc profiling</strong>（1.1–1.5x）+ <strong>eBPF 动态追踪</strong>（几乎零侵入，见 §06）。这一档不能抓竞态，但能抓泄漏与 UB，而且是唯一能在<strong>真实时序</strong>下工作的。</span></div>
+  </div>
+</section>
+
+<section class="chapter" id="s4">
+  <div class="ch-head"><div class="num">04</div><div class="t"><h2>三个复盘案例</h2><p class="sub">从报告读到根因的完整路径</p></div></div>
+
+  <details class="qa standalone">
+    <summary><strong>案例 1 · TLV 长度字段未校验 → 堆越界读</strong> <span class="pill red">越界 / 安全</span></summary>
+    <div class="ans">
+      <p><strong>现象</strong>：某型对端设备接入后，管理面进程每隔几十分钟崩一次；换回原厂对端就正常。core dump 的栈在解析函数里，但每次崩的位置不同，有时甚至栈都是坏的。</p>
+
+      <p><strong>第一步：把它变成可重复的。</strong>崩溃随机说明读到的内容不确定——典型的越界。先在故障时段抓包（<code>tcpdump -s0 -w</code>），拿到 pcap 后写一个 20 行的重放程序把报文逐个喂给解析器，在开发机上用 ASan 编译运行。第三个报文就炸了：</p>
+<pre>==12345==ERROR: AddressSanitizer: heap-buffer-overflow on address 0x60300000f0e8
+READ of size 4 at 0x60300000f0e8 thread T0
+    #0 parse_tlv(const uint8_t*, size_t) tlv.cc:47
+    #1 handle_msg(Session&amp;, Buf&amp;)       session.cc:212
+    #2 replay_main()                    replay.cc:31
+
+0x60300000f0e8 is located 8 bytes to the right of 96-byte region [0x60300000f080,0x60300000f0e0)
+allocated by thread T0 here:
+    #0 operator new(unsigned long)
+    #1 Buf::Buf(size_t)                 buf.cc:14</pre>
+
+      <p><strong>怎么读这份报告</strong>——三行关键信息，缺一不可：</p>
+      <ul>
+        <li><code>READ of size 4</code>：读 4 字节 → 在读一个 <code>uint32_t</code>，符合"读长度字段/读 value"。</li>
+        <li><code>8 bytes to the right of 96-byte region</code>：<strong>这是最有价值的一行</strong>。缓冲只有 96 字节，而访问落在结束后 8 字节处 → 偏移算到了 104。说明<strong>偏移来自报文里的某个字段，而那个字段没有和缓冲长度比对过</strong>。</li>
+        <li><code>allocated by ... Buf::Buf</code>：确认越界的对象就是 recv buffer 本身，不是别的结构被踩。</li>
+      </ul>
+
+      <p><strong>根因代码</strong>：</p>
+      <div class="cmp">
+        <div class="bad">
+          <h5>❌ 长度字段直接当偏移用</h5>
+<pre>while (off + 4 &lt;= len) {          <span class="cm">// 只检查了 T+L 这 4 字节</span>
+  uint16_t type, vlen;
+  std::memcpy(&amp;type, p + off,     2);
+  std::memcpy(&amp;vlen, p + off + 2, 2);
+  type = ntohs(type); vlen = ntohs(vlen);
+
+  handle_value(p + off + 4, vlen);  <span class="cm">// ⚠️ vlen 完全来自对端！</span>
+  off += 4 + vlen;                  <span class="cm">// ⚠️ 还可能溢出回绕</span>
+}
+<span class="cm">// 对端把 vlen 填成 100，实际只剩 8 字节 → 越界读 92 字节</span>
+<span class="cm">// 这不是对端"坏"：它可能只是用了不同的可选字段组合，</span>
+<span class="cm">// 而我们从没验证过这条路径。</span></pre>
+        </div>
+        <div class="good">
+          <h5>✅ 先校验再解析 + span 边界</h5>
+<pre>std::span&lt;const std::byte&gt; buf{p, len};
+size_t off = 0;
+while (off + 4 &lt;= buf.size()) {
+  auto type = read_be&lt;uint16_t&gt;(buf.data() + off);
+  auto vlen = read_be&lt;uint16_t&gt;(buf.data() + off + 2);
+
+  <span class="cm">// ① 剩余空间检查（用减法，避免 off+4+vlen 溢出回绕）</span>
+  if (vlen &gt; buf.size() - off - 4) return Err::kTruncated;
+  <span class="cm">// ② 语义检查：这个 type 允许的长度范围</span>
+  if (!len_ok(type, vlen))         return Err::kBadLength;
+
+  <span class="cm">// ③ 传<strong>子 span</strong>，被调用方拿不到越界的能力</span>
+  if (auto e = handle_value(type, buf.subspan(off + 4, vlen)); e)
+    return e;
+  off += 4u + vlen;
+}
+if (off != buf.size()) return Err::kTrailingGarbage;  <span class="cm">// ④ 不容忍尾部残留</span>
+return Err::kOk;</pre>
+        </div>
+      </div>
+
+      <div class="rule"><b>三条可复用的教训。</b>① <strong>剩余空间检查一律用减法</strong>（<code>vlen &gt; size - off - 4</code>）而不是加法（<code>off + 4 + vlen &gt; size</code>）——后者在 <code>size_t</code> 上会因溢出回绕而把检查变成恒真。② <strong>传 span 而不是"指针 + 长度"</strong>：被调用方从类型上就拿不到越界能力，这是把"约定"变成"编译期保证"（见 <a href="cpp_modern_in_comm.html">现代 C++ 那篇</a>）。③ <strong>这个 bug 本该被 fuzz 在第一天抓到</strong>：随机变异 vlen 字段是 libFuzzer 最容易发现的模式之一（见 §07）。它能活到现场，说明解析器从来没被 fuzz 过。</div>
+
+      <p><strong>顺带说明为什么 Memcheck 在这里不如 ASan</strong>：Memcheck 也能报这个越界，但它对<strong>堆块之间</strong>的越界依赖红区大小，小幅越界（比如只越 4 字节且落在同一个 chunk 的 padding 里）可能漏报；ASan 的红区是明确插入的且报告直接给出"距离哪个对象右侧多少字节"，定位效率高得多。而且 ASan 只有 2x 开销，能直接跑集成测试。<strong>越界类问题优先 ASan，Memcheck 留给"未初始化读"这类 ASan 抓不到的。</strong></p>
+    </div>
+  </details>
+
+  <details class="qa standalone">
+    <summary><strong>案例 2 · 会话 teardown 与定时器回调竞态 → UAF</strong> <span class="pill amber">竞态 / 悬垂</span></summary>
+    <div class="ans">
+      <p><strong>现象</strong>：链路抖动频繁的现场，进程每天崩 1–2 次。栈有时在定时器线程、有时在工作线程，崩的对象是会话结构。<strong>加了日志之后不复现了</strong>（典型的 Heisenbug——日志把时序拉开了）。</p>
+
+      <p><strong>第一步：判断是竞态还是纯逻辑错误。</strong>"加日志就不复现"+"崩的位置随机"+"与链路抖动强相关"三条同时成立，基本可以定性为<strong>销毁与使用的竞态</strong>。链路抖动 = 频繁断链 = 频繁 teardown，正好是触发窗口。</p>
+
+      <p><strong>第二步：构造复现。</strong>不要指望在设备上抓。把会话管理抽成单测，开 8 个线程反复做「建会话 → 挂 10 ms 定时器 → 立即 teardown」，跑 TSan：</p>
+<pre>WARNING: ThreadSanitizer: heap-use-after-free (pid=8123)
+  Read of size 8 at 0x7b0400001040 by thread T3:
+    #0 Session::on_timer()        session.cc:301
+    #1 TimerWheel::tick()         timer.cc:88
+
+  Previous write of size 8 at 0x7b0400001040 by thread T1:
+    #0 operator delete(void*)
+    #1 SessionMgr::teardown()     mgr.cc:145
+
+  Location is heap block of size 512 at 0x7b0400001040 freed by thread T1
+</pre>
+      <p><strong>报告的读法</strong>：TSan 直接给出了<strong>两个线程 + 两条栈</strong>——T3 在读，T1 已经 free 了。这比 core dump 强的地方在于它<strong>同时给出了释放方的栈</strong>，根因一眼可见：<code>teardown()</code> 删了会话，但时间轮里还挂着指向它的回调。</p>
+
+      <div class="cmp">
+        <div class="bad">
+          <h5>❌ 裸指针回调 + "取消定时器"不可靠</h5>
+<pre>void SessionMgr::teardown(SessionId id) {
+  auto* s = map_[id];
+  timer_.cancel(s-&gt;timer_id);   <span class="cm">// ⚠️ 看似取消了</span>
+  map_.erase(id);
+  delete s;                     <span class="cm">// ⚠️ 但回调可能<strong>已经在跑</strong></span>
+}
+<span class="cm">// 竞态窗口：tick() 已经从时间轮取出这个回调、</span>
+<span class="cm">// 正准备调用（或已进入 on_timer 但还没读成员），</span>
+<span class="cm">// 此时 cancel() 找不到东西可取消，delete 照常执行。</span>
+<span class="cm">// → on_timer 里的 this 悬垂。</span>
+<span class="cm">// 窗口只有几十纳秒，但一天几万次 teardown 就够了。</span>
+<span class="cm">// ⚠️ 关键认识：<strong>"取消"永远无法覆盖"已取出待调用"</strong>，</span>
+<span class="cm">// 除非取消与调用在同一个串行上下文里。</span></pre>
+        </div>
+        <div class="good">
+          <h5>✅ weak_ptr：让回调自己判断对象还在不在</h5>
+<pre><span class="cm">// 会话由 shared_ptr 持有，定时器只持 weak_ptr</span>
+void SessionMgr::arm(std::shared_ptr&lt;Session&gt; s) {
+  std::weak_ptr&lt;Session&gt; w = s;
+  timer_.after(10ms, [w] {
+    if (auto sp = w.lock()) sp-&gt;on_timer();   <span class="cm">// ✅ 提升成功才用</span>
+    <span class="cm">// 提升失败 = 会话已销毁 = 什么都不做，正确且无竞态</span>
+  });
+}
+void SessionMgr::teardown(SessionId id) {
+  map_.erase(id);      <span class="cm">// 引用计数归零时才真正析构；</span>
+                       <span class="cm">// 若回调正持有 sp，析构推迟到回调结束</span>
+}</pre>
+        </div>
+      </div>
+
+      <div class="rule"><b>三种修法，按推荐度排序。</b>① <strong>Active Object / 单一执行上下文</strong>（最彻底）：定时器到期只是<strong>往会话邮箱投一条消息</strong>，与 teardown 消息在同一个队列里串行——竞态从结构上不存在，连引用计数都不需要。见 <a href="comm_design_patterns.html#s5">设计模式 §05</a>。② <strong><code>shared_ptr</code> + <code>weak_ptr</code></strong>（上面的代码，改动最小）：适合已有大量裸指针回调的存量代码，代价是每次回调一次原子引用计数操作。③ <strong>取消令牌（cancellation token）</strong>：回调闭包持有一个 <code>shared_ptr&lt;atomic&lt;bool&gt;&gt;</code>，teardown 时置位，回调进门先检查。比 weak_ptr 轻，但要自己保证"检查后到使用前对象不会被销毁"——<strong>通常还是要配引用计数</strong>，所以只在极热路径上才值得。</div>
+
+      <p><strong>为什么 Helgrind 在这里不如 TSan</strong>：Helgrind 能报同样的问题，但它的报告噪声大得多（对无锁原语与自定义同步的误报率高，通信代码里这两样都不少），而且 20–100x 的开销让"跑几百万次 teardown"这种加压方式变得不现实——而<strong>竞态类 bug 恰恰需要大量迭代才能命中</strong>。TSan 的 5–15x 让你能在几分钟里跑完百万次循环，这是它的决定性优势。<strong>Helgrind 的价值在于不需要重新编译</strong>（对付只有二进制的第三方库时有用）。</p>
+    </div>
+  </details>
+
+  <details class="qa standalone">
+    <summary><strong>案例 3 · 每连接残留 5 KB → 7 天长稳 RSS 上扬</strong> <span class="pill cyan">泄漏 / 长稳</span></summary>
+    <div class="ans">
+      <p><strong>现象</strong>：功能测试全过，短时压测（1 小时）内存平稳。7 天长稳跑到第 4 天 RSS 从 1.2 G 涨到 3.8 G，趋势线笔直向上，第 6 天被 OOM killer 收走。</p>
+
+      <p><strong>第一步：先确认是"泄漏"还是"缓存增长"或"碎片"</strong>——这三者的处理完全不同，搞错方向会白费几天：</p>
+      <ul>
+        <li>看 <strong>RSS 与堆使用量的差</strong>：<code>malloc_info</code> / <code>tcmalloc</code> 的统计显示"应用持有的堆"只有 1.3 G，而 RSS 3.8 G → 偏向<strong>碎片</strong>或分配器不归还。</li>
+        <li>反之若两者一起涨 → 真的有对象没释放，是<strong>泄漏</strong>或<strong>无界缓存</strong>。本例是这一种。</li>
+        <li><strong>关掉某个功能后趋势是否消失</strong>：这是最便宜的二分法。本例关掉"待确认消息重传"后曲线立刻变平——范围一下缩到一个模块。</li>
+      </ul>
+
+      <p><strong>第二步：定位到具体分配点。</strong>LSan 在这里帮不上忙——它只在<strong>进程退出</strong>时报告，而长稳进程根本不退出，而且这些内存"仍被 pending 表可达"，从 LSan 的定义看<strong>不算泄漏</strong>。要用的是"堆增长归因"类工具：</p>
+      <ul>
+        <li><strong>heaptrack</strong>（开销 ~1.1–1.5x，可在长稳环境常开）：直接给出"从 T1 到 T2 之间净增长的分配来自哪些调用栈"，这正是本例需要的。</li>
+        <li><strong>Massif</strong>（Valgrind 家族）：快照曲线很直观，但开销让它只能在实验室低负载跑，而低负载下增长慢、要等很久。</li>
+        <li><strong>tcmalloc / jemalloc 的 heap profiler</strong>：开销极低，可以在生产上按需 dump，是最实用的一档。</li>
+      </ul>
+
+      <p>本例的 heaptrack 报告显示，净增长的 87% 来自一个调用栈：</p>
+<pre>2.4G  net increase (over 72h)
+  └─ 87%  PendingMap::insert(SessionId, PendingEntry)   pending.cc:63
+       └─ Session::send_with_ack(Msg&amp;&amp;)                 session.cc:418
+            └─ ...
+
+<span class="cm"># 对照：PendingMap 的条目数从 0 单调涨到 480 万，从未下降</span>
+<span class="cm"># 而同期活跃会话数一直稳定在 ~2000</span></pre>
+
+      <p><strong>根因</strong>：<code>send_with_ack()</code> 把待确认消息记进 <code>PendingMap</code>，收到 ack 时删除。但<strong>会话异常断开时没有清理它自己的 pending 条目</strong>——ack 永远不会来，条目永久驻留。每条约 5 KB（含消息副本），链路抖动频繁的现场每天几十万次断链，一周就是几个 G。</p>
+
+      <div class="cmp">
+        <div class="bad">
+          <h5>❌ 只在正常路径上清理</h5>
+<pre>void Session::send_with_ack(Msg&amp;&amp; m) {
+  pending_map_.insert(id_, PendingEntry{std::move(m), now()});
+  transport_.send(...);
+}
+void Session::on_ack(SeqNo s) {
+  pending_map_.erase(id_, s);      <span class="cm">// ✅ 正常路径清理了</span>
+}
+<span class="cm">// ❌ 但 ~Session() 里什么都没做</span>
+<span class="cm">// ❌ 也没有任何条目级的超时清理</span>
+<span class="cm">// 于是：断链 = 一批条目永久留下</span>
+<span class="cm">// 而且这些内存<strong>是可达的</strong> —— LSan/Memcheck</span>
+<span class="cm">// 都不会报"泄漏"，只有增长归因工具能看见。</span></pre>
+        </div>
+        <div class="good">
+          <h5>✅ 所有权明确 + 兜底超时</h5>
+<pre>class Session {
+  <span class="cm">// ① 让 pending 表<strong>属于会话</strong>：析构自动清理，</span>
+  <span class="cm">//    不依赖任何人"记得"调用清理函数</span>
+  PendingTable pending_;
+ public:
+  ~Session() = default;            <span class="cm">// pending_ 随之析构</span>
+};
+
+<span class="cm">// ② 即使所有权正确，仍要有条目级兜底超时 —— </span>
+<span class="cm">//    防止"会话活着但对端永不 ack"这一类</span>
+void PendingTable::gc(steady_clock::time_point now) {
+  erase_if(map_, [&amp;](auto&amp; kv) {
+    if (now - kv.second.ts &lt; kAckTimeout) return false;
+    ++stats_.expired;              <span class="cm">// ③ 打点：能上监控的指标</span>
+    return true;
+  });
+}
+<span class="cm">// ④ 硬上限：条目数超阈值就拒绝新的 send_with_ack</span>
+<span class="cm">//    并告警 —— 把"无界增长"变成"明确拒绝"</span></pre>
+        </div>
+      </div>
+
+      <div class="rule"><b>本例最重要的一条教训：这类问题不是"泄漏"，标准泄漏检测工具全都报不出来。</b>内存<strong>仍然可达</strong>（<code>PendingMap</code> 持有它），从 Memcheck / LSan 的定义看完全合法。它是<strong>"逻辑泄漏"或"无界缓存"</strong>，只能靠三件事发现：① <strong>长稳测试的 RSS 趋势告警</strong>（见 §05）；② <strong>关键容器的 size 打点</strong>（本例中 <code>PendingMap</code> 的条目数与活跃会话数的比值，稳态下应该有界——4.8M vs 2000 是明显异常，<strong>而这个指标一秒钟就能看出问题</strong>）；③ <strong>增长归因工具</strong>（heaptrack / tcmalloc profiler）。<br><strong>推论：所有长期存活的容器都必须导出 size 指标</strong>。这条规则的成本是几行代码，收益是把"一周后 OOM"变成"十分钟内看见"。</div>
+    </div>
+  </details>
+</section>
+
+<section class="chapter" id="s5">
+  <div class="ch-head"><div class="num">05</div><div class="t"><h2>长稳测试怎么设计</h2><p class="sub">soak 测试的价值在趋势，不在通过与否</p></div></div>
+
+  <div class="def"><strong>长稳（soak）测试</strong>：在<strong>接近生产的负载</strong>下连续运行数天到数周，目的不是验证功能，而是暴露<strong>只在时间尺度上显现</strong>的缺陷：泄漏、句柄耗尽、计数器回绕、碎片累积、日志打满磁盘、证书过期、定时器堆积。通信设备的验收几乎都包含这一项，因为它的运行周期以年计。</div>
+
+  <div class="stack">
+    <div class="stack-row"><span class="stack-tag">负载模型</span><span>关键是<strong>包含生命周期变化</strong>，而不只是稳态打流。必须有：连续的会话建立/拆除（这是最容易泄漏的路径）、周期性的配置变更、注入的链路抖动与断链、异常报文比例（1% 畸形）。<strong>只跑稳态转发的长稳测试几乎抓不到东西</strong>——案例 3 那个 bug 就在拆除路径上。</span></div>
+    <div class="stack-row"><span class="stack-tag">基线指标</span><span>跑之前先记录稳态基线：RSS、虚拟内存、<strong>FD 数</strong>、线程数、各队列水位、<strong>关键容器 size</strong>、CPU、时延分位数。没有基线，第 4 天看到 3.8 G 你也不知道它是不是正常。</span></div>
+    <div class="stack-row"><span class="stack-tag">趋势告警</span><span>判据不是"有没有崩"，而是<strong>斜率</strong>：任何本该有界的指标出现<strong>单调上升</strong>就是缺陷，哪怕绝对值还很低。RSS 每小时涨 10 MB 看着无害，30 天就是 7 G。<strong>用线性拟合的斜率做告警，不要用阈值</strong>——阈值只会在快撞墙时才响。</span></div>
+    <div class="stack-row"><span class="stack-tag">容器 size 打点</span><span>承接案例 3 的推论：<strong>每一个长期存活的 map / list / 队列都要导出条目数</strong>，并给出"稳态下它应该与什么成正比"的注释（如 pending 表 ≈ 活跃会话数 × 每会话在飞消息数）。比值异常比绝对值异常更早、更明确。</span></div>
+    <div class="stack-row"><span class="stack-tag">周期性效应</span><span>专门检查跨天/跨周的边界：日志轮转、证书与令牌刷新（<a href="tls_ssh_cert.html">TLS 证书</a>过期是长稳测试的经典发现）、闰秒与授时跳变（会毁掉用 <code>system_clock</code> 算超时的代码——这也是为什么必须用 <code>steady_clock</code>）、计数器 32 位回绕。</span></div>
+  </div>
+
+  <div class="box star"><strong>长稳测试最容易被浪费的方式是"跑完看有没有崩"。</strong>它真正的产出是<strong>一整套指标的时间序列</strong>。所以在设计上要保证：指标采集从第一秒就开着、采样间隔够密（分钟级）、数据能保留到测试后分析、并且<strong>每次长稳结束都把曲线和上一版对比</strong>。<br>很多缺陷是<strong>渐变</strong>的——这一版比上一版每小时多涨 3 MB，两个版本各自都"通过"了，但趋势对比能立刻指出是哪次提交引入的。这比事后从几万行 diff 里考古便宜太多。完整的泄漏治理流程见 <a href="../perf-debug/memory_leak_guide.html">内存泄漏治理</a>。</div>
+</section>
+
+<section class="chapter" id="s6">
+  <div class="ch-head"><div class="num">06</div><div class="t"><h2>不能上工具时的生产手段</h2><p class="sub">现场只给你一次机会</p></div></div>
+
+  <div class="stack">
+    <div class="stack-row"><span class="stack-tag">core dump + 符号服务</span><span>生产二进制必须是 <strong>带符号但 strip 过</strong>的：发布时把 <code>.debug</code> 分离存档（<code>objcopy --only-keep-debug</code>），设备上跑 strip 版本，出 core 后用归档的符号解析。⚠️ 三件必配：<code>ulimit -c unlimited</code>、<code>kernel.core_pattern</code> 指向<strong>有足够空间</strong>的分区（几 G 的 core 写满 <code>/</code> 会二次故障）、以及 <strong>build-id 与版本号入库</strong>——现场跑的到底是哪次构建，这个问题在多版本并存时会卡住整个分析。</span></div>
+    <div class="stack-row"><span class="stack-tag">分配器 profiling</span><span>链上 <strong>tcmalloc / jemalloc</strong>，通过环境变量或信号触发 heap dump。开销 &lt; 5%，可以长期开着。这是生产环境定位内存增长<strong>唯一实用</strong>的手段（案例 3 那类"可达的逻辑泄漏"只有它能看见）。jemalloc 还能顺带给出碎片率，用来区分"泄漏"与"碎片"。</span></div>
+    <div class="stack-row"><span class="stack-tag">eBPF 动态追踪</span><span>不改代码、不重启进程，动态挂探针看函数调用频率、参数、时延分布、以及内核侧的丢包与队列。排查"某个路径是不是被走到了""慢在哪一层"极其高效。⚠️ 注意 uprobe 会带来实际开销（每次命中一次陷入），高频函数上要用采样或聚合而不是逐次打印。用法见 <a href="../system/observability_ebpf.html">eBPF 可观测性</a>。</span></div>
+    <div class="stack-row"><span class="stack-tag">结构化日志 + 关联 ID</span><span>每条日志带 <strong>session-id / 关联 ID</strong>，输出成可检索的键值对而不是自由文本。这样"把某个 UE 的完整生命周期捞出来"是一次查询而不是一场 grep 考古。⚠️ 日志本身是抖动源与磁盘炸弹：热路径用<strong>无锁队列交给专门线程落盘</strong>（绝不在 IO 线程里同步写盘，见 <a href="comm_design_patterns.html#s8">反模式 ④</a>），并且带限速与采样。</span></div>
+    <div class="stack-row"><span class="stack-tag">状态快照与迁移日志</span><span>承接 <a href="protocol_state_machine.html">状态机那篇</a>：把状态迁移与非法事件计数<strong>常态化打点</strong>。现场排障时，"这个会话在 12:03:41 从 CONNECTED 迁到 IDLE，触发事件是 T310 超时"这一行信息，价值超过一小时的猜测。<strong>可观测性是设计出来的，不是出事之后加的。</strong></span></div>
+  </div>
+</section>
+
+<section class="chapter" id="s7">
+  <div class="ch-head"><div class="num">07</div><div class="t"><h2>把排查前移</h2><p class="sub">最便宜的排查是根本不用排查</p></div></div>
+
+  <div class="def"><strong>模糊测试（fuzzing）</strong>：用变异或生成的输入反复调用目标函数，配合 Sanitizer 检测崩溃与 UB。<strong>覆盖率引导</strong>的 fuzzer（libFuzzer、AFL++）会根据"哪些输入触发了新的代码路径"来指导变异，因此能自动钻进人写不出来的边角分支。<strong>协议解析器是 fuzz 的最佳目标</strong>：输入就是字节串、无需环境、单次调用极快（每秒几十万次）。</div>
+
+  <div class="cmp">
+    <div class="bad">
+      <h5>基础版：随机字节</h5>
+<pre><span class="cm">// 20 行就能挂上，第一天就能抓一批越界</span>
+extern "C" int LLVMFuzzerTestOneInput(
+    const uint8_t* d, size_t n) {
+  Parser p;
+  p.parse({reinterpret_cast&lt;const std::byte*&gt;(d), n});
+  return 0;   <span class="cm">// 崩溃/UB 由 ASan+UBSan 报告</span>
+}
+<span class="cm">// 编译：</span>
+<span class="cm">// clang++ -fsanitize=fuzzer,address,undefined ...</span>
+
+<span class="cm">// 局限：纯随机字节很难通过 magic 与</span>
+<span class="cm">// 校验和检查，绝大多数输入在头几个</span>
+<span class="cm">// 字节就被拒 —— 深层解析逻辑覆盖不到。</span></pre>
+    </div>
+    <div class="good">
+      <h5>✅ 工程版：真实语料 + 修正校验和</h5>
+<pre>extern "C" int LLVMFuzzerTestOneInput(
+    const uint8_t* d, size_t n) {
+  if (n &lt; kMinFrame) return 0;
+  <span class="cm">// ① 用变异数据构帧，但<strong>重算</strong> magic 与 CRC，</span>
+  <span class="cm">//    让 fuzzer 的力气花在字段语义而不是校验和上</span>
+  auto frame = build_frame(d, n);
+  fix_magic(frame); fix_crc(frame);
+
+  Parser p;
+  if (auto msg = p.parse(frame)) {
+    <span class="cm">// ② 断言不变量，不只是"没崩"</span>
+    assert(msg-&gt;tlv_count() &lt;= kMaxTlv);
+    assert(msg-&gt;total_len() == frame.size());
+    <span class="cm">// ③ 往下喂状态机，抓深层问题</span>
+    fsm_.feed(*msg);
+  }
+  return 0;
+}
+<span class="cm">// 语料库种子 = 生产抓包的 pcap 拆出的真实报文</span>
+<span class="cm">// → 起点就在深处，覆盖率爬升快得多</span></pre>
+    </div>
+  </div>
+
+  <div class="stack">
+    <div class="stack-row"><span class="stack-tag">语料库怎么来</span><span>最有效的种子是<strong>生产抓包</strong>：把 pcap 里的应用层报文逐条拆出来当初始语料。这让 fuzzer 从"合法且复杂"的输入开始变异，而不是从零学会构造合法帧。语料库要<strong>入库并持续积累</strong>（每次发现新崩溃的输入都加进去做回归）。</span></div>
+    <div class="stack-row"><span class="stack-tag">断言不变量</span><span>只检查"没崩"会浪费一大半价值。在 fuzz target 里<strong>断言协议不变量</strong>（解析出的长度与输入一致、TLV 数量有上限、状态机不进入非法状态），能把"没崩但解析错了"这类沉默缺陷也抓出来。</span></div>
+    <div class="stack-row"><span class="stack-tag">状态机也能 fuzz</span><span>把<strong>事件序列</strong>当输入：让 fuzzer 生成随机的事件序列喂给状态机，断言"不会进入未定义状态、不会泄漏资源、非法事件都被计数而不是崩溃"。这是抓状态爆炸类缺陷最有效的手段（见 <a href="protocol_state_machine.html">状态机那篇</a>的可测试性一节）。</span></div>
+    <div class="stack-row"><span class="stack-tag">静态分析</span><span><code>-Wall -Wextra -Werror</code> 是底线；再加 <code>clang-tidy</code>（尤其 <code>bugprone-*</code>、<code>cppcoreguidelines-*</code>）与 <code>clang --analyze</code>。它们抓不到并发问题，但对"忘检返回值""可疑的类型转换""越界的常量下标"这类命中率不低，而且<strong>零运行成本</strong>。</span></div>
+    <div class="stack-row"><span class="stack-tag">CI 门禁</span><span>把 ASan / UBSan / TSan 做成<strong>阻塞合并</strong>的门禁而不是"参考信息"。关键在于必须<strong>零容忍</strong>：一旦允许"这个告警先忽略"，报告很快会积累到没人看的程度，工具就等于没有。发现历史遗留太多时，用抑制列表（suppression）冻结存量、对新代码严格执行，然后逐步清理存量。</span></div>
+  </div>
+
+  <div class="box star"><strong>把本篇倒过来读，就是一份优先级清单。</strong>最贵的排查是现场偶发（案例 2 那种，一天崩两次、加日志就消失）；便宜一点的是长稳趋势（案例 3，一周才看出来，但至少确定可复现）；再便宜的是 CI 里的 Sanitizer 报告（几分钟，且直接给出两条栈）；最便宜的是 fuzz 在提交前就把畸形报文挡住（案例 1 本该死在这一关）。<br><strong>四类缺陷对应四道防线</strong>：解析越界 → fuzz + span；UAF → 所有权模型（Active Object / weak_ptr）+ TSan；逻辑泄漏 → 容器 size 打点 + 长稳趋势；死锁 → 锁序约定 + TSan。<strong>每一道防线的成本都比它下游的排查便宜一到两个数量级</strong>，这就是"把排查前移"的全部理由。</div>
+
+  <div class="card">
+    <div class="card-title">🎯 本篇要点回顾</div>
+    <ul>
+      <li>通信软件四类高发缺陷：畸形报文越界、会话销毁与回调竞态（UAF）、每连接逻辑泄漏、锁序死锁——分布由"输入不可信 + 并发拆除 + 运行以年计"决定</li>
+      <li>工具选型先按"能跑在哪"筛：UBSan/heaptrack（~1.2x，可上真实负载）→ ASan（2x，实验室）→ TSan（5–15x，单测）→ Valgrind 家族（10–100x，抽出来的模块）</li>
+      <li>Valgrind 不能上带 PTP / 实时约束的节点：不只是慢，它会<strong>制造假 bug</strong>（超时击穿、看门狗复位、PTP 失锁）并<strong>掩盖真竞态</strong>（相对时序被打乱）</li>
+      <li>替代路径优先级：抓包离线重放 &gt; 模块抽出单测 &gt; 降速（负载与超时<strong>同步</strong>放大）&gt; 上低开销工具</li>
+      <li>案例 1：ASan 报告里"距对象右侧 N 字节"直接指向未校验的长度字段；剩余空间检查用<strong>减法</strong>防溢出回绕，传 <strong>span</strong> 把约定变成编译期保证</li>
+      <li>案例 2：TSan 同时给出读方与释放方两条栈；"cancel 定时器"永远无法覆盖"已取出待调用"，修法优先 Active Object，其次 weak_ptr</li>
+      <li>案例 3：可达的"逻辑泄漏"标准泄漏工具全都报不出来——靠长稳 RSS 趋势 + <strong>容器 size 打点</strong> + heaptrack 增长归因</li>
+      <li>长稳测试的产出是<strong>指标时间序列</strong>而非"有没有崩"；判据是<strong>斜率</strong>不是阈值；负载模型必须含会话建立/拆除与异常注入</li>
+      <li>生产手段：分离符号的 core dump（含 build-id 入库）、tcmalloc/jemalloc profiling、eBPF 动态追踪、带关联 ID 的结构化日志、常态化的状态迁移打点</li>
+      <li>fuzz 解析器要<strong>修正校验和 + 用生产 pcap 做种子 + 断言不变量</strong>；事件序列 fuzz 可以抓状态机缺陷；CI 门禁必须零容忍，存量用抑制列表冻结</li>
+    </ul>
+  </div>
+
+  <div class="box tip">Module 11 结束。检验一下 → <a href="interview_cpp_engineering.html">通信软件工程与 C/C++ 面试题</a> 末章新增了「现代 C++ / 状态机 / 高并发 / ARM / 排错」12 道题。</div>
+</section>
+
+<div class="footer-nav">
+  <a href="arm_platform_comm.html">⬅️ ARM 平台</a>
+  <a href="interview_cpp_engineering.html">➡️ C/C++ 面试题</a>
+  <a href="../perf-debug/sanitizers_guide.html">📘 Sanitizers 指南</a>
+  <a href="../perf-debug/valgrind_guide.html">📘 Valgrind 指南</a>
+  <a href="communication_directory.html">📚 目录</a>
+  <a href="../index.html">🏠 主页</a>
+</div>
+
+  </main>
+</div>
+
+<script src="../assets/page-shell.js" defer></script>
+
+<footer><p>通信软件的内存与竞态排查实战 — Kavin Tech Notes · 2026</p></footer>
+
+<button class="back-top" id="backTop" onclick="window.scrollTo({top:0,behavior:'smooth'})">↑</button>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>
