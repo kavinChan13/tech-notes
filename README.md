@@ -36,7 +36,7 @@ _结构化目录 + 卡片化导航 + 单页 HTML · 离线可读_
 
 ## 🎯 项目介绍
 
-这是我在长期一线工作中沉淀下来的技术与管理笔记。最早只是几篇 C++ 调试记录，后来慢慢长成了一个有十个子目录、几十篇文档的静态站点。它不是教程，也不是面向某个具体岗位的体系——更像是一个"自用的工程参考书"：遇到问题翻一翻、回顾旧知识时也方便找。
+这是我在长期一线工作中沉淀下来的技术与管理笔记。最早只是几篇 C++ 调试记录，后来慢慢长成了一个按领域分目录、持续增补的静态站点。它不是教程，也不是面向某个具体岗位的体系——更像是一个"自用的工程参考书"：遇到问题翻一翻、回顾旧知识时也方便找。
 
 整个仓库不依赖任何构建工具、框架或外部服务。每篇文档都是一个独立的 HTML 文件，clone 下来双击就能用浏览器打开；`push` 到 `main` 之后 GitHub Pages 会自动把仓库当作静态站点发布。每页右上角带统一的「主页 / Repo / Source」浮动胶囊，方便跳回索引或查看源码。
 
@@ -92,7 +92,7 @@ npx serve .
 | **通信系统与协议** | [`communication/`](./communication) | TCP/IP、以太网、无线与 4G/5G、RAN（CU/DU/RU）、前传/中传/后传、OBSAI/CPRI/eCPRI、O-RAN、Open Fronthaul、O1/E2/A1/F1、NETCONF/YANG、TLS/SSH、PTP/SyncE、C/C++ 通信编程与系统设计 |
 | **工程管理 & EM** | [`management/`](./management) | 研发管理、管理知识体系、Senior EM、AI-Native EM、组织设计、EM 模板库 |
 | **PM 双线** | [`pm/`](./pm) | PgM × PdM 能力地图、EVM、A/B 测试、干系人、JTBD、PRD、PMBOK + PM 模板库 |
-| **面试** | [`interview/`](./interview) | Tech Lead 长文 + C++ / 架构师 / EM / PM 四套交互式卡片应用 + AI 系统设计 + 大数据系统设计 12 经典题 |
+| **面试** | [`interview/`](./interview) | Tech Lead 长文 + C++ / 架构师 / EM / PM 四套交互式卡片应用 + AI 系统设计 + 大数据系统设计经典题集 |
 
 > 完整目录、跨文档链接、搜索、阅读时长等导航信息都在 [GitHub Pages 站点](https://kavinchan13.github.io/tech-notes/) 上。
 
@@ -103,7 +103,7 @@ npx serve .
 - [C++ 对象模型](https://kavinchan13.github.io/tech-notes/cpp/object_model.html) —— vtable、多继承、EBO，那些容易忘记的细节
 - [低延迟编程](https://kavinchan13.github.io/tech-notes/perf-debug/low_latency_guide.html) —— 无锁、内核旁路、硬件时间戳
 - [架构师 Capstone (C++)](https://kavinchan13.github.io/tech-notes/architect/architect_capstone.html) —— 一个端到端的设计走查：需求 → ADR → 存储 → 可观测性
-- [AI Agent Capstone · 端到端 case study](https://kavinchan13.github.io/tech-notes/ai-native/ai_agent_capstone.html) —— 通用 AI Agent 系统设计 case study · 5 ADR + 4 层 RAG + hypothesis-driven 范式 · 把 X06/X08/X09/X11/X12 串成一个端到端实战
+- [AI Agent Capstone · 端到端 case study](https://kavinchan13.github.io/tech-notes/ai-native/ai_agent_capstone.html) —— 通用 AI Agent 系统设计 case study · ADR 决策链 + 分层 RAG + hypothesis-driven 范式 · 把 X06/X08/X09/X11/X12 串成一个端到端实战
 - [Transformer 与现代 LLM 架构](https://kavinchan13.github.io/tech-notes/ai-native/transformer_llm_architecture.html) —— Attention/KV-Cache/RoPE/GQA→MLA/MoE，生活类比 + 交互演示
 - [vLLM 推理深潜](https://kavinchan13.github.io/tech-notes/ai-infra/inference_serving.html) —— PagedAttention、Continuous Batching、源码导览（C++ 老兵转 AI Infra 的最大杠杆点）
 - [AI 工程师 30/60/90 学习路径](https://kavinchan13.github.io/tech-notes/interview/ai_study_path.html) —— 周-by-周计划，3 轨可选（AI Infra / LLM App / ML Research）
