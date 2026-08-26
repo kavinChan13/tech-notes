@@ -54,6 +54,7 @@ CATEGORY = {
     "neural-networks": "神经网络",
     "reinforcement": "强化学习",
     "communication": "通信系统",
+    "desktop-gui": "桌面 GUI / Qt",
 }
 
 SCRIPT_RE = re.compile(r"<script\b[\s\S]*?</script>", re.I)

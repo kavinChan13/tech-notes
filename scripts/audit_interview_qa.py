@@ -33,11 +33,11 @@ ROOT = Path(__file__).resolve().parents[1]
 
 CONTENT_DIRS = ["cpp", "stl", "perf-debug", "architect", "system", "ai-infra",
                 "bigdata", "embedded-realtime", "ai-native", "neural-networks",
-                "reinforcement", "communication"]
+                "reinforcement", "communication", "desktop-gui"]
 
 # Directories whose interview sections are already migrated: legacy layouts
 # found there are hard failures rather than "not yet converted".
-MIGRATED_DIRS = {"cpp", "perf-debug", "stl"}
+MIGRATED_DIRS = {"cpp", "perf-debug", "stl", "desktop-gui"}
 
 LEVELS = {"basic": "基础", "principle": "原理", "mid": "中级", "pro": "进阶",
           "adv": "高级", "eng": "工程", "expert": "专家", "risk": "安全"}

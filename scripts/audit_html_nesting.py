@@ -29,9 +29,9 @@ ROOT = Path(__file__).resolve().parents[1]
 CONTENT_DIRS = ["cpp", "stl", "perf-debug", "architect", "system", "ai-infra",
                 "bigdata", "embedded-realtime", "ai-native", "neural-networks",
                 "reinforcement", "communication", "interview", "tools",
-                "management", "pm"]
+                "management", "pm", "desktop-gui"]
 
-CLEAN_DIRS = {"cpp", "stl", "perf-debug"}
+CLEAN_DIRS = {"cpp", "stl", "perf-debug", "desktop-gui"}
 
 VOID = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link",
         "meta", "param", "source", "track", "wbr"}

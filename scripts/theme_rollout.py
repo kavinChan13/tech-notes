@@ -32,6 +32,7 @@ FOLDER_TARGET = {
     'system': 'system/linux_system_directory.html',
     'perf-debug': 'perf-debug/perf_debug_directory.html',
     'embedded-realtime': 'embedded-realtime/embedded_realtime_directory.html',
+    'desktop-gui': 'desktop-gui/desktop_gui_directory.html',
     'interview': 'interview/interview_directory.html',
     'management': 'management/leadership_pm_directory.html',
     'pm': 'management/leadership_pm_directory.html',
