@@ -29,15 +29,13 @@ from collections import Counter
 from html.parser import HTMLParser
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-
-CONTENT_DIRS = ["cpp", "stl", "perf-debug", "architect", "system", "ai-infra",
-                "bigdata", "embedded-realtime", "ai-native", "neural-networks",
-                "reinforcement", "communication", "desktop-gui"]
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _site import ROOT, content_dirs, content_files  # noqa: E402
 
 # Directories whose interview sections are already migrated: legacy layouts
 # found there are hard failures rather than "not yet converted".
-MIGRATED_DIRS = {"cpp", "perf-debug", "stl", "desktop-gui"}
+MIGRATED_DIRS = {"algorithms", "cpp", "perf-debug", "stl", "desktop-gui",
+                 "robotics-comm"}
 
 LEVELS = {"basic": "基础", "principle": "原理", "mid": "中级", "pro": "进阶",
           "adv": "高级", "eng": "工程", "expert": "专家", "risk": "安全"}
@@ -190,24 +188,24 @@ def main(argv: list[str]) -> int:
             dirs.append(arg)
     if not dirs:
         # default to the gate: directories that are supposed to be clean already
-        dirs = CONTENT_DIRS if scan_all else sorted(MIGRATED_DIRS)
+        dirs = content_dirs() if scan_all else sorted(MIGRATED_DIRS)
 
     total_problems = total_q = total_loose = 0
-    for d in dirs:
+    for path in content_files(dirs):
+        d = path.relative_to(ROOT).parts[0]
         strict = d in MIGRATED_DIRS or d in strict_extra
-        for path in sorted((ROOT / d).glob("*.html")):
-            problems, n, loose, levels = audit(path, strict)
-            if not problems and not n and not loose:
-                continue
-            rel = path.relative_to(ROOT).as_posix()
-            summary = ", ".join(f"{LEVELS[k]} {v}" for k, v in sorted(levels.items()))
-            extra = f" + {loose} standalone" if loose else ""
-            print(f"[{rel}] {n} question(s){extra}" + (f" — {summary}" if summary else ""))
-            for p in problems:
-                print(f"  {p}")
-            total_problems += len(problems)
-            total_q += n
-            total_loose += loose
+        problems, n, loose, levels = audit(path, strict)
+        if not problems and not n and not loose:
+            continue
+        rel = path.relative_to(ROOT).as_posix()
+        summary = ", ".join(f"{LEVELS[k]} {v}" for k, v in sorted(levels.items()))
+        extra = f" + {loose} standalone" if loose else ""
+        print(f"[{rel}] {n} question(s){extra}" + (f" — {summary}" if summary else ""))
+        for p in problems:
+            print(f"  {p}")
+        total_problems += len(problems)
+        total_q += n
+        total_loose += loose
 
     print(f"\n{total_q} interview questions ({total_loose} standalone), "
           f"Total problems: {total_problems}")

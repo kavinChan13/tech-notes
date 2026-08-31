@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import re
+import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _site import ROOT, content_files  # noqa: E402
 
 ARCHITECT = sorted((ROOT / "architect").glob("*.html"))
 EDITED_P12 = [
@@ -71,15 +73,10 @@ def audit_leftover(path: Path) -> list[str]:
     return problems
 
 
-CONTENT_DIRS = ["architect", "cpp", "system", "perf-debug", "ai-infra", "bigdata",
-                 "stl", "embedded-realtime", "ai-native", "neural-networks",
-                 "reinforcement", "communication", "desktop-gui"]
-
-
 def main() -> None:
-    all_files = sorted(
-        {p for d in CONTENT_DIRS for p in (ROOT / d).glob("*.html")}
-    )
+    # Topic folders are discovered from the filesystem (scripts/_site.py) so a
+    # new one can never be silently skipped.
+    all_files = content_files(sys.argv[1:] or None)
     total = 0
     for path in all_files:
         probs = []

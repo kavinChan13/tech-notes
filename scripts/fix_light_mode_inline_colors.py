@@ -155,6 +155,76 @@ BORDER_HEX = [
      r'\1var(--border)'),
 ]
 
+# Dark hexes that survived the exact-match lists above. Neutral navy/slate
+# greys collapse onto the border tokens; hued ones keep their hue via
+# color-mix so the semantic colour still reads in light mode.
+DARK_NEUTRAL_BORDERS = {
+    '#243352': 'var(--border-2)',
+    '#2e3a5a': 'var(--border-2)',
+    '#2a3756': 'var(--border-2)',
+    '#3a4670': 'var(--border-2)',
+    '#1e2a44': 'var(--border)',
+    '#1a2440': 'var(--border)',
+    '#2a3347': 'var(--border)',
+    '#34405c': 'var(--border-2)',
+    '#2d3a52': 'var(--border-2)',
+}
+DARK_HUED_BORDERS = {
+    '#3d2d6e': 'color-mix(in srgb, var(--purple) 45%, var(--border))',
+    '#5a2d8c': 'color-mix(in srgb, var(--purple) 45%, var(--border))',
+    '#2a5a8c': 'color-mix(in srgb, var(--accent) 45%, var(--border))',
+    '#6b4f00': 'color-mix(in srgb, var(--yellow) 45%, var(--border))',
+    '#2d6e2d': 'color-mix(in srgb, var(--green) 45%, var(--border))',
+    '#6e2d2d': 'color-mix(in srgb, var(--red) 45%, var(--border))',
+}
+GENERIC_BORDER = re.compile(
+    r'(border(?:-(?:left|right|top|bottom))?\s*:\s*[\d.]+px\s+(?:solid|dashed|dotted)\s+)'
+    r'(#[0-9a-fA-F]{6})\b', re.I)
+
+# Dark tints used as a gradient stop / fill next to a token-driven colour.
+DARK_TINT_BG = [
+    ('linear-gradient(135deg,#624b14,var(--bg-card))',
+     'linear-gradient(135deg,color-mix(in srgb, var(--yellow) 22%, var(--bg-card)),var(--bg-card))'),
+    ('linear-gradient(135deg, #624b14, var(--bg-card))',
+     'linear-gradient(135deg, color-mix(in srgb, var(--yellow) 22%, var(--bg-card)), var(--bg-card))'),
+]
+
+# Mid-tone text that only has contrast on a dark card.
+DARK_ONLY_TEXT = {
+    'color:#8ec8f6': 'color:var(--accent)',
+    'color:#f0c040': 'color:var(--yellow)',
+    'color:#d4a0ff': 'color:var(--purple)',
+    'color:#7fdf7f': 'color:var(--green)',
+    'color:#ff9090': 'color:var(--red)',
+    'color: #8ec8f6': 'color: var(--accent)',
+    'color: #f0c040': 'color: var(--yellow)',
+    'color: #d4a0ff': 'color: var(--purple)',
+    'color: #7fdf7f': 'color: var(--green)',
+    'color: #ff9090': 'color: var(--red)',
+}
+
+# Page-local :root aliases whose names site-tokens.css does NOT define, so the
+# light theme can never override them. Point them at the real tokens.
+ORPHAN_ROOT_TOKENS = {
+    '--border2': 'var(--border-2)',
+    '--border-accent': 'var(--border-2)',
+}
+ORPHAN_DECL = re.compile(
+    r'(' + '|'.join(re.escape(k) for k in ORPHAN_ROOT_TOKENS) + r')\s*:\s*#[0-9a-fA-F]{3,8}')
+
+# `var(--border, #1e2a44)`: the fallback never fires (site-tokens.css always
+# defines these) but it records a dark-only value that gets copy-pasted into
+# places where it does fire. Strip it for tokens site-tokens.css guarantees.
+SITE_TOKENS = set(re.findall(
+    r'(--[\w-]+)\s*:',
+    (ROOT / 'assets' / 'site-tokens.css').read_text(encoding='utf-8')))
+VAR_FALLBACK = re.compile(r'var\((--[\w-]+),\s*#[0-9a-fA-F]{3,8}\)')
+
+# Outline drawn in the page background colour, not a real border colour.
+OUTLINE_AS_BG = {'#080c18': 'var(--bg)'}
+OUTLINE_RE = re.compile(
+    r'(border\s*:\s*[\d.]+px\s+solid\s+)(' + '|'.join(OUTLINE_AS_BG) + r')\b', re.I)
+
 
 def fix_text(text: str) -> tuple[str, int]:
     n = 0
@@ -167,6 +237,49 @@ def fix_text(text: str) -> tuple[str, int]:
     for pat, repl in BORDER_HEX:
         text, c = pat.subn(repl, text)
         n += c
+
+    def border_sub(m):
+        nonlocal n
+        hexv = m.group(2).lower()
+        repl = DARK_NEUTRAL_BORDERS.get(hexv) or DARK_HUED_BORDERS.get(hexv)
+        if not repl:
+            return m.group(0)
+        n += 1
+        return m.group(1) + repl
+
+    text = GENERIC_BORDER.sub(border_sub, text)
+
+    for old, new in DARK_TINT_BG:
+        if old in text:
+            n += text.count(old)
+            text = text.replace(old, new)
+    for old, new in DARK_ONLY_TEXT.items():
+        if old in text:
+            n += text.count(old)
+            text = text.replace(old, new)
+
+    def orphan_sub(m):
+        nonlocal n
+        n += 1
+        return f'{m.group(1)}: {ORPHAN_ROOT_TOKENS[m.group(1)]}'
+
+    text = ORPHAN_DECL.sub(orphan_sub, text)
+
+    def fallback_sub(m):
+        nonlocal n
+        if m.group(1) not in SITE_TOKENS:
+            return m.group(0)
+        n += 1
+        return f'var({m.group(1)})'
+
+    text = VAR_FALLBACK.sub(fallback_sub, text)
+
+    def outline_sub(m):
+        nonlocal n
+        n += 1
+        return m.group(1) + OUTLINE_AS_BG[m.group(2).lower()]
+
+    text = OUTLINE_RE.sub(outline_sub, text)
     return text, n
 
 

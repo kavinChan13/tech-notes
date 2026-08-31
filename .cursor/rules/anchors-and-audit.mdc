@@ -12,6 +12,21 @@ alwaysApply: true
 - `<details>` / `<summary>` 必须成对闭合；`.interview-card` 的 `<details>` 内必须含 `<summary>`。
 - scroll-spy 的选择器要与实际 DOM 一致（TOC 用 `.toc` 就别去查 `.sidebar a`）。
 
+## 跨文件链接与锚点
+
+页内锚点由 `audit_guides.py` 保证，**指向别的页面的链接它查不到**——文件被改名、
+从未创建、或对方的章节 id 变了，页面照样通过自检却在浏览器里 404。
+（`perf-debug/perf_landscape.html` 曾被 `system/` 三个页面引用而根本不存在，就是这么漏过去的。）
+
+- 写 `href="../topic/page.html#sec"` 时，**同时确认两件事**：目标文件存在、目标文件里真有 `id="sec"`。
+  跨目录引用别凭记忆写章节号，去目标页确认一次实际的 `id`。
+- 章节 `id` 命名全站统一用 `s<N>` / `s<N>-<M>`（如 `s10` `s10-4`），**不要写 `sec10` / `modern-linker`
+  这类自创名字**——自创名字改版时最容易失联，而且引用方无从推断。
+- 新建页面前先 `Grep` 一下预期的文件名：可能已经有页面在链它了（那就是"待补"而不是"新增"）。
+- 删除或改名页面后，必须 `Grep` 旧文件名，把所有引用改到新位置或对应目录页。
+  指向"整条主线"的链接应指 `<topic>_directory.html`，指向某一篇的才指具体页面。
+- 用 `python scripts/audit_links.py` 校验（见下）。
+
 ## 块级标签嵌套
 
 排版塌掉最常见的三个原因，改完页面务必确认没有：
@@ -24,25 +39,83 @@ alwaysApply: true
  正确写法是：整段纯文本直接写在 div 里、不加 `</p>`；要分两段就**两段都用完整的 `<p>…</p>` 包起来**。
 - **没闭合的行内标签**：`<strong>` `<a>` `<span>` 漏了闭合，样式会渗到后面整段。
 - **正文/`<pre>` 里没转义的尖括号**：`<algorithm>`、`<unfinished ...>` 会被当成真标签吃掉，
-  一律写成 `&lt;algorithm&gt;`。
+  一律写成 `&lt;algorithm&gt;`。实际踩过的：CUDA 的 `vecAdd<<<grid, block>>>(…)`、
+  数学式里的 `P(x_t | x_{<t})`、示意用的 `<tool_call>`。**在 `<pre><code>` 里也照样要转义**——
+  `<pre>` 只保留空白，不改变 HTML 解析。
+- **容器与折叠块的闭合顺序写反**：
+  ```html
+  <details class="interview-card">
+    <summary>…</summary>
+    <div class="ic-body">
+      …
+  </details>      <!-- ❌ div.ic-body 还开着 -->
+  </div>          <!-- ❌ 这个 </div> 于是关掉了 <main> -->
+  ```
+  `</div>` 必须在 `</details>` 之前。architect 的三篇曾各有 5~6 处，
+  后果是最后一张卡之后的所有内容都跑到文章栏外面。
+- **成对结构被交错**：`software_management_guide.html` 里
+  `section.slide` 的闭合标签跑到了下一张 slide 的开标签之后，
+  于是第一张 slide 一直开到文末、`</main>` 关到了它头上。
+  改这类页面时用 `python scripts/audit_html_nesting.py <dir>` 逐个确认，别靠肉眼数缩进。
 
 ## 自检命令
 
 改完内容页后逐条跑干净（`Total problems: 0`）：
 
 ```bash
-python scripts/audit_guides.py         # 锚点 / details 结构
+python scripts/audit_guides.py         # 页内锚点 / details 结构
+python scripts/audit_links.py          # 跨文件链接与锚点
 python scripts/audit_html_nesting.py   # 块级嵌套
 python scripts/audit_interview_qa.py   # 面试题格式（见 interview-qa-format 规则）
+python scripts/audit_page_shell.py     # 离线自包含 / 主题初始化 / 样式表顺序 / scroll-spy
+python scripts/audit_counts.py         # 首页与目录页的篇数计数（`--fix` 可自动改写）
+python scripts/build_search_index.py   # 刷新全文索引
 ```
 
-后两个脚本不带参数只校验**已清零的目录**（各自的 `CLEAN_DIRS` / `MIGRATED_DIRS`），
-所以「Total problems: 0」是可以要求的硬指标；想看全站还剩多少历史遗留：
-`audit_html_nesting.py` 不带参数会把其余目录一并列出但不判失败，
-`audit_interview_qa.py --all` 则输出整个待迁移积压。
+**这七条已全部清零，任何一条不为 0 都是回归。** `.github/workflows/audit.yml`
+会在每次 push / PR 上跑同一套，索引过期（跑完 `build_search_index.py` 后
+`assets/search-index.js` 有 diff）也判失败。
 
-`audit_html_nesting.py` 不带参数会扫全站：`cpp` / `stl` / `perf-debug` / `desktop-gui` 已清零，
-其余目录（`architect` `system` `ai-infra` `ai-native` `management`）尚有历史遗留，
-迁移到哪个目录就顺手清掉那个目录，并把它加进脚本的 `CLEAN_DIRS`。
+- `audit_html_nesting.py` / `audit_interview_qa.py` 只对各自的 `CLEAN_DIRS` /
+  `MIGRATED_DIRS` 判失败。`CLEAN_DIRS` 现在**包含全部 19 个内容目录**；
+  `MIGRATED_DIRS` 仍是子集（面试题格式迁移还在推进），
+  想看整体积压用 `audit_interview_qa.py --all`。
+- 脚本自动跳过 `.private/`、`?cats=` 之类的查询串、以及 `${...}` / `'+href+'` 这类 JS 拼接。
+
+### ⚠️ 目录列表已改为自动发现，不要再往回写死
+
+`audit_guides` / `audit_html_nesting` / `audit_interview_qa` / `audit_page_shell` /
+`audit_counts` 都从 **`scripts/_site.py`** 取目录：`content_dirs()` 扫出所有含 `.html`
+的顶层目录，`content_files()` 递归取其中的笔记（会覆盖 `pm/templates/`、
+`management/em-templates/` 这类子目录）。**只有排除项**（`assets` `scripts` `tools`
+`node_modules` …）是写死的。
+
+以前每个脚本各自维护一份 `CONTENT_DIRS`，漏登记一个目录**不会报错**——
+自检照样打印 `Total problems: 0`，只是一个文件都没打开。`interview/` `management/`
+`pm/` `ai-templates/` 就这样被 `audit_guides` 和 `audit_interview_qa` 跳过了很久，
+接进来的第一次运行立刻暴露出 7 个失效锚点。所以：
+**新增内容目录不需要改任何脚本；也不要为了"提速"把目录名重新写死回去。**
+
+### 曾经的积压：导入内容的路径遗留
+
+`ai-native/` 与 `interview/ai_interview_*.html` 是从另一个知识库导入的，那边按
+`engineering/` `agent/` `transformer/` `rag/` `llm/` `topics/` `video/` `projects/`
+分子目录，本仓库则**全部平铺进 `ai-native/`**，文件名多半加了前缀。共 85 处失效引用，
+已全部清完，修法分三类，以后遇到同类问题照此处理：
+
+- **同名不同目录**（36 处）：`../transformer/attention_mechanism.html` →
+  `../ai-native/transformer_attention_mechanism.html`。把 `<子目录>/<名字>` 拿去匹配
+  现有的 `<子目录>_<名字>.html` 或 `<名字>.html`，命中就改前缀，可以批量。
+- **按内容找对应物**（41 处）：`hallucination_prevention` → `llm_hallucination_defense`、
+  `query_rewrite` → `rag_query_rewriting`、`mcp_protocol` → `mcp_architecture_core`。
+  **不能靠文件名猜**，要看目标页标题/正文，逐条判断。
+- **本仓库确实没有**（8 处）：项目内部文档、视频笔记、以及内容其实就写在引用页自己
+  身上的（会变成自链接）。这类**去掉 `<a>` 只保留文字**，不要硬凑一个不相干的目标。
+
+⚠️ 新增/修改 `ai-native/` 或 `interview/` 的页面时，**不要沿用导入遗留的
+`../engineering/` `../agent/` `../transformer/` `../rag/` `../llm/` `../topics/`
+`../video/` 这类路径**——本仓库没有这些目录，一律写 `ai-native/<文件名>.html`
+（同目录内直接写文件名）。同理，链接文案里的 `E01` `L05` `T05` `G03` `S01` 等编号
+属于原知识库的编排，本仓库对不上，新写的链接不要跟着编。
 
 有问题先修复再交付。

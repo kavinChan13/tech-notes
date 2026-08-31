@@ -1,5 +1,8 @@
 /* Directory-page filter with in-directory full-text search.
- * Requires window.TN_SEARCH_INDEX (assets/search-index.js) to be loaded first.
+ * Requires assets/search-index-loader.js to be loaded first; the ~12 MB index
+ * itself is fetched lazily on the first interaction with #q, so a directory
+ * page that is only browsed (not searched) never pays for it. Until the index
+ * arrives, filtering falls back to title + data-search matching, then re-runs.
  * DOM contract (shared by all *_directory.html):
  *   #q        search input
  *   .item     each card, containing an <a href> to a note in this directory
@@ -13,17 +16,20 @@
   var q = document.getElementById('q');
   if (!q) return;
 
-  var idx = window.TN_SEARCH_INDEX || [];
-  var byPath = {};
-  idx.forEach(function (e) {
-    var t = e.t + ' ';
-    (e.s || []).forEach(function (s) { t += s.x + ' '; });
-    byPath[e.u.toLowerCase()] = t.toLowerCase();
-  });
-
   // folder that this directory page lives in (last path segment before the file)
   var parts = location.pathname.replace(/\\/g, '/').split('/').filter(Boolean);
   var folder = parts.length >= 2 ? parts[parts.length - 2] : '';
+
+  var byPath = {};
+
+  function indexBodies(idx) {
+    byPath = {};
+    idx.forEach(function (e) {
+      var t = e.t + ' ';
+      (e.s || []).forEach(function (s) { t += s.x + ' '; });
+      byPath[e.u.toLowerCase()] = t.toLowerCase();
+    });
+  }
 
   function bodyOf(a) {
     if (!a) return '';
@@ -46,12 +52,16 @@
   var items = [].slice.call(document.querySelectorAll('.item'));
   var secs = [].slice.call(document.querySelectorAll('.sec'));
   var empty = document.getElementById('empty');
-  items.forEach(function (i) { i.__body = bodyOf(i.querySelector('a[href]')); });
+
+  function attachBodies() {
+    items.forEach(function (i) { i.__body = bodyOf(i.querySelector('a[href]')); });
+  }
+  attachBodies();
 
   function f() {
     var kw = (q.value || '').toLowerCase().trim(), n = 0;
     items.forEach(function (i) {
-      var t = (i.innerText + ' ' + (i.dataset.search || '') + ' ' + i.__body).toLowerCase();
+      var t = (i.innerText + ' ' + (i.dataset.search || '') + ' ' + (i.__body || '')).toLowerCase();
       var show = !kw || t.indexOf(kw) >= 0;
       i.style.display = show ? '' : 'none';
       if (show) n++;
@@ -63,6 +73,18 @@
     if (empty) empty.style.display = n ? 'none' : 'block';
   }
 
-  q.addEventListener('input', f);
+  function ensureIndex() {
+    if (!window.TNSearchIndex) return;
+    window.TNSearchIndex.load(function (idx) {
+      indexBodies(idx);
+      attachBodies();
+      f();
+    });
+  }
+
+  // Warm the index as soon as the user shows intent, so the body-text upgrade
+  // is usually already in place by the time they finish typing.
+  q.addEventListener('focus', ensureIndex, { once: true });
+  q.addEventListener('input', function () { ensureIndex(); f(); });
   f();
 })();

@@ -13,9 +13,9 @@ Usage:
     python scripts/audit_html_nesting.py                  # every content dir
     python scripts/audit_html_nesting.py cpp perf-debug   # only these
 
-Directories listed in CLEAN_DIRS are expected to stay at zero; the remaining
-ones still carry a pre-existing backlog (see the rule file), so run the audit
-per directory while working through it.
+Topic folders are discovered from the filesystem (scripts/_site.py), so a new
+one is covered automatically. CLEAN_DIRS is the opt-in list of directories that
+must stay at zero; anything outside it is reported but does not fail the run.
 """
 from __future__ import annotations
 
@@ -24,14 +24,14 @@ from collections import Counter
 from html.parser import HTMLParser
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _site import ROOT, content_dirs, content_files  # noqa: E402
 
-CONTENT_DIRS = ["cpp", "stl", "perf-debug", "architect", "system", "ai-infra",
-                "bigdata", "embedded-realtime", "ai-native", "neural-networks",
-                "reinforcement", "communication", "interview", "tools",
-                "management", "pm", "desktop-gui"]
-
-CLEAN_DIRS = {"cpp", "stl", "perf-debug", "desktop-gui"}
+CLEAN_DIRS = {"algorithms", "cpp", "stl", "perf-debug", "desktop-gui",
+              "robotics-comm", "architect", "system", "ai-infra", "ai-native",
+              "management", "bigdata", "embedded-realtime", "neural-networks",
+              "reinforcement", "communication", "interview", "pm",
+              "ai-templates"}
 
 VOID = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link",
         "meta", "param", "source", "track", "wbr"}
@@ -91,22 +91,18 @@ def audit(path: Path) -> list[str]:
 
 
 def main(argv: list[str]) -> int:
-    dirs = argv or CONTENT_DIRS
+    dirs = argv or content_dirs()
     total = 0
     per_dir: Counter[str] = Counter()
-    for d in dirs:
-        base = ROOT / d
-        if not base.is_dir():
+    for path in content_files(dirs):
+        problems = audit(path)
+        if not problems:
             continue
-        for path in sorted(base.glob("*.html")):
-            problems = audit(path)
-            if not problems:
-                continue
-            print(f"[{path.relative_to(ROOT).as_posix()}]")
-            for p in problems:
-                print(f"  {p}")
-            total += len(problems)
-            per_dir[d] += 1
+        print(f"[{path.relative_to(ROOT).as_posix()}]")
+        for p in problems:
+            print(f"  {p}")
+        total += len(problems)
+        per_dir[path.relative_to(ROOT).parts[0]] += 1
 
     print(f"\nTotal problems: {total}")
     if total:

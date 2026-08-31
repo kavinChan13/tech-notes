@@ -7,6 +7,10 @@ Why a .js (not .json): pages must work by double-click (file://). Under
 file:// a fetch() of a local .json is blocked by CORS, but a <script src>
 that assigns a global loads fine. So we emit a JS file that defines a global.
 
+The file is ~12 MB, so no page links it directly. Pages ship the ~1 KB
+assets/search-index-loader.js instead, which injects this <script> on the
+first search interaction. See .cursor/rules/search-index.mdc.
+
 Each entry:
   {
     u: "bigdata/spark_internals.html",   # root-relative url, forward slashes
@@ -38,6 +42,7 @@ OUT = ROOT / "assets" / "search-index.js"
 
 # folder -> human category (aligns with the home page domains)
 CATEGORY = {
+    "algorithms": "算法与数据结构",
     "cpp": "现代 C++ / STL",
     "stl": "现代 C++ / STL",
     "system": "Linux 系统",
@@ -55,6 +60,7 @@ CATEGORY = {
     "reinforcement": "强化学习",
     "communication": "通信系统",
     "desktop-gui": "桌面 GUI / Qt",
+    "robotics-comm": "机器人通信",
 }
 
 SCRIPT_RE = re.compile(r"<script\b[\s\S]*?</script>", re.I)
