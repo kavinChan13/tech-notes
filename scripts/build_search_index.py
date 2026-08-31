@@ -136,7 +136,11 @@ def should_skip(path: Path) -> bool:
 def main() -> None:
     entries: list[dict] = []
     dup_check: dict[str, str] = {}
-    for path in sorted(ROOT.rglob("*.html")):
+    # Sort on the posix string, not the Path: comparing Path objects uses
+    # case-insensitive ordering on Windows and case-sensitive ordering on
+    # Linux, so a file like interview/STUDY_PATH.html lands in a different
+    # slot on each and the generated file differs between a local run and CI.
+    for path in sorted(ROOT.rglob("*.html"), key=lambda p: p.as_posix()):
         if should_skip(path):
             continue
         rel = path.relative_to(ROOT).as_posix()

@@ -58,7 +58,9 @@ def content_files(dirs: list[str] | None = None, recursive: bool = True) -> list
             if _is_excluded(rel):
                 continue
             out.add(p)
-    return sorted(out)
+    # Sort on the posix string so report order is identical on Windows (where
+    # Path comparison is case-insensitive) and Linux/CI (where it is not).
+    return sorted(out, key=lambda p: p.as_posix())
 
 
 def rel(path: Path) -> str:
