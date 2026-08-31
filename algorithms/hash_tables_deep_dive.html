@@ -1,0 +1,1390 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>哈希表内核 · 哈希函数标准 / 拉链与开放寻址 / Robin Hood / Swiss Table 的 SIMD 探测 / 增量 rehash / Hash-DoS</title>
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<style>
+  html { scroll-behavior: smooth; }
+  body { line-height: 1.75; min-height: 100vh; overflow-x: hidden; }
+  main { min-width: 0; }
+  pre { font-family: var(--mono); font-size: .85rem; line-height: 1.6; }
+  code { font-family: var(--mono); }
+  svg text { font-family: var(--sans); }
+  table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: .9rem; }
+  th, td { border: 1px solid var(--border); padding: .55rem .85rem; text-align: left; vertical-align: top; }
+  th { background: var(--bg-card-2); color: var(--accent); }
+  tr:nth-child(even) { background: color-mix(in srgb, var(--text) 3%, transparent); }
+
+  .analogy {
+    background: color-mix(in srgb, var(--accent-4) 9%, var(--bg-card));
+    border: 1px solid color-mix(in srgb, var(--accent-4) 30%, var(--border));
+    border-left: 4px solid var(--accent-4);
+    border-radius: 10px; padding: 14px 18px; margin: 16px 0; font-size: .95rem;
+  }
+  .analogy::before { content: "🏠 生活类比 · "; color: var(--accent-4); font-weight: 700; font-size: .86rem; }
+
+  .def {
+    background: color-mix(in srgb, var(--accent) 8%, var(--bg-card));
+    border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
+    border-left: 4px solid var(--accent);
+    border-radius: 10px; padding: 13px 17px; margin: 15px 0; font-size: .95rem;
+  }
+  .def > strong:first-child { color: var(--accent); }
+
+  .fig { margin: 22px 0; text-align: center; overflow-x: auto; }
+  .fig svg { max-width: 100%; height: auto; }
+  .fig figcaption { font-size: .82rem; color: var(--text-dim); margin-top: 8px; }
+  .fig .box   { fill: var(--bg-card-2); stroke: var(--border-2); stroke-width: 1.2; }
+  .fig .box-a { fill: color-mix(in srgb, var(--accent) 14%, var(--bg-card)); stroke: var(--accent); stroke-width: 1.2; }
+  .fig .box-g { fill: color-mix(in srgb, var(--accent-3) 14%, var(--bg-card)); stroke: var(--accent-3); stroke-width: 1.2; }
+  .fig .box-p { fill: color-mix(in srgb, var(--accent-2) 14%, var(--bg-card)); stroke: var(--accent-2); stroke-width: 1.2; }
+  .fig .box-y { fill: color-mix(in srgb, var(--accent-4) 14%, var(--bg-card)); stroke: var(--accent-4); stroke-width: 1.2; }
+  .fig .box-r { fill: color-mix(in srgb, var(--danger) 14%, var(--bg-card)); stroke: var(--danger); stroke-width: 1.2; }
+  .fig .t   { fill: var(--text); font-size: 12px; }
+  .fig .tb  { fill: var(--text); font-size: 12.5px; font-weight: 700; }
+  .fig .ts  { fill: var(--text-dim); font-size: 10.5px; }
+  .fig .tm  { fill: var(--text-dim); font-size: 10.5px; font-family: var(--mono); }
+  .fig .ta  { fill: var(--accent); font-size: 12px; font-weight: 700; }
+  .fig .tg  { fill: var(--accent-3); font-size: 11px; font-weight: 600; }
+  .fig .tp  { fill: var(--accent-2); font-size: 11px; font-weight: 600; }
+  .fig .ty  { fill: var(--accent-4); font-size: 11px; font-weight: 600; }
+  .fig .tr  { fill: var(--danger); font-size: 11px; font-weight: 600; }
+  .fig .ln  { stroke: var(--border-2); stroke-width: 1.4; fill: none; }
+  .fig .ln-a{ stroke: var(--accent); stroke-width: 1.6; fill: none; }
+  .fig .ln-g{ stroke: var(--accent-3); stroke-width: 1.6; fill: none; }
+  .fig .ln-p{ stroke: var(--accent-2); stroke-width: 1.6; fill: none; }
+  .fig .ln-r{ stroke: var(--danger); stroke-width: 1.8; fill: none; stroke-dasharray: 5 4; }
+  .fig .grid{ stroke: var(--border); stroke-width: .7; fill: none; stroke-dasharray: 3 3; }
+  .fig .ar-a{ fill: var(--accent); }
+  .fig .ar-r{ fill: var(--danger); }
+
+  .vs { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 16px 0; }
+  @media (max-width: 860px) { .vs { grid-template-columns: 1fr; } }
+  .vs > div { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+  .vs > div > h5 { margin: 0 0 6px; font-size: .88rem; }
+  .vs .bad  { border-color: color-mix(in srgb, var(--danger) 45%, var(--border)); background: color-mix(in srgb, var(--danger) 6%, var(--bg-card)); }
+  .vs .bad  > h5 { color: var(--danger); }
+  .vs .good { border-color: color-mix(in srgb, var(--accent-3) 45%, var(--border)); background: color-mix(in srgb, var(--accent-3) 6%, var(--bg-card)); }
+  .vs .good > h5 { color: var(--accent-3); }
+  .vs pre { margin: 6px 0 0; font-size: .78rem; }
+
+  .demo {
+    background: var(--bg-card); border: 1px solid var(--border-2);
+    border-radius: 12px; padding: 16px 18px; margin: 18px 0;
+  }
+  .demo > h4 { margin: 0 0 4px; color: var(--accent-2); font-size: .98rem; }
+  .demo .hint { font-size: .82rem; color: var(--text-dim); margin-bottom: 12px; }
+  .demo button {
+    font: 600 13px var(--mono); cursor: pointer; padding: 6px 12px; margin: 0 6px 8px 0;
+    border-radius: 7px; border: 1px solid var(--accent); color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 10%, var(--bg-card)); transition: .15s;
+  }
+  .demo button:hover { background: color-mix(in srgb, var(--accent) 22%, var(--bg-card)); }
+  .demo button.on { background: var(--accent); color: var(--bg-card); }
+  .demo .out {
+    font: 12px/1.75 var(--mono); background: var(--code-bg); border: 1px solid var(--border);
+    border-radius: 8px; padding: 12px 14px; margin-top: 8px; color: var(--text-dim);
+    white-space: pre-wrap; min-height: 200px; overflow-x: auto;
+  }
+  .demo .out b { color: var(--accent-3); font-weight: 600; }
+  .demo .out i { color: var(--danger); font-style: normal; font-weight: 600; }
+  .demo .out u { color: var(--accent-4); text-decoration: none; }
+  .demo .out em { color: var(--accent-2); font-style: normal; font-weight: 600; }
+
+  .formula {
+    background: var(--code-bg); border: 1px solid var(--border);
+    border-radius: 8px; padding: 12px 16px; margin: 14px 0;
+    font: 13px/1.9 var(--mono); color: var(--text); overflow-x: auto;
+  }
+  .formula .hl { color: var(--accent); font-weight: 700; }
+</style>
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="tn-shell-overlay has-topnav">
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="algorithms_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 42 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="progress" id="progress"></div>
+<div class="layout">
+  <aside class="toc">
+    <h2>哈希表内核</h2>
+    <nav>
+      <ol>
+        <li><a href="#s1">本质：用值算地址</a>
+          <ol>
+            <li><a href="#s1-1">与其他章节的关系</a></li>
+          </ol>
+        </li>
+        <li><a href="#s2">哈希函数</a>
+          <ol>
+            <li><a href="#s2-1">好哈希的三个标准</a></li>
+            <li><a href="#s2-2">std::hash 的实现与陷阱</a></li>
+            <li><a href="#s2-3">取模 vs 位掩码</a></li>
+            <li><a href="#s2-4">组合多个字段</a></li>
+          </ol>
+        </li>
+        <li><a href="#s3">拉链法</a>
+          <ol>
+            <li><a href="#s3-1">unordered_map 的真实结构</a></li>
+            <li><a href="#s3-2">标准为什么逼出这个实现</a></li>
+          </ol>
+        </li>
+        <li><a href="#s4">开放寻址</a>
+          <ol>
+            <li><a href="#s4-1">线性探测与聚簇</a></li>
+            <li><a href="#s4-2">二次探测与双重哈希</a></li>
+            <li><a href="#s4-3">Robin Hood</a></li>
+            <li><a href="#s4-4">删除的墓碑问题</a></li>
+          </ol>
+        </li>
+        <li><a href="#s5">Swiss Table</a>
+          <ol>
+            <li><a href="#s5-1">控制字节与 SIMD 探测</a></li>
+            <li><a href="#s5-2">快 2–3 倍的来源</a></li>
+            <li><a href="#s5-3">代价：迭代器与引用失效</a></li>
+          </ol>
+        </li>
+        <li><a href="#s6">负载因子与 rehash</a>
+          <ol>
+            <li><a href="#s6-1">探测长度曲线</a></li>
+            <li><a href="#s6-2">增量式 rehash</a></li>
+            <li><a href="#s6-3">尾延迟</a></li>
+          </ol>
+        </li>
+        <li><a href="#s7">哈希碰撞 DoS</a>
+          <ol>
+            <li><a href="#s7-1">2011 年的事故</a></li>
+            <li><a href="#s7-2">SipHash 与随机种子</a></li>
+          </ol>
+        </li>
+        <li><a href="#s8">选型决策表</a>
+          <ol>
+            <li><a href="#s8-1">实现对照（交互）</a></li>
+          </ol>
+        </li>
+        <li><a href="#s9">分布式场景</a></li>
+        <li><a href="#s10">面试题集（12 道）</a>
+          <ol>
+            <li><a href="#s10-1">10.1 基础</a></li>
+            <li><a href="#s10-2">10.2 中级</a></li>
+            <li><a href="#s10-3">10.3 高级</a></li>
+          </ol>
+        </li>
+      </ol>
+    </nav>
+  </aside>
+
+<main>
+
+  <header class="hero">
+    <div class="badge">Algorithms · Hash Tables · 2026</div>
+    <h1>哈希表内核</h1>
+    <p class="sub">哈希表是「O(1)」这个说法被滥用得最严重的地方。它的 O(1) 是<strong>期望、摊销、且依赖哈希函数质量</strong>的——三个限定词各自对应一类真实事故：碰撞攻击、rehash 停顿、哈希函数选错。这一篇把两种冲突解决方案、Swiss Table 的 SIMD 技巧、rehash 的尾延迟以及 Hash-DoS 讲清，让你知道 <code>unordered_map</code> 什么时候不该用。</p>
+    <div class="meta-row">
+      <span class="pill red">核心难度 ★★★★☆</span>
+      <span class="pill cyan">面试出现率 极高</span>
+      <span class="pill green">阅读时长 ~42 min</span>
+      <span class="pill amber">前置 复杂度与分析</span>
+    </div>
+    <div class="meta">
+      <span>哈希函数三标准</span>
+      <span>拉链 vs 开放寻址</span>
+      <span>Robin Hood</span>
+      <span>Swiss Table SIMD</span>
+      <span>增量 rehash</span>
+      <span>Hash-DoS</span>
+    </div>
+  </header>
+
+<!-- ================================================================ §1 -->
+<section class="chapter" id="s1">
+  <div class="ch-head">
+    <div class="num">01</div>
+    <div class="t"><h2>本质：用值算地址</h2><p class="sub">以及那个 O(1) 的三个限定词</p></div>
+  </div>
+
+  <p>数组的下标访问是 O(1)，因为地址可以直接算出来。哈希表想把这个能力推广到<strong>任意类型的键</strong>：先用哈希函数把键映射成一个整数，再用这个整数当下标。</p>
+
+  <div class="formula">位置 = <span class="hl">h(key)</span> mod 桶数
+
+代价：键空间（几乎无限）→ 桶空间（有限）必然产生<span class="hl">冲突</span>
+     哈希表的全部工程复杂度都在「怎么处理冲突」上</div>
+
+  <div class="def"><strong>「哈希表是 O(1)」的三个限定词，每一个都对应一类真实故障</strong>：
+  <ul>
+    <li><strong>期望（expected）</strong>——假设哈希值均匀分布。假设不成立时退化到 O(n)，而<em>攻击者可以主动制造这个不成立</em>（§7 的 Hash-DoS）。</li>
+    <li><strong>摊销（amortized）</strong>——单次操作可能触发 rehash，代价 O(n)。这是尾延迟来源（§6.3）。</li>
+    <li><strong>不含哈希计算</strong>——渐进分析把 <code>h(key)</code> 当成 O(1)，但对长字符串它是 O(len)。键很长时哈希计算本身就是瓶颈。</li>
+  </ul>
+  <em>面试里能主动说出这三条，比背「平均 O(1) 最坏 O(n)」有价值得多。</em></div>
+
+  <div class="analogy">哈希表像<strong>图书馆按书名首字母分区上架</strong>。要找《算法导论》，你不用扫遍全馆——直接走到「S」区（<code>h("算法导论") = S</code>），只在那一小片找。<br><br>三个问题也都在这个类比里：<br>· <strong>分区不均</strong>：如果馆藏 80% 是「S」开头的书，S 区会挤成一条长龙，退化成线性查找。<em>好的哈希函数就是好的分区规则。</em><br>· <strong>扩馆</strong>：书太多要换更大的馆，得把所有书重新按新规则上架一遍——这就是 rehash，那天谁来借书都得等。<br>· <strong>恶意读者</strong>：有人专门捐赠 S 开头的书把 S 区搞垮，这就是碰撞攻击。防御办法不是换书架，而是<strong>让分区规则每次开馆时随机变化</strong>，让他猜不到该捐什么。</div>
+
+  <h3 id="s1-1">1.1 与其他章节的关系</h3>
+  <ul>
+    <li><a href="./complexity_and_analysis.html">复杂度与分析</a> —— 摊销 vs 平均的区别、rehash 的尾延迟、p99 视角</li>
+    <li><a href="./monotonic_and_prefix.html">单调栈与前缀和</a> —— 「前缀和 + 哈希表」是哈希表最高频的算法用途</li>
+    <li><a href="./sorting_deep_dive.html">排序全景</a> —— 哈希去重 vs <code>sort + unique</code> 的分工</li>
+    <li><a href="../stl/stl_containers_ppt.html">STL 容器深度剖析</a> —— <code>unordered_map</code> 与 <code>map</code> 的接口层对照</li>
+    <li><a href="../architect/storage_and_data_architecture.html">存储与数据架构</a> —— 一致性哈希、LRU 缓存、跳表</li>
+    <li><a href="../ai-native/cache_penetration.html">缓存穿透与布隆过滤器</a> —— 布隆 / Cuckoo 过滤器的完整展开</li>
+  </ul>
+</section>
+
+<!-- ================================================================ §2 -->
+<section class="chapter" id="s2">
+  <div class="ch-head">
+    <div class="num">02</div>
+    <div class="t"><h2>哈希函数</h2><p class="sub">整个数据结构的性能地基</p></div>
+  </div>
+
+  <h3 id="s2-1">2.1 好哈希的三个标准</h3>
+
+  <table>
+    <thead><tr><th>标准</th><th>含义</th><th>不满足的后果</th></tr></thead>
+    <tbody>
+      <tr><td><strong>均匀性</strong></td><td>输出在值域上近似均匀分布</td><td>桶倾斜 → 链表变长 → 退化 O(n)</td></tr>
+      <tr><td><strong>雪崩效应</strong></td><td>输入改 1 位，输出<strong>约一半</strong>的位翻转</td><td>相似键映射到相邻桶 → 聚簇（开放寻址下尤其致命）</td></tr>
+      <tr><td><strong>速度</strong></td><td>短键几个周期，长键接近内存带宽</td><td>哈希计算本身成为瓶颈</td></tr>
+      <tr><td>（可选）<strong>抗碰撞</strong></td><td>攻击者无法构造碰撞</td><td>Hash-DoS（§7）</td></tr>
+    </tbody>
+  </table>
+
+  <div class="def"><strong>雪崩效应为什么重要</strong>：考虑一个坏哈希 <code>h(x) = x</code>（恒等）。插入 <code>1, 2, 3, …, n</code> 时，用取模分桶尚可（均匀），但用<strong>位掩码</strong>分桶时只看低位——如果键都是 8 的倍数（比如指针、页对齐的地址），低 3 位恒为 0，<strong>所有键挤进 1/8 的桶</strong>。<br>而且在开放寻址下，相邻的哈希值会形成连续占用（聚簇），探测长度急剧上升。所以<strong>「均匀」不够，还要「打散」</strong>。</div>
+
+  <table>
+    <thead><tr><th>哈希函数</th><th>速度（长键）</th><th>抗碰撞</th><th>典型用途</th></tr></thead>
+    <tbody>
+      <tr><td>FNV-1a</td><td>慢（逐字节）</td><td>否</td><td>短键、代码简单优先</td></tr>
+      <tr><td>MurmurHash3</td><td>快</td><td>否</td><td>曾是事实标准，仍广泛使用</td></tr>
+      <tr><td><strong>xxHash3</strong></td><td><span class="cell-ok">极快（接近内存带宽）</span></td><td>否</td><td>大数据、校验、非对抗场景首选</td></tr>
+      <tr><td>CityHash / FarmHash</td><td>快</td><td>否</td><td>Google 内部，abseil 默认</td></tr>
+      <tr><td>wyhash</td><td><span class="cell-ok">极快</span></td><td>否</td><td>新一代，很多 Rust/C++ 库采用</td></tr>
+      <tr><td><strong>SipHash-1-3</strong></td><td>中等</td><td><span class="cell-ok">是（带密钥）</span></td><td><strong>处理不可信输入时必选</strong>（Rust/Python 默认）</td></tr>
+      <tr><td>SHA-256 / BLAKE3</td><td><span class="cell-bad">慢</span></td><td><span class="cell-ok">密码学级</span></td><td>内容寻址、签名，<strong>不要用于哈希表</strong></td></tr>
+    </tbody>
+  </table>
+
+  <div class="warn">不要用密码学哈希（SHA、MD5）做哈希表的键映射——慢几十倍，而哈希表根本不需要「抗第二原像」这种强度。需要抗攻击时用 <strong>SipHash</strong>（专为此设计，只需抗「密钥未知时无法构造碰撞」）。<br>反过来也别用非抗碰撞的快哈希去做内容寻址或去重指纹——xxHash 有意不抗碰撞，攻击者能轻易构造相同指纹。<em>「选哈希函数」的第一个问题是「输入是否可信」。</em></div>
+
+  <h3 id="s2-2">2.2 std::hash 的实现与陷阱</h3>
+
+  <table>
+    <thead><tr><th>类型</th><th>libstdc++ 的 <code>std::hash</code></th><th>问题</th></tr></thead>
+    <tbody>
+      <tr><td><code>int</code> / 整型</td><td><strong>恒等函数</strong>（直接返回值）</td><td><span class="cell-bad">零雪崩</span>。配位掩码桶时低位倾斜的键会严重聚簇</td></tr>
+      <tr><td><code>T*</code> 指针</td><td>reinterpret 成整数</td><td><span class="cell-bad">低位恒为 0</span>（对齐），同上</td></tr>
+      <tr><td><code>std::string</code></td><td>MurmurHash 变体（逐字节）</td><td>O(len)；<strong>无随机种子</strong> → 可被攻击</td></tr>
+      <tr><td><code>float</code> / <code>double</code></td><td>按位哈希（0 特判）</td><td><code>NaN != NaN</code> 导致 NaN 键永远查不到</td></tr>
+      <tr><td><code>std::pair</code> / <code>tuple</code></td><td><span class="cell-bad">没有特化</span></td><td>编译报错，必须自己写</td></tr>
+    </tbody>
+  </table>
+
+  <div class="danger"><strong>整型的 <code>std::hash</code> 是恒等函数</strong>，这是个必须知道的实现细节。libstdc++ 的 <code>unordered_map</code> 用<em>素数桶数</em>取模，所以恒等哈希勉强可用。但如果你自己写一个<strong>2 的幂桶数 + 位掩码</strong>的哈希表（性能考虑，见 §2.3），再配上 <code>std::hash&lt;int&gt;</code>，那么：
+<pre style="margin:8px 0 0"><span class="cm">// 键都是 1000 的倍数（比如按 1000 递增的 ID）</span>
+<span class="cm">// 桶数 = 1024，掩码 = 0x3FF</span>
+<span class="num">1000</span> &amp; <span class="num">0x3FF</span> = <span class="num">1000</span>
+<span class="num">2000</span> &amp; <span class="num">0x3FF</span> = <span class="num">976</span>
+<span class="num">3000</span> &amp; <span class="num">0x3FF</span> = <span class="num">952</span>   <span class="cm">// 步长恒为 -24 → 聚簇成一段</span></pre>
+  <strong>修复办法：自己加一层混淆（finalizer）</strong>，把整数打散：
+<pre style="margin:8px 0 0"><span class="cm">// splitmix64 的 finalizer，3 条指令，雪崩效果很好</span>
+<span class="kw">inline</span> <span class="kw">uint64_t</span> <span class="fn">mix</span>(<span class="kw">uint64_t</span> x) {
+    x += <span class="num">0x9E3779B97F4A7C15ULL</span>;
+    x = (x ^ (x &gt;&gt; <span class="num">30</span>)) * <span class="num">0xBF58476D1CE4E5B9ULL</span>;
+    x = (x ^ (x &gt;&gt; <span class="num">27</span>)) * <span class="num">0x94D049BB133111EBULL</span>;
+    <span class="kw">return</span> x ^ (x &gt;&gt; <span class="num">31</span>);
+}</pre>
+  <code>absl::flat_hash_map</code> 和大多数现代实现<strong>内置</strong>了这层混淆，所以直接用它们不必操心。</div>
+
+  <h3 id="s2-3">2.3 取模 vs 位掩码</h3>
+
+  <div class="vs">
+    <div class="bad">
+      <h5>素数取模：分布好，但慢</h5>
+<pre>bucket = h % prime_bucket_count;
+
+<span class="cm">// 整数除法在现代 x86 上要 20~40 周期</span>
+<span class="cm">// 而且桶数不是编译期常量 → 无法优化成乘法</span>
+<span class="cm">// libstdc++ 的 unordered_map 走这条路</span>
+
+<span class="cm">// 好处：即使哈希函数很差（如恒等），</span>
+<span class="cm">// 取模也能把高位信息「搅」进结果</span></pre>
+    </div>
+    <div class="good">
+      <h5>2 的幂 + 位掩码：快，但依赖好哈希</h5>
+<pre>bucket = h &amp; (bucket_count - <span class="num">1</span>);
+
+<span class="cm">// 1 条 AND 指令，1 周期</span>
+<span class="cm">// 扩容时只需检查 1 个新位，rehash 更快</span>
+
+<span class="cm">// 代价：<b>只用了 h 的低位</b></span>
+<span class="cm">// → 必须搭配有雪崩效应的哈希函数</span>
+<span class="cm">// absl / folly / Rust 的 HashMap 都走这条路</span></pre>
+    </div>
+  </div>
+
+  <div class="def"><strong>这是一个把复杂度从 A 转移到 B 的经典取舍</strong>：
+  <ul>
+    <li>素数取模把「保证分布」的责任放在<strong>桶映射</strong>上，于是哈希函数可以很弱（甚至恒等）。代价是每次操作一次整数除法。</li>
+    <li>位掩码把责任放在<strong>哈希函数</strong>上，桶映射变成 1 周期。代价是哈希函数必须够好，否则崩得很惨。</li>
+  </ul>
+  现代实现全部选后者——因为好的非密码学哈希（xxHash、wyhash）已经足够快且雪崩充分，用 1 条 AND 换 20 周期的除法明显划算。<em>但这也意味着：自己造哈希表时，绝不能配一个弱哈希函数。</em><br><br>还有一种折中：<strong>Fibonacci 哈希</strong>（<code>(h * 0x9E3779B97F4A7C15) &gt;&gt; (64 - log2(buckets))</code>）——一次乘法 + 移位，用高位而不是低位，兼顾速度与打散。</div>
+
+  <h3 id="s2-4">2.4 组合多个字段</h3>
+
+  <p><code>std::hash</code> 没有 <code>pair</code> / <code>tuple</code> 的特化，必须自己写。而「怎么组合」有对错之分：</p>
+
+  <div class="vs">
+    <div class="bad">
+      <h5>❌ 三种常见错法</h5>
+<pre><span class="cm">// ① 异或：对称 → (a,b) 与 (b,a) 碰撞</span>
+<span class="kw">return</span> <span class="fn">h1</span>(p.first) ^ <span class="fn">h2</span>(p.second);
+<span class="cm">// 而且 a==b 时结果恒为 0！</span>
+
+<span class="cm">// ② 相加：同样对称，且易碰撞</span>
+<span class="kw">return</span> <span class="fn">h1</span>(p.first) + <span class="fn">h2</span>(p.second);
+
+<span class="cm">// ③ 简单移位：高位信息丢失</span>
+<span class="kw">return</span> (<span class="fn">h1</span>(p.first) &lt;&lt; <span class="num">32</span>) | <span class="fn">h2</span>(p.second);
+<span class="cm">// 若 h2 值域大于 32 位就冲突</span></pre>
+    </div>
+    <div class="good">
+      <h5>✅ Boost 风格 hash_combine</h5>
+<pre><span class="kw">template</span> &lt;<span class="kw">class</span> T&gt;
+<span class="kw">inline</span> <span class="kw">void</span> <span class="fn">hash_combine</span>(<span class="kw">size_t</span>&amp; seed, <span class="kw">const</span> T&amp; v) {
+    seed ^= std::hash&lt;T&gt;{}(v)
+          + <span class="num">0x9E3779B97F4A7C15ULL</span>   <span class="cm">// 黄金比例常数</span>
+          + (seed &lt;&lt; <span class="num">6</span>) + (seed &gt;&gt; <span class="num">2</span>);
+}
+
+<span class="kw">struct</span> <span class="type">PairHash</span> {
+    <span class="kw">template</span> &lt;<span class="kw">class</span> A, <span class="kw">class</span> B&gt;
+    <span class="kw">size_t</span> <span class="kw">operator</span>()(<span class="kw">const</span> std::pair&lt;A,B&gt;&amp; p) <span class="kw">const</span> {
+        <span class="kw">size_t</span> seed = <span class="num">0</span>;
+        <span class="fn">hash_combine</span>(seed, p.first);
+        <span class="fn">hash_combine</span>(seed, p.second);
+        <span class="kw">return</span> seed;   <span class="cm">// 顺序敏感、有雪崩</span>
+    }
+};</pre>
+    </div>
+  </div>
+
+  <div class="tip">异或的问题值得记牢，因为它是最常见的错法：<strong>异或是对称且自逆的</strong>——<code>h(a) ^ h(b) == h(b) ^ h(a)</code>（<code>(1,2)</code> 和 <code>(2,1)</code> 必然碰撞），而且 <code>a == b</code> 时结果恒为 0（所有对角元素挤进一个桶）。<br>如果不想自己写，C++ 里有两条捷径：<strong>①</strong> 用 <code>absl::flat_hash_map</code> —— abseil 为 <code>pair</code>/<code>tuple</code>/容器都提供了正确的 <code>AbslHashValue</code>；<strong>②</strong> 把多字段拼成一个字符串或结构体，对其字节序列整体做 <code>xxHash</code>（注意结构体有 padding，要么 <code>#pragma pack</code>，要么逐字段拼）。</div>
+
+  <div class="warn">对结构体做「整体字节哈希」有个隐藏坑：<strong>padding 字节的内容是未定义的</strong>。两个逻辑相等的对象可能因为 padding 里的垃圾值不同而哈希不同。所以要么保证结构体无 padding（<code>static_assert(sizeof(S) == 各字段之和)</code>），要么逐字段 combine。</div>
+</section>
+
+<!-- ================================================================ §3 -->
+<section class="chapter" id="s3">
+  <div class="ch-head">
+    <div class="num">03</div>
+    <div class="t"><h2>拉链法</h2><p class="sub">std::unordered_map 走的路，以及标准怎么把它逼出来的</p></div>
+  </div>
+
+  <h3 id="s3-1">3.1 unordered_map 的真实结构</h3>
+
+  <div class="fig">
+    <svg viewBox="0 0 720 250" role="img" aria-label="libstdc++ 的 unordered_map 结构：桶数组指向一条全局单链表的分段">
+      <text class="tb" x="16" y="18">libstdc++ 的 unordered_map：桶数组 + <tspan class="ta">一条全局单链表</tspan>（不是每桶一条）</text>
+
+      <!-- buckets -->
+      <text class="tm" x="16" y="52">桶数组</text>
+      <rect class="box" x="72" y="36" width="44" height="24" rx="3"/><text class="ts" x="88" y="53">0</text>
+      <rect class="box-a" x="118" y="36" width="44" height="24" rx="3"/><text class="ts" x="134" y="53">1</text>
+      <rect class="box" x="164" y="36" width="44" height="24" rx="3"/><text class="ts" x="180" y="53">2</text>
+      <rect class="box-a" x="210" y="36" width="44" height="24" rx="3"/><text class="ts" x="226" y="53">3</text>
+      <rect class="box" x="256" y="36" width="44" height="24" rx="3"/><text class="ts" x="272" y="53">4</text>
+      <rect class="box-a" x="302" y="36" width="44" height="24" rx="3"/><text class="ts" x="318" y="53">5</text>
+      <text class="ts" x="360" y="53">桶存的是「前驱指针」，不是链表头</text>
+
+      <!-- single linked list -->
+      <text class="tm" x="16" y="120">全局链表</text>
+      <rect class="box-g" x="72" y="100" width="84" height="34" rx="4"/>
+      <text class="tm" x="80" y="121">k1 (桶1)</text>
+      <rect class="box-g" x="176" y="100" width="84" height="34" rx="4"/>
+      <text class="tm" x="184" y="121">k2 (桶1)</text>
+      <rect class="box-p" x="280" y="100" width="84" height="34" rx="4"/>
+      <text class="tm" x="288" y="121">k3 (桶3)</text>
+      <rect class="box-y" x="384" y="100" width="84" height="34" rx="4"/>
+      <text class="tm" x="392" y="121">k4 (桶5)</text>
+      <rect class="box-y" x="488" y="100" width="84" height="34" rx="4"/>
+      <text class="tm" x="496" y="121">k5 (桶5)</text>
+      <path class="ln-g" d="M156,117 L174,117" marker-end="url(#arA7)"/>
+      <path class="ln-g" d="M260,117 L278,117" marker-end="url(#arA7)"/>
+      <path class="ln-g" d="M364,117 L382,117" marker-end="url(#arA7)"/>
+      <path class="ln-g" d="M468,117 L486,117" marker-end="url(#arA7)"/>
+      <defs>
+        <marker id="arA7" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+          <path class="ar-a" d="M0,0 L10,5 L0,10 z"/>
+        </marker>
+      </defs>
+      <path class="ln-a" d="M134,60 L110,96" stroke-dasharray="3 3"/>
+      <path class="ln-a" d="M226,60 L300,96" stroke-dasharray="3 3"/>
+      <path class="ln-a" d="M318,60 L410,96" stroke-dasharray="3 3"/>
+
+      <rect class="box-r" x="16" y="152" width="336" height="88" rx="8"/>
+      <text class="tb" x="28" y="172">为什么是「一条全局链表」</text>
+      <text class="ts" x="28" y="192">标准要求 begin()/end() 遍历是 <tspan class="tr">O(size)</tspan>，</text>
+      <text class="ts" x="28" y="208">不能是 O(桶数)。若每桶一条独立链表，</text>
+      <text class="ts" x="28" y="224">遍历就得跳过所有空桶 → O(桶数)。</text>
+      <text class="tr" x="28" y="236">所以必须把所有节点串成一条。</text>
+
+      <rect class="box-y" x="366" y="152" width="338" height="88" rx="8"/>
+      <text class="tb" x="378" y="172">代价</text>
+      <text class="ts" x="378" y="192">· 每个节点一次单独 malloc（<tspan class="ty">指针追逐</tspan>）</text>
+      <text class="ts" x="378" y="208">· 节点额外 8~16 B（next 指针 + 缓存的 hash）</text>
+      <text class="ts" x="378" y="224">· 查找 = 1 次桶访问 + N 次链表跳转，</text>
+      <text class="ts" x="378" y="238">　每次都可能 cache miss</text>
+    </svg>
+    <figcaption><code>unordered_map</code> 的「桶 + 全局单链表」结构不是实现者的偏好，而是标准的接口要求逼出来的。</figcaption>
+  </div>
+
+  <h3 id="s3-2">3.2 标准为什么逼出这个实现</h3>
+
+  <p>C++ 标准对 <code>unordered_map</code> 定了几条要求，它们联合起来<strong>排除了开放寻址</strong>：</p>
+
+  <table>
+    <thead><tr><th>标准要求</th><th>后果</th></tr></thead>
+    <tbody>
+      <tr><td><strong>引用与指针在 rehash 后仍有效</strong>（只有迭代器失效）</td><td>元素必须<strong>单独分配</strong>在堆上，不能存在连续数组里（数组重分配会移动元素）</td></tr>
+      <tr><td>提供 <code>bucket_count()</code> / <code>bucket(key)</code> / <code>bucket_size(n)</code></td><td>必须真的有「桶」这个概念，暴露了拉链结构</td></tr>
+      <tr><td>提供局部迭代器 <code>begin(n)</code> / <code>end(n)</code>（遍历第 n 个桶）</td><td>同上</td></tr>
+      <tr><td><code>max_load_factor</code> 可设为 &gt; 1</td><td>开放寻址的负载因子<strong>不可能超过 1</strong></td></tr>
+      <tr><td>全表遍历 O(size)</td><td>节点必须串成一条全局链表</td></tr>
+      <tr><td>插入不使已存在元素的引用失效</td><td>禁止 Robin Hood 这类「移动已有元素」的方案</td></tr>
+    </tbody>
+  </table>
+
+  <div class="def"><strong>这是标准库设计里一个著名的教训</strong>：C++11 定 <code>unordered_map</code> 接口时，把太多<em>实现细节</em>写进了契约（桶接口、引用稳定性、负载因子 &gt; 1）。结果是<strong>任何符合标准的实现都必须是拉链法</strong>，无法换成更快的开放寻址。<br><br>这就是为什么 abseil、folly、Boost.Unordered（新版）都提供<strong>不完全兼容标准接口</strong>的替代品——它们主动放弃引用稳定性来换 2–3 倍性能。<em>「接口暴露了多少实现细节」直接决定了未来的优化空间</em>，这条经验对设计任何库都成立。</div>
+
+  <div class="tip">拉链法也有它真正的优势，不是只有劣势：
+  <ul>
+    <li><strong>引用稳定</strong>：可以安全地持有 <code>&amp;map[key]</code> 跨插入操作。这在缓存、对象池、图结构里非常有用。</li>
+    <li><strong>负载因子可 &gt; 1</strong>：内存吃紧时可以让链表长一点，不必扩容。</li>
+    <li><strong>删除简单</strong>：直接摘链，没有开放寻址的墓碑问题（§4.4）。</li>
+    <li><strong>可以按桶退化成树</strong>：Java 8 的 <code>HashMap</code> 在单桶超过 8 个元素时把链表转成红黑树，把最坏从 O(n) 降到 O(log n)——这是拉链法独有的能力。</li>
+  </ul>
+  所以选型不是「开放寻址总是更好」，而是<strong>「你需不需要引用稳定性」</strong>（§8）。</div>
+</section>
+
+<!-- ================================================================ §4 -->
+<section class="chapter" id="s4">
+  <div class="ch-head">
+    <div class="num">04</div>
+    <div class="t"><h2>开放寻址</h2><p class="sub">所有元素放在一个连续数组里</p></div>
+  </div>
+
+  <h3 id="s4-1">4.1 线性探测与聚簇</h3>
+
+  <p>开放寻址不用链表：冲突时就<strong>顺着数组往后找下一个空位</strong>。</p>
+
+<pre><span class="cm">// 线性探测的查找（概念版）</span>
+<span class="kw">int</span> <span class="fn">find_slot</span>(<span class="kw">const</span> Key&amp; k) {
+    <span class="kw">size_t</span> i = <span class="fn">hash</span>(k) &amp; mask;
+    <span class="kw">while</span> (slots[i].state != EMPTY) {
+        <span class="kw">if</span> (slots[i].state == FULL &amp;&amp; slots[i].key == k) <span class="kw">return</span> i;
+        i = (i + <span class="num">1</span>) &amp; mask;      <span class="cm">// 往后走一格</span>
+    }
+    <span class="kw">return</span> -<span class="num">1</span>;   <span class="cm">// 碰到 EMPTY 说明不存在</span>
+}</pre>
+
+  <div class="def"><strong>为什么线性探测反而是最快的</strong>——尽管它理论上聚簇最严重：因为它的探测序列是<strong>连续地址</strong>，完全符合 cache line 和硬件预取的模式。探测 8 个槽位可能只需 1 次 cache miss；而二次探测或双重哈希的跳跃式探测，每一步都可能是一次 miss。<br><br>这是<a href="./complexity_and_analysis.html">「渐进相同、常数不同」</a>的又一个案例：理论上「聚簇更少」的方案，实测更慢。</div>
+
+  <p><strong>探测长度与负载因子的关系</strong>（这条曲线决定了 <code>max_load_factor</code> 该设多少）：</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 720 290" role="img" aria-label="线性探测的期望探测长度随负载因子上升的曲线">
+      <!-- grid -->
+      <line class="grid" x1="70" y1="240" x2="660" y2="240"/>
+      <line class="grid" x1="70" y1="200" x2="660" y2="200"/>
+      <line class="grid" x1="70" y1="160" x2="660" y2="160"/>
+      <line class="grid" x1="70" y1="120" x2="660" y2="120"/>
+      <line class="grid" x1="70" y1="80" x2="660" y2="80"/>
+      <line class="grid" x1="70" y1="40" x2="660" y2="40"/>
+      <line class="ln" x1="70" y1="30" x2="70" y2="250"/>
+      <line class="ln" x1="70" y1="250" x2="660" y2="250"/>
+
+      <text class="tm" x="44" y="244">1</text>
+      <text class="tm" x="44" y="204">3</text>
+      <text class="tm" x="44" y="164">5</text>
+      <text class="tm" x="44" y="124">10</text>
+      <text class="tm" x="44" y="84">25</text>
+      <text class="tm" x="44" y="44">50</text>
+      <text class="ts" x="16" y="20">期望探测次数</text>
+
+      <text class="tm" x="66" y="266">0</text>
+      <text class="tm" x="184" y="266">0.5</text>
+      <text class="tm" x="302" y="266">0.7</text>
+      <text class="tm" x="420" y="266">0.85</text>
+      <text class="tm" x="538" y="266">0.95</text>
+      <text class="tm" x="632" y="266">1.0</text>
+      <text class="ts" x="560" y="284">负载因子 α</text>
+
+      <!-- successful search curve: (1 + 1/(1-a))/2 -->
+      <path class="ln-g" d="M70,246 L184,238 L302,228 L420,206 L538,150 L620,60"/>
+      <text class="tg" x="470" y="130">查找命中</text>
+
+      <!-- unsuccessful: (1 + 1/(1-a)^2)/2 -->
+      <path class="ln-r" d="M70,246 L184,232 L302,212 L420,168 L538,80 L600,32"/>
+      <text class="tr" x="424" y="150">查找未命中 / 插入</text>
+
+      <!-- sweet spot -->
+      <line class="ln-p" x1="420" y1="30" x2="420" y2="250" stroke-dasharray="4 3"/>
+      <text class="tp" x="396" y="26">α ≈ 0.85</text>
+
+      <rect class="box-y" x="76" y="40" width="290" height="88" rx="8"/>
+      <text class="tb" x="88" y="60">线性探测的期望探测次数</text>
+      <text class="tm" x="88" y="80">命中　： (1 + 1/(1−α)) / 2</text>
+      <text class="tm" x="88" y="98">未命中： (1 + 1/(1−α)²) / 2</text>
+      <text class="ts" x="88" y="118">α→1 时<tspan class="tr">发散</tspan>：α=0.99 未命中要探测 ~5000 次</text>
+    </svg>
+    <figcaption>探测长度在 α &gt; 0.85 之后急剧上升，且「未命中」比「命中」恶化得快得多——这决定了扩容阈值。</figcaption>
+  </div>
+
+  <div class="warn">注意「<strong>未命中</strong>」的曲线（<code>1/(1−α)²</code>）比「命中」（<code>1/(1−α)</code>）恶化快得多。这有个重要的工程含义：<strong>以「查不到」为主的负载（缓存 miss 检查、去重判断、布隆过滤器前置）对负载因子更敏感</strong>。<br>如果你的哈希表主要用来回答「这个 key 存在吗」而答案多是「不存在」，那么该把 <code>max_load_factor</code> 设得更低，或者前面加一层布隆过滤器。</div>
+
+  <h3 id="s4-2">4.2 二次探测与双重哈希</h3>
+
+  <table>
+    <thead><tr><th>探测方式</th><th>第 i 次探测位置</th><th>聚簇</th><th>cache 友好</th></tr></thead>
+    <tbody>
+      <tr><td><strong>线性探测</strong></td><td><code>h + i</code></td><td><span class="cell-bad">主聚簇（primary clustering）</span></td><td><span class="cell-ok">最好</span></td></tr>
+      <tr><td>二次探测</td><td><code>h + i²</code> 或 <code>h + (i+i²)/2</code></td><td>次聚簇（同 h 的键仍走同一序列）</td><td>中</td></tr>
+      <tr><td>双重哈希</td><td><code>h1 + i·h2(k)</code></td><td><span class="cell-ok">几乎无</span></td><td><span class="cell-bad">最差（每步随机跳）</span></td></tr>
+      <tr><td>Robin Hood（§4.3）</td><td>线性，但会<strong>抢位</strong></td><td>线性，但<strong>方差极小</strong></td><td><span class="cell-ok">最好</span></td></tr>
+    </tbody>
+  </table>
+
+  <div class="note">二次探测有个容易忽略的正确性要求：<strong>探测序列必须能覆盖所有槽位</strong>，否则表还没满就找不到空位（死循环或误判为满）。<br>常用做法：桶数取 2 的幂，探测式子用 <code>h + (i + i²)/2</code>——它能保证遍历完所有 2^k 个槽位。用朴素的 <code>h + i²</code> 配 2 的幂桶数只能覆盖约一半槽位。<em>这类「看起来能跑但在高负载下出错」的 bug 极难调试。</em></div>
+
+  <h3 id="s4-3">4.3 Robin Hood</h3>
+
+  <p><strong>Robin Hood hashing</strong>（罗宾汉哈希）是对线性探测的一个巧妙改进：插入时如果发现「当前位置的占用者比我更接近它的理想位置」，就<strong>把它踢出来，自己占进去</strong>，然后继续为被踢者找位置。</p>
+
+  <div class="def"><strong>核心不变式</strong>：定义每个元素的 <em>probe distance</em>（实际位置 − 理想位置）。Robin Hood 保证探测序列上的 probe distance <strong>单调不减</strong>。<br><br>由此得到两个好处：
+  <ul>
+    <li><strong>查找可以提前终止</strong>：探测到某个槽位时，如果它的 probe distance 已经<em>小于</em>当前查找的距离，就说明目标不可能在后面——因为如果它在，它的距离会更大，早该出现在这里。<strong>未命中查找不必走到 EMPTY</strong>。</li>
+    <li><strong>探测长度的方差极小</strong>：它不降低平均探测长度（那由负载因子决定），但把「个别元素探测几十次」这种长尾<strong>削平了</strong>。这直接改善 p99。</li>
+  </ul></div>
+
+  <div class="analogy">名字来自「劫富济贫」：<strong>抢劫「富人」（离家近、探测距离短的元素）去帮助「穷人」（离家远的）</strong>。<br><br>总的财富（平均探测长度）不变——那是由房子有多挤（负载因子）决定的，谁也变不了。但<strong>分配变均匀了</strong>：没有人特别惨。<em>这正是「不改善均值但削平长尾」的典型手法，和限流里的对冲请求、GC 里的增量回收是同一类思路。</em></div>
+
+  <div class="tip">Robin Hood 的代价：<strong>插入时要移动已有元素</strong>，这直接违反 C++ 标准对 <code>unordered_map</code> 的「引用稳定性」要求，所以标准库不能用它。Rust 的 <code>HashMap</code> 曾用 Robin Hood（1.36 之前），后来改成了 Swiss Table（hashbrown）。<br>它仍是自己造哈希表时的好选择——尤其是对 p99 敏感的场景。</div>
+
+  <h3 id="s4-4">4.4 删除的墓碑问题</h3>
+
+  <p>开放寻址的删除不能简单地把槽位标成 EMPTY——那会<strong>切断探测链</strong>：</p>
+
+  <div class="vs">
+    <div class="bad">
+      <h5>❌ 直接标 EMPTY</h5>
+<pre><span class="cm">// 插入顺序：A→槽3, B→槽3(冲突,占4), C→槽3(冲突,占5)</span>
+<span class="cm">// 槽：  [.., .., .., A, B, C, ..]</span>
+
+<span class="cm">// 删除 B，标成 EMPTY：</span>
+<span class="cm">// 槽：  [.., .., .., A, _, C, ..]</span>
+
+<span class="cm">// 现在查找 C：从槽3开始 → A 不匹配 → 槽4 是 EMPTY</span>
+<span class="cm">// → <b>判定「不存在」并返回</b></span>
+<span class="cm">// 但 C 明明在槽5！探测链被切断了</span></pre>
+    </div>
+    <div class="good">
+      <h5>✅ 墓碑（tombstone / DELETED）</h5>
+<pre><span class="cm">// 三态：EMPTY / FULL / DELETED</span>
+<span class="cm">// 删除 B，标成 DELETED：</span>
+<span class="cm">// 槽：  [.., .., .., A, X, C, ..]   X=墓碑</span>
+
+<span class="cm">// 查找：遇到 DELETED <b>继续往下探测</b>（不终止）</span>
+<span class="cm">// 插入：遇到 DELETED <b>可以复用</b>该槽位</span>
+<span class="cm">// 只有遇到 EMPTY 才判定「不存在」</span></pre>
+    </div>
+  </div>
+
+  <div class="danger">墓碑本身又带来一个问题：<strong>墓碑不减少「探测长度」，只减少「元素个数」</strong>。一个反复插入删除的表，墓碑会不断累积，导致：
+  <ul>
+    <li><code>size()</code> 很小但探测长度很长（有效负载因子被墓碑撑高）；</li>
+    <li>极端情况下整个表变成墓碑，任何未命中查找都要扫全表 → <strong>O(n)</strong>。</li>
+  </ul>
+  <strong>标准解法：把墓碑计入负载因子</strong>（<code>load = (size + tombstones) / capacity</code>），超过阈值时触发 rehash——rehash 会自然清掉所有墓碑。<br><br>这也是开放寻址在<strong>「写多删多」工作负载</strong>下的固有弱点。这类场景下拉链法（删除只是摘链，无残留）反而更稳。<em>选型时要问的不只是「读写比」，还有「删除频率」。</em></div>
+</section>
+
+<!-- ================================================================ §5 -->
+<section class="chapter" id="s5">
+  <div class="ch-head">
+    <div class="num">05</div>
+    <div class="t"><h2>Swiss Table</h2><p class="sub">abseil / Rust hashbrown 的做法：用 SIMD 一次探测 16 个槽</p></div>
+  </div>
+
+  <h3 id="s5-1">5.1 控制字节与 SIMD 探测</h3>
+
+  <p>Swiss Table 的核心创新是把元数据和数据<strong>分开存放</strong>：一个紧凑的「控制字节数组」+ 一个「槽位数组」。</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 720 290" role="img" aria-label="Swiss Table 的控制字节数组与 SIMD 并行探测">
+      <text class="tb" x="16" y="18">Swiss Table：每个槽位对应 1 字节控制信息，16 个控制字节 = 1 条 SIMD 寄存器</text>
+
+      <!-- control bytes -->
+      <text class="tm" x="16" y="52">控制字节</text>
+      <rect class="box" x="90" y="36" width="36" height="24" rx="2"/><text class="tm" x="98" y="53">E</text>
+      <rect class="box-g" x="128" y="36" width="36" height="24" rx="2"/><text class="tm" x="136" y="53">7A</text>
+      <rect class="box-g" x="166" y="36" width="36" height="24" rx="2"/><text class="tm" x="174" y="53">3C</text>
+      <rect class="box-a" x="204" y="36" width="36" height="24" rx="2"/><text class="tm" x="212" y="53">5F</text>
+      <rect class="box" x="242" y="36" width="36" height="24" rx="2"/><text class="tm" x="250" y="53">E</text>
+      <rect class="box-g" x="280" y="36" width="36" height="24" rx="2"/><text class="tm" x="288" y="53">1B</text>
+      <rect class="box-r" x="318" y="36" width="36" height="24" rx="2"/><text class="tm" x="326" y="53">D</text>
+      <rect class="box-g" x="356" y="36" width="36" height="24" rx="2"/><text class="tm" x="364" y="53">5F</text>
+      <text class="ts" x="404" y="53">… 共 16 个 = 128 bit</text>
+      <text class="ts" x="90" y="76">E = 空(0x80)   D = 墓碑(0xFE)   其余 = <tspan class="tg">哈希高 7 位</tspan>（H2）</text>
+
+      <!-- simd compare -->
+      <rect class="box-a" x="16" y="96" width="330" height="88" rx="8"/>
+      <text class="tb" x="28" y="116">一次 SIMD 比较，得到 16 位掩码</text>
+      <text class="tm" x="28" y="136">m = _mm_movemask_epi8(</text>
+      <text class="tm" x="28" y="152">      _mm_cmpeq_epi8(ctrl, set1(H2)))</text>
+      <text class="tg" x="28" y="172">→ 掩码里每个 1 表示「这个槽的 H2 匹配」</text>
+
+      <path class="ln-a" d="M182,184 L182,200" marker-end="url(#arA8)"/>
+      <defs>
+        <marker id="arA8" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+          <path class="ar-a" d="M0,0 L10,5 L0,10 z"/>
+        </marker>
+      </defs>
+
+      <rect class="box-g" x="16" y="202" width="330" height="76" rx="8"/>
+      <text class="tb" x="28" y="222">只对掩码里的位去访问真正的槽位</text>
+      <text class="ts" x="28" y="240">H2 有 7 位 → 假阳性率约 1/128</text>
+      <text class="tg" x="28" y="258">⟹ 绝大多数情况只需比较 <tspan class="tg">1 次</tspan>完整 key</text>
+      <text class="ts" x="28" y="272">而完整 key 的比较才是真正贵的那一步</text>
+
+      <!-- comparison -->
+      <rect class="box-y" x="366" y="96" width="338" height="182" rx="8"/>
+      <text class="tb" x="378" y="116">与传统开放寻址的对比</text>
+      <text class="tr" x="378" y="140">传统：每探测一个槽</text>
+      <text class="ts" x="378" y="156">　→ 访问槽位（可能 cache miss）</text>
+      <text class="ts" x="378" y="172">　→ 比较完整 key（string 要 memcmp）</text>
+      <text class="ts" x="378" y="188">　探测 8 次 = 8 次 miss + 8 次 memcmp</text>
+
+      <text class="tg" x="378" y="214">Swiss：控制字节数组极小</text>
+      <text class="ts" x="378" y="230">　16 字节 = 1/4 条 cache line</text>
+      <text class="ts" x="378" y="246">　1 次 miss 拿到 64 个槽的元信息</text>
+      <text class="ts" x="378" y="262">　1 条 SIMD 指令筛掉 127/128 的候选</text>
+      <text class="tg" x="378" y="276">　→ 通常只需 1 次完整 key 比较</text>
+    </svg>
+    <figcaption>控制字节把「探测」和「比较」解耦：探测在极小的元数据数组上批量做，只有通过筛选的才去访问真正的键值。</figcaption>
+  </div>
+
+  <div class="def"><strong>哈希值被拆成两部分用</strong>：
+  <ul>
+    <li><strong>H1</strong>（高位，除 H2 外）→ 决定起始的「组」（group）位置。</li>
+    <li><strong>H2</strong>（7 位）→ 存进控制字节，作为<strong>快速筛选的指纹</strong>。</li>
+  </ul>
+  这个设计的精髓在于：<strong>把「大概率排除」和「精确确认」分成两步</strong>，前者在极小的连续数组上用 SIMD 批量做，后者只对少数候选执行。<br><br>它和<strong>布隆过滤器</strong>的思路完全同源——都是用一个小的、可能假阳性的摘要挡住绝大多数无效访问。区别是布隆过滤器不存真实数据，Swiss Table 的控制字节后面就跟着真数据。</div>
+
+  <h3 id="s5-2">5.2 快 2–3 倍的来源</h3>
+
+  <table>
+    <thead><tr><th>因素</th><th><code>std::unordered_map</code></th><th><code>absl::flat_hash_map</code></th></tr></thead>
+    <tbody>
+      <tr><td>内存布局</td><td>节点散落（每个一次 malloc）</td><td><span class="cell-ok">一块连续数组</span></td></tr>
+      <tr><td>查找的 cache miss</td><td>1（桶）+ N（链表跳转）</td><td><span class="cell-ok">通常 2（控制字节 + 槽位）</span></td></tr>
+      <tr><td>每元素额外内存</td><td>next 指针 + 缓存 hash + malloc 头 ≈ 32 B</td><td><span class="cell-ok">1 字节控制字节</span></td></tr>
+      <tr><td>桶映射</td><td>素数取模（整数除法 ~20 周期）</td><td><span class="cell-ok">位掩码（1 周期）</span></td></tr>
+      <tr><td>key 比较次数</td><td>链表上每个节点都比</td><td><span class="cell-ok">SIMD 筛完通常只比 1 次</span></td></tr>
+      <tr><td>哈希函数</td><td><code>std::hash</code>（整型是恒等）</td><td><span class="cell-ok">内置混淆 + 随机种子</span></td></tr>
+      <tr><td>分配次数</td><td>每次插入一次</td><td><span class="cell-ok">仅扩容时</span></td></tr>
+    </tbody>
+  </table>
+
+  <div class="tip">注意这个 2–3 倍<strong>不是来自某一个技巧</strong>，而是七项累积。这也说明为什么「只把 <code>std::hash</code> 换成 xxHash」通常提升有限——真正的瓶颈是内存布局和分配，而那需要换整个容器。<br><strong>实测建议</strong>：数据量小（几百个）时差别不大甚至 <code>unordered_map</code> 更好（无 SIMD 开销、无扩容抖动）；数据量大且访问随机时差距最明显。<em>永远要在自己的数据上测，见 <a href="../perf-debug/performance_guide.html">性能优化指南</a>。</em></div>
+
+  <h3 id="s5-3">5.3 代价：迭代器与引用失效</h3>
+
+  <div class="danger"><code>absl::flat_hash_map</code> 的元素<strong>直接存在数组里</strong>，所以扩容时元素会被<strong>移动</strong>——<code>&amp;map[key]</code> 拿到的引用会在任何可能触发 rehash 的操作后失效。这和 <code>std::unordered_map</code> 的保证完全不同。
+<pre style="margin:8px 0 0"><span class="cm">// ❌ 在 flat_hash_map 上是悬垂引用</span>
+<span class="kw">auto</span>&amp; v = map[<span class="str">"a"</span>];
+map[<span class="str">"b"</span>] = <span class="num">1</span>;        <span class="cm">// 可能扩容 → v 悬垂</span>
+v = <span class="num">2</span>;                <span class="cm">// use-after-free</span>
+
+<span class="cm">// ✅ 需要引用稳定时用 node_hash_map（abseil 的拉链版）</span>
+absl::node_hash_map&lt;std::string, <span class="kw">int</span>&gt; m;   <span class="cm">// 引用稳定，但慢一些</span></pre>
+  <strong>迁移 <code>unordered_map</code> → <code>flat_hash_map</code> 时，这是唯一需要审查的地方</strong>：全仓库搜「持有 map 元素的引用/指针跨越后续 map 操作」的代码。ASan 能抓到这类问题（<code>heap-use-after-free</code>），把它挂进 CI 是必要的。</div>
+
+  <div class="note">还有两个次要差异要注意：<strong>①</strong> <code>flat_hash_map</code> 要求 value 类型<strong>可移动</strong>（因为扩容要搬）；<strong>②</strong> 它的迭代顺序<strong>刻意随机化</strong>——abseil 故意让每次运行的顺序不同，防止代码依赖上遍历顺序（这是个好设计，但会暴露原本隐藏的顺序依赖 bug）。<em>迁移后如果测试挂了，先怀疑是不是有代码依赖了遍历顺序。</em></div>
+</section>
+
+<!-- ================================================================ §6 -->
+<section class="chapter" id="s6">
+  <div class="ch-head">
+    <div class="num">06</div>
+    <div class="t"><h2>负载因子与 rehash</h2><p class="sub">摊销 O(1) 背后的那次停顿</p></div>
+  </div>
+
+  <h3 id="s6-1">6.1 探测长度曲线</h3>
+
+  <table>
+    <thead><tr><th>实现</th><th>默认 max_load_factor</th><th>扩容策略</th></tr></thead>
+    <tbody>
+      <tr><td><code>std::unordered_map</code>（libstdc++）</td><td>1.0</td><td>下一个素数（约 2 倍）</td></tr>
+      <tr><td><code>absl::flat_hash_map</code></td><td>约 0.875（7/8）</td><td>2 倍</td></tr>
+      <tr><td>Rust <code>HashMap</code>（hashbrown）</td><td>约 0.875</td><td>2 倍</td></tr>
+      <tr><td>Java <code>HashMap</code></td><td>0.75</td><td>2 倍；单桶 &gt; 8 转红黑树</td></tr>
+      <tr><td>Python <code>dict</code></td><td>约 0.66（2/3）</td><td>约 3 倍（按已用槽数）</td></tr>
+    </tbody>
+  </table>
+
+  <div class="def"><strong>为什么拉链法能容忍 α = 1 而开放寻址只能到 0.875</strong>：
+  <ul>
+    <li>拉链法的 α 是「平均链长」。α = 1 意味着平均每桶 1 个元素，查找期望比较约 1.5 次——完全可接受，且 α 可以 &gt; 1（链长 2、3 也还行）。</li>
+    <li>开放寻址的 α 是「占用率」，探测长度是 <code>1/(1−α)</code> 量级。α = 0.9 时未命中要探测约 50 次，α → 1 时<strong>发散</strong>。而且 α 物理上不可能超过 1。</li>
+  </ul>
+  Swiss Table 之所以敢用 0.875（比经典建议的 0.7 高），是因为 SIMD 让「探测 16 个槽」的成本接近「探测 1 个槽」——<strong>它把探测长度的常数压得极低，于是可以承受更高的负载因子，从而省内存</strong>。这是一个漂亮的连锁收益。</div>
+
+  <h3 id="s6-2">6.2 增量式 rehash</h3>
+
+  <p>一次性 rehash 是 O(n)：分配新表 + 重算所有键的桶 + 搬移。n 很大时这是几十甚至几百毫秒的停顿。<strong>Redis 的做法是把它切碎</strong>：</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 720 210" role="img" aria-label="Redis 的渐进式 rehash：双表并存，每次操作搬移一个桶">
+      <text class="tb" x="16" y="18">Redis 的渐进式 rehash（rehashidx 从 0 逐步推进到 ht[0] 末尾）</text>
+
+      <text class="tm" x="16" y="52">ht[0] 旧表</text>
+      <rect class="box" x="96" y="36" width="40" height="24" rx="3"/><text class="ts" x="110" y="53">✓</text>
+      <rect class="box" x="138" y="36" width="40" height="24" rx="3"/><text class="ts" x="152" y="53">✓</text>
+      <rect class="box-y" x="180" y="36" width="40" height="24" rx="3"/><text class="ts" x="194" y="53">→</text>
+      <rect class="box-a" x="222" y="36" width="40" height="24" rx="3"/><text class="ts" x="238" y="53">k</text>
+      <rect class="box-a" x="264" y="36" width="40" height="24" rx="3"/><text class="ts" x="280" y="53">k</text>
+      <rect class="box-a" x="306" y="36" width="40" height="24" rx="3"/><text class="ts" x="322" y="53">k</text>
+      <text class="ty" x="184" y="76">rehashidx</text>
+      <text class="ts" x="356" y="53">✓ = 已搬空　k = 还有数据</text>
+
+      <path class="ln-a" d="M200,62 L200,84" marker-end="url(#arA9)"/>
+      <defs>
+        <marker id="arA9" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+          <path class="ar-a" d="M0,0 L10,5 L0,10 z"/>
+        </marker>
+      </defs>
+
+      <text class="tm" x="16" y="106">ht[1] 新表</text>
+      <rect class="box-g" x="96" y="90" width="30" height="24" rx="3"/>
+      <rect class="box-g" x="128" y="90" width="30" height="24" rx="3"/>
+      <rect class="box-g" x="160" y="90" width="30" height="24" rx="3"/>
+      <rect class="box-g" x="192" y="90" width="30" height="24" rx="3"/>
+      <rect class="box" x="224" y="90" width="30" height="24" rx="3"/>
+      <rect class="box" x="256" y="90" width="30" height="24" rx="3"/>
+      <rect class="box" x="288" y="90" width="30" height="24" rx="3"/>
+      <rect class="box" x="320" y="90" width="30" height="24" rx="3"/>
+      <text class="ts" x="360" y="106">容量是旧表的 2 倍</text>
+
+      <rect class="box-p" x="16" y="130" width="336" height="72" rx="8"/>
+      <text class="tb" x="28" y="150">rehash 期间的读写规则</text>
+      <text class="ts" x="28" y="168">查找 / 删除：<tspan class="tp">先查 ht[0]，没找到再查 ht[1]</tspan></text>
+      <text class="ts" x="28" y="184">插入：<tspan class="tp">一律写 ht[1]</tspan>（保证 ht[0] 只减不增）</text>
+      <text class="ts" x="28" y="198">每次增删查改顺带搬 1 个桶；另有定时任务批量搬</text>
+
+      <rect class="box-g" x="366" y="130" width="338" height="72" rx="8"/>
+      <text class="tb" x="378" y="150">效果</text>
+      <text class="ts" x="378" y="168">单次操作最坏从 <tspan class="tr">O(n)</tspan> 降到 <tspan class="tg">O(1) + 一个桶</tspan></text>
+      <text class="ts" x="378" y="184">代价：rehash 期间内存占用是两份，</text>
+      <text class="ts" x="378" y="198">且每次操作要查两张表（常数变大）</text>
+    </svg>
+    <figcaption>渐进式 rehash 把一次长停顿摊成很多次微小开销——总工作量不变，但尾延迟大幅改善。</figcaption>
+  </div>
+
+  <div class="analogy">一次性 rehash 像<strong>搬家时请一天假、把所有东西一次搬完</strong>——那一天什么也干不了。渐进式 rehash 像<strong>每天下班顺手带一箱过去</strong>：总工作量一样，但没有哪一天被完全占用。<br><br>代价也很真实：<strong>过渡期你有两套房子的租金</strong>（内存翻倍），而且找东西要两边都翻一遍（每次操作查两张表）。<em>这就是「用平均成本换尾延迟」的标准交易——GC 的增量回收、数据库的在线 DDL、LSM 的分层 compaction 都是同一笔交易。</em></div>
+
+  <h3 id="s6-3">6.3 尾延迟</h3>
+
+  <p>「摊销 O(1)」在均值上完美，但那次 O(n) 的 rehash 落在哪个请求上，那个请求就是 p99。对低延迟服务这是要命的。</p>
+
+  <table>
+    <thead><tr><th>手段</th><th>做法</th><th>代价</th></tr></thead>
+    <tbody>
+      <tr><td><strong>预留容量</strong></td><td>启动时 <code>reserve(峰值)</code>，运行期永不扩容</td><td>要能估出峰值；内存常驻</td></tr>
+      <tr><td>渐进式 rehash</td><td>把搬移分摊到后续操作（Redis 做法）</td><td>实现复杂；过渡期内存双份、常数变大</td></tr>
+      <tr><td>换稳定结构</td><td>用红黑树（<code>std::map</code>）：<strong>永远 O(log n)，无抖动</strong></td><td>平均更慢</td></tr>
+      <tr><td>分片</td><td>拆成 N 个小表，rehash 只影响 1/N</td><td>跨片操作变复杂</td></tr>
+      <tr><td>后台 rehash</td><td>另起线程建新表，切换时原子替换</td><td>需要并发安全设计，内存双份</td></tr>
+    </tbody>
+  </table>
+
+  <div class="tip"><code>reserve</code> 是收益最高、成本最低的一条，但有个细节：<strong><code>reserve(n)</code> 的语义是「保证能装 n 个元素而不 rehash」</strong>，实现会按 <code>n / max_load_factor</code> 算桶数。所以 <code>reserve(1000)</code> 在 α=0.875 时会开约 1176 → 向上取到 2048 个槽。<br><strong>不要用 <code>rehash(n)</code> 代替</strong>——它的参数是<em>桶数</em>而不是元素数，语义完全不同，是个高频误用。<br>低延迟场景的完整清单见 <a href="../perf-debug/low_latency_guide.html">低延迟编程</a>。</div>
+</section>
+
+<!-- ================================================================ §7 -->
+<section class="chapter" id="s7">
+  <div class="ch-head">
+    <div class="num">07</div>
+    <div class="t"><h2>哈希碰撞 DoS</h2><p class="sub">把「平均 O(1)」变成「最坏 O(n)」的攻击</p></div>
+  </div>
+
+  <h3 id="s7-1">7.1 2011 年的事故</h3>
+
+  <p>2011 年底的 <strong>28C3 大会</strong>上，Alexander Klink 和 Julian Wälde 公布了一个影响几乎所有 Web 框架的漏洞：</p>
+
+  <div class="def"><strong>攻击原理</strong>：Web 框架把 HTTP POST 的表单字段、查询参数、JSON 键放进哈希表。攻击者<strong>预先计算出大量哈希值相同的字符串</strong>，作为参数名发过去。这些键全部落进同一个桶，哈希表退化成链表：
+  <ul>
+    <li>插入 n 个碰撞键的总代价从 O(n) 变成 <strong>O(n²)</strong>（每次插入都要遍历整条链查重）。</li>
+    <li>当时报告的数字：<strong>几十 KB 到几 MB 的 POST 请求就能让一个 CPU 核跑满数分钟</strong>。</li>
+  </ul>
+  受影响的包括 PHP、Java（Tomcat/Jetty）、Python、Ruby、ASP.NET、V8/Node.js——因为它们都用了<strong>确定性的、公开的</strong>哈希函数。攻击者离线算好碰撞集，成本几乎为零。</div>
+
+  <div class="warn">这个事故的教训不在「哈希表有 bug」，而在<strong>「平均复杂度可被攻击」这个一般性原理</strong>（参见 <a href="./complexity_and_analysis.html">复杂度与分析</a> §4.5）。同一类漏洞还有：
+  <ul>
+    <li><strong>ReDoS</strong>：正则回溯的最坏是指数级，构造特定输入可打满 CPU。</li>
+    <li><strong>快排复杂度攻击</strong>：针对「三点取中」构造锯齿输入，把 O(n log n) 拖成 O(n²)。</li>
+    <li><strong>zip bomb / 解压炸弹</strong>：解压比无上限。</li>
+    <li><strong>递归解析爆栈</strong>：深度嵌套的 JSON/XML（见 <a href="./recursion_and_divide_conquer.html">递归与分治</a>）。</li>
+  </ul>
+  <strong>共同点：某个资源维度没有上界，而它由攻击者控制。</strong>写「处理不可信输入」的代码时，应该逐个资源维度问「上界在哪、谁保证」。</div>
+
+  <h3 id="s7-2">7.2 SipHash 与随机种子</h3>
+
+  <p>修复方案<strong>不是换数据结构</strong>，而是让攻击者<strong>算不出</strong>碰撞：</p>
+
+  <div class="formula">确定性哈希：h(key)                     ← 攻击者可离线计算碰撞
+带密钥哈希：h(<span class="hl">secret_key</span>, key)          ← 密钥进程启动时随机生成
+
+攻击者不知道 secret_key ⟹ 无法构造碰撞集
+（SipHash 的安全性正是「密钥未知时不可构造碰撞」）</div>
+
+  <table>
+    <thead><tr><th>语言 / 库</th><th>现在的默认</th></tr></thead>
+    <tbody>
+      <tr><td>Python 3.3+</td><td>SipHash-1-3 + 随机种子（<code>PYTHONHASHSEED</code> 可固定，仅用于调试）</td></tr>
+      <tr><td>Rust <code>HashMap</code></td><td><span class="cell-ok">SipHash-1-3 + 随机种子（默认就安全）</span></td></tr>
+      <tr><td>Ruby / Perl / PHP 7+</td><td>SipHash 或加盐</td></tr>
+      <tr><td>Java <code>HashMap</code></td><td>没换哈希，改成<strong>单桶超 8 个转红黑树</strong>（最坏 O(log n)）</td></tr>
+      <tr><td><code>absl::flat_hash_map</code></td><td>内置混淆 + 进程级随机种子</td></tr>
+      <tr><td><strong><code>std::unordered_map</code></strong></td><td><span class="cell-bad">无随机化，<code>std::hash</code> 完全确定</span></td></tr>
+    </tbody>
+  </table>
+
+  <div class="danger"><strong>C++ 的 <code>std::hash</code> 没有随机化，这是标准层面的问题</strong>：<code>std::hash&lt;std::string&gt;</code> 对同一字符串在同一实现上永远返回同一值，而算法是公开的。<br><br>所以<strong>直接把不可信输入（HTTP 参数名、JSON 键、上传的字段名）当键放进 <code>std::unordered_map</code> 是有风险的</strong>。三种修法：
+<pre style="margin:8px 0 0"><span class="cm">// ① 自定义带随机种子的 hasher（推荐）</span>
+<span class="kw">struct</span> <span class="type">SeededHash</span> {
+    <span class="kw">static</span> <span class="kw">const</span> <span class="kw">uint64_t</span> seed;   <span class="cm">// 进程启动时从 random_device 取</span>
+    <span class="kw">size_t</span> <span class="kw">operator</span>()(std::string_view s) <span class="kw">const</span> {
+        <span class="kw">return</span> <span class="fn">siphash13</span>(seed, s.<span class="fn">data</span>(), s.<span class="fn">size</span>());
+    }
+};
+std::unordered_map&lt;std::string, V, <span class="type">SeededHash</span>&gt; m;
+
+<span class="cm">// ② 换 absl::flat_hash_map（内置随机种子）</span>
+
+<span class="cm">// ③ 限制键的数量与长度（纵深防御，应该同时做）</span>
+<span class="kw">if</span> (params.<span class="fn">size</span>() &gt; kMaxParams) <span class="kw">return</span> <span class="fn">reject</span>();</pre>
+  ③ 值得单独强调：<strong>即使哈希是安全的，也应该限制参数个数</strong>——这挡住的是一整类「资源无上界」问题，不只是哈希碰撞。</div>
+
+  <div class="note">Java 的选择（转红黑树）和其他语言（换哈希）代表两种不同的哲学：<strong>Java 改的是「最坏复杂度」</strong>（O(n) → O(log n)，攻击仍能发生但危害可控），<strong>其他语言改的是「攻击可行性」</strong>（最坏仍是 O(n)，但攻击者构造不出来）。<br>两者都有效，可以叠加。转树的额外好处是对<em>非恶意</em>的坏哈希也有效（比如用户自己写了个糟糕的 <code>hashCode</code>）。</div>
+</section>
+
+<!-- ================================================================ §8 -->
+<section class="chapter" id="s8">
+  <div class="ch-head">
+    <div class="num">08</div>
+    <div class="t"><h2>选型决策表</h2><p class="sub">按约束而不是按「哪个快」来选</p></div>
+  </div>
+
+  <table>
+    <thead><tr><th>需求</th><th>选什么</th><th>理由</th></tr></thead>
+    <tbody>
+      <tr><td>通用、无特殊要求</td><td><code>absl::flat_hash_map</code> / <code>ankerl::unordered_dense</code></td><td>2–3 倍性能，内存更省</td></tr>
+      <tr><td><strong>需要引用/指针稳定</strong></td><td><code>std::unordered_map</code> / <code>absl::node_hash_map</code></td><td>flat 版扩容会移动元素</td></tr>
+      <tr><td><strong>需要有序遍历 / 范围查询</strong></td><td><code>std::map</code>（红黑树）</td><td>哈希表无序；要 <code>lower_bound</code> 只能用树</td></tr>
+      <tr><td><strong>需要稳定的最坏延迟</strong></td><td><code>std::map</code> 或预留容量的哈希表</td><td>树永远 O(log n)；哈希 rehash 会抖</td></tr>
+      <tr><td><strong>键来自不可信输入</strong></td><td>带随机种子的 hasher 或 <code>absl</code></td><td><code>std::hash</code> 无随机化，可被 Hash-DoS</td></tr>
+      <tr><td>元素少（&lt; 几十个）</td><td><code>std::vector</code> + 线性查找</td><td>连续内存 + 无哈希计算，实测常更快</td></tr>
+      <tr><td>键是小整数且稠密</td><td><code>std::vector</code> 直接下标</td><td>不需要哈希，真正的 O(1)</td></tr>
+      <tr><td>写多删多</td><td>拉链法</td><td>开放寻址的墓碑会累积（§4.4）</td></tr>
+      <tr><td>只需判断「存在过吗」，容忍误判</td><td><a href="../ai-native/cache_penetration.html">布隆过滤器</a></td><td>空间小几十倍</td></tr>
+      <tr><td>多线程高并发读写</td><td><code>folly::ConcurrentHashMap</code> / 分片加锁</td><td>标准容器都不是线程安全的</td></tr>
+    </tbody>
+  </table>
+
+  <div class="def"><strong>选型的三个问题，按顺序问</strong>：
+  <ol>
+    <li><strong>「元素有多少？」</strong>——几十个以内，<code>vector</code> + 线性扫描往往打败任何哈希表（连续内存、无哈希计算、无分支）。这一条最常被跳过。</li>
+    <li><strong>「有没有硬约束？」</strong>——引用稳定性、有序遍历、最坏延迟保证、线程安全。有约束就先满足约束，性能是次要的。</li>
+    <li><strong>「键可信吗？」</strong>——不可信就必须用带随机种子的哈希。</li>
+  </ol>
+  三个都没问题，才轮到比性能。<em>「哪个更快」是最后一个问题，不是第一个。</em></div>
+
+  <h3 id="s8-1">8.1 实现对照（交互）</h3>
+
+  <div class="demo">
+    <h4>五种实现的内部结构与取舍</h4>
+    <p class="hint">点击实现名，看它的内部结构、性能来源、以及必须接受的代价。</p>
+    <div>
+      <button id="htA" class="on">unordered_map</button>
+      <button id="htB">开放寻址</button>
+      <button id="htC">Robin Hood</button>
+      <button id="htD">Swiss Table</button>
+      <button id="htE">std::map</button>
+    </div>
+    <div class="out" id="htOut"></div>
+  </div>
+</section>
+
+<!-- ================================================================ §9 -->
+<section class="chapter" id="s9">
+  <div class="ch-head">
+    <div class="num">09</div>
+    <div class="t"><h2>分布式场景</h2><p class="sub">同一个哈希，换成分片的地址</p></div>
+  </div>
+
+  <p>把「哈希 → 桶」换成「哈希 → 机器」，就得到了分布式系统的<strong>分片（sharding）</strong>。但这时朴素的取模会出大问题：</p>
+
+  <div class="vs">
+    <div class="bad">
+      <h5>❌ 朴素取模分片</h5>
+<pre>node = <span class="fn">hash</span>(key) % N;
+
+<span class="cm">// N 从 3 变成 4（加一台机器）时：</span>
+<span class="cm">// hash=10 → 10%3=1  变成  10%4=2</span>
+<span class="cm">// hash=11 → 11%3=2  变成  11%4=3</span>
+<span class="cm">// ...</span>
+<span class="cm">// <b>约 N/(N+1) 的键都要迁移</b></span>
+<span class="cm">// 缓存场景 → 命中率瞬间归零 → 雪崩</span></pre>
+    </div>
+    <div class="good">
+      <h5>✅ 一致性哈希</h5>
+<pre><span class="cm">// 把 hash 值域看成一个环</span>
+<span class="cm">// 每个节点（及其虚拟节点）落在环上若干点</span>
+<span class="cm">// key 顺时针找到的第一个节点就是它的归属</span>
+
+<span class="cm">// 加一台机器时：<b>只有它接管的那段键要迁移</b></span>
+<span class="cm">// 迁移量 ≈ 1/N，而不是 N/(N+1)</span>
+
+<span class="cm">// 虚拟节点（每台机器 100~200 个）</span>
+<span class="cm">// 用来解决环上分布不均导致的负载倾斜</span></pre>
+    </div>
+  </div>
+
+  <div class="def"><strong>虚拟节点为什么必需</strong>：如果每台机器只在环上占一个点，N 台机器把环切成 N 段，段长的<strong>方差很大</strong>——某台机器可能负责 3 倍于平均的键。虚拟节点（每台机器散布 100–200 个点）让每台机器负责很多小段，由大数定律把方差压下来。<br>虚拟节点还带来一个额外好处：<strong>可以按机器性能分配不同数量的虚拟节点</strong>，实现加权分片。</div>
+
+  <table>
+    <thead><tr><th>方案</th><th>加/减节点的迁移量</th><th>负载均衡</th><th>典型使用者</th></tr></thead>
+    <tbody>
+      <tr><td>取模</td><td><span class="cell-bad">≈ N/(N+1)</span></td><td><span class="cell-ok">完美</span></td><td>节点数固定的场景</td></tr>
+      <tr><td>一致性哈希 + 虚拟节点</td><td><span class="cell-ok">≈ 1/N</span></td><td>好（靠虚拟节点数）</td><td>Cassandra、Dynamo、memcached 客户端</td></tr>
+      <tr><td>Rendezvous（HRW）哈希</td><td><span class="cell-ok">≈ 1/N</span></td><td><span class="cell-ok">很好</span></td><td>实现更简单，无需维护环</td></tr>
+      <tr><td>Jump Consistent Hash</td><td><span class="cell-ok">最优</span></td><td><span class="cell-ok">完美</span></td><td>Google；但<strong>只支持在末尾增删节点</strong></td></tr>
+      <tr><td>槽位映射（slot）</td><td>可控（按槽迁移）</td><td><span class="cell-ok">完美</span></td><td><strong>Redis Cluster（16384 槽）</strong></td></tr>
+    </tbody>
+  </table>
+
+  <div class="tip"><strong>Redis Cluster 的固定槽位方案值得单独学</strong>：它不用一致性哈希，而是把键空间固定切成 16384 个槽（<code>CRC16(key) % 16384</code>），再把槽<em>手工/自动</em>分配给节点。<br>好处是<strong>迁移的粒度和进度完全可控可观测</strong>——你能确切知道「槽 5000 正在从 A 迁到 B」，而一致性哈希的迁移是隐式的。代价是多了一层槽到节点的映射需要维护和同步。<br><em>这是「显式的间接层」换「可运维性」的典型选择</em>，完整讨论见 <a href="../architect/storage_and_data_architecture.html">存储与数据架构</a>。</div>
+</section>
+
+<!-- ================================================================ §10 -->
+<section class="chapter" id="s10">
+  <div class="ch-head">
+    <div class="num">10</div>
+    <div class="t"><h2>面试题集（12 道）</h2><p class="sub">按难度分三段，先自测再对照</p></div>
+  </div>
+
+  <h3 id="s10-1">10.1 基础（必答）</h3>
+  <p class="qa-hint">点击每道题展开参考答案（先自测，再对照）。</p>
+  <ol class="qa-list">
+    <li><details class="qa">
+      <summary><span class="lvl basic">基础</span>哈希表的查找是 O(1) 吗？把这句话说完整。</summary>
+      <div class="ans">
+        <p>不完整。准确说法是：<strong>期望、摊销 O(1)，且不含哈希计算本身；最坏 O(n)</strong>。三个限定词各自对应一类真实故障。</p>
+        <div class="point"><div class="label">① 期望（expected）</div><div>建立在「哈希值均匀分布」的假设上。假设不成立就退化到 O(n)——而<strong>攻击者可以主动制造这个不成立</strong>（Hash-DoS）。</div></div>
+        <div class="point"><div class="label">② 摊销（amortized）</div><div>单次插入可能触发 <strong>rehash</strong>，代价 O(n)。均值上无所谓，但那次停顿落在哪个请求上，那个请求就是 p99。</div></div>
+        <div class="point"><div class="label">③ 不含哈希计算</div><div>渐进分析把 <code>h(key)</code> 当 O(1)，但对长字符串它是 <strong>O(len)</strong>。键很长时哈希计算本身就是瓶颈。</div></div>
+        <div class="point deep"><div class="label">和红黑树对比时该怎么说</div><div><code>std::map</code> 是<strong>确定性的</strong> O(log n)：没有假设、没有抖动、没有攻击面。所以「哈希表比树快」只在<em>平均意义</em>上成立；需要<strong>稳定最坏延迟</strong>时树反而是对的选择。<br>而且 n 小时（几十到几百）树常常更快——log n 只有 6~8，而哈希要算 hash + 一次随机地址访问。</div></div>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl basic">基础</span>解决哈希冲突有哪两大类方法？各自的优缺点？</summary>
+      <div class="ans">
+        <table>
+          <thead><tr><th></th><th>拉链法（separate chaining）</th><th>开放寻址（open addressing）</th></tr></thead>
+          <tbody>
+            <tr><td>做法</td><td>每桶挂一条链表/树</td><td>冲突时在同一数组里找下一个空位</td></tr>
+            <tr><td>负载因子</td><td><span class="cell-ok">可 &gt; 1</span></td><td><span class="cell-bad">必须 &lt; 1</span>，且 &gt;0.85 后急剧恶化</td></tr>
+            <tr><td>引用稳定性</td><td><span class="cell-ok">稳定</span>（元素单独分配）</td><td><span class="cell-bad">扩容会移动元素</span></td></tr>
+            <tr><td>cache 友好</td><td><span class="cell-bad">差</span>（指针追逐）</td><td><span class="cell-ok">好</span>（连续内存）</td></tr>
+            <tr><td>每元素额外内存</td><td><span class="cell-bad">≈ 32 B</span>（指针+hash+malloc 头）</td><td><span class="cell-ok">0~1 B</span></td></tr>
+            <tr><td>删除</td><td><span class="cell-ok">简单摘链</span></td><td><span class="cell-bad">需要墓碑</span></td></tr>
+            <tr><td>分配次数</td><td>每次插入一次 malloc</td><td><span class="cell-ok">仅扩容时</span></td></tr>
+          </tbody>
+        </table>
+        <div class="point"><div class="label">谁在用</div><div><strong>拉链</strong>：<code>std::unordered_map</code>、Java <code>HashMap</code>（单桶超 8 个转红黑树）。<br><strong>开放寻址</strong>：<code>absl::flat_hash_map</code>、Rust <code>HashMap</code>、Python <code>dict</code>。</div></div>
+        <div class="point good"><div class="label">选型判据不是「哪个快」</div><div>先问<strong>「需不需要引用稳定性」</strong>（能否持有 <code>&amp;map[k]</code> 跨插入）和<strong>「删除频繁吗」</strong>（开放寻址的墓碑会累积）。两个都不需要，再选开放寻址求性能。</div></div>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl basic">基础</span>什么是负载因子？它为什么决定了扩容时机？</summary>
+      <div class="ans">
+        <p><strong>负载因子 α = 元素数 / 桶数（或槽数）</strong>。它是「有多挤」的度量，直接决定查找的期望比较次数。</p>
+        <div class="formula">拉链法：α = 平均链长；期望比较 ≈ 1 + α/2
+        α=1 时约 1.5 次 → 完全可接受，<span class="hl">α 可以 &gt; 1</span>
+
+开放寻址：α = 占用率
+  命中　： (1 + 1/(1−α)) / 2
+  未命中： (1 + 1/(1−α)<span class="hl">²</span>) / 2       ← 恶化更快
+        α=0.9  未命中约 50 次
+        α=0.99 未命中约 <span class="hl">5000 次</span>（发散）</div>
+        <div class="point"><div class="label">所以阈值差别很大</div><div><code>unordered_map</code>（拉链）默认 <strong>1.0</strong>；<code>flat_hash_map</code>（开放寻址）约 <strong>0.875</strong>；Java 0.75；Python 约 0.66。</div></div>
+        <div class="point deep"><div class="label">「未命中恶化更快」的工程含义</div><div>以「查不到」为主的负载——<strong>缓存 miss 检查、去重判断、存在性验证</strong>——对负载因子更敏感。这类场景该把阈值设更低，或前面加一层布隆过滤器挡掉不存在的键。</div></div>
+        <div class="point good"><div class="label">Swiss Table 为什么敢用 0.875</div><div>因为 SIMD 让「探测 16 个槽」的成本接近「探测 1 个槽」——<strong>它把探测长度的常数压得极低，于是能承受更高负载因子，从而省内存</strong>。这是个漂亮的连锁收益。</div></div>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl basic">基础</span>为什么 <code>std::unordered_map</code> 的 <code>std::hash&lt;int&gt;</code> 是恒等函数也能用？什么时候会出问题？</summary>
+      <div class="ans">
+        <p>因为 libstdc++ 的 <code>unordered_map</code> 用<strong>素数桶数取模</strong>。取模会把哈希值的高位信息「搅」进结果，所以即使哈希函数很弱（恒等），分布也还算均匀。</p>
+        <div class="point bad"><div class="label">出问题的场合：自己造 2 的幂 + 位掩码的表</div><div>位掩码 <code>h &amp; (n-1)</code> <strong>只用低位</strong>。此时恒等哈希会暴露键的低位规律：<pre style="margin:6px 0 0"><span class="cm">// 键都是 1000 的倍数，桶数 1024</span>
+<span class="num">1000</span> &amp; <span class="num">0x3FF</span> = <span class="num">1000</span>
+<span class="num">2000</span> &amp; <span class="num">0x3FF</span> = <span class="num">976</span>
+<span class="num">3000</span> &amp; <span class="num">0x3FF</span> = <span class="num">952</span>    <span class="cm">// 步长恒定 → 聚簇成一段</span></pre>指针做键更糟——<strong>对齐让低位恒为 0</strong>。</div></div>
+        <div class="point"><div class="label">这是一个责任转移的取舍</div><div><strong>素数取模</strong>把「保证分布」的责任放在桶映射上（哈希函数可以弱），代价是每次一次整数除法（~20 周期）。<br><strong>位掩码</strong>把责任放在哈希函数上，桶映射只需 1 周期，但<strong>哈希函数必须有雪崩效应</strong>。<br>现代实现全选后者——因为好的快哈希（xxHash、wyhash）已经足够。</div></div>
+        <div class="point good"><div class="label">修法</div><div>自己加一层混淆（splitmix64 的 finalizer，3 条指令，雪崩很好）：<pre style="margin:6px 0 0">x += <span class="num">0x9E3779B97F4A7C15</span>;
+x = (x ^ (x&gt;&gt;<span class="num">30</span>)) * <span class="num">0xBF58476D1CE4E5B9</span>;
+x = (x ^ (x&gt;&gt;<span class="num">27</span>)) * <span class="num">0x94D049BB133111EB</span>;
+<span class="kw">return</span> x ^ (x&gt;&gt;<span class="num">31</span>);</pre>或者直接用 <code>absl::flat_hash_map</code>——它内置了这层混淆。</div></div>
+      </div>
+    </details></li>
+  </ol>
+
+  <h3 id="s10-2">10.2 中级（区分熟练度）</h3>
+  <ol class="qa-list" start="5">
+    <li><details class="qa">
+      <summary><span class="lvl mid">中级</span>为什么 <code>std::unordered_map</code> 必须是拉链法实现？标准做了什么约束？</summary>
+      <div class="ans">
+        <p>标准把太多<strong>实现细节</strong>写进了接口契约，这些要求联合起来<strong>排除了开放寻址</strong>：</p>
+        <table>
+          <thead><tr><th>标准要求</th><th>后果</th></tr></thead>
+          <tbody>
+            <tr><td><strong>引用与指针在 rehash 后仍有效</strong></td><td>元素必须单独堆分配，<span class="cell-bad">不能存在连续数组里</span></td></tr>
+            <tr><td><code>bucket_count()</code> / <code>bucket(key)</code> / 局部迭代器 <code>begin(n)</code></td><td>必须真的有「桶」，暴露了拉链结构</td></tr>
+            <tr><td><code>max_load_factor</code> 可 &gt; 1</td><td>开放寻址的负载因子<span class="cell-bad">物理上不可能 &gt; 1</span></td></tr>
+            <tr><td>全表遍历 O(size)</td><td>节点必须串成<strong>一条全局链表</strong>（否则要跳过空桶 → O(桶数)）</td></tr>
+            <tr><td>插入不使已存在元素的引用失效</td><td>禁止 Robin Hood 这类「移动已有元素」的方案</td></tr>
+          </tbody>
+        </table>
+        <div class="point deep"><div class="label">这是标准库设计的一个著名教训</div><div>C++11 定接口时把桶接口、引用稳定性、负载因子 &gt; 1 都写进了契约，结果<strong>任何符合标准的实现都必须是拉链法</strong>，未来无法换成更快的方案。<br>这就是 abseil、folly、Boost.Unordered 新版都提供<strong>不完全兼容标准接口</strong>的替代品的原因——它们主动放弃引用稳定性换 2–3 倍性能。<br><strong>「接口暴露了多少实现细节」直接决定未来的优化空间</strong>——这条经验对设计任何库都成立。</div></div>
+        <div class="point good"><div class="label">但拉链法也有真优势</div><div><strong>①</strong> 引用稳定（可安全持有 <code>&amp;map[k]</code>，在缓存/对象池/图结构里很有用）；<strong>②</strong> 负载因子可 &gt; 1（内存吃紧时不必扩容）；<strong>③</strong> 删除简单，无墓碑；<strong>④</strong> <strong>可按桶退化成树</strong>——Java 8 单桶超 8 个转红黑树，把最坏从 O(n) 降到 O(log n)，这是拉链法独有的能力。</div></div>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl mid">中级</span>开放寻址的删除为什么需要「墓碑」？墓碑又带来什么问题？</summary>
+      <div class="ans">
+        <p>因为直接标 EMPTY 会<strong>切断探测链</strong>：</p>
+<pre><span class="cm">// A→槽3, B→槽3冲突占4, C→槽3冲突占5</span>
+<span class="cm">// 槽: [.., .., .., A, B, C, ..]</span>
+<span class="cm">// 删 B 标 EMPTY → [.., .., .., A, _, C, ..]</span>
+<span class="cm">// 查 C：槽3(A 不匹配) → 槽4 是 EMPTY → <b>判定「不存在」</b></span>
+<span class="cm">// 但 C 明明在槽5！</span></pre>
+        <div class="point good"><div class="label">墓碑（三态）</div><div>状态改为 <strong>EMPTY / FULL / DELETED</strong>：<br>· 查找遇到 DELETED <strong>继续探测</strong>（不终止）<br>· 插入遇到 DELETED <strong>可以复用</strong>该槽<br>· <strong>只有遇到 EMPTY 才判定不存在</strong></div></div>
+        <div class="point bad"><div class="label">墓碑带来的新问题</div><div><strong>墓碑不减少探测长度，只减少元素个数。</strong>反复插入删除的表会不断累积墓碑，导致：<br>· <code>size()</code> 很小但探测很长（有效负载因子被墓碑撑高）<br>· 极端情况整表全是墓碑 → 任何未命中查找都要扫全表 → <strong>O(n)</strong></div></div>
+        <div class="point good"><div class="label">标准解法</div><div><strong>把墓碑计入负载因子</strong>：<code>load = (size + tombstones) / capacity</code>，超阈值就 rehash——rehash 会自然清掉所有墓碑。</div></div>
+        <div class="point deep"><div class="label">选型含义</div><div>这是开放寻址在<strong>「写多删多」负载</strong>下的固有弱点。这类场景拉链法反而更稳（删除只是摘链，无残留）。<br><strong>选型时要问的不只是读写比，还有删除频率</strong>——这一点经常被忽略。</div></div>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl mid">中级</span>Swiss Table（<code>absl::flat_hash_map</code>）为什么比 <code>unordered_map</code> 快 2–3 倍？</summary>
+      <div class="ans">
+        <p>核心创新是<strong>元数据与数据分离</strong>：一个紧凑的「控制字节数组」（每槽 1 字节）+ 一个槽位数组。哈希值拆成两部分用：<strong>H1</strong> 定位组，<strong>H2</strong>（7 位）存进控制字节当<em>指纹</em>。</p>
+        <div class="formula">m = _mm_movemask_epi8(_mm_cmpeq_epi8(ctrl, set1(H2)))
+
+一条 SIMD 指令比较 <span class="hl">16 个</span>控制字节 → 得到 16 位掩码
+只对掩码里的位去访问真正的槽位
+H2 有 7 位 ⟹ 假阳性率约 <span class="hl">1/128</span> ⟹ 通常只需比较 1 次完整 key</div>
+        <div class="point"><div class="label">关键是「探测」和「比较」解耦</div><div>传统开放寻址每探测一个槽都要：访问槽位（可能 cache miss）+ 比较完整 key（string 要 memcmp）。<br>Swiss Table 的探测发生在<strong>极小的连续元数据数组</strong>上——16 字节只占 1/4 条 cache line，一次 miss 能拿到 64 个槽的元信息。</div></div>
+        <div class="point"><div class="label">但 2–3 倍不来自单个技巧，是七项累积</div><div>连续内存（vs 节点散落）、位掩码（vs 素数取模的整数除法 ~20 周期）、1 字节元数据（vs 每元素 ~32 B 额外内存）、SIMD 筛选、内置哈希混淆、仅扩容时分配、更高的负载因子。<br><strong>所以「只把 std::hash 换成 xxHash」提升有限</strong>——真正的瓶颈是内存布局和分配。</div></div>
+        <div class="point bad"><div class="label">代价：引用与迭代器失效</div><div>元素直接存在数组里，扩容会<strong>移动元素</strong>：<pre style="margin:6px 0 0"><span class="kw">auto</span>&amp; v = map[<span class="str">"a"</span>];
+map[<span class="str">"b"</span>] = <span class="num">1</span>;   <span class="cm">// 可能扩容 → v 悬垂</span>
+v = <span class="num">2</span>;           <span class="cm">// use-after-free</span></pre>需要引用稳定就用 <code>absl::node_hash_map</code>。<strong>迁移时唯一要审查的就是这一点</strong>——全仓库搜「持有 map 元素引用跨越后续 map 操作」，并把 ASan 挂进 CI。</div></div>
+        <div class="point"><div class="label">还有两个次要差异</div><div>value 必须<strong>可移动</strong>；迭代顺序<strong>刻意随机化</strong>（防止代码依赖遍历顺序）——迁移后测试挂了，先怀疑是不是有隐藏的顺序依赖。</div></div>
+        <div class="point deep"><div class="label">同源思想</div><div>控制字节 = 一个小的、可能假阳性的摘要，用来挡住绝大多数无效访问——这和<strong>布隆过滤器</strong>完全同源。区别只是布隆不存真实数据。</div></div>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl mid">中级</span>自己给 <code>std::pair</code> 写 hasher，为什么不能用异或组合？</summary>
+      <div class="ans">
+        <p>因为<strong>异或是对称且自逆的</strong>，会产生两类系统性碰撞：</p>
+        <div class="point bad"><div class="label">① 对称 → 顺序信息丢失</div><div><code>h(a) ^ h(b) == h(b) ^ h(a)</code> ⟹ <code>(1,2)</code> 和 <code>(2,1)</code> <strong>必然碰撞</strong>。用 pair 表示「有向边」或「坐标」时这是灾难。</div></div>
+        <div class="point bad"><div class="label">② 自逆 → 对角线全归一桶</div><div><code>a == b</code> 时 <code>h(a) ^ h(a) == 0</code> ⟹ 所有 <code>(x, x)</code> 挤进同一个桶。</div></div>
+        <p>相加也有同样的对称问题；简单移位 <code>(h1 &lt;&lt; 32) | h2</code> 在 h2 超过 32 位时冲突。</p>
+        <div class="point good"><div class="label">正确写法：Boost 风格 hash_combine</div><div><pre style="margin:6px 0 0"><span class="kw">template</span> &lt;<span class="kw">class</span> T&gt;
+<span class="kw">void</span> <span class="fn">hash_combine</span>(<span class="kw">size_t</span>&amp; seed, <span class="kw">const</span> T&amp; v) {
+    seed ^= std::hash&lt;T&gt;{}(v)
+          + <span class="num">0x9E3779B97F4A7C15ULL</span>       <span class="cm">// 黄金比例常数</span>
+          + (seed &lt;&lt; <span class="num">6</span>) + (seed &gt;&gt; <span class="num">2</span>);   <span class="cm">// 混入已有 seed</span>
+}</pre>它<strong>顺序敏感</strong>且有雪崩效应。</div></div>
+        <div class="point"><div class="label">两条捷径</div><div><strong>①</strong> 用 <code>absl::flat_hash_map</code>——abseil 为 <code>pair</code>/<code>tuple</code>/容器都提供了正确的 <code>AbslHashValue</code>；<strong>②</strong> 逐字段拼成字节序列后整体 <code>xxHash</code>。</div></div>
+        <div class="point warn"><div class="label">整体字节哈希的隐藏坑</div><div>结构体的 <strong>padding 字节内容是未定义的</strong>——两个逻辑相等的对象可能因 padding 里的垃圾值不同而哈希不同。要么 <code>static_assert</code> 确认无 padding，要么逐字段 combine。</div></div>
+      </div>
+    </details></li>
+  </ol>
+
+  <h3 id="s10-3">10.3 高级（体现深度）</h3>
+  <ol class="qa-list" start="9">
+    <li><details class="qa">
+      <summary><span class="lvl adv">高级</span>什么是 Hash-DoS？为什么 C++ 的 <code>std::unordered_map</code> 有风险，怎么修？</summary>
+      <div class="ans">
+        <p>2011 年 28C3 公布的攻击：Web 框架把 HTTP 参数名 / JSON 键放进哈希表，攻击者<strong>预先离线算出大量哈希相同的字符串</strong>发过去，全部落进同一桶。</p>
+        <div class="formula">插入 n 个碰撞键的总代价：O(n) → <span class="hl">O(n²)</span>
+（每次插入都要遍历整条链查重）
+
+当时的数字：几十 KB ~ 几 MB 的 POST 就能打满一个 CPU 核数分钟</div>
+        <p>受影响的有 PHP、Java、Python、Ruby、ASP.NET、V8——都因为用了<strong>确定性的、算法公开的</strong>哈希函数。</p>
+        <div class="point bad"><div class="label">C++ 的问题在标准层面</div><div><code>std::hash&lt;std::string&gt;</code> <strong>没有随机化</strong>：同一字符串在同一实现上永远返回同一值，算法还是公开的。<br>所以<strong>把不可信输入（参数名、JSON 键、上传字段名）直接当键放进 <code>std::unordered_map</code> 是有风险的</strong>。</div></div>
+        <div class="point good"><div class="label">修法一 · 带随机种子的 hasher</div><div><pre style="margin:6px 0 0"><span class="kw">struct</span> <span class="type">SeededHash</span> {
+    <span class="kw">static</span> <span class="kw">const</span> <span class="kw">uint64_t</span> seed;   <span class="cm">// 启动时从 random_device 取</span>
+    <span class="kw">size_t</span> <span class="kw">operator</span>()(std::string_view s) <span class="kw">const</span> {
+        <span class="kw">return</span> <span class="fn">siphash13</span>(seed, s.<span class="fn">data</span>(), s.<span class="fn">size</span>());
+    }
+};</pre><strong>SipHash 的安全性正是「密钥未知时不可构造碰撞」</strong>——这是它相对 xxHash/Murmur 的唯一优势，也是它存在的理由。</div></div>
+        <div class="point good"><div class="label">修法二 · 换 absl（内置随机种子）</div><div><code>absl::flat_hash_map</code> 自带进程级随机种子 + 哈希混淆。</div></div>
+        <div class="point good"><div class="label">修法三 · 限制键数量与长度（必须同时做）</div><div><code>if (params.size() &gt; kMaxParams) reject();</code>——即使哈希安全也该做。<strong>这挡住的是一整类「资源无上界」问题</strong>，不只哈希碰撞。</div></div>
+        <div class="point deep"><div class="label">Java 的另一条路</div><div>Java 没换哈希，而是<strong>单桶超 8 个转红黑树</strong>。这改的是「最坏复杂度」（O(n)→O(log n)，攻击仍能发生但危害可控）；换哈希改的是「攻击可行性」（最坏仍 O(n) 但构造不出来）。<br>两者可叠加。转树还对<strong>非恶意</strong>的坏哈希有效（比如用户自己写了糟糕的 <code>hashCode</code>）。</div></div>
+        <div class="point deep"><div class="label">一般性原理</div><div>教训不是「哈希表有 bug」，而是<strong>「平均复杂度可被攻击」</strong>。同类漏洞：ReDoS（正则回溯指数级）、快排复杂度攻击（针对三点取中构造锯齿输入）、zip bomb、递归解析爆栈。<br><strong>共同点：某个资源维度没有上界，而它由攻击者控制。</strong>写处理不可信输入的代码时，逐个资源维度问「上界在哪、谁保证」。</div></div>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl adv">高级</span>一个哈希表在线上偶发 200ms 的延迟尖刺，怎么排查和消除？</summary>
+      <div class="ans">
+        <p>「偶发」+「尖刺」+ 哈希表，几乎可以直接指向 <strong>rehash</strong>：单次插入触发 O(n) 的重建（分配新表 + 重算所有键的桶 + 搬移 + 释放旧表）。</p>
+        <div class="point"><div class="label">① 确认</div><div>尖刺频率应该随元素数呈<strong>指数递减</strong>（每翻倍一次 rehash）；用 perf 抓尖刺时的栈，会看到 <code>_M_rehash</code> / <code>resize</code> / <code>operator new</code>。也可以打点记录 <code>bucket_count()</code> 的变化时刻与尖刺时刻对齐。</div></div>
+        <div class="point warn"><div class="label">别忽略另外两个嫌疑</div><div><strong>①</strong> 如果表很大且元素是<strong>单独 malloc</strong> 的节点（<code>unordered_map</code>），rehash 时的<strong>内存分配器行为</strong>（可能触发 <code>mmap</code>、页错误、甚至 THP 整理）比搬移本身更贵；<strong>②</strong> 释放旧表时的大量 <code>free</code> 也是一笔。用 heap profiler 确认。</div></div>
+        <p><strong>按性价比排序的消除手段：</strong></p>
+        <div class="point good"><div class="label">① 预留容量（首选）</div><div>启动时 <code>reserve(峰值)</code>，运行期永不扩容——把摊销 O(1) 变成<strong>最坏</strong> O(1)。<br><strong>注意 <code>reserve(n)</code> 的参数是元素数</strong>（内部按 <code>n / max_load_factor</code> 算桶数），而 <code>rehash(n)</code> 的参数是<em>桶数</em>——这是高频误用。</div></div>
+        <div class="point good"><div class="label">② 分片</div><div>拆成 N 个小表（<code>shard = hash(k) % N</code>），rehash 只影响 1/N 的数据，单次停顿降到 1/N。顺带还能降低锁竞争。代价是跨片操作（如全表遍历、批量原子操作）变复杂。</div></div>
+        <div class="point good"><div class="label">③ 渐进式 rehash（Redis 的做法）</div><div>双表并存，<code>rehashidx</code> 逐步推进：查找/删除先查旧表再查新表，<strong>插入一律写新表</strong>（保证旧表只减不增），每次操作顺带搬 1 个桶。<br>单次最坏从 O(n) 降到 O(1)+一个桶。代价：<strong>过渡期内存双份</strong>，且每次操作要查两张表（常数变大）。</div></div>
+        <div class="point good"><div class="label">④ 换稳定结构</div><div><code>std::map</code> 永远 O(log n)、<strong>无抖动</strong>。平均更慢，但如果需求是「p99 稳定」而不是「均值最快」，这是对的选择。</div></div>
+        <div class="point deep"><div class="label">这是一笔通用的交易</div><div>「用平均成本换尾延迟」——渐进式 rehash、GC 的增量回收、数据库的在线 DDL、LSM 的分层 compaction，全是同一笔交易。<br><strong>做决定前先确认目标是「均值」还是「p99」</strong>：扇出 100 次的服务里，单次 p99=200ms 意味着 63% 的用户请求会撞上它（见 <a href="./complexity_and_analysis.html">复杂度与分析</a> §8.2）。</div></div>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl adv">高级</span>你要给一个高频交易系统选 key-value 容器，怎么决策？</summary>
+      <div class="ans">
+        <p>高频交易的核心约束是<strong>最坏延迟（p99.9）而不是平均延迟</strong>，这会让常规的「哈希表最快」结论完全翻转。</p>
+        <div class="point bad"><div class="label">先排除的：默认的 unordered_map</div><div>三个理由：<strong>①</strong> rehash 造成不可预测的停顿；<strong>②</strong> 每次插入一次 <code>malloc</code>——<strong><code>malloc</code> 自身的尾延迟不受控</strong>（可能触发 mmap、页错误、锁竞争）；<strong>③</strong> 指针追逐导致 cache miss 不可预测。</div></div>
+        <div class="point good"><div class="label">① 首选：预分配的开放寻址表</div><div>启动时 <code>reserve</code> 到峰值容量，<strong>运行期零分配、零 rehash</strong>。连续内存 + 位掩码，访问模式可预测。<br>如果键是<strong>稠密小整数</strong>（instrument id、order id 段），直接用 <code>std::vector</code> 下标——真正的 O(1)，无哈希计算，最可预测。<strong>这一条最常被跳过，但往往是最优解。</strong></div></div>
+        <div class="point good"><div class="label">② 元素少时用线性扫描的数组</div><div>几十个以内（比如订阅的合约列表），<code>vector&lt;pair&lt;K,V&gt;&gt;</code> + 线性查找往往打败任何哈希表：连续内存、无哈希计算、无分支预测失败、可 SIMD。<strong>先量一下真实规模再谈结构。</strong></div></div>
+        <div class="point"><div class="label">③ 需要有序（价格档位、时间序）</div><div>不要用哈希表。价格档位这类要 <code>lower_bound</code> 的场景用<strong>排序数组 + 二分</strong>（比 <code>std::map</code> 快得多，因为连续内存），或者干脆用<strong>按价格直接下标的数组</strong>（价格离散化后值域有限）。</div></div>
+        <div class="point warn"><div class="label">④ 别忘了内存局部性之外的约束</div><div><strong>NUMA</strong>：表要分配在访问它的核所在的 NUMA 节点上；<strong>大页</strong>：大表用 hugepage 减少 TLB miss；<strong>禁用 THP 的整理</strong>（可能造成停顿）；<strong>预热</strong>：启动后先跑一遍把页真正映射进来（首次触碰的页错误也是尖刺）。<br>见 <a href="../perf-debug/low_latency_guide.html">低延迟编程</a> 与 <a href="../system/numa_memory_advanced.html">NUMA 与内存</a>。</div></div>
+        <div class="point deep"><div class="label">决策顺序（这才是答案）</div><div><strong>①</strong> 量真实规模和访问模式 → 可能根本不需要哈希表；<strong>②</strong> 列出硬约束（最坏延迟、有序性、单线程还是并发）；<strong>③</strong> 消除所有运行期动态分配；<strong>④</strong> 在<strong>真实数据和真实延迟分布</strong>上测，看 p99.9 而不是均值。<br><strong>「哪个容器快」是最后一个问题</strong>——前三步做对了，容器选择的影响反而变小。</div></div>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl adv">高级</span>把「哈希 → 桶」换成「哈希 → 机器」，会遇到什么新问题？</summary>
+      <div class="ans">
+        <p>核心新问题是：<strong>桶数（机器数）会变，而变化的代价是数据迁移而不是内存重分配</strong>。</p>
+        <div class="point bad"><div class="label">朴素取模的灾难</div><div><code>node = hash(key) % N</code>。N 从 3 变 4 时，<strong>约 N/(N+1) 的键都要迁移</strong>——缓存场景下命中率瞬间归零，全部打到后端 → <strong>雪崩</strong>。<br>对比单机哈希表：rehash 也要重算所有键，但那只是内存操作；分布式里这是跨网络搬 TB 级数据。</div></div>
+        <div class="point good"><div class="label">一致性哈希</div><div>把哈希值域看成一个<strong>环</strong>，节点落在环上若干点，key 顺时针找到的第一个节点就是归属。<strong>加节点时只有它接管的那段键要迁移，迁移量 ≈ 1/N。</strong></div></div>
+        <div class="point"><div class="label">虚拟节点为什么必需</div><div>每台机器只占一个点时，N 台把环切成 N 段，<strong>段长方差很大</strong>——某台机器可能负责 3 倍于平均的键。虚拟节点（每机 100–200 个点）用大数定律把方差压下来。<br>额外好处：<strong>可以按机器性能分配不同数量的虚拟节点</strong>，实现加权分片。</div></div>
+        <table>
+          <thead><tr><th>方案</th><th>迁移量</th><th>特点</th></tr></thead>
+          <tbody>
+            <tr><td>取模</td><td><span class="cell-bad">≈N/(N+1)</span></td><td>仅适合节点数固定</td></tr>
+            <tr><td>一致性哈希+虚节点</td><td><span class="cell-ok">≈1/N</span></td><td>Cassandra、Dynamo、memcached</td></tr>
+            <tr><td>Rendezvous（HRW）</td><td><span class="cell-ok">≈1/N</span></td><td>实现更简单，无需维护环</td></tr>
+            <tr><td>Jump Consistent Hash</td><td><span class="cell-ok">最优</span></td><td>但<strong>只支持末尾增删节点</strong></td></tr>
+            <tr><td>固定槽位</td><td>可控</td><td><strong>Redis Cluster（16384 槽）</strong></td></tr>
+          </tbody>
+        </table>
+        <div class="point deep"><div class="label">Redis Cluster 的选择值得单独学</div><div>它<strong>不用</strong>一致性哈希，而是把键空间固定切成 16384 槽（<code>CRC16(key) % 16384</code>），再把槽分配给节点。<br>好处是<strong>迁移的粒度和进度完全可控可观测</strong>——你能确切知道「槽 5000 正在从 A 迁到 B」，能暂停、能回滚、能监控进度。一致性哈希的迁移是隐式的，出问题很难定位。<br>代价是多了一层槽→节点的映射要维护和同步。<strong>这是「显式的间接层」换「可运维性」的典型选择</strong>——在分布式系统里，可运维性常常比理论最优更值钱。</div></div>
+        <div class="point warn"><div class="label">还有两个必须处理的问题</div><div><strong>热点键</strong>：一致性哈希解决的是「键的数量」均衡，不解决「访问量」均衡。一个爆款商品的 key 会打爆它所在的那台机器——要靠本地缓存、key 加随机后缀分散、或单独处理热点。<br><strong>迁移期间的一致性</strong>：数据正在从 A 搬到 B 时，读写该去哪？Redis Cluster 用 <code>ASK</code>/<code>MOVED</code> 重定向，本质是让客户端参与解决。见 <a href="../architect/storage_and_data_architecture.html">存储与数据架构</a>。</div></div>
+      </div>
+    </details></li>
+  </ol>
+</section>
+
+<div class="footer-nav">
+  <a href="monotonic_and_prefix.html">⬅️ 单调栈与前缀和</a>
+  <a href="heap_and_topk.html">➡️ 堆与 Top-K</a>
+  <a href="complexity_and_analysis.html">📐 复杂度与分析</a>
+  <a href="../architect/storage_and_data_architecture.html">🗄️ 存储与数据架构</a>
+  <a href="algorithms_directory.html">📚 目录</a>
+  <a href="../index.html">🏠 主页</a>
+</div>
+
+</main>
+</div>
+
+<footer>
+  <p>哈希表内核 — 哈希函数标准 · 拉链与开放寻址 · Robin Hood · Swiss Table 的 SIMD 探测 · 增量 rehash · Hash-DoS — Kavin Tech Notes · 2026</p>
+</footer>
+
+<script>
+document.querySelectorAll('aside.toc nav a').forEach(a=>{a.addEventListener('click',e=>{e.preventDefault();const t=document.querySelector(a.getAttribute('href'));if(t)t.scrollIntoView({behavior:'smooth'})})});
+const obs=new IntersectionObserver(es=>{es.forEach(e=>{if(e.isIntersecting){document.querySelectorAll('aside.toc nav a').forEach(a=>a.classList.remove('active'));const l=document.querySelector(`aside.toc nav a[href="#${e.target.id}"]`);if(l)l.classList.add('active')}})},{threshold:.2});
+document.querySelectorAll('section[id]').forEach(s=>obs.observe(s));
+(function(){var p=document.getElementById('progress');if(!p)return;addEventListener('scroll',function(){var h=document.documentElement;var m=h.scrollHeight-h.clientHeight;p.style.width=(m>0?(h.scrollTop/m*100):0)+'%';},{passive:true});})();
+</script>
+
+<script>
+(function(){
+  var out = document.getElementById('htOut');
+  if (!out) return;
+  var btns = {
+    a: document.getElementById('htA'), b: document.getElementById('htB'),
+    c: document.getElementById('htC'), d: document.getElementById('htD'),
+    e: document.getElementById('htE')
+  };
+
+  var CASES = {
+    a:
+      '<em>std::unordered_map</em>（libstdc++）  拉链法\n' +
+      '——————————————————————————————————————————\n' +
+      '<b>结构</b>  桶数组 + <u>一条全局单链表</u>（不是每桶一条）\n' +
+      '      桶里存的是「前驱指针」，指向该桶在全局链表中的起点\n\n' +
+      '<b>为什么是一条全局链表</b>\n' +
+      '  标准要求 begin()/end() 遍历是 <b>O(size)</b> 而非 O(桶数)。\n' +
+      '  若每桶独立链表，遍历就要跳过所有空桶 → O(桶数)。\n\n' +
+      '<b>标准把这个实现「锁死」了</b>\n' +
+      '  · 引用/指针 rehash 后仍有效 → 元素必须<u>单独堆分配</u>\n' +
+      '  · 暴露 bucket_count / bucket(key) / 局部迭代器 → 必须真有桶\n' +
+      '  · max_load_factor 可 &gt; 1 → 开放寻址物理上做不到\n' +
+      '  · 插入不失效已有引用 → 禁止 Robin Hood 式移动\n' +
+      '  <i>⟹ 任何符合标准的实现都必须是拉链法</i>\n\n' +
+      '<b>代价</b>\n' +
+      '  每节点一次 malloc（指针追逐）· 额外 ~32 B/元素\n' +
+      '  素数取模（整数除法 ~20 周期）· std::hash&lt;int&gt; 是<i>恒等函数</i>\n' +
+      '  查找 = 1 次桶访问 + N 次链表跳转，每次都可能 cache miss\n\n' +
+      '<b>但它的优势是真实的</b>\n' +
+      '  ① 引用稳定（可持有 &amp;map[k] 跨插入）\n' +
+      '  ② 负载因子可 &gt; 1（内存紧时不必扩容）\n' +
+      '  ③ 删除只是摘链，<u>无墓碑问题</u>\n' +
+      '  ④ 可按桶退化成树（Java 8 单桶 &gt;8 转红黑树 → 最坏 O(log n)）',
+    b:
+      '<em>开放寻址</em>  所有元素放在一个连续数组里\n' +
+      '——————————————————————————————————————————\n' +
+      '<b>探测方式</b>\n' +
+      '  线性  h + i        主聚簇严重，但 <b>cache 最友好</b>（连续地址）\n' +
+      '  二次  h + (i+i²)/2  次聚簇；<i>式子要能覆盖全部槽位</i>\n' +
+      '  双重  h1 + i·h2(k)  几乎无聚簇，但<i>每步随机跳 → cache 最差</i>\n\n' +
+      '<b>为什么线性探测反而最快</b>\n' +
+      '  探测序列是连续地址，完全符合 cache line + 硬件预取。\n' +
+      '  探测 8 个槽可能只 1 次 miss；跳跃式探测每步都可能 miss。\n' +
+      '  <em>又一个「渐进相同、常数不同」的案例。</em>\n\n' +
+      '<b>探测长度（这条曲线决定扩容阈值）</b>\n' +
+      '  命中　： (1 + 1/(1−α)) / 2\n' +
+      '  未命中： (1 + 1/(1−α)<b>²</b>) / 2      ← 恶化<i>快得多</i>\n' +
+      '  α=0.9  未命中约 50 次\n' +
+      '  α=0.99 未命中约 <i>5000 次</i>（发散）\n\n' +
+      '  <b>工程含义</b>：以「查不到」为主的负载（缓存 miss 检查、\n' +
+      '  去重判断、存在性验证）对负载因子<u>更敏感</u>，\n' +
+      '  该把阈值设更低，或前面加一层布隆过滤器。\n\n' +
+      '<i>删除必须用墓碑</i>  直接标 EMPTY 会<b>切断探测链</b>：\n' +
+      '  A→槽3, B→占4, C→占5；删 B 标 EMPTY\n' +
+      '  → 查 C 时槽4 是 EMPTY → 误判「不存在」\n' +
+      '  三态 EMPTY/FULL/DELETED：查找遇 DELETED <b>继续</b>，插入可复用\n' +
+      '  <i>墓碑会累积</i> → 必须把它<b>计入负载因子</b>，超阈值 rehash 清掉\n' +
+      '  ⟹ 「写多删多」的负载下，拉链法反而更稳',
+    c:
+      '<em>Robin Hood hashing</em>  线性探测 + 抢位\n' +
+      '——————————————————————————————————————————\n' +
+      '<b>做法</b>  插入时若「当前占用者比我更接近它的理想位置」，\n' +
+      '      就把它<u>踢出来</u>自己占进去，再为被踢者继续找位置\n\n' +
+      '<b>核心不变式</b>\n' +
+      '  probe distance（实际位置 − 理想位置）沿探测序列<b>单调不减</b>\n\n' +
+      '<b>两个好处</b>\n' +
+      '  ① <b>查找可提前终止</b>：探到某槽时若它的 probe distance\n' +
+      '     已<u>小于</u>当前查找距离，目标必然不存在——\n' +
+      '     若存在，它的距离更大，早该出现在这里。\n' +
+      '     ⟹ 未命中查找<b>不必走到 EMPTY</b>\n' +
+      '  ② <b>探测长度方差极小</b>：不降低平均值（那由负载因子决定），\n' +
+      '     但把「个别元素探测几十次」的长尾<u>削平了</u> → 直接改善 p99\n\n' +
+      '<b>名字的由来：劫富济贫</b>\n' +
+      '  抢「富人」（离家近的）去帮「穷人」（离家远的）。\n' +
+      '  总财富不变（房子多挤是负载因子决定的），但<u>分配变均匀</u>。\n' +
+      '  <em>「不改善均值但削平长尾」——和限流的对冲请求、</em>\n' +
+      '  <em>GC 的增量回收是同一类思路。</em>\n\n' +
+      '<i>代价</i>  插入要<b>移动已有元素</b> → 违反 C++ 标准对\n' +
+      '  unordered_map 的引用稳定性要求，所以标准库不能用它。\n' +
+      '  Rust 的 HashMap 曾用它（1.36 之前），后改为 Swiss Table。\n\n' +
+      '<u>什么时候值得自己上</u>  自造哈希表且<b>对 p99 敏感</b>的场景。',
+    d:
+      '<em>Swiss Table</em>（absl::flat_hash_map / Rust hashbrown）\n' +
+      '——————————————————————————————————————————\n' +
+      '<b>核心创新：元数据与数据分离</b>\n' +
+      '  控制字节数组（每槽 <b>1 字节</b>）+ 槽位数组\n' +
+      '  哈希值拆两半用：H1 → 定位组；<b>H2（7 位）→ 存进控制字节当指纹</b>\n' +
+      '  控制字节取值：0x80=空  0xFE=墓碑  其余=H2\n\n' +
+      '<b>SIMD 探测</b>\n' +
+      '  m = _mm_movemask_epi8(_mm_cmpeq_epi8(ctrl, set1(H2)))\n' +
+      '  一条指令比较 <b>16 个</b>控制字节 → 16 位掩码\n' +
+      '  只对掩码里的位去访问真正的槽位\n' +
+      '  H2 有 7 位 ⟹ 假阳性率约 <b>1/128</b> ⟹ 通常只比 1 次完整 key\n\n' +
+      '<b>关键是「探测」和「比较」解耦</b>\n' +
+      '  传统：每探一个槽 = 访问槽位（可能 miss）+ 比完整 key（memcmp）\n' +
+      '  Swiss：探测发生在<u>极小的连续元数据数组</u>上\n' +
+      '        16 字节 = 1/4 条 cache line；1 次 miss 拿到 64 个槽的元信息\n\n' +
+      '<b>2~3 倍不来自单个技巧，是七项累积</b>\n' +
+      '  连续内存 · 位掩码(vs 除法 ~20 周期) · 1B 元数据(vs ~32B)\n' +
+      '  SIMD 筛选 · 内置哈希混淆+随机种子 · 仅扩容时分配 · 更高负载因子\n' +
+      '  <i>⟹ 所以「只换 std::hash 为 xxHash」提升有限</i>\n\n' +
+      '<i>代价：引用与迭代器失效</i>\n' +
+      '  auto&amp; v = map["a"];  map["b"]=1;  <i>// 可能扩容 → v 悬垂</i>\n' +
+      '  需要引用稳定 → absl::node_hash_map\n' +
+      '  <b>迁移时唯一要审查的就是这一点</b>：搜「持有 map 元素引用\n' +
+      '  跨越后续 map 操作」，并把 ASan 挂进 CI\n\n' +
+      '<u>两个次要差异</u>  value 必须可移动；迭代顺序<b>刻意随机化</b>\n' +
+      '  （迁移后测试挂了，先怀疑隐藏的遍历顺序依赖）\n\n' +
+      '<b>同源思想</b>  控制字节 = 小的、可能假阳性的摘要，挡住无效访问\n' +
+      '  —— 和<b>布隆过滤器</b>完全同源，区别只是布隆不存真实数据',
+    e:
+      '<em>std::map</em>（红黑树）  什么时候它才是对的选择\n' +
+      '——————————————————————————————————————————\n' +
+      '<b>三个理由选它，<u>都不是速度</u></b>\n' +
+      '  ① <b>需要有序遍历 / 范围查询</b>\n' +
+      '     lower_bound / upper_bound / 按序 iterate\n' +
+      '     哈希表无序，这个需求它根本满足不了\n' +
+      '  ② <b>需要稳定的最坏延迟</b>\n' +
+      '     树永远 O(log n)，<u>无 rehash 抖动、无攻击面</u>\n' +
+      '     哈希表是「期望 O(1)、最坏 O(n)、且偶尔 O(n) 停顿」\n' +
+      '  ③ <b>插入不失效迭代器</b>\n' +
+      '     unordered_map 的 rehash 会失效迭代器（引用还有效）\n' +
+      '     flat_hash_map 连引用都失效\n\n' +
+      '<b>n 小的时候树常常更快</b>\n' +
+      '  n=64 → log₂n = 6 次跳转，而且<u>树的上层节点常驻 cache</u>\n' +
+      '  哈希表要：算 hash（string 得扫全串）+ 1 次随机地址访问(miss)\n' +
+      '  交叉点约在 n 几百~一千，强烈依赖 key 类型与 hash 成本\n\n' +
+      '<b>但别忘了还有更好的选项</b>\n' +
+      '  只读 + 要有序 → <b>排序数组 + 二分</b>\n' +
+      '    连续内存，比红黑树快得多（无指针追逐）\n' +
+      '  键是稠密小整数 → <b>直接 vector 下标</b>\n' +
+      '    真正的 O(1)，无哈希计算，最可预测\n' +
+      '  元素 &lt; 几十个 → <b>vector + 线性扫描</b>\n' +
+      '    连续内存 + 无哈希 + 可 SIMD，实测常打败一切\n\n' +
+      '<b>选型的三个问题，按顺序问</b>\n' +
+      '  ① 元素有多少？（几十个以内 → 可能根本不需要哈希表）\n' +
+      '  ② 有没有硬约束？（引用稳定 / 有序 / 最坏延迟 / 线程安全）\n' +
+      '  ③ 键可信吗？（不可信 → 必须带随机种子的哈希）\n' +
+      '  <em>三个都没问题，才轮到比性能。「哪个更快」是最后一个问题。</em>'
+  };
+
+  function show(k) {
+    out.innerHTML = CASES[k];
+    Object.keys(btns).forEach(function(x){ if(btns[x]) btns[x].classList.toggle('on', x === k); });
+  }
+  Object.keys(btns).forEach(function(k){ if(btns[k]) btns[k].addEventListener('click', function(){ show(k); }); });
+  show('a');
+})();
+</script>
+
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

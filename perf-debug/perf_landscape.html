@@ -1,0 +1,1457 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>perf 全景 — 采样原理 / 子命令谱系 / 栈回溯 / 符号化 / Top-Down / 生产实践</title>
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<link rel="stylesheet" href="../assets/guide-extras-perf-debug.css">
+<style>
+/* 本页特有组件：名词解释 · 生活类比 · 子命令卡 · 判读行 · 陷阱行 */
+.def{background:var(--bg-card);border:1px solid var(--border);border-left:3px solid var(--accent-2);border-radius:8px;padding:12px 16px;margin:14px 0;font-size:14px;line-height:1.75}
+.def .term{font-family:"JetBrains Mono",monospace;font-weight:700;color:var(--accent-2);margin-right:8px}
+.analogy{background:color-mix(in srgb, var(--accent-4) 8%, var(--bg-card));border:1px solid color-mix(in srgb, var(--accent-4) 28%, var(--border));border-radius:10px;padding:14px 18px;margin:16px 0;font-size:14px;line-height:1.8}
+.analogy .at{display:block;font-weight:700;color:var(--accent-4);margin-bottom:6px;font-size:13px;letter-spacing:.5px}
+.sc{background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:14px 16px}
+.sc h4{margin:0 0 6px;font-size:14px;font-family:"JetBrains Mono",monospace;color:var(--accent)}
+.sc p{margin:0;font-size:13px;color:var(--text-dim);line-height:1.7}
+.sc .tag{float:right;font-size:10px;font-family:"JetBrains Mono",monospace;color:var(--text-mute);border:1px solid var(--border-2);border-radius:99px;padding:1px 8px;text-transform:uppercase;letter-spacing:.5px}
+.rd{display:flex;gap:12px;align-items:flex-start;padding:10px 14px;margin:8px 0;background:var(--bg-card);border:1px solid var(--border);border-left:3px solid var(--accent-3);border-radius:8px;font-size:13.5px;line-height:1.75}
+.rd .n{font-family:"JetBrains Mono",monospace;color:var(--accent-3);font-weight:700;flex:0 0 auto;min-width:104px}
+.rd.warn{border-left-color:var(--warn)} .rd.warn .n{color:var(--warn)}
+.rd.bad{border-left-color:var(--danger)} .rd.bad .n{color:var(--danger)}
+.trap{display:flex;gap:12px;align-items:flex-start;padding:11px 14px;margin:9px 0;background:color-mix(in srgb, var(--danger) 6%, var(--bg-card));border:1px solid color-mix(in srgb, var(--danger) 22%, var(--border));border-radius:8px;font-size:13.5px;line-height:1.75}
+.trap .i{font-family:"JetBrains Mono",monospace;color:var(--danger);font-weight:700;flex:0 0 auto;min-width:34px}
+</style>
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav tn-shell-overlay">
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="perf_debug_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 46 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="progress" id="progress"></div>
+<div class="layout">
+  <aside class="toc">
+    <h2>perf · Landscape</h2>
+    <nav>
+    <ol>
+      <li><a href="#ch1">perf 是什么 · 工具谱系定位</a>
+        <ol>
+          <li><a href="#s1-1">一句话定位</a></li>
+          <li><a href="#s1-2">和 valgrind / ASan / eBPF / VTune 的分工</a></li>
+          <li><a href="#s1-3">本文覆盖范围与阅读顺序</a></li>
+        </ol></li>
+      <li><a href="#ch2">采样原理 · PMU 与 perf_event_open</a>
+        <ol>
+          <li><a href="#s2-1">计数模式 vs 采样模式</a></li>
+          <li><a href="#s2-2">一次采样中断到底发生了什么</a></li>
+          <li><a href="#s2-3">四类事件源</a></li>
+          <li><a href="#s2-4">为什么开销能压到 1% 以内</a></li>
+        </ol></li>
+      <li><a href="#ch3">权限模型 · 容器与生产环境</a>
+        <ol>
+          <li><a href="#s3-1">perf_event_paranoid 四档语义</a></li>
+          <li><a href="#s3-2">CAP_PERFMON —— 别再给 root</a></li>
+          <li><a href="#s3-3">容器 / K8s 里怎么跑</a></li>
+          <li><a href="#s3-4">虚拟机里 PMU 常常根本不存在</a></li>
+        </ol></li>
+      <li><a href="#ch4">子命令全景 · 16 个里先学 6 个</a>
+        <ol>
+          <li><a href="#s4-1">按用途分四组</a></li>
+          <li><a href="#s4-2">全子命令速查表</a></li>
+          <li><a href="#s4-3">症状 → 子命令决策树</a></li>
+        </ol></li>
+      <li><a href="#ch5">事件命名 · perf list 与计数器复用</a>
+        <ol>
+          <li><a href="#s5-1">三层事件名：通用 / 原生 / raw</a></li>
+          <li><a href="#s5-2">跨平台：x86 与 ARM 的事件名不通用</a></li>
+          <li><a href="#s5-3">计数器复用 (multiplexing) 与缩放外推</a></li>
+          <li><a href="#s5-4">读懂 &lt;not counted&gt; 与 &lt;not supported&gt;</a></li>
+        </ol></li>
+      <li><a href="#ch6">perf stat 判读 · 从数字到结论</a>
+        <ol>
+          <li><a href="#s6-1">默认输出逐行拆解</a></li>
+          <li><a href="#s6-2">常用开关：-d / -r / --per-core / -M</a></li>
+          <li><a href="#s6-3">三条健康线与它们的例外</a></li>
+          <li><a href="#s6-4">别把比率当结论</a></li>
+        </ol></li>
+      <li><a href="#ch7">Top-Down 微架构分析法</a>
+        <ol>
+          <li><a href="#s7-1">为什么"cache-miss 率"不够用</a></li>
+          <li><a href="#s7-2">四象限：流水线槽位去哪了</a></li>
+          <li><a href="#s7-3">perf stat --topdown 与 toplev</a></li>
+          <li><a href="#s7-4">逐层下钻的正确姿势</a></li>
+        </ol></li>
+      <li><a href="#ch8">perf record · 三种栈回溯的取舍</a>
+        <ol>
+          <li><a href="#s8-1">FP · 快但要重编</a></li>
+          <li><a href="#s8-2">DWARF · 准但数据暴涨</a></li>
+          <li><a href="#s8-3">LBR · 免费但很浅</a></li>
+          <li><a href="#s8-4">三者对比与选型</a></li>
+          <li><a href="#s8-5">采样频率：为什么是 99 而不是 100</a></li>
+        </ol></li>
+      <li><a href="#ch9">符号化 · 为什么栈里全是 [unknown]</a>
+        <ol>
+          <li><a href="#s9-1">六种典型原因</a></li>
+          <li><a href="#s9-2">build-id 与 debuginfod</a></li>
+          <li><a href="#s9-3">JIT / 解释型代码</a></li>
+          <li><a href="#s9-4">容器：--symfs 与 buildid-cache</a></li>
+        </ol></li>
+      <li><a href="#ch10">report / annotate / diff</a>
+        <ol>
+          <li><a href="#s10-1">perf report 的四个必会开关</a></li>
+          <li><a href="#s10-2">perf annotate 与 skid / PEBS</a></li>
+          <li><a href="#s10-3">perf diff · 优化前后对比</a></li>
+        </ol></li>
+      <li><a href="#ch11">火焰图 · on-CPU / off-CPU / 差分</a>
+        <ol>
+          <li><a href="#s11-1">生成管线与每一步在做什么</a></li>
+          <li><a href="#s11-2">怎么读：宽度是量，不是时间轴</a></li>
+          <li><a href="#s11-3">off-CPU 火焰图</a></li>
+          <li><a href="#s11-4">差分火焰图</a></li>
+        </ol></li>
+      <li><a href="#ch12">访存与并发 · mem / c2c / lock / sched</a>
+        <ol>
+          <li><a href="#s12-1">perf mem · 这次 load 从哪一级拿到的</a></li>
+          <li><a href="#s12-2">perf c2c · 假共享定位</a></li>
+          <li><a href="#s12-3">perf lock · 锁竞争</a></li>
+          <li><a href="#s12-4">perf sched · 调度延迟</a></li>
+        </ol></li>
+      <li><a href="#ch13">动态探针 · perf probe / perf trace</a>
+        <ol>
+          <li><a href="#s13-1">perf probe · 给内核函数临时加埋点</a></li>
+          <li><a href="#s13-2">uprobe · 探自己的 C++ 函数</a></li>
+          <li><a href="#s13-3">perf trace · 比 strace 轻的 syscall 观测</a></li>
+        </ol></li>
+      <li><a href="#ch14">生产实践与十个陷阱</a>
+        <ol>
+          <li><a href="#s14-1">常驻采集 · continuous profiling</a></li>
+          <li><a href="#s14-2">喂给 AutoFDO / BOLT</a></li>
+          <li><a href="#s14-3">十个陷阱清单</a></li>
+        </ol></li>
+      <li><a href="#ch15">面试题（12 道分层）</a>
+        <ol>
+          <li><a href="#s15-1">基础（必答）</a></li>
+          <li><a href="#s15-2">中级（区分熟练度）</a></li>
+          <li><a href="#s15-3">高级（体现深度）</a></li>
+        </ol></li>
+      <li><a href="#ch16">速查卡 · 下一步</a>
+        <ol>
+          <li><a href="#s16-1">一页速查</a></li>
+          <li><a href="#s16-2">动手清单</a></li>
+          <li><a href="#s16-3">延伸阅读</a></li>
+        </ol></li>
+    </ol>
+    </nav>
+  </aside>
+
+  <main>
+
+<header class="hero">
+  <div class="badge">P01 · perf Landscape · Linux Profiling</div>
+  <h1>perf 全景</h1>
+  <p class="sub">从 <strong>PMU 采样原理</strong> 到 <strong>生产落地</strong>：<em>子命令谱系</em> · <em>事件命名与计数器复用</em> · <em>三种栈回溯的取舍</em> · <em>符号化</em> · <em>Top-Down 微架构分析</em> · <em>火焰图</em> —— 不是命令罗列，而是一份能让你在<strong>陌生机器上从零建立性能判断</strong>的方法论。</p>
+  <div class="meta-row">
+    <span class="pill cyan">Linux 标配</span>
+    <span class="pill green">开销 &lt; 1%</span>
+    <span class="pill amber">生产可用</span>
+    <span class="pill violet">面试高频</span>
+  </div>
+</header>
+
+<!-- ============= CH1 ============= -->
+<section class="chapter" id="ch1">
+  <div class="ch-head">
+    <div class="num">01</div>
+    <div class="t">
+      <h2>perf 是什么 · 工具谱系定位</h2>
+      <p class="sub">一句话定位 · 和 valgrind / ASan / eBPF / VTune 的分工 · 本文覆盖范围与阅读顺序</p>
+    </div>
+  </div>
+
+  <p class="lead">先把最容易混淆的一点说清楚：<strong>perf 不是"一个测速工具"，而是 Linux 内核 <code>perf_event</code> 子系统的官方前端</strong>。内核负责采集，perf 负责下发配置、收数据、符号化、出报告。理解这条分界线，后面所有"为什么它能做 X 却做不了 Y"的问题都会自然有答案。</p>
+
+  <h3 id="s1-1">1.1 一句话定位</h3>
+
+  <div class="def"><span class="term">perf</span>基于<strong>硬件性能计数器（PMU）+ 内核事件</strong>的<strong>采样式</strong>剖析器。它不改你的二进制、不重启你的进程，用统计抽样的方式回答"CPU 时间花在哪、为什么慢"。</div>
+
+  <div class="analogy">
+    <span class="at">🎬 生活类比 · 人口普查 vs 抽样调查</span>
+    Valgrind / Callgrind 像<strong>全员普查</strong>：每条指令都过一遍，数据绝对完整，但整个城市停摆（慢 10-30 倍）。<br>
+    perf 像<strong>抽样调查</strong>：每秒随机拦下 99 个人问"你现在在干什么"，跑 30 秒就有 3000 个样本。它永远说不出"第 12345 次调用发生了什么"，但能非常准确地告诉你"<u>70% 的人都堵在同一个路口</u>"。<br>
+    性能优化要的恰好是后者——你要找的是<strong>热点分布</strong>，不是完整流水账。
+  </div>
+
+  <h3 id="s1-2">1.2 和 valgrind / ASan / eBPF / VTune 的分工</h3>
+
+  <p>这几个工具经常被摆在一起比较，但它们的坐标其实差得很远。横轴是<strong>观测层次</strong>（只看自己进程 → 看整个内核），纵轴是<strong>运行时开销</strong>（决定了能不能上生产）：</p>
+
+  <div class="svg-wrap">
+    <svg viewBox="0 0 720 400" role="img" aria-label="性能工具定位图：开销与观测层次两个维度">
+      <!-- 坐标轴 -->
+      <line x1="70" y1="340" x2="690" y2="340" stroke="var(--border-2)" stroke-width="1.5"/>
+      <line x1="70" y1="340" x2="70" y2="30" stroke="var(--border-2)" stroke-width="1.5"/>
+      <text x="380" y="374" text-anchor="middle" fill="var(--text-mute)" font-size="12">观测层次 →　单进程用户态　···　整机 + 内核态</text>
+      <text x="26" y="185" text-anchor="middle" fill="var(--text-mute)" font-size="12" transform="rotate(-90 26 185)">运行时开销 →　可上生产　···　只能开发期</text>
+
+      <!-- 生产可用分界线 -->
+      <line x1="70" y1="150" x2="690" y2="150" stroke="var(--danger)" stroke-width="1.2" stroke-dasharray="6 5" opacity="0.65"/>
+      <text x="684" y="143" text-anchor="end" fill="var(--danger)" font-size="11">↑ 这条线以上，别想上生产</text>
+
+      <!-- 工具点 -->
+      <g font-size="12.5" font-weight="600">
+        <circle cx="180" cy="70" r="9" fill="var(--danger)"/>
+        <text x="198" y="68" fill="var(--text)">Valgrind / Callgrind</text>
+        <text x="198" y="84" fill="var(--text-mute)" font-size="11" font-weight="400">动态二进制翻译 · 10-30× · 指令级完整</text>
+
+        <circle cx="205" cy="118" r="9" fill="var(--warn)"/>
+        <text x="223" y="116" fill="var(--text)">ASan / TSan</text>
+        <text x="223" y="132" fill="var(--text-mute)" font-size="11" font-weight="400">编译期插桩 · 2-15× · 查正确性不是查性能</text>
+
+        <circle cx="250" cy="215" r="9" fill="var(--accent-2)"/>
+        <text x="268" y="213" fill="var(--text)">Intel VTune</text>
+        <text x="268" y="229" fill="var(--text-mute)" font-size="11" font-weight="400">也走 PMU · 图形界面 + 微架构模型更细 · 需装 driver</text>
+
+        <circle cx="360" cy="290" r="11" fill="var(--accent)"/>
+        <text x="380" y="288" fill="var(--accent)" font-size="14">perf</text>
+        <text x="380" y="304" fill="var(--text-mute)" font-size="11" font-weight="400">PMU 采样 · &lt; 1% · 用户态 + 内核态一起看 · 零依赖</text>
+
+        <circle cx="580" cy="255" r="9" fill="var(--accent-3)"/>
+        <text x="598" y="253" text-anchor="end" fill="var(--text)" font-size="12.5">eBPF / bpftrace</text>
+        <text x="598" y="269" text-anchor="end" fill="var(--text-mute)" font-size="11" font-weight="400">可编程聚合 · 自定义过滤</text>
+      </g>
+    </svg>
+    <div class="svg-caption">图 1.1 · perf 占据的是"低开销 + 覆盖内核"这个象限，这正是生产环境唯一能站的位置。</div>
+  </div>
+
+  <table>
+    <tr><th>工具</th><th>核心机制</th><th>擅长回答</th><th>不擅长</th></tr>
+    <tr><td><b>perf</b></td><td>PMU 计数 / 中断采样</td><td>"CPU 时间在哪、微架构瓶颈是什么"</td><td>"第 N 次调用为什么错"、精确调用次数</td></tr>
+    <tr><td><a href="./valgrind_guide.html">Valgrind</a></td><td>动态二进制翻译</td><td>"指令级完整计数、可重现 cache 模拟"</td><td>生产、长跑、墙钟时间</td></tr>
+    <tr><td><a href="./sanitizers_guide.html">Sanitizers</a></td><td>编译期插桩</td><td>"有没有内存 / 并发 <em>正确性</em> bug"</td><td>性能剖析（它本身就慢）</td></tr>
+    <tr><td><a href="../system/observability_ebpf.html">eBPF / bpftrace</a></td><td>内核可编程探针</td><td>"自定义条件下的延迟分布、跨进程因果"</td><td>微架构指标（PMU 那套还是 perf 更顺）</td></tr>
+    <tr><td>VTune</td><td>PMU + 自家模型</td><td>"inner loop 的端口占用、内存带宽建模"</td><td>轻量、免装、脚本化流水线</td></tr>
+  </table>
+
+  <div class="box tip">
+    perf 与 eBPF <strong>不是替代关系</strong>：perf 强在"标准化的 PMU 指标 + 采样剖析"，eBPF 强在"可编程的条件过滤与聚合"。实际排查里常常是 <code>perf top</code> 先定位方向，再用 bpftrace 精确验证假设。
+  </div>
+
+  <h3 id="s1-3">1.3 本文覆盖范围与阅读顺序</h3>
+
+  <p>本页是 <strong>perf 本身</strong>的系统性梳理——原理、子命令谱系、事件模型、栈回溯、符号化、生产实践。它和已有的两篇有明确分工，别重复读：</p>
+
+  <div class="grid cols-3">
+    <div class="panel accent">
+      <h4>本页 · perf 全景</h4>
+      <p><strong>工具视角</strong>。perf 自己怎么工作、有哪些能力边界、在生产上怎么用不踩坑。</p>
+    </div>
+    <div class="panel green">
+      <h4><a href="./performance_guide.html">性能优化方法论</a></h4>
+      <p><strong>优化视角</strong>。cache / 分支 / 数据布局 / 编译器优化怎么做，perf 只是其中的测量环节。</p>
+    </div>
+    <div class="panel purple">
+      <h4><a href="../system/observability_ebpf.html">系统观测 / eBPF</a></h4>
+      <p><strong>生产观测视角</strong>。跨进程、内核态、实时诊断，perf 是其中最轻的那把。</p>
+    </div>
+  </div>
+
+  <div class="note">
+    只想马上用起来？跳到 <a href="#s4-3">§4.3 症状 → 子命令决策树</a> 和 <a href="#s16-1">§16.1 一页速查</a>。想搞懂"为什么我的栈全是问号"，直接看 <a href="#ch8">第 8 章</a> 和 <a href="#ch9">第 9 章</a>——这是 perf 使用者踩坑最集中的地方。
+  </div>
+</section>
+
+<!-- ============= CH2 ============= -->
+<section class="chapter" id="ch2">
+  <div class="ch-head">
+    <div class="num">02</div>
+    <div class="t">
+      <h2>采样原理 · PMU 与 perf_event_open</h2>
+      <p class="sub">计数模式 vs 采样模式 · 一次采样中断到底发生了什么 · 四类事件源 · 为什么开销能压到 1% 以内</p>
+    </div>
+  </div>
+
+  <h3 id="s2-1">2.1 计数模式 vs 采样模式</h3>
+
+  <p>整个 perf 只有两种工作模式，所有子命令都是这两种的包装：</p>
+
+  <div class="grid cols-2">
+    <div class="card">
+      <h4>计数模式 (counting)</h4>
+      <p>让 PMU 从 0 开始<strong>纯累加</strong>，程序跑完读一次结果。产出的是"这段时间一共发生了 N 次"。</p>
+      <p><span class="pill cyan">代表</span> <code>perf stat</code></p>
+      <p><span class="pill green">特点</span>几乎零开销（就是几条寄存器读写）、数字精确、<u>但完全不知道发生在哪行代码</u>。</p>
+    </div>
+    <div class="card violet">
+      <h4>采样模式 (sampling)</h4>
+      <p>给计数器预设一个<strong>溢出阈值</strong>，每溢出一次就触发中断，内核趁机记下"当前指令地址 + 调用栈 + pid/tid/cpu/时间戳"。</p>
+      <p><span class="pill violet">代表</span> <code>perf record</code> / <code>perf top</code></p>
+      <p><span class="pill amber">特点</span>能定位到函数甚至指令，<u>但结果是统计意义上的</u>——样本太少就会失真。</p>
+    </div>
+  </div>
+
+  <div class="def"><span class="term">period / frequency</span>采样密度的两种表达。<code>-c 1000000</code> 是"每 100 万个事件采一次"（固定周期，period）；<code>-F 99</code> 是"每秒采 99 次"（固定频率，frequency，内核自动动态调整 period 去逼近这个频率）。<strong>日常用 <code>-F</code>，需要跨机器可比的绝对计数时才用 <code>-c</code>。</strong></div>
+
+  <h3 id="s2-2">2.2 一次采样中断到底发生了什么</h3>
+
+  <div class="svg-wrap">
+    <svg viewBox="0 0 760 330" role="img" aria-label="perf 采样链路：PMU 溢出到 perf.data">
+      <defs>
+        <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+          <path d="M0,0 L10,5 L0,10 z" fill="var(--accent)"/>
+        </marker>
+      </defs>
+
+      <!-- 硬件层 -->
+      <rect x="20" y="24" width="200" height="86" rx="10" fill="var(--bg-card)" stroke="var(--accent)" stroke-width="1.4"/>
+      <text x="120" y="48" text-anchor="middle" fill="var(--accent)" font-size="12.5" font-weight="700">① PMU 计数器</text>
+      <text x="120" y="70" text-anchor="middle" fill="var(--text-dim)" font-size="11">预置 -period，每个 cycles</text>
+      <text x="120" y="87" text-anchor="middle" fill="var(--text-dim)" font-size="11">事件 +1，归零即溢出</text>
+      <text x="120" y="103" text-anchor="middle" fill="var(--text-mute)" font-size="10">CPU 硬件 · 零软件开销</text>
+
+      <!-- 中断 -->
+      <rect x="280" y="24" width="200" height="86" rx="10" fill="var(--bg-card)" stroke="var(--accent-2)" stroke-width="1.4"/>
+      <text x="380" y="48" text-anchor="middle" fill="var(--accent-2)" font-size="12.5" font-weight="700">② NMI / PMI 中断</text>
+      <text x="380" y="70" text-anchor="middle" fill="var(--text-dim)" font-size="11">打断当前执行，进入内核</text>
+      <text x="380" y="87" text-anchor="middle" fill="var(--text-dim)" font-size="11">perf_event 的 overflow handler</text>
+      <text x="380" y="103" text-anchor="middle" fill="var(--text-mute)" font-size="10">内核态 · 几微秒</text>
+
+      <!-- 记录 -->
+      <rect x="540" y="24" width="200" height="86" rx="10" fill="var(--bg-card)" stroke="var(--accent-3)" stroke-width="1.4"/>
+      <text x="640" y="48" text-anchor="middle" fill="var(--accent-3)" font-size="12.5" font-weight="700">③ 组装一条 sample</text>
+      <text x="640" y="70" text-anchor="middle" fill="var(--text-dim)" font-size="11">IP · pid/tid · cpu · time</text>
+      <text x="640" y="87" text-anchor="middle" fill="var(--text-dim)" font-size="11">callchain（按 -g 方式回溯）</text>
+      <text x="640" y="103" text-anchor="middle" fill="var(--text-mute)" font-size="10">这一步决定了栈准不准</text>
+
+      <!-- ring buffer -->
+      <rect x="200" y="160" width="360" height="72" rx="10" fill="var(--bg-card-2)" stroke="var(--border-2)" stroke-width="1.4"/>
+      <text x="380" y="185" text-anchor="middle" fill="var(--text)" font-size="12.5" font-weight="700">④ per-CPU mmap ring buffer</text>
+      <text x="380" y="206" text-anchor="middle" fill="var(--text-dim)" font-size="11">内核写、用户态 perf 进程读，无 syscall 拷贝</text>
+      <text x="380" y="223" text-anchor="middle" fill="var(--text-mute)" font-size="10">缓冲写满且来不及消费 → LOST 事件（报告里会提示）</text>
+
+      <!-- 落盘 -->
+      <rect x="240" y="262" width="280" height="52" rx="10" fill="var(--bg-card)" stroke="var(--accent)" stroke-width="1.4"/>
+      <text x="380" y="284" text-anchor="middle" fill="var(--accent)" font-size="12.5" font-weight="700">⑤ perf.data</text>
+      <text x="380" y="302" text-anchor="middle" fill="var(--text-dim)" font-size="11">裸地址 + mmap 映射记录 + build-id，事后才符号化</text>
+
+      <g stroke="var(--accent)" stroke-width="1.6" fill="none" marker-end="url(#ar)">
+        <path d="M220,67 L276,67"/>
+        <path d="M480,67 L536,67"/>
+        <path d="M640,112 L640,140 L562,140 L562,160"/>
+        <path d="M380,234 L380,258"/>
+      </g>
+    </svg>
+    <div class="svg-caption">图 2.1 · 采样链路五步。注意第 ⑤ 步：<strong>perf.data 里存的是裸地址</strong>，符号化发生在 <code>perf report</code> 阶段——这就是第 9 章所有符号问题的根源。</div>
+  </div>
+
+  <div class="box star">
+    面试常问"perf 会不会漏样本"。会。两处会漏：① <strong>ring buffer 打满</strong>（提高 <code>-m</code> 缓冲页数、降低频率）；② <strong>内核限流</strong>——单次采样处理超时，内核会打印 <em>"perf interrupt took too long, lowering kernel.perf_event_max_sample_rate"</em> 并主动降频，这时你的 <code>-F 4000</code> 已经悄悄不生效了。
+  </div>
+
+  <h3 id="s2-3">2.3 四类事件源</h3>
+
+  <table>
+    <tr><th>类别</th><th>由谁提供</th><th>例子</th><th>关键约束</th></tr>
+    <tr><td><b>Hardware event</b></td><td>CPU 的 PMU</td><td><code>cycles</code> <code>instructions</code> <code>branch-misses</code> <code>cache-misses</code></td><td>计数器个数有限；虚拟机里常不可用</td></tr>
+    <tr><td><b>Software event</b></td><td>内核自己的计数器</td><td><code>cpu-clock</code> <code>task-clock</code> <code>page-faults</code> <code>context-switches</code></td><td>永远可用，<u>没 PMU 时的兜底</u></td></tr>
+    <tr><td><b>Tracepoint</b></td><td>内核里的静态埋点</td><td><code>sched:sched_switch</code> <code>syscalls:sys_enter_write</code></td><td>数量巨大但位置固定，改不了</td></tr>
+    <tr><td><b>Dynamic probe</b></td><td>kprobe / uprobe</td><td><code>perf probe</code> 现场加的探针</td><td>灵活；取变量值要 debuginfo</td></tr>
+  </table>
+
+  <div class="box tip">
+    <strong>没 PMU 也能干活</strong>：云上虚拟机常常拿不到 <code>cycles</code>，但 <code>cpu-clock</code> 这个 software event 一定有。<code>perf record -e cpu-clock -F 99 -g</code> 依然能出一张可用的 on-CPU 火焰图，只是没法看 IPC / cache miss。这是很多人在 EC2 上"perf 完全用不了"的误判来源。
+  </div>
+
+  <h3 id="s2-4">2.4 为什么开销能压到 1% 以内</h3>
+
+  <div class="rd"><div class="n">计数免费</div><div>PMU 累加是<strong>硬件行为</strong>，程序照原速跑，不插一条指令。这一点是它和 Valgrind / ASan 的根本区别。</div></div>
+  <div class="rd"><div class="n">中断稀疏</div><div><code>-F 99</code> 意味着每核每秒只被打断 99 次。单次中断处理约几微秒，算下来 CPU 占用在千分之几量级。</div></div>
+  <div class="rd"><div class="n">无 syscall</div><div>样本经 <strong>mmap 共享的 ring buffer</strong> 交给用户态，不走 read/write，避免了每样本一次系统调用。</div></div>
+  <div class="rd warn"><div class="n">但会变贵</div><div>开销主要来自<strong>你自己的选择</strong>：<code>--call-graph dwarf</code> 每个样本都要拷贝几 KB 栈内存（数据量能涨 10-50 倍）；<code>-F 10000</code> 把中断频率抬两个数量级；订阅高频 tracepoint（如 <code>sched:*</code>）在忙机器上每秒几十万条。<u>"perf 很轻"是默认配置下的结论，不是无条件的。</u></div></div>
+</section>
+
+<!-- ============= CH3 ============= -->
+<section class="chapter" id="ch3">
+  <div class="ch-head">
+    <div class="num">03</div>
+    <div class="t">
+      <h2>权限模型 · 容器与生产环境</h2>
+      <p class="sub">perf_event_paranoid 四档语义 · CAP_PERFMON · 容器 / K8s 里怎么跑 · 虚拟机里 PMU 常常根本不存在</p>
+    </div>
+  </div>
+
+  <p class="lead">"在自己机器上好使，上了生产 / 容器就报 <code>Permission denied</code>" —— 这是 perf 第一大门槛。它不是配置繁琐，而是<strong>性能计数器天然是侧信道</strong>：能观测别的进程执行细节，等于能推断它的秘密。所以内核默认收得很紧。</p>
+
+  <h3 id="s3-1">3.1 perf_event_paranoid 四档语义</h3>
+
+  <pre>$ cat /proc/sys/kernel/perf_event_paranoid
+2</pre>
+
+  <table>
+    <tr><th>值</th><th>非特权用户能做什么</th><th>典型场景</th></tr>
+    <tr><td><code>-1</code></td><td>几乎全放开，含 raw tracepoint</td><td>专用性能实验机；<span class="cell-bad">生产别这么设</span></td></tr>
+    <tr><td><code>0</code></td><td>可做系统级（<code>-a</code>）采集，禁 raw tracepoint</td><td>需要整机火焰图的性能环境</td></tr>
+    <tr><td><code>1</code></td><td>禁系统级 / per-cpu 采集，自己的进程可以</td><td>共享开发机</td></tr>
+    <tr><td><code>2</code></td><td>再禁内核态采样，只剩用户态</td><td><strong>多数发行版默认</strong></td></tr>
+    <tr><td><code>3</code>+</td><td>非特权用户彻底禁用（Debian/Ubuntu 的额外补丁档）</td><td>加固过的系统</td></tr>
+  </table>
+
+  <div class="box danger">
+    <code>paranoid=2</code> 下你依然能剖析自己的进程，只是<strong>栈会在进入内核的地方断掉</strong>——火焰图底部一大片 <code>[unknown]</code>，看起来像"符号有问题"，其实是权限问题。想看到 <code>__do_sys_write → ext4_file_write_iter</code> 这类内核帧，至少要 <code>paranoid ≤ 1</code>，并且 <code>kptr_restrict=0</code>（见 <a href="#s9-1">§9.1</a>）。
+  </div>
+
+  <h3 id="s3-2">3.2 CAP_PERFMON —— 别再给 root</h3>
+
+  <p>Linux 5.8 之前，"让 CI 里的采集脚本能跑 perf"通常靠 <code>sudo</code> 或 <code>CAP_SYS_ADMIN</code>——而 <code>CAP_SYS_ADMIN</code> 几乎等于 root，为了看个火焰图付出的代价太大。5.8 引入了细粒度的 <strong><code>CAP_PERFMON</code></strong>：</p>
+
+<pre><span class="cm"># 只给 perf 观测能力，不给挂载 / 改内核参数等一揽子权限</span>
+$ sudo setcap cap_perfmon,cap_sys_ptrace,cap_syslog=ep $(which perf)
+
+<span class="cm"># 或者在容器 / systemd 单元里声明</span>
+securityContext:
+  capabilities:
+    add: [<span class="str">"PERFMON"</span>]</pre>
+
+  <div class="rd"><div class="n">CAP_PERFMON</div><div>访问 perf_event 子系统。</div></div>
+  <div class="rd"><div class="n">CAP_SYS_PTRACE</div><div>读目标进程的 <code>/proc/&lt;pid&gt;/maps</code> 与内存，符号化和 DWARF 回溯需要。</div></div>
+  <div class="rd"><div class="n">CAP_SYSLOG</div><div>读 <code>/proc/kallsyms</code> 里的内核符号地址（受 <code>kptr_restrict</code> 影响）。</div></div>
+
+  <h3 id="s3-3">3.3 容器 / K8s 里怎么跑</h3>
+
+  <p>容器里的 perf 有三个独立的坑，必须分开解决：</p>
+
+  <div class="rd bad"><div class="n">① 权限</div><div><code>perf_event_paranoid</code> 是<strong>宿主机内核的全局参数</strong>，容器内改不了（<code>/proc/sys</code> 只读）。要么调宿主机，要么给 Pod 加 <code>CAP_PERFMON</code>（老内核只能 <code>privileged</code>）。</div></div>
+  <div class="rd bad"><div class="n">② PID 视角</div><div>在宿主机上 <code>perf record -p &lt;宿主 pid&gt;</code> 采到的样本，地址属于容器里的二进制。<strong>最省事的做法是在宿主机采集、在宿主机符号化</strong>，通过 <code>--symfs</code> 指到容器 rootfs（见 <a href="#s9-4">§9.4</a>）；在容器内采集则需要 <code>hostPID: true</code> 才能看到别的进程。</div></div>
+  <div class="rd bad"><div class="n">③ 符号</div><div>生产镜像通常 strip 过。要么构建时把 <code>.debug</code> 单独产物存进符号服务器（配 debuginfod），要么保留 build-id 后期匹配。<u>先把这件事做好，再谈采集</u>——否则你会拿到一堆地址。</div></div>
+
+  <h3 id="s3-4">3.4 虚拟机里 PMU 常常根本不存在</h3>
+
+  <p>这一点在云上排查时极容易误判。虚拟化环境是否暴露 PMU 取决于 hypervisor 配置，很多实例类型直接不给：</p>
+
+<pre>$ perf stat -e cycles,instructions ./bench
+
+ Performance counter stats for './bench':
+
+   &lt;not supported&gt;      cycles
+   &lt;not supported&gt;      instructions</pre>
+
+  <div class="box tip">
+    看到 <code>&lt;not supported&gt;</code> 先别怀疑自己：① 换 software event（<code>cpu-clock</code> / <code>task-clock</code>）继续做<strong>时间分布</strong>剖析；② 需要真实微架构指标时，换 <strong>裸金属实例</strong>或开了 vPMU 的实例类型；③ KVM 宿主机可以给 guest 开 <code>-cpu host,pmu=on</code>。<u>不要把云上测出的 IPC / cache-miss 当作可信基准。</u>
+  </div>
+</section>
+
+<!-- ============= CH4 ============= -->
+<section class="chapter" id="ch4">
+  <div class="ch-head">
+    <div class="num">04</div>
+    <div class="t">
+      <h2>子命令全景 · 16 个里先学 6 个</h2>
+      <p class="sub">按用途分四组 · 全子命令速查表 · 症状 → 子命令决策树</p>
+    </div>
+  </div>
+
+  <p class="lead"><code>perf --help</code> 列出二十来个子命令，容易让人以为要全学。实际上 <strong>6 个覆盖 95% 的日常</strong>：<code>stat</code> <code>top</code> <code>record</code> <code>report</code> <code>script</code> <code>list</code>。其余的是专项工具，遇到对应症状再翻。</p>
+
+  <h3 id="s4-1">4.1 按用途分四组</h3>
+
+  <div class="grid cols-2">
+    <div class="sc"><span class="tag">日常</span><h4>perf stat</h4><p>计数模式。回答"整体健康吗、瓶颈是哪一类"。第一条该跑的命令。</p></div>
+    <div class="sc"><span class="tag">日常</span><h4>perf top</h4><p>实时热点榜。像 <code>top</code> 但精确到函数。适合"现在就在冒烟"的现场。</p></div>
+    <div class="sc"><span class="tag">日常</span><h4>perf record / report</h4><p>离线采样 + 分析。深度剖析的主力，产出 <code>perf.data</code>。</p></div>
+    <div class="sc"><span class="tag">日常</span><h4>perf script</h4><p>把 <code>perf.data</code> 摊成文本，是接火焰图 / pprof / 自定义脚本的<strong>唯一出口</strong>。</p></div>
+    <div class="sc"><span class="tag">日常</span><h4>perf list</h4><p>列出这台机器实际支持的事件名。换机器、换架构第一件事。</p></div>
+    <div class="sc"><span class="tag">日常</span><h4>perf annotate</h4><p>下钻到汇编，看热点函数里具体哪几条指令在烧钱。</p></div>
+
+    <div class="sc"><span class="tag">访存</span><h4>perf mem</h4><p>每次 load / store 命中了哪一级（L1/L2/L3/DRAM/远端 NUMA）、延迟多少。</p></div>
+    <div class="sc"><span class="tag">访存</span><h4>perf c2c</h4><p>Cache-to-Cache。找假共享：哪条 cache line 在核间被反复抢。</p></div>
+
+    <div class="sc"><span class="tag">并发</span><h4>perf lock</h4><p>锁竞争统计。新内核的 <code>perf lock contention</code> 走 BPF，开销低得多。</p></div>
+    <div class="sc"><span class="tag">并发</span><h4>perf sched</h4><p>调度延迟：线程从"可运行"到"真的跑起来"等了多久。</p></div>
+
+    <div class="sc"><span class="tag">探针</span><h4>perf probe</h4><p>现场给内核 / 用户函数加 kprobe / uprobe，不用改代码不用重编。</p></div>
+    <div class="sc"><span class="tag">探针</span><h4>perf trace</h4><p>strace 的低开销版本，走 tracepoint 而不是 ptrace。</p></div>
+
+    <div class="sc"><span class="tag">辅助</span><h4>perf diff</h4><p>两份 <code>perf.data</code> 对比，直接看优化前后哪个函数涨了 / 降了。</p></div>
+    <div class="sc"><span class="tag">辅助</span><h4>perf inject</h4><p>往数据流里补信息，最常用是 <code>--jit</code> 处理 JIT 符号。</p></div>
+    <div class="sc"><span class="tag">辅助</span><h4>perf buildid-cache</h4><p>管理 build-id ↔ 二进制/调试信息的本地缓存，跨机分析的关键。</p></div>
+    <div class="sc"><span class="tag">辅助</span><h4>perf bench</h4><p>内置微基准（内存带宽、调度、futex 等），拿来快速摸清一台新机器的底。</p></div>
+  </div>
+
+  <h3 id="s4-2">4.2 全子命令速查表</h3>
+
+  <table>
+    <tr><th>子命令</th><th>一句话</th><th>最常用形态</th></tr>
+    <tr><td><code>stat</code></td><td>整体计数器</td><td><code>perf stat -d ./prog</code></td></tr>
+    <tr><td><code>top</code></td><td>实时热点</td><td><code>perf top -p &lt;pid&gt;</code></td></tr>
+    <tr><td><code>record</code></td><td>采样落盘</td><td><code>perf record -F 99 -g -p &lt;pid&gt; -- sleep 30</code></td></tr>
+    <tr><td><code>report</code></td><td>读采样结果</td><td><code>perf report --stdio -g graph,0.5,caller</code></td></tr>
+    <tr><td><code>script</code></td><td>导出文本</td><td><code>perf script &gt; out.perf</code></td></tr>
+    <tr><td><code>annotate</code></td><td>指令级归因</td><td><code>perf annotate -s hot_func</code></td></tr>
+    <tr><td><code>list</code></td><td>查可用事件</td><td><code>perf list cache</code></td></tr>
+    <tr><td><code>mem</code></td><td>访存来源与延迟</td><td><code>perf mem record ./prog; perf mem report</code></td></tr>
+    <tr><td><code>c2c</code></td><td>假共享</td><td><code>perf c2c record -a -- sleep 10; perf c2c report</code></td></tr>
+    <tr><td><code>lock</code></td><td>锁竞争</td><td><code>perf lock contention -a -- sleep 10</code></td></tr>
+    <tr><td><code>sched</code></td><td>调度延迟</td><td><code>perf sched record -- sleep 5; perf sched latency</code></td></tr>
+    <tr><td><code>probe</code></td><td>动态探针</td><td><code>perf probe --add tcp_sendmsg</code></td></tr>
+    <tr><td><code>trace</code></td><td>syscall 观测</td><td><code>perf trace -p &lt;pid&gt;</code></td></tr>
+    <tr><td><code>diff</code></td><td>两份数据对比</td><td><code>perf diff old.data new.data</code></td></tr>
+    <tr><td><code>inject</code></td><td>补充符号信息</td><td><code>perf inject --jit -i perf.data -o jit.data</code></td></tr>
+    <tr><td><code>buildid-cache</code></td><td>符号缓存</td><td><code>perf buildid-cache -a ./myapp</code></td></tr>
+    <tr><td><code>bench</code></td><td>内置基准</td><td><code>perf bench mem memcpy</code></td></tr>
+  </table>
+
+  <h3 id="s4-3">4.3 症状 → 子命令决策树</h3>
+
+  <div class="flow-row"><div class="step">CPU 高</div><div class="arrow">→</div><div class="desc"><code>perf top -p PID</code> 看谁在烧 → <code>perf record -g</code> + 火焰图定因果 → <code>perf annotate</code> 下钻到指令</div></div>
+  <div class="flow-row"><div class="step">CPU 不高<br>但很慢</div><div class="arrow">→</div><div class="desc">说明卡在 off-CPU。<code>perf sched latency</code> 看调度等待；<code>perf trace</code> 看是不是堵在 syscall；<code>perf lock contention</code> 看锁</div></div>
+  <div class="flow-row"><div class="step">IPC 低</div><div class="arrow">→</div><div class="desc"><code>perf stat --topdown</code> 分四象限 → 前端受限查 icache/分支，后端受限查 <code>perf mem</code></div></div>
+  <div class="flow-row"><div class="step">多核不扩展</div><div class="arrow">→</div><div class="desc"><code>perf c2c record/report</code> 找被争抢的 cache line → <code>alignas(64)</code> 或改 per-thread 累加</div></div>
+  <div class="flow-row"><div class="step">新版本变慢</div><div class="arrow">→</div><div class="desc">两个版本各 <code>perf record</code>，然后 <code>perf diff</code>；或做<a href="#s11-4">差分火焰图</a></div></div>
+  <div class="flow-row"><div class="step">延迟毛刺</div><div class="arrow">→</div><div class="desc"><code>perf record -e sched:*</code> 或 <code>perf sched timehist</code> 做时序对齐；毛刺类问题优先考虑 <a href="../system/observability_ebpf.html">bpftrace 自定义直方图</a></div></div>
+</section>
+
+<!-- ============= CH5 ============= -->
+<section class="chapter" id="ch5">
+  <div class="ch-head">
+    <div class="num">05</div>
+    <div class="t">
+      <h2>事件命名 · perf list 与计数器复用</h2>
+      <p class="sub">三层事件名 · 跨平台差异 · 计数器复用与缩放外推 · 读懂 &lt;not counted&gt; 与 &lt;not supported&gt;</p>
+    </div>
+  </div>
+
+  <h3 id="s5-1">5.1 三层事件名：通用 / 原生 / raw</h3>
+
+  <table>
+    <tr><th>层级</th><th>写法</th><th>可移植性</th><th>什么时候用</th></tr>
+    <tr><td><b>通用事件</b>（generalized）</td><td><code>cycles</code> <code>instructions</code> <code>cache-misses</code></td><td class="cell-ok">高，跨架构可用</td><td>默认首选</td></tr>
+    <tr><td><b>原生事件</b>（native / PMU）</td><td><code>MEM_LOAD_RETIRED.L3_MISS</code>、<code>l2d_cache_refill</code></td><td class="cell-mid">绑定具体微架构</td><td>通用事件太粗，要精确语义</td></tr>
+    <tr><td><b>raw 事件</b></td><td><code>r04c5</code>、<code>cpu/event=0xc5,umask=0x0/</code></td><td class="cell-bad">绑定到具体型号</td><td>手册里有、perf 还没收录的事件</td></tr>
+  </table>
+
+  <div class="box danger">
+    <strong><code>cache-misses</code> 是最容易被误解的事件名。</strong>它在多数 Intel 微架构上映射到 <em>LLC（末级缓存）miss</em>，不是"所有层级的 cache miss"。想区分 L1 / L2 / LLC 必须用 <code>L1-dcache-load-misses</code>、<code>LLC-load-misses</code> 这类更明确的名字，或者直接上原生事件。<u>看到"cache-miss 率 3%，很健康"这种结论，先问一句：哪一级？</u>
+  </div>
+
+  <h3 id="s5-2">5.2 跨平台：x86 与 ARM 的事件名不通用</h3>
+
+  <p>换到 ARM 服务器（Graviton / 鲲鹏 / Ampere）上，<code>perf</code> 命令行完全一样，但一旦用了原生事件就全部失效：</p>
+
+  <table>
+    <tr><th>想测</th><th>x86 (Intel)</th><th>ARM (aarch64)</th></tr>
+    <tr><td>LLC 读 miss</td><td><code>LLC-load-misses</code> / <code>MEM_LOAD_RETIRED.L3_MISS</code></td><td><code>ll_cache_miss_rd</code> / <code>l2d_cache_refill</code>（随核型号变）</td></tr>
+    <tr><td>精确访存采样</td><td>PEBS（<code>:pp</code> 修饰符）</td><td>ARM SPE：<code>perf record -e arm_spe//</code></td></tr>
+    <tr><td>分支栈</td><td>LBR（<code>-b</code> / <code>--call-graph lbr</code>）</td><td>BRBE（较新核）或退化到 FP/DWARF</td></tr>
+  </table>
+
+  <div class="box tip">
+    换机器第一条命令永远是 <code>perf list</code>（配合 <code>perf list cache</code> / <code>perf list pmu</code> 过滤）。ARM 的 PMU <strong>可编程计数器通常只有 6 个</strong>（x86 常见 4 通用 + 3 固定），一次订阅太多事件更容易触发复用。ARM 平台的更多差异见 <a href="../communication/arm_platform_comm.html">ARM 平台通信实战</a>。
+  </div>
+
+  <h3 id="s5-3">5.3 计数器复用 (multiplexing) 与缩放外推</h3>
+
+  <div class="def"><span class="term">multiplexing</span>当你订阅的事件数超过物理计数器数量时，内核会<strong>轮流</strong>把它们调度到计数器上，每个事件只在部分时间被真实统计，最后按"实际启用时间占比"<strong>线性外推</strong>成完整值。</div>
+
+<pre>$ perf stat -e cycles,instructions,cache-references,cache-misses,\
+branches,branch-misses,L1-dcache-loads,L1-dcache-load-misses ./bench
+
+     3,214,556,102      cycles                    <span class="cm"># (74.85%)  ← 只统计了 74.85% 的时间</span>
+     5,102,338,914      instructions              <span class="cm"># (74.91%)</span>
+       182,441,203      cache-references          <span class="cm"># (62.13%)</span>
+        21,338,772      cache-misses              <span class="cm"># (49.77%)  ← 外推自不到一半的样本</span></pre>
+
+  <div class="rd warn"><div class="n">怎么识别</div><div>输出行尾出现 <code>(xx.xx%)</code> 就是发生了复用。<strong>百分比越低，数字越不可信</strong>；低于 50% 时基本只能看数量级。</div></div>
+  <div class="rd"><div class="n">怎么规避</div><div>① 拆成多次跑，每次只订阅 2-4 个事件；② 用 <code>-M</code> 指定官方 metric group，perf 会自动挑能同时上的组合；③ 需要严格同时性时，用 <code>{}</code> 声明事件组：<code>-e '{cycles,instructions}'</code>，保证组内事件始终一起被调度。</div></div>
+  <div class="rd bad"><div class="n">最坑的表现</div><div>外推会产生<strong>非整数或明显不合理的派生指标</strong>——比如 branch-misses 比 branches 还多、IPC 算出来 12。<u>看到荒谬的比率，先怀疑复用，而不是怀疑 CPU。</u></div></div>
+
+  <h3 id="s5-4">5.4 读懂 &lt;not counted&gt; 与 &lt;not supported&gt;</h3>
+
+  <div class="rd bad"><div class="n">not supported</div><div>这台机器/这个 PMU <strong>压根没有这个事件</strong>。常见于虚拟机（没暴露 PMU）、或把 x86 原生事件名搬到了 ARM 上。</div></div>
+  <div class="rd warn"><div class="n">not counted</div><div>事件存在，但<strong>整个测量期间一次都没被调度到计数器上</strong>（复用调度的极端情况），或者程序跑得太短。加长运行时间、减少订阅事件数。</div></div>
+</section>
+
+<!-- ============= CH6 ============= -->
+<section class="chapter" id="ch6">
+  <div class="ch-head">
+    <div class="num">06</div>
+    <div class="t">
+      <h2>perf stat 判读 · 从数字到结论</h2>
+      <p class="sub">默认输出逐行拆解 · 常用开关 · 三条健康线与它们的例外 · 别把比率当结论</p>
+    </div>
+  </div>
+
+  <h3 id="s6-1">6.1 默认输出逐行拆解</h3>
+
+<pre>$ perf stat ./bench
+
+ Performance counter stats for './bench':
+
+          1,842.55 msec task-clock       #    0.998 CPUs utilized
+                12      context-switches #    6.512 /sec
+                 0      cpu-migrations   #    0.000 /sec
+            18,204      page-faults      #    9.879 K/sec
+     6,231,882,104      cycles           #    3.382 GHz
+     9,884,120,377      instructions     #    1.59  insn per cycle
+     1,712,004,551      branches         #  929.155 M/sec
+        18,432,109      branch-misses    #    1.08% of all branches
+
+       1.845821194 seconds time elapsed
+       1.798412000 seconds user
+       0.044019000 seconds sys</pre>
+
+  <div class="rd"><div class="n">task-clock</div><div>进程实际占用的 CPU 时间。右边的 <code>CPUs utilized</code> ≈ task-clock / elapsed，<strong>是判断"单线程还是并行、有没有在等"的第一眼指标</strong>。0.998 = 基本纯 CPU 单线程；0.2 = 大部分时间在等（IO / 锁 / 睡眠）；3.6 = 用了约 3.6 个核。</div></div>
+  <div class="rd"><div class="n">cycles / GHz</div><div>算出的实际频率。<strong>明显低于标称频率</strong>说明有降频（散热、governor、AVX 频率墙），基准测试前必须先排除。</div></div>
+  <div class="rd"><div class="n">insn per cycle</div><div>IPC，本页最重要的单一数字。现代乱序核理论上限 4-6，实测 &gt; 2 算舒展，&lt; 1 说明流水线大量空转。</div></div>
+  <div class="rd"><div class="n">context-switches<br>cpu-migrations</div><div>切换多 → 线程数超配 / 锁竞争；迁移多 → 没绑核，cache 局部性被反复打掉。低延迟场景这两个要接近 0。</div></div>
+  <div class="rd"><div class="n">user vs sys</div><div>sys 占比高说明时间花在内核——syscall 太频、page fault 太多、网络栈开销大。这时该看的是 <code>perf trace</code> 而不是继续优化用户态算法。</div></div>
+
+  <h3 id="s6-2">6.2 常用开关：-d / -r / --per-core / -M</h3>
+
+<pre><span class="cm"># -d 加一组常用细节事件；-dd / -ddd 更细（注意会触发复用）</span>
+perf stat -d ./prog
+
+<span class="cm"># -r 10 跑 10 次，输出均值 ± 标准差 —— 微基准必用</span>
+perf stat -r <span class="num">10</span> ./bench
+
+<span class="cm"># 只测某段时间的整机情况</span>
+perf stat -a -- sleep <span class="num">10</span>
+
+<span class="cm"># 看负载在核间是否均衡 / 有没有单核打满</span>
+perf stat -a --per-core -e cycles,instructions -- sleep <span class="num">5</span>
+
+<span class="cm"># 用官方 metric group，让 perf 自己挑事件组合并算派生指标</span>
+perf stat -M IPC,L1MPKI --metric-only ./prog
+
+<span class="cm"># 只统计某个阶段：用信号或 --delay 跳过启动预热</span>
+perf stat --delay <span class="num">2000</span> -- ./prog</pre>
+
+  <div class="box star">
+    <code>perf stat -r 10</code> 输出的 <strong>标准差</strong>比均值更有价值。抖动 &gt; 5% 时任何"优化了 3%"的结论都是噪声。这是"优化被 review 打回"最常见的原因。
+  </div>
+
+  <h3 id="s6-3">6.3 三条健康线与它们的例外</h3>
+
+  <table>
+    <tr><th>指标</th><th>粗略健康线</th><th>不达标最可能的原因</th><th>例外 / 陷阱</th></tr>
+    <tr><td>IPC</td><td>&gt; 1.5</td><td>访存等待、分支误预测、依赖链过长</td><td><strong>spin-wait 的 IPC 极高但纯属浪费</strong>；SIMD 代码 IPC 低但吞吐很好</td></tr>
+    <tr><td>branch-miss 率</td><td>&lt; 1-2%</td><td>数据相关分支、虚函数分派、解释器循环</td><td>分支总数很小时百分比抖动大</td></tr>
+    <tr><td>LLC-miss 率</td><td>&lt; 5-10%</td><td>数据布局差、工作集超 LLC、指针追逐</td><td>流式处理（如 memcpy 大块）本来就该 miss，看的是<strong>带宽</strong>不是命中率</td></tr>
+  </table>
+
+  <div class="box danger">
+    <strong>IPC 高 ≠ 程序好。</strong>一个忙等自旋锁的循环 IPC 可以接近 4，但它一件有用的事都没干。同理，"优化后 IPC 从 0.8 涨到 2.0 但墙钟时间没变"是常见幻觉——你可能只是把工作换成了更廉价但更多的指令。<u>唯一的最终指标永远是墙钟时间 / 吞吐 / P99，微架构指标只用来解释"为什么"。</u>
+  </div>
+
+  <h3 id="s6-4">6.4 别把比率当结论</h3>
+
+  <p>比率的分母会骗人。同一段代码，你可以通过"多执行一些廉价指令"把 miss <em>率</em> 压下来，而 miss 的<strong>绝对次数</strong>一点没少。工业界更常用 <strong>MPKI</strong>（Misses Per Kilo-Instructions）来消掉这个歧义：</p>
+
+  <div class="def"><span class="term">MPKI</span><code>1000 × misses / instructions</code>。以"每千条指令 miss 多少次"衡量，不受"指令总数变化"干扰。经验尺度：L1D MPKI &gt; 30 或 LLC MPKI &gt; 5 就值得专门做数据布局优化（见 <a href="./memory_optimization_guide.html">内存优化指南</a>）。</div>
+</section>
+
+<!-- ============= CH7 ============= -->
+<section class="chapter" id="ch7">
+  <div class="ch-head">
+    <div class="num">07</div>
+    <div class="t">
+      <h2>Top-Down 微架构分析法</h2>
+      <p class="sub">为什么"cache-miss 率"不够用 · 四象限 · perf stat --topdown 与 toplev · 逐层下钻</p>
+    </div>
+  </div>
+
+  <h3 id="s7-1">7.1 为什么"cache-miss 率"不够用</h3>
+
+  <p class="lead">传统做法是盯着一堆孤立事件（cache-miss、branch-miss、TLB-miss……）逐个猜。问题是<strong>这些事件会互相掩盖</strong>：乱序执行可以把一次 L3 miss 藏在其他指令后面，此时 miss 数很高但根本不影响性能；反过来，一个不起眼的依赖链可能才是真正的瓶颈。</p>
+
+  <p>Intel 提出的 <strong>Top-Down Microarchitecture Analysis (TMA)</strong> 换了个思路：不数事件，而是<strong>做流水线槽位的会计</strong>。每个 cycle 的流水线有固定数量的 issue slot（比如 4 个），每个 slot 的命运只有四种可能，加起来必然是 100%。这就把"猜"变成了"分账"。</p>
+
+  <div class="analogy">
+    <span class="at">🎬 生活类比 · 餐厅上菜为什么慢</span>
+    你只统计"厨房出错次数"没法定位问题。Top-Down 的做法是盯着<strong>每一个上菜窗口位</strong>问它空着的原因：<br>
+    · 菜正常端走了 → <strong>Retiring</strong>（有效产出）<br>
+    · 端出去发现点错了、倒掉重做 → <strong>Bad Speculation</strong>（分支预测失败）<br>
+    · 窗口空着因为<u>服务员没来取</u> → <strong>Frontend Bound</strong>（取指 / 译码供不上）<br>
+    · 窗口空着因为<u>厨房堵了</u> → <strong>Backend Bound</strong>（访存或计算资源不够）<br>
+    四类加起来 100%，最大那一类就是你该优化的方向——不用再猜。
+  </div>
+
+  <h3 id="s7-2">7.2 四象限：流水线槽位去哪了</h3>
+
+  <div class="svg-wrap">
+    <svg viewBox="0 0 700 320" role="img" aria-label="Top-Down 四象限与下钻方向">
+      <text x="350" y="22" text-anchor="middle" fill="var(--text)" font-size="13" font-weight="700">每个流水线 issue slot 的四种归属（合计 100%）</text>
+
+      <!-- Retiring -->
+      <rect x="30" y="42" width="310" height="120" rx="10" fill="color-mix(in srgb, var(--accent-3) 12%, var(--bg-card))" stroke="var(--accent-3)" stroke-width="1.5"/>
+      <text x="48" y="66" fill="var(--accent-3)" font-size="13.5" font-weight="700">Retiring · 有效产出</text>
+      <text x="48" y="88" fill="var(--text-dim)" font-size="11.5">槽位真的完成了一条有用的 uop。</text>
+      <text x="48" y="107" fill="var(--text-dim)" font-size="11.5">占比高是好事，但仍可能"高效地做无用功"。</text>
+      <text x="48" y="130" fill="var(--text-mute)" font-size="11">下钻 → 是不是能用 SIMD / 更少指令做同样的事</text>
+      <text x="48" y="149" fill="var(--text-mute)" font-size="11">（也留意 Microcode Sequencer 占比异常）</text>
+
+      <!-- Bad Speculation -->
+      <rect x="360" y="42" width="310" height="120" rx="10" fill="color-mix(in srgb, var(--danger) 12%, var(--bg-card))" stroke="var(--danger)" stroke-width="1.5"/>
+      <text x="378" y="66" fill="var(--danger)" font-size="13.5" font-weight="700">Bad Speculation · 白干</text>
+      <text x="378" y="88" fill="var(--text-dim)" font-size="11.5">槽位干了活但因预测错误被丢弃 + 恢复代价。</text>
+      <text x="378" y="107" fill="var(--text-dim)" font-size="11.5">主因：分支误预测、机器清空 (machine clears)。</text>
+      <text x="378" y="130" fill="var(--text-mute)" font-size="11">下钻 → branch-misses / 数据相关分支 / 虚函数</text>
+      <text x="378" y="149" fill="var(--text-mute)" font-size="11">手段：排序数据、branchless、[[likely]]</text>
+
+      <!-- Frontend -->
+      <rect x="30" y="176" width="310" height="120" rx="10" fill="color-mix(in srgb, var(--accent-4) 12%, var(--bg-card))" stroke="var(--accent-4)" stroke-width="1.5"/>
+      <text x="48" y="200" fill="var(--accent-4)" font-size="13.5" font-weight="700">Frontend Bound · 供不上</text>
+      <text x="48" y="222" fill="var(--text-dim)" font-size="11.5">后端有空位，但取指 / 译码没能填满。</text>
+      <text x="48" y="241" fill="var(--text-dim)" font-size="11.5">主因：icache miss、iTLB miss、代码布局差。</text>
+      <text x="48" y="264" fill="var(--text-mute)" font-size="11">下钻 → 大量内联膨胀？巨型 switch？冷热代码混排？</text>
+      <text x="48" y="283" fill="var(--text-mute)" font-size="11">手段：PGO / BOLT 重排、控制内联、拆冷路径</text>
+
+      <!-- Backend -->
+      <rect x="360" y="176" width="310" height="120" rx="10" fill="color-mix(in srgb, var(--accent-2) 12%, var(--bg-card))" stroke="var(--accent-2)" stroke-width="1.5"/>
+      <text x="378" y="200" fill="var(--accent-2)" font-size="13.5" font-weight="700">Backend Bound · 堵住了</text>
+      <text x="378" y="222" fill="var(--text-dim)" font-size="11.5">前端供得上，但后端资源不够、发不出去。</text>
+      <text x="378" y="241" fill="var(--text-dim)" font-size="11.5">再分 Memory Bound（等数据）/ Core Bound（等端口）。</text>
+      <text x="378" y="264" fill="var(--text-mute)" font-size="11">下钻 → perf mem 看命中层级；perf c2c 看核间争抢</text>
+      <text x="378" y="283" fill="var(--text-mute)" font-size="11">手段：数据布局、预取、减依赖链、换算法</text>
+    </svg>
+    <div class="svg-caption">图 7.1 · TMA Level-1 四象限。<strong>先看哪一格最大，再只往那一格下钻</strong>——这是 Top-Down 名字的含义，也是它比"逐个事件猜"高效的原因。</div>
+  </div>
+
+  <h3 id="s7-3">7.3 perf stat --topdown 与 toplev</h3>
+
+<pre><span class="cm"># 较新内核 + Intel Skylake 以后的核，perf 直接给 Level-1 分解</span>
+$ perf stat --topdown -a -- sleep <span class="num">5</span>
+
+<span class="cm"># 指定层级（Ice Lake 之后硬件直接支持到 Level-2）</span>
+$ perf stat --topdown --td-level=<span class="num">2</span> ./prog
+
+<span class="cm"># 用 metric group 的方式取同样的指标</span>
+$ perf stat -M TopdownL1 ./prog
+
+<span class="cm"># 更完整的实现：Intel pmu-tools 的 toplev，能自动逐层下钻到 Level-4</span>
+$ toplev.py --level <span class="num">3</span> -- ./prog</pre>
+
+  <div class="rd"><div class="n">perf 原生</div><div>够用、零依赖，但层级和覆盖的微架构有限。AMD 有自己的一套（<code>-M</code> 下的 pipeline utilization 指标），ARM 通常要靠厂商工具或自己按手册组事件。</div></div>
+  <div class="rd"><div class="n">toplev</div><div>Intel 官方 <code>pmu-tools</code> 里的脚本，内置各代微架构的完整 TMA 公式树，会自动处理计数器复用与多次运行。<strong>做微架构级优化时值得装。</strong></div></div>
+  <div class="rd warn"><div class="n">前提</div><div>Top-Down 依赖 <code>slots</code> 之类的固定计数器和精确事件。<u>虚拟机里基本别想</u>（见 <a href="#s3-4">§3.4</a>），要裸金属。</div></div>
+
+  <h3 id="s7-4">7.4 逐层下钻的正确姿势</h3>
+
+  <div class="rd"><div class="n">① 只追最大项</div><div>四格里挑占比最大的那格下钻。<strong>不要平均用力</strong>——Frontend 占 8% 时，把它优化到 0 也只提升 8%。</div></div>
+  <div class="rd"><div class="n">② 一层一层</div><div>Level-1 定方向 → Level-2 定子类（如 Backend → Memory Bound → L3 Bound）→ 到这一步才去看具体事件和代码。</div></div>
+  <div class="rd"><div class="n">③ 和火焰图交叉</div><div>Top-Down 告诉你"<em>什么</em>类型的瓶颈"，火焰图告诉你"<em>哪个函数</em>"。<strong>两者交叉才能定位到"哪个函数的哪类瓶颈"</strong>——单看任何一个都容易改错地方。</div></div>
+  <div class="rd bad"><div class="n">④ 别在噪声上下钻</div><div>负载不稳定时四象限占比会大幅漂移。先用 <code>perf stat -r</code> 确认可重复，再做 Top-Down。</div></div>
+</section>
+
+<!-- ============= CH8 ============= -->
+<section class="chapter" id="ch8">
+  <div class="ch-head">
+    <div class="num">08</div>
+    <div class="t">
+      <h2>perf record · 三种栈回溯的取舍</h2>
+      <p class="sub">FP · DWARF · LBR · 三者对比与选型 · 采样频率：为什么是 99 而不是 100</p>
+    </div>
+  </div>
+
+  <p class="lead">这一章是 perf 使用者最容易翻车、也最能体现深度的地方。"火焰图只有一层"、"栈里全是 <code>[unknown]</code>"、"perf.data 一分钟 2GB" —— 三个症状都出自同一个选择：<code>-g</code> 到底用哪种方式回溯调用栈。</p>
+
+  <h3 id="s8-1">8.1 FP · 快但要重编</h3>
+
+  <p>默认方式（<code>-g</code> 等价于 <code>--call-graph fp</code>）。依赖 <strong>frame pointer 链</strong>：每个栈帧的 <code>rbp</code> 指向上一帧的 <code>rbp</code>，内核只要顺着这条链走几步就能拿到整个栈——快到几乎免费。</p>
+
+  <div class="rd bad"><div class="n">致命前提</div><div>编译器默认开 <code>-fomit-frame-pointer</code>（<code>-O2</code> 起就省掉了 <code>rbp</code> 当通用寄存器用），<strong>链子是断的</strong>。你的代码要加 <code>-fno-omit-frame-pointer</code>；<u>而系统库（libc / libstdc++）不是你能控制的</u>——栈走到 libc 就断。</div></div>
+  <div class="rd"><div class="n">好消息</div><div>Fedora 38（2023）和 Ubuntu 24.04 LTS 已经把发行版全量重编为保留 frame pointer，理由正是"可剖析性比省一个寄存器值钱"。在这些系统上 FP 回溯的可用性大幅提升。</div></div>
+  <div class="rd"><div class="n">代价</div><div>保留 frame pointer 的性能损失通常在 1% 量级（个别热点小函数更明显）。<strong>对绝大多数服务，这个交换是值的</strong>：换来的是生产环境随时能出可信火焰图。</div></div>
+
+  <h3 id="s8-2">8.2 DWARF · 准但数据暴涨</h3>
+
+<pre>perf record --call-graph dwarf,<span class="num">16384</span> -F <span class="num">99</span> -p &lt;pid&gt; -- sleep <span class="num">30</span></pre>
+
+  <p>不依赖 frame pointer，而是<strong>在中断时把栈内存原样拷一份</strong>（默认 8192 字节，可调），事后用二进制里的 DWARF CFI（<code>.eh_frame</code>）信息离线展开。</p>
+
+  <div class="rd"><div class="n">优点</div><div>不用重编目标程序，能穿过没有 frame pointer 的库；深栈也能完整拿到（只要没被截断）。</div></div>
+  <div class="rd warn"><div class="n">代价一：体积</div><div>每个样本多带 8-16KB。<code>-F 99</code> × 32 核 × 30 秒 ≈ 十万样本 ≈ <strong>GB 级 perf.data</strong>。写盘本身就可能成为新的瓶颈。</div></div>
+  <div class="rd warn"><div class="n">代价二：后处理</div><div>展开发生在 <code>perf report</code>/<code>script</code> 阶段，大文件解析要几分钟到几十分钟，内存占用也高。</div></div>
+  <div class="rd bad"><div class="n">代价三：截断</div><div>栈超过拷贝上限就被切掉，表现为<strong>火焰图底部莫名断层</strong>。深递归 / 深模板嵌套要显式加大第二个参数。</div></div>
+
+  <h3 id="s8-3">8.3 LBR · 免费但很浅</h3>
+
+<pre>perf record --call-graph lbr -F <span class="num">99</span> -p &lt;pid&gt; -- sleep <span class="num">30</span></pre>
+
+  <div class="def"><span class="term">LBR</span>Last Branch Record，Intel CPU 里一组<strong>硬件环形寄存器</strong>，自动记录最近若干次分支的源/目标地址。perf 从其中的 call 记录反推调用栈，完全不用碰内存。</div>
+
+  <div class="rd"><div class="n">优点</div><div>不需要 frame pointer，不需要拷栈，开销和数据量都极小。</div></div>
+  <div class="rd bad"><div class="n">硬限制</div><div>寄存器深度有限（常见 16 / 32 条），<strong>只能拿到最近十几层调用</strong>。深栈的 C++ 服务通常不够。而且一般只覆盖用户态。</div></div>
+  <div class="rd"><div class="n">真正的主场</div><div>LBR 的分支栈（<code>perf record -b</code>）是 <strong>AutoFDO 与 BOLT 的输入格式</strong>——它们要的不是完整调用栈，而是"哪些分支被走到了"，正好对上。见 <a href="#s14-2">§14.2</a>。</div></div>
+
+  <h3 id="s8-4">8.4 三者对比与选型</h3>
+
+  <table>
+    <tr><th></th><th>FP</th><th>DWARF</th><th>LBR</th></tr>
+    <tr><td>需要重编目标</td><td class="cell-bad">要（<code>-fno-omit-frame-pointer</code>）</td><td class="cell-ok">不要</td><td class="cell-ok">不要</td></tr>
+    <tr><td>运行时开销</td><td class="cell-ok">极低</td><td class="cell-mid">中～高</td><td class="cell-ok">极低</td></tr>
+    <tr><td>perf.data 体积</td><td class="cell-ok">小</td><td class="cell-bad">大 10-50×</td><td class="cell-ok">小</td></tr>
+    <tr><td>栈深度</td><td class="cell-ok">完整</td><td class="cell-ok">完整（受拷贝上限）</td><td class="cell-bad">仅十几层</td></tr>
+    <tr><td>穿越无 FP 的库</td><td class="cell-bad">不行</td><td class="cell-ok">行</td><td class="cell-ok">行</td></tr>
+    <tr><td>硬件要求</td><td>无</td><td>无</td><td class="cell-mid">Intel（ARM 需 BRBE）</td></tr>
+  </table>
+
+  <div class="box ok">
+    <strong>实战选型</strong>：① 能控制构建 → 全线加 <code>-fno-omit-frame-pointer</code>，用 FP，这是长期最省事的方案，也是生产常驻采集的唯一现实选择；② 临时排查第三方 / 已发布的二进制 → DWARF，但把频率降到 <code>-F 49</code>、时间缩到 10 秒；③ 只要"哪些分支热" → LBR + <code>-b</code>。
+  </div>
+
+  <h3 id="s8-5">8.5 采样频率：为什么是 99 而不是 100</h3>
+
+  <p>几乎所有教程都写 <code>-F 99</code>，原因不是玄学：内核的周期性活动（timer tick、各种定时任务）往往正好是 100 / 250 / 1000 Hz。<strong>用整数 100 采样会和它们锁相</strong>，导致你总在同一个相位上采到样本，火焰图里凭空出现一根不该那么宽的柱子（采样别名 / aliasing）。取质数 99 打破这种同步。</p>
+
+  <div class="rd"><div class="n">99 / 97</div><div>生产默认。30 秒能拿到约 3000 样本 × 核数，对定位 top 热点足够。</div></div>
+  <div class="rd"><div class="n">999</div><div>短事务、需要更细分辨率时用，注意开销和数据量都涨 10 倍。</div></div>
+  <div class="rd warn"><div class="n">不写 -F</div><div><code>perf record</code> 默认频率是 <strong>4000 Hz</strong>，对生产偏高。<u>忘记写 <code>-F</code> 是新手最常见的开销来源。</u></div></div>
+  <div class="rd bad"><div class="n">被内核降频</div><div>超过 <code>kernel.perf_event_max_sample_rate</code> 时内核会强制降频并在 dmesg 留言。这时你以为的采样率和实际的不一致，<strong>跨机器对比会得出错误结论</strong>。</div></div>
+</section>
+
+<!-- ============= CH9 ============= -->
+<section class="chapter" id="ch9">
+  <div class="ch-head">
+    <div class="num">09</div>
+    <div class="t">
+      <h2>符号化 · 为什么栈里全是 [unknown]</h2>
+      <p class="sub">六种典型原因 · build-id 与 debuginfod · JIT / 解释型代码 · 容器：--symfs 与 buildid-cache</p>
+    </div>
+  </div>
+
+  <p class="lead">回忆 <a href="#s2-2">§2.2</a>：perf.data 里存的是<strong>裸地址</strong>。把地址翻成 <code>MyClass::process(Request&amp;)</code> 这一步叫符号化，发生在 report 阶段，需要"地址 → 二进制 → 符号表"三段链路都对上。任何一段断了，你就看到 <code>[unknown]</code> 或 <code>0x00007f2a3c1b4e20</code>。</p>
+
+  <h3 id="s9-1">9.1 六种典型原因</h3>
+
+  <div class="trap"><div class="i">①</div><div><strong>二进制被 strip 了</strong>。生产镜像常规操作。→ 构建时把符号单独产出（<code>objcopy --only-keep-debug</code>），并在分析机上通过 build-id 关联回来。</div></div>
+  <div class="trap"><div class="i">②</div><div><strong>分析时用的二进制和采集时不是同一个</strong>（重新编译过、版本不同）。build-id 不匹配，perf 会警告但很多人忽略。→ 认 build-id，别认路径。</div></div>
+  <div class="trap"><div class="i">③</div><div><strong>栈本身就是断的</strong>，不是符号问题。见 <a href="#ch8">第 8 章</a>：FP 被优化掉、DWARF 栈被截断、LBR 深度不够。<u>先分清"栈断"还是"名字翻不出来"</u>——前者表现为层数少，后者表现为层数够但名字是地址。</div></div>
+  <div class="trap"><div class="i">④</div><div><strong>内核符号不可见</strong>。<code>kptr_restrict=1/2</code> 时 <code>/proc/kallsyms</code> 里的地址全是 0，内核帧显示为 <code>[unknown]</code>。→ <code>sysctl kernel.kptr_restrict=0</code>（并保证 <code>perf_event_paranoid ≤ 1</code>）。</div></div>
+  <div class="trap"><div class="i">⑤</div><div><strong>代码是运行时生成的</strong>（JIT、动态生成的 trampoline）。地址不属于任何磁盘文件。→ 见 <a href="#s9-3">§9.3</a>。</div></div>
+  <div class="trap"><div class="i">⑥</div><div><strong>在容器 / 另一台机器上分析</strong>，perf 按 perf.data 里记录的绝对路径去找文件，找不到。→ 见 <a href="#s9-4">§9.4</a>。</div></div>
+
+  <h3 id="s9-2">9.2 build-id 与 debuginfod</h3>
+
+  <div class="def"><span class="term">build-id</span>链接器写进 ELF 的一段唯一哈希（<code>.note.gnu.build-id</code>）。它是"这份二进制"的身份证，<strong>perf 用它而不是文件路径来判断符号文件是否匹配</strong>。<code>readelf -n ./myapp | grep -i build</code> 可以看到。</div>
+
+<pre><span class="cm"># 采集机：把二进制 + 调试信息塞进本地缓存（~/.debug）</span>
+$ perf buildid-cache -a ./myapp
+
+<span class="cm"># 看这份 perf.data 依赖哪些 build-id，缺哪个一目了然</span>
+$ perf buildid-list -i perf.data
+
+<span class="cm"># 让 perf 自动去符号服务器拉 debuginfo（现代发行版都提供）</span>
+$ export DEBUGINFOD_URLS=<span class="str">"https://debuginfod.elfutils.org/"</span>
+$ perf report</pre>
+
+  <div class="box tip">
+    <strong>工程化建议</strong>：CI 构建时把 stripped 二进制发布、把 <code>.debug</code> 按 build-id 上传到内部符号服务器（自建 debuginfod 即可）。这样生产采集的 <code>perf.data</code> 拿到任何一台分析机上都能完整符号化，<u>而生产镜像不必因为要保留符号而变大</u>。这是"能不能在生产用 perf"的真正分水岭，比任何命令行技巧重要。
+  </div>
+
+  <h3 id="s9-3">9.3 JIT / 解释型代码</h3>
+
+  <p>纯 C++ 服务通常不涉及，但只要进程里嵌了 JIT（LuaJIT、V8、JVM、某些 SQL 引擎的表达式编译、PyTorch inductor 生成的 kernel），就会遇到"一大片地址翻不出来"。两种机制：</p>
+
+  <div class="rd"><div class="n">perf-PID.map</div><div>最简单的约定：运行时进程自己往 <code>/tmp/perf-&lt;pid&gt;.map</code> 追加 <code>起始地址 长度 符号名</code> 三列文本，perf report 会自动读取。很多运行时有开关或第三方 agent 来生成。</div></div>
+  <div class="rd"><div class="n">jitdump + inject</div><div>更完整的方案：运行时写 <code>/tmp/jit-&lt;pid&gt;.dump</code>（含代码字节和调试行号），采集后跑 <code>perf inject --jit -i perf.data -o jit.data</code>，perf 会把 JIT 代码<strong>物化成一堆小 ELF</strong> 并重写样本，之后连 <code>perf annotate</code> 都能用。</div></div>
+  <div class="rd warn"><div class="n">注意时序</div><div>map 文件必须在 <strong>report 时仍然存在</strong>，而且进程重启后 pid 复用会串味。容器里 <code>/tmp</code> 是容器内的，宿主机 perf 看不到——需要挂出来。</div></div>
+
+  <h3 id="s9-4">9.4 容器：--symfs 与 buildid-cache</h3>
+
+<pre><span class="cm"># 场景：在宿主机采集容器里的进程，在宿主机分析</span>
+
+<span class="cm"># 1) 找到容器的 rootfs（或直接用 /proc/&lt;pid&gt;/root）</span>
+$ perf report --symfs /proc/<span class="num">12345</span>/root -i perf.data
+
+<span class="cm"># 2) 或者把容器里的二进制先导出来入缓存</span>
+$ docker cp mysvc:/usr/local/bin/myapp /tmp/myapp
+$ perf buildid-cache -a /tmp/myapp
+$ perf report -i perf.data
+
+<span class="cm"># 3) 跨机分析：打包时带上依赖的二进制与符号</span>
+$ perf archive perf.data          <span class="cm"># 生成 perf.data.tar.bz2</span>
+$ <span class="cm"># 在分析机上解到 ~/.debug 后即可 perf report</span></pre>
+
+  <div class="rd"><div class="n">--symfs</div><div>给所有路径加一个前缀根目录。perf.data 里记着 <code>/usr/lib/libfoo.so</code>，加了 <code>--symfs /path/to/rootfs</code> 就去 <code>/path/to/rootfs/usr/lib/libfoo.so</code> 找。<strong>容器与跨机分析的主力开关。</strong></div></div>
+  <div class="rd"><div class="n">perf archive</div><div>把这份 perf.data 需要的所有二进制/符号按 build-id 打成一个包，换机器直接展开就能分析。<u>把火焰图发给同事之前，考虑发这个包而不是 svg。</u></div></div>
+</section>
+
+<!-- ============= CH10 ============= -->
+<section class="chapter" id="ch10">
+  <div class="ch-head">
+    <div class="num">10</div>
+    <div class="t">
+      <h2>report / annotate / diff</h2>
+      <p class="sub">perf report 的四个必会开关 · perf annotate 与 skid / PEBS · perf diff</p>
+    </div>
+  </div>
+
+  <h3 id="s10-1">10.1 perf report 的四个必会开关</h3>
+
+<pre><span class="cm"># ① 文本输出，可以塞进 CI 日志 / diff</span>
+perf report --stdio
+
+<span class="cm"># ② 调用图方向与阈值：caller 视角、只展开占比 &gt; 0.5% 的分支</span>
+perf report -g graph,<span class="num">0.5</span>,caller
+
+<span class="cm"># ③ 关掉"把子函数开销累加到父函数"，只看自身开销</span>
+perf report --no-children
+
+<span class="cm"># ④ 换聚合维度：按 DSO / 按线程 / 按 CPU 看分布</span>
+perf report --sort dso
+perf report --sort comm,pid
+perf report --sort cpu</pre>
+
+  <div class="def"><span class="term">Children vs Self</span>perf report 默认按 <strong>Children</strong>（含所有被调用者）排序，所以榜首往往是 <code>main</code> / 事件循环——正确但没用。<code>--no-children</code> 切到 <strong>Self</strong>（只算函数自己那几条指令），才能看到"真正在烧 CPU 的叶子函数"。<u>两个视角都要看：Self 告诉你改哪个函数，Children 告诉你是谁在调它。</u></div>
+
+  <div class="box star">
+    <code>--sort dso</code> 是个被严重低估的开关。它一眼告诉你"CPU 花在自己代码、libc、还是某个第三方库上"。见过太多"优化了三天自己的代码"，结果 <code>--sort dso</code> 显示 60% 在 <code>libssl</code> 里。<strong>先分清战场，再冲锋。</strong>
+  </div>
+
+  <h3 id="s10-2">10.2 perf annotate 与 skid / PEBS</h3>
+
+<pre>$ perf annotate -s hot_func --stdio
+
+       │     for (size_t i = 0; i &lt; n; ++i) {
+  1.20 │ 40:   add    $0x8,%rax
+       │       sum += data[idx[i]];
+ 71.40 │       mov    (%rcx,%rdx,8),%rdx     <span class="cm">← 71% 集中在这条 load</span>
+  3.10 │       add    %rdx,%rsi</pre>
+
+  <p>看到 71% 压在一条 <code>mov</code> 上，直觉是"这条指令很慢"。<strong>但要小心归因误差</strong>：</p>
+
+  <div class="def"><span class="term">skid</span>PMU 溢出到中断真正打断执行之间隔了若干个 cycle，记录下来的指令地址<strong>往往落在真正的"罪犯"之后几条</strong>。这就是为什么热点常常显示在一条无辜的指令上，尤其是在长延迟 load 的<em>下一条</em>指令上。</div>
+
+  <div class="rd"><div class="n">解法：精确事件</div><div>Intel 的 <strong>PEBS</strong> 让硬件在事件发生时直接写下精确现场。用修饰符开启：<code>-e cycles:pp</code>（<code>:p</code> 越多越精确，<code>:ppp</code> 为零 skid）。AMD 对应 <strong>IBS</strong>，ARM 对应 <strong>SPE</strong>。</div></div>
+  <div class="rd warn"><div class="n">仍要留心</div><div>即便精确采样，乱序执行也让"哪条指令负责这次停顿"本身就是模糊概念。<strong>annotate 用来定位到"这个循环 / 这次访存"，不要精确到"就是这一条指令"。</strong></div></div>
+
+  <h3 id="s10-3">10.3 perf diff · 优化前后对比</h3>
+
+<pre>$ perf record -o before.data -F <span class="num">99</span> -g ./prog_v1
+$ perf record -o after.data  -F <span class="num">99</span> -g ./prog_v2
+$ perf diff before.data after.data
+
+<span class="cm"># Baseline  Delta      Shared Object     Symbol</span>
+<span class="cm"># ........  .........  ................  ...............................</span>
+    <span class="num">31.20</span>%    <span class="num">-18.40</span>%  myapp             [.] parse_header
+     <span class="num">4.10</span>%     <span class="num">+6.80</span>%  libc.so.6         [.] __memmove_avx_unaligned
+     <span class="num">2.30</span>%     <span class="num">+3.10</span>%  myapp             [.] Buffer::grow</pre>
+
+  <div class="box tip">
+    上面这份 diff 讲了一个典型故事：<code>parse_header</code> 确实降了 18%，但开销<strong>转移</strong>到了 <code>memmove</code> 和 <code>Buffer::grow</code>——很可能优化引入了额外拷贝。<u><code>perf diff</code> 的价值就在于让"开销搬家"这件事无法藏起来</u>，而单看两张火焰图很容易漏掉。CI 里跑基准时把它自动化，回归会自己浮出来。
+  </div>
+</section>
+
+<!-- ============= CH11 ============= -->
+<section class="chapter" id="ch11">
+  <div class="ch-head">
+    <div class="num">11</div>
+    <div class="t">
+      <h2>火焰图 · on-CPU / off-CPU / 差分</h2>
+      <p class="sub">生成管线与每一步在做什么 · 怎么读 · off-CPU 火焰图 · 差分火焰图</p>
+    </div>
+  </div>
+
+  <h3 id="s11-1">11.1 生成管线与每一步在做什么</h3>
+
+<pre>$ git clone https://github.com/brendangregg/FlameGraph
+
+$ sudo perf record -F <span class="num">99</span> -g -p $(pgrep myapp) -- sleep <span class="num">30</span>
+$ sudo perf script &gt; out.perf
+$ ./FlameGraph/stackcollapse-perf.pl out.perf &gt; out.folded
+$ ./FlameGraph/flamegraph.pl out.folded &gt; flame.svg</pre>
+
+  <div class="rd"><div class="n">perf script</div><div>把二进制 perf.data 摊成"一个样本一段文本栈"。<strong>这是唯一的出口</strong>，接 pprof / 自研工具也走这里。</div></div>
+  <div class="rd"><div class="n">stackcollapse</div><div>把每个样本的多行栈压成一行 <code>a;b;c 1</code>，并把相同栈合并计数。<u>这一步之后就没有时间信息了</u>——这解释了下一节的"宽度不是时间轴"。</div></div>
+  <div class="rd"><div class="n">flamegraph.pl</div><div>按字母序递归排布成 SVG。颜色默认只是随机区分，<strong>没有语义</strong>（除非用 <code>--color=java/js</code> 之类的调色板）。</div></div>
+
+  <h3 id="s11-2">11.2 怎么读：宽度是量，不是时间轴</h3>
+
+  <div class="rd"><div class="n">纵轴</div><div>调用栈深度。上面的函数被下面的函数调用。</div></div>
+  <div class="rd"><div class="n">横轴</div><div><strong>样本数占比，按字母序排列，不是时间顺序</strong>。左右相邻没有先后关系。想看时序要用 <code>perf script</code> 原始输出或 perfetto 之类的时序视图。</div></div>
+  <div class="rd"><div class="n">看什么</div><div>找<strong>宽而平的顶部平台</strong>——那是真正在消耗 CPU 的叶子函数。一根又高又窄的塔通常无害（只是调用链深）。</div></div>
+  <div class="rd warn"><div class="n">常见误读</div><div>① 把"某函数很宽"当成"它自己慢"，其实可能是它的子调用宽；② 用样本占比反推绝对耗时（要乘上总 CPU 时间才有意义）；③ 忘了这只是 <strong>on-CPU</strong>：<u>程序在睡觉、等锁、等 IO 的时间，一个样本都不会出现在图里</u>。</div></div>
+
+  <h3 id="s11-3">11.3 off-CPU 火焰图</h3>
+
+  <p>上一条的第 ③ 点很关键：如果你的服务"CPU 只用了 20% 但 P99 就是高"，on-CPU 火焰图会几乎空白——瓶颈全在 off-CPU。三种做法：</p>
+
+  <div class="rd"><div class="n">perf 内建</div><div>较新内核支持 <code>perf record --off-cpu</code>（底层用 BPF 记录调度切换时的栈），直接产出可以做 off-CPU 火焰图的数据。最省事。</div></div>
+  <div class="rd"><div class="n">sched 事件</div><div><code>perf record -e sched:sched_switch -g -a</code>，从"线程被换下 CPU 时的栈"聚合出"在哪里睡着了"。数据量大，忙机器上慎用。</div></div>
+  <div class="rd"><div class="n">bpftrace / BCC</div><div><code>offcputime</code> 这类工具直接在内核里聚合"阻塞时长 × 栈"，开销和数据量都最低。见 <a href="../system/observability_ebpf.html">系统观测 / eBPF</a>。</div></div>
+
+  <div class="box ok">
+    完整的判断姿势是<strong>两张图一起看</strong>：on-CPU 图回答"在算什么"，off-CPU 图回答"在等什么"。两张图的宽度加起来才是墙钟时间。只看 on-CPU 是绝大多数"优化了半天 P99 没动"的原因。
+  </div>
+
+  <h3 id="s11-4">11.4 差分火焰图</h3>
+
+<pre><span class="cm"># 采两份（v1 / v2 或 优化前/后）</span>
+$ ./stackcollapse-perf.pl before.perf &gt; before.folded
+$ ./stackcollapse-perf.pl after.perf  &gt; after.folded
+
+<span class="cm"># 红 = 变多了，蓝 = 变少了</span>
+$ ./difffolded.pl before.folded after.folded | ./flamegraph.pl &gt; diff.svg</pre>
+
+  <div class="box tip">
+    差分火焰图和 <a href="#s10-3"><code>perf diff</code></a> 是互补的：<code>perf diff</code> 给的是<strong>按函数排序的表格</strong>（精确、易自动化），差分火焰图给的是<strong>带调用上下文的图形</strong>（一眼看出"是哪条路径上的这个函数变多了"）。做性能回归排查时两个都值得跑。
+  </div>
+</section>
+
+<!-- ============= CH12 ============= -->
+<section class="chapter" id="ch12">
+  <div class="ch-head">
+    <div class="num">12</div>
+    <div class="t">
+      <h2>访存与并发 · mem / c2c / lock / sched</h2>
+      <p class="sub">perf mem · perf c2c · perf lock · perf sched</p>
+    </div>
+  </div>
+
+  <h3 id="s12-1">12.1 perf mem · 这次 load 从哪一级拿到的</h3>
+
+<pre>$ sudo perf mem record ./prog
+$ sudo perf mem report --stdio
+
+<span class="cm"># 输出里最有价值的一列是 "Data Src"：</span>
+<span class="cm">#   L1 hit / LFB / L2 hit / L3 hit / Local RAM / Remote RAM / Remote Cache</span></pre>
+
+  <p><code>perf mem</code> 底层用的就是<a href="#s10-2">精确访存采样</a>（Intel PEBS load-latency、AMD IBS、ARM SPE）。它回答的问题很具体：<strong>热点代码里的那次 load，数据实际是从哪一级拿到的、等了多少 cycle</strong>。</p>
+
+  <div class="rd"><div class="n">最有价值的信号</div><div>看到大量 <strong>Remote RAM / Remote Cache</strong> → NUMA 跨节点访存，该考虑绑核 + 本地分配（见 <a href="../system/numa_memory_advanced.html">NUMA 与内存进阶</a>）。看到大量 <strong>Local RAM</strong>（即 LLC miss 到内存）→ 工作集超了 LLC，该改数据布局或分块。</div></div>
+  <div class="rd warn"><div class="n">和 perf stat 的区别</div><div><code>perf stat -e LLC-load-misses</code> 只告诉你"总共 miss 了多少次"；<code>perf mem</code> 告诉你"<strong>哪一行代码</strong>的 load 在 miss、miss 到了哪一层"。前者判断有没有问题，后者定位在哪。</div></div>
+
+  <h3 id="s12-2">12.2 perf c2c · 假共享定位</h3>
+
+<pre>$ sudo perf c2c record -a -- sleep <span class="num">10</span>
+$ sudo perf c2c report --stdio</pre>
+
+  <div class="def"><span class="term">HITM</span>Hit in Modified —— 一次读命中了<strong>另一个核 cache 里处于 Modified 状态</strong>的行，必须走缓存一致性协议把数据从那个核搬过来。<code>perf c2c</code> 报告按 cache line 排序 HITM 次数，<strong>HITM 高的那几条 line 就是假共享现场</strong>。</div>
+
+  <p>报告会给出每条热点 cache line 的<strong>行内偏移</strong>以及参与读写的指令地址与线程。这一点非常关键：它不只说"有假共享"，还直接告诉你"是这个结构体里偏移 0 和偏移 8 的两个字段在打架"，对应修复就是 <code>alignas(64)</code> 拆开或改成 per-thread 局部累加。</p>
+
+  <div class="box tip">
+    机制层面（为什么写 A 会让另一个核的 B 失效、为什么单核几乎无感）见 <a href="../cpp/memory_model.html#s13-1-fs">内存模型 · MESI</a>；修复手法与实测数据见 <a href="./performance_guide.html#s6">性能指南 §6 False Sharing</a> 和 <a href="./memory_optimization_guide.html#s2-2">内存优化 §2.2</a>。本页只负责"用哪条命令看到它"。
+  </div>
+
+  <h3 id="s12-3">12.3 perf lock · 锁竞争</h3>
+
+<pre><span class="cm"># 老方式：基于 lock tracepoint，需要内核开 CONFIG_LOCK_STAT，开销较大</span>
+$ sudo perf lock record ./prog
+$ sudo perf lock report
+
+<span class="cm"># 新方式（Linux 6.x+）：BPF 内核内聚合，开销低得多，可以 -a 整机跑</span>
+$ sudo perf lock contention -a -b -- sleep <span class="num">10</span>
+$ sudo perf lock contention -a -b -t -- sleep <span class="num">10</span>   <span class="cm"># 按线程聚合</span></pre>
+
+  <div class="rd"><div class="n">看什么</div><div>竞争<strong>次数</strong>和<strong>累计等待时长</strong>要分开看。次数多但每次很短 → 可以接受；次数不多但单次等待很长 → 临界区里干了重活（可能有 IO 或分配），是更严重的问题。</div></div>
+  <div class="rd"><div class="n">配套</div><div>死锁与更系统的锁问题排查见 <a href="./deadlock_debugging_guide.html">死锁调试指南</a>；锁优化手法（分片、读写分离、无锁）见 <a href="./performance_guide.html#s13">性能指南 §13</a>。</div></div>
+
+  <h3 id="s12-4">12.4 perf sched · 调度延迟</h3>
+
+<pre>$ sudo perf sched record -- sleep <span class="num">5</span>
+$ sudo perf sched latency --sort max     <span class="cm"># 按最大延迟排序，抓毛刺</span>
+$ sudo perf sched timehist               <span class="cm"># 逐事件时序，做对齐分析</span>
+$ sudo perf sched map                    <span class="cm"># 可视化线程在核上的分布</span></pre>
+
+  <div class="def"><span class="term">调度延迟</span>线程从"进入可运行状态（被唤醒）"到"真正拿到 CPU 开始跑"之间的等待时间。它<strong>完全不出现在 on-CPU 火焰图里</strong>，却是延迟敏感服务 P99 毛刺的头号嫌疑之一。</div>
+
+  <div class="rd warn"><div class="n">数据量</div><div><code>perf sched record</code> 订阅高频 sched tracepoint，忙机器上几秒就能产生几百 MB。<strong>先短时间试采，确认量级再放长。</strong></div></div>
+  <div class="rd"><div class="n">典型结论</div><div>最大延迟到了毫秒级 → 检查 CPU 超卖、cgroup CPU 配额被限流（throttling）、有没有邻居噪声、线程数是否远超核数。低延迟场景的完整清单见 <a href="./low_latency_guide.html">低延时实战</a>，实时内核见 <a href="../embedded-realtime/preempt_rt_deep_dive.html">PREEMPT_RT 深入</a>。</div></div>
+</section>
+
+<!-- ============= CH13 ============= -->
+<section class="chapter" id="ch13">
+  <div class="ch-head">
+    <div class="num">13</div>
+    <div class="t">
+      <h2>动态探针 · perf probe / perf trace</h2>
+      <p class="sub">perf probe 给内核函数临时加埋点 · uprobe 探自己的 C++ 函数 · perf trace</p>
+    </div>
+  </div>
+
+  <h3 id="s13-1">13.1 perf probe · 给内核函数临时加埋点</h3>
+
+  <p>tracepoint 是内核开发者<strong>预先埋好</strong>的固定观测点，位置改不了。当你需要的点位没有 tracepoint 时，<code>perf probe</code> 可以用 kprobe 现场"钻一个孔"——不用改内核、不用重启。</p>
+
+<pre><span class="cm"># 在内核函数入口加探针</span>
+$ sudo perf probe --add tcp_sendmsg
+Added new event: probe:tcp_sendmsg
+
+<span class="cm"># 看这个函数在当前内核上能取到哪些变量（需要 kernel debuginfo）</span>
+$ sudo perf probe --vars tcp_sendmsg
+
+<span class="cm"># 带参数：抓 size 这个入参</span>
+$ sudo perf probe --add <span class="str">'tcp_sendmsg size'</span>
+
+<span class="cm"># 像普通事件一样采集</span>
+$ sudo perf record -e probe:tcp_sendmsg -a -- sleep <span class="num">10</span>
+
+<span class="cm"># 用完记得清理，探针是持久注册的</span>
+$ sudo perf probe -l
+$ sudo perf probe -d probe:tcp_sendmsg</pre>
+
+  <h3 id="s13-2">13.2 uprobe · 探自己的 C++ 函数</h3>
+
+<pre><span class="cm"># -x 指定用户态二进制。C++ 要用 mangled 名或加引号的完整签名</span>
+$ sudo perf probe -x /usr/local/bin/myapp --add <span class="str">'RequestHandler::handle'</span>
+
+<span class="cm"># 函数返回处（%return）+ 取返回值</span>
+$ sudo perf probe -x ./myapp --add <span class="str">'handle%return $retval'</span>
+
+<span class="cm"># 然后就能统计调用次数 / 做调用栈采样</span>
+$ sudo perf stat -e probe_myapp:handle -a -- sleep <span class="num">10</span></pre>
+
+  <div class="rd warn"><div class="n">前提</div><div>取变量值需要 <strong>DWARF debuginfo</strong>；只挂函数入口/出口不需要。被内联掉的函数<u>找不到符号也挂不上</u>——这是探自己代码时最常见的失败原因。</div></div>
+  <div class="rd warn"><div class="n">开销</div><div>uprobe 每次触发都要陷入内核（int3 → 内核处理 → 返回），单次约微秒量级。<strong>挂在每秒调用几百万次的热函数上会显著拖慢程序</strong>——这和 perf 的采样模式完全不同，别用同一套"开销 &lt; 1%"的直觉。</div></div>
+  <div class="rd"><div class="n">更好的选择</div><div>需要复杂过滤、聚合成直方图、或长期常驻时，用 <a href="../system/observability_ebpf.html">bpftrace / BCC</a> 更合适——它能在内核里就把数据聚合掉，不用把每次事件都送到用户态。<code>perf probe</code> 的定位是"临时、一次性、不想写脚本"。</div></div>
+
+  <h3 id="s13-3">13.3 perf trace · 比 strace 轻的 syscall 观测</h3>
+
+<pre>$ sudo perf trace -p $(pgrep myapp)
+$ sudo perf trace -s -p &lt;pid&gt; -- sleep <span class="num">10</span>       <span class="cm"># 汇总统计</span>
+$ sudo perf trace -e <span class="str">'syscalls:sys_enter_mmap,syscalls:sys_enter_brk'</span> ./myapp</pre>
+
+  <table>
+    <tr><th></th><th>strace</th><th>perf trace</th></tr>
+    <tr><td>机制</td><td>ptrace，每个 syscall 两次进程停顿</td><td>tracepoint，内核内记录</td></tr>
+    <tr><td>开销</td><td class="cell-bad">可达数十倍到上百倍</td><td class="cell-ok">通常个位数百分比</td></tr>
+    <tr><td>生产可用</td><td class="cell-bad">基本不行</td><td class="cell-ok">可以（注意数据量）</td></tr>
+    <tr><td>参数解码</td><td class="cell-ok">最详尽</td><td class="cell-mid">较好但不如 strace</td></tr>
+  </table>
+
+  <div class="box danger">
+    <strong>永远不要在生产进程上直接 <code>strace</code>。</strong>ptrace 的停-启机制会把 syscall 密集的服务拖慢一两个数量级，足以直接触发上游超时和雪崩。要在生产看 syscall，用 <code>perf trace</code> 或 eBPF。
+  </div>
+</section>
+
+<!-- ============= CH14 ============= -->
+<section class="chapter" id="ch14">
+  <div class="ch-head">
+    <div class="num">14</div>
+    <div class="t">
+      <h2>生产实践与十个陷阱</h2>
+      <p class="sub">常驻采集 · 喂给 AutoFDO / BOLT · 十个陷阱清单</p>
+    </div>
+  </div>
+
+  <h3 id="s14-1">14.1 常驻采集 · continuous profiling</h3>
+
+  <p class="lead">"出问题了再去登机器拉 perf"有两个致命缺陷：现场可能已经没了，而且你没有可对比的基线。成熟做法是<strong>常驻低频采集</strong>：每个实例每隔几分钟采 10 秒，落到中心存储，永远有历史可查。</p>
+
+  <div class="rd"><div class="n">采集参数</div><div><code>perf record -F 49 -g --call-graph fp -a -- sleep 10</code>，每 5 分钟一次。折算下来平均 CPU 占用在千分之几。<strong>关键是用 FP 而不是 DWARF</strong>（见 <a href="#s8-4">§8.4</a>），否则数据量和后处理成本都不可持续。</div></div>
+  <div class="rd"><div class="n">存储格式</div><div><code>perf script | stackcollapse</code> 后的 folded 文本压缩率极高（同栈已合并），或直接转 <strong>pprof</strong> 格式接现成的后端：<code>perf script | go tool pprof -http=:8080 -</code>。</div></div>
+  <div class="rd"><div class="n">现成方案</div><div>Parca / Pyroscope / Grafana Phlare 这类系统已经把"eBPF 采集 + 存储 + 差分 UI"做好了，自建流水线前先评估。落地细节见 <a href="./observability_guide.html#s12">可观测性指南 §12</a>。</div></div>
+  <div class="rd"><div class="n">收益</div><div>① 事后可追溯，不用复现；② 版本间自动差分，回归无处可藏；③ 跨实例横向对比能揪出"就那台机器慢"；④ 给容量规划提供"CPU 花在哪个业务模块"的真实数据。</div></div>
+
+  <h3 id="s14-2">14.2 喂给 AutoFDO / BOLT</h3>
+
+  <p>perf 除了给人看，还能<strong>直接喂给编译器和链接器</strong>。这是 perf 最被低估的用途：生产采集的分支 profile 可以转化成 3-20% 的免费性能提升。</p>
+
+<pre><span class="cm"># AutoFDO：生产环境采分支样本 → 转成编译器能吃的 profile</span>
+$ sudo perf record -b -e br_inst_retired.near_taken:pp -- ./myapp prod_workload
+$ create_llvm_prof --binary=./myapp --profile=perf.data --out=myapp.afdo
+$ clang++ -O2 -fprofile-sample-use=myapp.afdo ...
+
+<span class="cm"># BOLT：拿成品二进制 + perf profile 重排函数与基本块（post-link）</span>
+$ sudo perf record -e cycles:u -j any,u -- ./myapp prod_workload
+$ perf2bolt -p perf.data -o myapp.fdata ./myapp
+$ llvm-bolt ./myapp -o myapp.bolt -data=myapp.fdata -reorder-blocks=ext-tsp \
+    -reorder-functions=hfsort -split-functions -split-all-cold</pre>
+
+  <div class="rd"><div class="n">为什么要 -b / -j</div><div>这两个工具要的不是调用栈，而是<strong>分支执行轨迹</strong>（LBR 分支栈）。所以用 <code>-b</code> / <code>-j any,u</code> 而不是 <code>-g</code>。这也是 LBR 在 <a href="#s8-3">§8.3</a> 里"很浅但很有用"的真正原因。</div></div>
+  <div class="rd"><div class="n">收益来自哪</div><div>本质是把<strong>热代码聚到一起</strong>，降低 icache / iTLB miss —— 也就是 <a href="#s7-2">Top-Down 里的 Frontend Bound</a>。所以先跑 Top-Down 看 Frontend 占比，就能预判 BOLT 能不能给你带来收益。</div></div>
+  <div class="rd"><div class="n">完整对比</div><div>PGO / AutoFDO / BOLT / ThinLTO 的关系、收益量级与常见坑，见 <a href="./performance_guide.html#s16c">性能指南 §16c</a>。</div></div>
+
+  <h3 id="s14-3">14.3 十个陷阱清单</h3>
+
+  <div class="trap"><div class="i">1</div><div><strong>忘写 <code>-F</code></strong>。默认 4000 Hz，生产上偏高，还容易被内核限流。</div></div>
+  <div class="trap"><div class="i">2</div><div><strong>直接用 <code>--call-graph dwarf</code> 上生产</strong>。数据量能大 10-50 倍，写盘本身变成新瓶颈。</div></div>
+  <div class="trap"><div class="i">3</div><div><strong>只看 on-CPU 火焰图</strong>。CPU 不高但很慢的问题，图上什么都看不到（<a href="#s11-3">§11.3</a>）。</div></div>
+  <div class="trap"><div class="i">4</div><div><strong>把复用外推的数字当精确值</strong>。看到行尾 <code>(48.5%)</code> 就该警觉（<a href="#s5-3">§5.3</a>）。</div></div>
+  <div class="trap"><div class="i">5</div><div><strong>在虚拟机上测 IPC / cache-miss 并当作基准</strong>。PMU 可能根本没暴露，或被 hypervisor 干扰（<a href="#s3-4">§3.4</a>）。</div></div>
+  <div class="trap"><div class="i">6</div><div><strong>把栈断当成符号问题</strong>（或反过来）。层数少 = 回溯方式问题；层数够但名字是地址 = 符号问题（<a href="#s9-1">§9.1</a>）。</div></div>
+  <div class="trap"><div class="i">7</div><div><strong>用不匹配的二进制符号化</strong>。build-id 不一致时，你看到的函数名可能是<u>完全错的</u>——比看不到名字更危险。</div></div>
+  <div class="trap"><div class="i">8</div><div><strong>只看 Children 视图</strong>。榜首永远是 <code>main</code>，得加 <code>--no-children</code> 看 Self（<a href="#s10-1">§10.1</a>）。</div></div>
+  <div class="trap"><div class="i">9</div><div><strong>没固定测量环境就下结论</strong>。频率漂移、turbo、邻居噪声、cgroup 限流都能造出 ±15% 的假差异。先 <code>perf stat -r 10</code> 看标准差。</div></div>
+  <div class="trap"><div class="i">10</div><div><strong>把 <code>perf probe</code> 挂在热函数上</strong>。uprobe 是每次触发都陷内核，和采样完全不是一个开销模型（<a href="#s13-2">§13.2</a>）。</div></div>
+</section>
+
+<!-- ============= CH15 ============= -->
+<section class="chapter" id="ch15">
+  <div class="ch-head">
+    <div class="num">15</div>
+    <div class="t">
+      <h2>面试题（12 道分层）</h2>
+      <p class="sub">基础（必答） · 中级（区分熟练度） · 高级（体现深度）</p>
+    </div>
+  </div>
+
+  <h3 id="s15-1">15.1 基础（必答）</h3>
+  <p class="qa-hint">点击每道题展开参考答案（先自测，再对照）。</p>
+
+<ol class="qa-list">
+  <li><details class="qa">
+    <summary><span class="lvl basic">基础</span>perf 和 Valgrind、ASan 有什么本质区别？</summary>
+    <div class="ans">
+      <p>三者解决的<strong>不是同一类问题</strong>：</p>
+      <div class="point"><div class="label">perf</div><div>基于 PMU 的<strong>采样式性能</strong>剖析，不改二进制、开销 &lt; 1%、能看到内核态，答"CPU 时间花在哪"。代价是统计性质，说不出精确调用次数。</div></div>
+      <div class="point"><div class="label">Valgrind</div><div>动态二进制翻译，指令级<strong>完整</strong>计数，慢 10-30×。答"精确的指令数 / 可重现的 cache 模拟"，不能上生产。</div></div>
+      <div class="point"><div class="label">Sanitizers</div><div>编译期插桩，查<strong>正确性</strong>（内存错误、data race），不是性能工具。</div></div>
+      <div class="point deep"><div class="label">一句话</div><div>perf 是"抽样调查"，Valgrind 是"全员普查"，Sanitizer 是"体检"。</div></div>
+    </div>
+  </details></li>
+  <li><details class="qa">
+    <summary><span class="lvl basic">基础</span><code>perf stat</code> 你会重点看哪几个数字？怎么判断"CPU 用得健康"？</summary>
+    <div class="ans">
+      <div class="point"><div class="label">四个数字</div><div>① <strong>CPUs utilized</strong>（task-clock / elapsed）判断是 CPU 密集还是在等；② <strong>IPC</strong>，&gt; 1.5 算舒展、&lt; 1 说明流水线大量空转；③ <strong>branch-miss 率</strong>，&lt; 1-2%；④ <strong>LLC-miss 率 / MPKI</strong>，miss 高说明访存受限。再加上 <strong>user vs sys 比例</strong>判断时间是否花在内核。</div></div>
+      <div class="point warn"><div class="label">但要补一句</div><div>这三条线只是启发式。<strong>IPC 高不等于程序好</strong>——自旋等待的 IPC 接近 4 却毫无产出。最终指标永远是墙钟时间 / 吞吐 / P99，微架构指标只用来解释原因。</div></div>
+      <div class="point deep"><div class="label">加分</div><div>提到 <code>cache-misses</code> 在多数 Intel 平台上其实是 <strong>LLC</strong> miss 而不是"所有 cache miss"，以及用 <strong>MPKI</strong> 代替百分比来避免分母骗人。</div></div>
+    </div>
+  </details></li>
+  <li><details class="qa">
+    <summary><span class="lvl basic">基础</span>给一个正在生产跑的服务出火焰图，完整命令是什么？每一步在做什么？</summary>
+    <div class="ans">
+      <pre>sudo perf record -F 99 -g -p $(pgrep myapp) -- sleep 30
+sudo perf script &gt; out.perf
+./stackcollapse-perf.pl out.perf | ./flamegraph.pl &gt; flame.svg</pre>
+      <div class="point"><div class="label">逐步</div><div><code>record</code> 以 99Hz 带调用栈采样 30 秒 → <code>script</code> 把二进制数据摊成文本栈 → <code>stackcollapse</code> 把相同栈合并成一行计数 → <code>flamegraph.pl</code> 画 SVG。</div></div>
+      <div class="point"><div class="label">为什么 99</div><div>避免和内核 100/250/1000 Hz 的周期性活动锁相产生采样别名。</div></div>
+      <div class="point warn"><div class="label">读图注意</div><div>横轴是<strong>样本占比且按字母序排</strong>，不是时间轴；要找的是宽而平的顶部平台；<u>这只是 on-CPU</u>，等锁 / 等 IO 的时间不会出现。</div></div>
+    </div>
+  </details></li>
+  <li><details class="qa">
+    <summary><span class="lvl basic">基础</span>为什么 perf 的开销能低到 1% 以内？什么情况下会不止 1%？</summary>
+    <div class="ans">
+      <div class="point"><div class="label">为什么低</div><div>① PMU 计数是<strong>硬件行为</strong>，不插一条指令；② <code>-F 99</code> 每核每秒只中断 99 次，单次几微秒；③ 样本走 <strong>mmap ring buffer</strong> 给用户态，不走 syscall。</div></div>
+      <div class="point bad"><div class="label">什么时候变贵</div><div>① <code>--call-graph dwarf</code> 每样本拷几 KB 栈；② 频率抬到几千 Hz；③ 订阅高频 tracepoint（<code>sched:*</code>）；④ 用 uprobe 挂热函数——那已经是每次触发都陷内核，不是采样了。</div></div>
+    </div>
+  </details></li>
+</ol>
+
+  <h3 id="s15-2">15.2 中级（区分熟练度）</h3>
+
+<ol class="qa-list" start="5">
+  <li><details class="qa">
+    <summary><span class="lvl mid">中级</span>火焰图只有一两层，或者栈里全是 <code>[unknown]</code>。怎么定位原因？</summary>
+    <div class="ans">
+      <div class="point"><div class="label">先分类</div><div><strong>层数少</strong> = 栈回溯断了；<strong>层数够但名字是地址</strong> = 符号化失败。这是两条完全不同的排查路径，先分清能省一半时间。</div></div>
+      <div class="point"><div class="label">栈断</div><div>① 默认 <code>-g</code> 走 frame pointer，而 <code>-O2</code> 默认 <code>-fomit-frame-pointer</code> → 加 <code>-fno-omit-frame-pointer</code> 重编，或改用 <code>--call-graph dwarf</code>；② DWARF 模式下栈拷贝上限默认 8KB，深栈被截断 → <code>dwarf,32768</code>；③ LBR 只有十几层深度；④ <code>perf_event_paranoid=2</code> 时内核帧被禁，栈在进内核处断掉。</div></div>
+      <div class="point"><div class="label">符号化失败</div><div>① 二进制被 strip → 用 build-id 关联单独的 debuginfo 或配 <code>DEBUGINFOD_URLS</code>；② 分析用的二进制和采集时不是同一份（build-id 不匹配）；③ 内核符号看不到 → <code>kptr_restrict=0</code>；④ 容器 / 跨机分析路径找不到 → <code>--symfs</code> 或 <code>perf archive</code>；⑤ JIT 代码 → <code>/tmp/perf-&lt;pid&gt;.map</code> 或 <code>perf inject --jit</code>。</div></div>
+      <div class="point deep"><div class="label">加分</div><div>提到 Fedora 38 / Ubuntu 24.04 已经把发行版整体重编为保留 frame pointer，正是因为"可剖析性 &gt; 省一个寄存器"这个权衡在服务端成立。</div></div>
+    </div>
+  </details></li>
+  <li><details class="qa">
+    <summary><span class="lvl mid">中级</span><code>perf record -g</code> 的三种栈回溯方式怎么选？</summary>
+    <div class="ans">
+      <div class="point"><div class="label">FP</div><div>顺 frame pointer 链走。开销极低、数据量小、栈完整，<strong>但要求目标和依赖库都保留 frame pointer</strong>。</div></div>
+      <div class="point"><div class="label">DWARF</div><div>中断时拷一段栈内存，事后用 <code>.eh_frame</code> CFI 离线展开。不用重编、能穿无 FP 的库，<strong>代价是数据量涨 10-50 倍、后处理很慢、深栈会被截断</strong>。</div></div>
+      <div class="point"><div class="label">LBR</div><div>读硬件分支寄存器反推。零内存拷贝、几乎免费，<strong>但只有十几层深度、一般只覆盖用户态、依赖 Intel（ARM 需 BRBE）</strong>。</div></div>
+      <div class="point"><div class="label">选型</div><div>能控制构建 → 全线 FP（生产常驻采集唯一现实选择）；临时查第三方二进制 → DWARF 但降频缩时长；只要分支热度（AutoFDO / BOLT）→ LBR + <code>-b</code>。</div></div>
+    </div>
+  </details></li>
+  <li><details class="qa">
+    <summary><span class="lvl mid">中级</span><code>perf stat</code> 输出里每行后面的 <code>(62.13%)</code> 是什么意思？会带来什么风险？</summary>
+    <div class="ans">
+      <div class="point"><div class="label">是什么</div><div><strong>计数器复用（multiplexing）</strong>的启用时间占比。订阅的事件数超过物理计数器数量时，内核轮流把事件调度到计数器上，每个事件只在部分时间被真实统计，最后按占比<strong>线性外推</strong>。</div></div>
+      <div class="point bad"><div class="label">风险</div><div>外推假设"负载在整段时间里是均匀的"。<u>负载有相位（如启动 / 稳态 / GC）时这个假设不成立</u>，误差可以很大。表现为荒谬的派生指标——branch-misses 比 branches 多、IPC 算出 12。占比低于 50% 时基本只能看数量级。</div></div>
+      <div class="point"><div class="label">怎么办</div><div>① 拆成多次跑，每次只订阅 2-4 个事件；② 用 <code>{cycles,instructions}</code> 事件组语法保证组内始终一起被调度；③ 用 <code>-M</code> 让 perf 按官方 metric group 挑组合；④ ARM 计数器更少（常见 6 个），更容易触发。</div></div>
+    </div>
+  </details></li>
+  <li><details class="qa">
+    <summary><span class="lvl mid">中级</span>服务 CPU 只用了 15%，但 P99 延迟很高。用 perf 怎么查？</summary>
+    <div class="ans">
+      <div class="point"><div class="label">第一判断</div><div>瓶颈在 <strong>off-CPU</strong>。on-CPU 火焰图在这种场景下几乎无用——程序在睡觉的时间一个样本都不会被采到。</div></div>
+      <div class="point"><div class="label">路径</div><div>① <code>perf sched latency --sort max</code> 看调度延迟，毫秒级说明 CPU 超卖 / cgroup 限流 / 线程数超配；② <code>perf lock contention -a -b</code> 看锁等待，重点看"单次等待时长"而不只是次数；③ <code>perf trace -s</code> 看是否堵在某类 syscall；④ <code>perf record --off-cpu</code> 或 bpftrace 的 <code>offcputime</code> 出一张 off-CPU 火焰图。</div></div>
+      <div class="point deep"><div class="label">方法论</div><div>on-CPU 图回答"在算什么"，off-CPU 图回答"在等什么"，<strong>两张宽度加起来才是墙钟时间</strong>。只看前者是"优化半天 P99 没动"的最常见原因。</div></div>
+    </div>
+  </details></li>
+</ol>
+
+  <h3 id="s15-3">15.3 高级（体现深度）</h3>
+
+<ol class="qa-list" start="9">
+  <li><details class="qa">
+    <summary><span class="lvl adv">高级</span>什么是 Top-Down 微架构分析法？它比"逐个看 cache-miss / branch-miss"强在哪？</summary>
+    <div class="ans">
+      <div class="point"><div class="label">核心思想</div><div>不数孤立事件，而是<strong>给流水线 issue slot 做会计</strong>。每个 slot 的归属只有四种：<strong>Retiring</strong>（有效产出）/ <strong>Bad Speculation</strong>（预测错白干）/ <strong>Frontend Bound</strong>（取指译码供不上）/ <strong>Backend Bound</strong>（后端堵住），四者合计 100%。先看哪格最大，再只往那格下钻。</div></div>
+      <div class="point"><div class="label">强在哪</div><div>孤立事件会<strong>互相掩盖</strong>：乱序执行能把一次 L3 miss 藏在其他指令后面，此时 miss 数很高却不影响性能；反之一个不显眼的依赖链才是真瓶颈。<u>Top-Down 直接量化"损失了多少执行带宽"，把猜变成分账。</u></div></div>
+      <div class="point"><div class="label">怎么跑</div><div><code>perf stat --topdown</code>（Skylake+），<code>--td-level=2</code>（Ice Lake+ 硬件支持），或 Intel pmu-tools 的 <code>toplev.py --level 3</code> 自动逐层下钻。</div></div>
+      <div class="point warn"><div class="label">边界</div><div>依赖 <code>slots</code> 等固定计数器和精确事件，<strong>虚拟机里通常不可用</strong>；AMD / ARM 各有自己一套指标，不能直接照搬 Intel 的公式。负载不稳定时四象限占比会大幅漂移，要先确认可重复。</div></div>
+    </div>
+  </details></li>
+  <li><details class="qa">
+    <summary><span class="lvl adv">高级</span><code>perf annotate</code> 显示 70% 的开销压在一条 <code>mov</code> 上，能直接断定是这条指令慢吗？</summary>
+    <div class="ans">
+      <div class="point bad"><div class="label">不能</div><div>存在 <strong>skid</strong>：PMU 计数器溢出到中断真正打断执行之间隔了若干 cycle，记下的指令地址<strong>往往落在真正的"罪犯"之后几条</strong>。热点常常显示在长延迟 load 的<em>下一条</em>指令上。</div></div>
+      <div class="point"><div class="label">缓解</div><div>用精确事件：Intel <strong>PEBS</strong>（<code>-e cycles:pp</code>，<code>:ppp</code> 为零 skid，硬件在事件发生点直接写现场）、AMD <strong>IBS</strong>、ARM <strong>SPE</strong>（<code>-e arm_spe//</code>）。<code>perf mem</code> / <code>perf c2c</code> 底层依赖的正是这套精确采样。</div></div>
+      <div class="point deep"><div class="label">更深一层</div><div>即使零 skid，在乱序超标量核上"<u>哪条指令负责这次停顿</u>"本身就是模糊概念——多条指令并行在飞，停顿是资源竞争的结果。所以 annotate 的正确用法是定位到"<strong>这个循环 / 这次访存</strong>"，而不是"就是这一条指令"。要判断瓶颈<em>类型</em>该上 Top-Down。</div></div>
+    </div>
+  </details></li>
+  <li><details class="qa">
+    <summary><span class="lvl adv">高级</span>要给公司几千个 C++ 服务实例上"常驻性能剖析"，你怎么设计？</summary>
+    <div class="ans">
+      <div class="point"><div class="label">① 采集</div><div><code>perf record -F 49 -g --call-graph fp -a -- sleep 10</code>，每实例每 5 分钟一次。<strong>必须用 FP 不能用 DWARF</strong>——DWARF 的数据量和后处理成本在这个规模上不可持续。前置条件是推动全公司构建加 <code>-fno-omit-frame-pointer</code>（约 1% 性能代价，换来永久可剖析性）。</div></div>
+      <div class="point"><div class="label">② 符号</div><div>这是<strong>真正的分水岭</strong>，比命令行技巧重要得多。CI 构建时：stripped 二进制进镜像，<code>.debug</code> 按 build-id 上传内部 debuginfod。这样生产镜像不变大，任何分析机都能完整符号化。</div></div>
+      <div class="point"><div class="label">③ 权限</div><div>给采集容器 <code>CAP_PERFMON</code> 而不是 privileged（内核 &lt; 5.8 才退化到 <code>CAP_SYS_ADMIN</code>）；宿主机统一 <code>perf_event_paranoid=1</code> + <code>kptr_restrict=0</code>，并评估侧信道风险后做取舍。</div></div>
+      <div class="point"><div class="label">④ 存储与查询</div><div><code>perf script</code> → folded / pprof 格式，按 服务 × 版本 × 实例 × 时间 打标入库。核心能力是<strong>差分</strong>：版本间、实例间、时间段间。优先评估 Parca / Pyroscope 而不是自建。</div></div>
+      <div class="point"><div class="label">⑤ 闭环</div><div>不止给人看：把分支 profile 接到 <strong>AutoFDO</strong>，让生产 profile 反馈进编译流水线，形成"跑得越多编得越好"的循环。这才是常驻采集 ROI 最高的部分。</div></div>
+      <div class="point warn"><div class="label">要主动提的风险</div><div>① PMU 在虚拟机上可能不可用，需要区分实例类型；② 性能计数器是侧信道，多租户环境要评估；③ 采集本身的开销要有熔断（比如目标机负载过高时跳过本轮）；④ 符号服务器挂了会让所有历史数据变成一堆地址，它是<u>关键依赖</u>而不是附属设施。</div></div>
+    </div>
+  </details></li>
+  <li><details class="qa">
+    <summary><span class="lvl adv">高级</span>同一份代码在 x86 上测得很好，搬到 ARM 服务器上 perf 结论完全对不上。可能是什么原因？</summary>
+    <div class="ans">
+      <div class="point"><div class="label">① 事件名不通用</div><div>命令一样但<strong>原生事件名完全不同</strong>：x86 的 <code>LLC-load-misses</code> 在 ARM 上要用 <code>ll_cache_miss_rd</code> / <code>l2d_cache_refill</code> 之类，还随核型号变。换机器第一件事是 <code>perf list</code>。</div></div>
+      <div class="point"><div class="label">② 计数器更少</div><div>ARM 常见 6 个可编程计数器（x86 常见 4 通用 + 3 固定），<strong>同样的 <code>-e</code> 列表在 ARM 上更容易触发复用外推</strong>，数字可信度下降。</div></div>
+      <div class="point"><div class="label">③ 精确采样机制不同</div><div>没有 PEBS，对应的是 <strong>ARM SPE</strong>（<code>-e arm_spe//</code>），行为和字段都不一样；LBR 对应 BRBE 且只有较新核才有，<code>--call-graph lbr</code> 往往直接不可用。</div></div>
+      <div class="point"><div class="label">④ 微架构差异本身</div><div>cache 层次与容量、cache line 大小（ARM 上可能是 128B，影响 <code>alignas(64)</code> 的假共享修复是否够）、内存序模型更弱（seq_cst 代价显著更高）、SIMD 是 NEON/SVE 而非 AVX。<u>结论对不上很可能是真的不一样，不是测错了。</u></div></div>
+      <div class="point deep"><div class="label">正确做法</div><div>不要移植"事件列表"，要移植"<strong>问题</strong>"。先用跨平台通用的 <code>cycles</code> / <code>instructions</code> / <code>task-clock</code> 建立 IPC 与时间分布，确认瓶颈类型；再按目标平台手册挑该平台的原生事件下钻。跨平台的更多差异见 <a href="../communication/arm_platform_comm.html">ARM 平台通信实战</a>。</div></div>
+    </div>
+  </details></li>
+</ol>
+</section>
+
+<!-- ============= CH16 ============= -->
+<section class="chapter" id="ch16">
+  <div class="ch-head">
+    <div class="num">16</div>
+    <div class="t">
+      <h2>速查卡 · 下一步</h2>
+      <p class="sub">一页速查 · 动手清单 · 延伸阅读</p>
+    </div>
+  </div>
+
+  <h3 id="s16-1">16.1 一页速查</h3>
+
+<pre><span class="cm">## 体检（先跑这个）</span>
+perf stat -d ./prog                       <span class="cm"># 整体计数器 + 细节</span>
+perf stat -r <span class="num">10</span> ./bench                    <span class="cm"># 跑 10 次看均值 ± 标准差</span>
+perf stat -a --per-core -e cycles -- sleep <span class="num">5</span>  <span class="cm"># 核间是否均衡</span>
+perf stat --topdown -a -- sleep <span class="num">5</span>           <span class="cm"># 四象限定瓶颈类型</span>
+
+<span class="cm">## 找热点</span>
+perf top -p &lt;pid&gt;                         <span class="cm"># 实时</span>
+perf record -F <span class="num">99</span> -g -p &lt;pid&gt; -- sleep <span class="num">30</span>  <span class="cm"># 离线采样（FP 回溯）</span>
+perf report --stdio --no-children         <span class="cm"># 看 Self 榜</span>
+perf report --sort dso                    <span class="cm"># CPU 花在哪个库</span>
+perf annotate -s hot_func                 <span class="cm"># 下钻到指令</span>
+
+<span class="cm">## 火焰图</span>
+perf script | stackcollapse-perf.pl | flamegraph.pl &gt; flame.svg
+perf record --off-cpu -g -a -- sleep <span class="num">10</span>    <span class="cm"># off-CPU（新内核）</span>
+
+<span class="cm">## 访存 / 并发</span>
+perf mem record ./prog &amp;&amp; perf mem report     <span class="cm"># 命中层级与延迟</span>
+perf c2c record -a -- sleep <span class="num">10</span> &amp;&amp; perf c2c report  <span class="cm"># 假共享</span>
+perf lock contention -a -b -- sleep <span class="num">10</span>     <span class="cm"># 锁竞争（BPF 模式）</span>
+perf sched record -- sleep <span class="num">5</span> &amp;&amp; perf sched latency --sort max
+
+<span class="cm">## 对比 / 探针</span>
+perf diff before.data after.data
+perf probe -x ./myapp --add <span class="str">'Handler::handle'</span>
+perf trace -s -p &lt;pid&gt; -- sleep <span class="num">10</span>
+
+<span class="cm">## 环境与符号（出问题先查这些）</span>
+perf list | less                          <span class="cm"># 这台机器支持什么事件</span>
+cat /proc/sys/kernel/perf_event_paranoid  <span class="cm"># 权限档位</span>
+cat /proc/sys/kernel/kptr_restrict        <span class="cm"># 内核符号可见性</span>
+perf buildid-list -i perf.data            <span class="cm"># 缺哪个 build-id</span>
+perf report --symfs /proc/&lt;pid&gt;/root      <span class="cm"># 容器符号</span>
+perf archive perf.data                    <span class="cm"># 打包给别人分析</span></pre>
+
+  <h3 id="s16-2">16.2 动手清单</h3>
+  <ol>
+    <li>在自己的服务上跑一遍 <code>perf stat -d</code>，把 IPC / branch-miss / LLC-miss 记下来当基线。</li>
+    <li>给项目加 <code>-fno-omit-frame-pointer</code> 重编，对比加之前 / 之后火焰图的层数差异——亲眼看到栈断是怎么回事。</li>
+    <li>故意写一段假共享代码（两个线程各自 <code>++</code> 相邻的 counter），用 <code>perf c2c</code> 把它抓出来，再 <code>alignas(64)</code> 修掉，记录加速比。</li>
+    <li>把服务的二进制 strip 后再分析一次，走通"build-id + 单独 debuginfo"的符号化链路。</li>
+    <li>做一次 <code>perf diff</code>：随便优化一处，验证"开销是不是只是搬家了"。</li>
+    <li>如果有裸金属机器，跑一次 <code>perf stat --topdown</code>，判断你的服务是 Frontend 还是 Backend 受限，再决定下一步优化方向。</li>
+  </ol>
+
+  <h3 id="s16-3">16.3 延伸阅读</h3>
+  <div class="info">
+    <strong>本站相关</strong>：<br>
+    • <a href="./performance_guide.html">C++ 性能优化方法论</a> — 拿到 perf 结论之后<em>怎么改</em>：cache / 分支 / 布局 / PGO<br>
+    • <a href="./memory_optimization_guide.html">内存优化指南</a> — 数据布局、假共享、分配器<br>
+    • <a href="./low_latency_guide.html">低延时实战</a> — 绑核、隔核、governor、抖动治理<br>
+    • <a href="./observability_guide.html#s12">可观测性指南 §12</a> — continuous profiling 的工程落地<br>
+    • <a href="./valgrind_guide.html">Valgrind 完全指南</a> — perf 的"完整普查"对照面<br>
+    • <a href="../system/observability_ebpf.html">系统观测 / eBPF / bpftrace</a> — 内核级、跨进程、可编程的那一半<br>
+    • <a href="../cpp/memory_model.html#s13-1">内存模型 · MESI</a> — 假共享与缓存一致性的机制层<br>
+    • <a href="../communication/arm_platform_comm.html">ARM 平台通信实战</a> — 跨架构的 PMU 与事件名差异
+  </div>
+
+  <div class="kmap">
+    <div class="kmap-title">学习闭环 · 你现在应该能做的事</div>
+    <div class="grid cols-2">
+      <ul style="font-size:14px">
+        <li>✓ 在陌生机器上 3 条命令内判断出瓶颈大类</li>
+        <li>✓ 解释 perf 为什么轻，以及自己什么时候把它变重了</li>
+        <li>✓ 看到断栈 / <code>[unknown]</code> 能分清是回溯问题还是符号问题</li>
+        <li>✓ 说清 FP / DWARF / LBR 的三方取舍并给出选型理由</li>
+      </ul>
+      <ul style="font-size:14px">
+        <li>✓ 读懂 <code>(62.13%)</code> 并知道复用外推会怎么骗你</li>
+        <li>✓ 用 Top-Down 四象限决定优化方向，而不是逐个猜事件</li>
+        <li>✓ 设计一套生产可用的常驻剖析方案（含符号服务器）</li>
+        <li>✓ 把 perf profile 接进 AutoFDO / BOLT 换免费性能</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<div class="footer-nav">
+  <a href="./performance_guide.html">⬅️ 性能优化方法论</a>
+  <a href="./valgrind_guide.html">➡️ Valgrind 完全指南</a>
+  <a href="../system/observability_ebpf.html">🔭 系统观测 / eBPF</a>
+  <a href="./low_latency_guide.html">⚡ 低延时实战</a>
+  <a href="perf_debug_directory.html">📚 目录</a>
+  <a href="../index.html">🏠 主页</a>
+</div>
+
+</main>
+</div>
+
+<footer>
+    <p>perf 全景 — PMU 采样原理 · 子命令谱系 · 栈回溯与符号化 · Top-Down · 生产实践 — 2026</p>
+</footer>
+
+<button class="back-top" id="backTop" onclick="window.scrollTo({top:0,behavior:'smooth'})">↑</button>
+
+<script>
+  const progress = document.getElementById('progress');
+  const links = document.querySelectorAll('aside.toc nav > ol > li > a');
+  const sections = document.querySelectorAll('section.chapter');
+  function onScroll() {
+    const h = document.documentElement;
+    const max = h.scrollHeight - h.clientHeight;
+    if (progress) progress.style.width = (max > 0 ? h.scrollTop / max * 100 : 0) + '%';
+    let cur = sections[0];
+    sections.forEach(s => {
+      if (s.getBoundingClientRect().top < window.innerHeight * 0.3) cur = s;
+    });
+    links.forEach(a => a.classList.toggle('active', cur && a.getAttribute('href') === '#' + cur.id));
+    document.getElementById('backTop').classList.toggle('show', window.scrollY > 400);
+  }
+  window.addEventListener('scroll', onScroll, { passive: true });
+  onScroll();
+</script>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>
