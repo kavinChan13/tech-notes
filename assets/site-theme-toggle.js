@@ -70,6 +70,73 @@
     toggle();
   }
 
+  // --- Wide tables: give each one its own horizontal scroll box. Guides put
+  //     raw <table> straight in the flow, so on a phone a 5-column comparison
+  //     table used to drag the whole page sideways. CSS alone can't fix it:
+  //     `display:block` on the table just re-lays the columns out at viewport
+  //     width, squeezing them to one character per line. A wrapper element is
+  //     the only way to let the table keep its natural width and scroll. ---
+  function wrapWideTables() {
+    var scope = document.querySelector('main') || document.body;
+    if (!scope) return;
+    var tables = scope.querySelectorAll('table');
+    for (var i = 0; i < tables.length; i++) {
+      var t = tables[i];
+      var p = t.parentNode;
+      if (!p || !p.classList || p.classList.contains('table-scroll')) continue;
+      var box = document.createElement('div');
+      box.className = 'table-scroll';
+      p.insertBefore(box, t);
+      box.appendChild(t);
+    }
+  }
+
+  // --- Mobile table of contents. Below 900px the .toc rail is parked
+  //     off-screen (article.css §5) and there was no other way to reach it,
+  //     so a 40-chapter guide could only be read by scrolling. Turn the same
+  //     <aside class="toc"> into a slide-in drawer behind a topnav button;
+  //     nothing per-page changes, and above 900px none of this is visible. ---
+  function setupTocDrawer() {
+    var toc = document.querySelector('aside.toc');
+    var links = document.querySelector('.tn-topnav .tn-navlinks');
+    if (!toc || !links || document.querySelector('.tn-toc-btn')) return;
+    if (!toc.id) toc.id = 'tn-toc';
+
+    var btn = document.createElement('button');
+    btn.className = 'tn-toc-btn';
+    btn.type = 'button';
+    btn.setAttribute('aria-label', '本页目录');
+    btn.setAttribute('aria-expanded', 'false');
+    btn.setAttribute('aria-controls', toc.id);
+    btn.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor">' +
+      '<path d="M2 3.5h12v1.6H2zM2 7.2h12v1.6H2zM2 10.9h8v1.6H2z"/></svg>';
+
+    var backdrop = document.createElement('div');
+    backdrop.className = 'tn-toc-backdrop';
+
+    function close() {
+      document.body.classList.remove('toc-open');
+      btn.setAttribute('aria-expanded', 'false');
+    }
+    function toggle() {
+      var open = document.body.classList.toggle('toc-open');
+      btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    }
+
+    btn.addEventListener('click', toggle);
+    backdrop.addEventListener('click', close);
+    // jumping to a section is the whole point of opening it
+    toc.addEventListener('click', function (e) { if (e.target.closest('a')) close(); });
+    document.addEventListener('keydown', function (e) { if (e.key === 'Escape') close(); });
+    // the rail comes back on its own past 900px; leave no stuck state behind
+    window.addEventListener('resize', function () {
+      if (window.innerWidth > 900) close();
+    }, { passive: true });
+
+    links.insertBefore(btn, links.firstChild);
+    document.body.appendChild(backdrop);
+  }
+
   function bind() {
     syncButtons(currentTheme());
     ['tn-theme-toggle', 'themeBtn'].forEach(function (id) {
@@ -81,6 +148,8 @@
       });
     });
     ensureBackTop();
+    wrapWideTables();
+    setupTocDrawer();
   }
 
   if (document.readyState === 'loading') {

@@ -1,0 +1,88 @@
+---
+description: 移动端排版：窄屏下任何页面都不许横向滚动
+globs: **/*.html
+alwaysApply: true
+---
+
+# 移动端排版
+
+站点部署在 GitHub Pages，**相当一部分读者用手机打开**。判据只有一条，而且是可机检的：
+
+> 任意页面在 390px 宽的视口下，`document.documentElement.scrollWidth` 必须等于视口宽度。
+> 一旦大于，整页可以左右拖动，正文被拖出屏幕——这就是"排版有问题"的真身。
+
+曾经全站 **386 / 488 个页面**在 390px 下横向溢出，最宽的
+`pm/prd_writing_kit.html` 达到 1059px（视口的 2.7 倍）。现已清零，任何一页再出现都是回归。
+
+## 根因只有两类，别去改单个页面
+
+1. **grid / flex 子项默认 `min-width:auto`**，也就是拒绝收缩到 min-content 以下。
+ `.vs` / `.cmp` 卡片里一行长代码、一张宽表格，就能把所在的轨道撑开；而 `<main>`
+ 自己就是 `.layout` 的 grid 子项，于是整页跟着变宽。`<pre>` 明明有 `overflow-x:auto`，
+ 但祖先一直在长大，它永远轮不到滚动。
+2. **宽表格没有自己的滚动容器**。`table{width:100%}` 挡不住 min-content 溢出。
+
+因此修复一律落在 `assets/article.css` 第 5 节（它最后加载，能盖过几百份内联 `<style>`），
+**不要为了某一页去它的内联样式里加 `@media`**。
+
+## 已经生效的共享规则（改动前先读一遍，别重复造）
+
+`assets/article.css` §5：
+
+- 无条件：`.layout > main{min-width:0}`，以及 `.vs/.cmp/.compare/.two-col/.grid*` 的
+ **直接子项** `min-width:0`（这条在桌面同样必要，`communication/cpp_modern_in_comm.html`
+ 在 1440px 下也曾溢出 52px）。
+- 无条件：`pre{max-width:100%;overflow-x:auto}`——`guide-theme.css` 给了，
+ 但 `ai-templates/` `pm/templates/` 这些不加载它的页面没有。
+- `≤900px`（与 `.layout` 塌成单列同一个断点）：`main, main *{min-width:0}`、
+ 表格滚动、`main,article{overflow-wrap:break-word}`、`svg[viewBox]/canvas/img{max-width:100%}`。
+- `≤760px`：`main` 内边距 `28px 16px 80px`、hero 与章节标题缩号、
+ `.vs/.cmp/.compare/.grid-*` 一律单列、`th/td` 内边距收紧。
+
+`assets/site-theme-toggle.js` 在 `bind()` 里做两件与本规则相关的事：
+
+- `wrapWideTables()`：把每个 `main table` 包进 `<div class="table-scroll">`。
+ **这一步只能用 JS**：给 `<table>` 设 `display:block` 不会产生滚动条，只会让匿名
+ 表格盒按视口宽度重排，把中文列挤成一行一个字。CSS 里的 `main table{display:block;…}`
+ 只是关掉 JS 时的兜底。
+- `setupTocDrawer()`：往顶栏 `.tn-navlinks` 最前面插一个 `.tn-toc-btn`（列表图标，
+ `aria-label="本页目录"`），点击给 `<body>` 加 `toc-open`，把同一个
+ `<aside class="toc">` 当抽屉滑出来（≤900px 才可见，>900px 自动收起）。
+ 遮罩 `.tn-toc-backdrop` 同样是 JS 建的。**页面侧不需要任何改动**——
+ 只要有 `aside.toc` + `.tn-topnav` 就自动生效（434 篇里 433 篇满足）。
+
+⚠️ 抽屉的停靠态用 `transform:translateX(-102%)` 而不是 `left:-300px`。
+后者是在猜章节标题有多长：`aside.toc` 是 shrink-to-fit 的，标题一长它就比 300px 宽，
+于是有一条会从左边探回正文上面。
+
+## 写新页面时的注意事项
+
+- **断点**：横向溢出相关的结构性规则用 `760px`（手机）；侧栏/单列相关的用 `900px`。
+ 别再引入 `640` / `800` / `1000` 之外的新断点，现有的已经够杂了。
+- **固定像素宽的可视化**（矩阵、泳道、时间轴、步骤条）在 390px 下必然放不下。
+ 给它套一个 `overflow-x:auto` 的容器，不要指望它缩放——
+ 参考 `ai-native/transformer_llm_architecture.html` 的 `#attn-matrix-container`。
+- **绝对定位 + `white-space:nowrap` 的标签**是隐形炸弹：`kh-guide.css` 的
+ `.flow-arrow[data-label]::before` 挂在一个 2px 宽的箭头右边，长标签直接顶穿卡片。
+ 这类标签在窄屏要么居中换行，要么别用绝对定位。
+- **`<code>` 里的长标识符**（`std::hardware_destructive_interference_size`）
+ 靠继承来的 `overflow-wrap:break-word` 断行，页面里不要再写 `white-space:nowrap` 抵消它。
+- **顶栏**：`≤640px` 已隐藏阅读时长、收紧间距、允许品牌名截断。往顶栏里加东西前
+ 先在 390px 量一遍。
+
+## 自检
+
+没有纯静态脚本能替代真实渲染——溢出是布局算出来的，不是文本里能 grep 到的。
+改动共享 CSS / JS，或新增带图表、表格的页面后，两条都要跑到 `0 / N`：
+
+```bash
+npm run check:mobile    # 390px，手机
+npm run check:desktop   # 1440px，确认桌面没被顺手改坏
+```
+
+单页调试：`node scripts/check_mobile_layout.mjs <page.html>`，
+它会列出溢出最远的几个元素及其父元素，直接告诉你该改哪个容器。
+
+这个脚本**不在 CI 里**：`audit.yml` 是纯 Python 的，而它需要 Playwright 和一个浏览器
+（优先用本机已装的 Edge / Chrome，都没有才退回 Playwright 自带的 Chromium）。
+所以它属于**提交前手动跑**的那一档，和 `audit_*.py` 一样重要，只是没人替你把关。
