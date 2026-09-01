@@ -65,11 +65,16 @@ node tools/build-cards.mjs architect  # 再用真数据填回
 
 ---
 
-## `inject-shell.ps1` — 共享主题注入（旧）
+## 已退役的脚本
 
-> **TODO**：路径在 2026-05 重构后过期，待修复。
-
-批量给文档注入 `assets/site-theme.css` + `assets/site-theme.js` 引用，并为带左侧栏的长文标记 `tn-shell-overlay`。
+- **`enrich-cards.mjs`**（2026-08 删除）——一次性迁移脚本，把
+  `why_asked` / `answers` / `failure_modes` / `follow_ups` 四个字段合入
+  `interview/data/<slug>.json`。它把 212 张卡的正文以模板字符串内嵌在脚本里，
+  单文件 826 KB，其中 99.8% 是数据。这些内容**早已全部写进 JSON**
+  （architect 57 / em 45 / cpp 75 / pm 35，逐条核对无遗漏），
+  JSON 才是真源，所以脚本只是一份重复副本。需要时从 git 历史取回。
+- **`inject-shell.ps1`**——文件早已不在仓库里，主题注入现在由
+  `scripts/theme_rollout.py` 负责。
 
 ---
 

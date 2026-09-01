@@ -18,6 +18,10 @@ consistency, search-index):
   7. no hardcoded dark background/border hexes in inline <style>
   8. the 12 MB search index is pulled in through search-index-loader.js, never
      linked directly
+  9. a vendored library (mermaid / chart.js) is never a render-blocking
+     <script> in <head>, and is only loaded by pages that actually use it
+ 10. icon-only buttons carry an aria-label, and every page has a
+     <meta name="description">
 
 Chrome pages (home, *_directory.html, template indexes) deliberately use a
 different shell — they get the checks that still apply (1, 2, 3, 7, 8).
@@ -30,6 +34,7 @@ from __future__ import annotations
 
 import re
 import sys
+from html import unescape as html_unescape
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -47,6 +52,12 @@ DARK_HEX = re.compile(
 # Declarations inside these blocks are *supposed* to be dark: the :root token
 # defaults and anything explicitly scoped to the dark theme.
 THEME_SCOPED = re.compile(r"[^{}]*(?::root|\[data-theme=[\"']?dark)[^{}]*\{[^}]*\}")
+
+VENDOR_TAG = re.compile(
+    r'<script[^>]*src="[^"]*vendor/(mermaid|chart)[^"]*"[^>]*>\s*</script>', re.I)
+ICON_BTN = re.compile(r"<button\b([^>]*)>([\s\S]{0,60}?)</button>", re.I)
+# Any letter, digit or CJK ideograph counts as a real, self-labelling caption.
+WORDY = re.compile(r"[0-9A-Za-z\u3400-\u9fff\u3040-\u30ff]")
 
 THEME_INIT = "tn-theme-init"
 TOKENS = "site-tokens.css"
@@ -138,6 +149,32 @@ def audit(path: Path) -> list[str]:
     # 8. search index must be lazy
     if re.search(r'src="[^"]*assets/search-index\.js"', text):
         out.append("links assets/search-index.js directly; use search-index-loader.js")
+
+    # 9. vendored libraries must not block rendering, and must be used
+    for m in VENDOR_TAG.finditer(text):
+        lib, tag = m.group(1).lower(), m.group(0)
+        in_head = bool(head_m) and m.start() < head_m.end()
+        deferred = "defer" in tag or "async" in tag
+        if in_head and not deferred:
+            out.append(
+                f"{lib} is a render-blocking <script> in <head>; move it next to its "
+                "init at the end of <body>, or add defer if init waits for DOMContentLoaded")
+        used = ('class="mermaid"' in text or "class='mermaid'" in text) if lib == "mermaid" \
+            else "<canvas" in text
+        if not used:
+            out.append(f"loads {lib} but the page has no diagram/canvas that uses it")
+
+    # 10. icon-only buttons and page description.
+    # "Icon-only" means the visible text has no word characters at all — an
+    # arrow or a symbol. A button reading 重置 / 清空 already labels itself.
+    for m in ICON_BTN.finditer(text):
+        if "aria-label" in m.group(1):
+            continue
+        inner = html_unescape(re.sub(r"<[^>]+>", "", m.group(2))).strip()
+        if not WORDY.search(inner):
+            out.append(f"icon-only <button> without aria-label: {inner or '(empty)'!r}")
+    if not re.search(r'<meta[^>]+name=["\']description["\']', head, re.I):
+        out.append("no <meta name=\"description\"> (search engines will invent a snippet)")
 
     return out
 

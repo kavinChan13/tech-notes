@@ -60,6 +60,8 @@
     }
     if (btn.dataset.tnBt) return;
     btn.dataset.tnBt = '1';
+    // Pages ship their own arrow-only button; label it too, not just ours.
+    if (!btn.getAttribute('aria-label')) btn.setAttribute('aria-label', '回到顶部');
     if (!btn.getAttribute('onclick') && !btn.onclick) {
       btn.addEventListener('click', function () { window.scrollTo({ top: 0, behavior: 'smooth' }); });
     }
