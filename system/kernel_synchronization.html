@@ -1,0 +1,2117 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>内核同步原语与 RCU · 原子操作 / 内存屏障 / spinlock / seqlock / per-CPU / RCU / lockdep</title>
+<meta name="description" content="内核态同步完全指南：内核并发的四个来源、原子操作与 READ_ONCE/WRITE_ONCE、内存屏障为什么总是成对出现、spinlock 家族的变体决策矩阵与 qspinlock 演进、mutex/rwsem 的乐观自旋与饥饿、seqlock 与 per-CPU 变量、RCU 的发布-订阅-宽限期三件套与真实陷阱、lockdep / KCSAN / hung task 排障，含 12 道面试题。">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<style>
+  html { scroll-behavior: smooth; }
+  body { line-height: 1.75; min-height: 100vh; overflow-x: hidden; }
+  main { min-width: 0; }
+  pre { font-family: var(--mono); font-size: .85rem; line-height: 1.6; }
+  code { font-family: var(--mono); }
+  svg text { font-family: var(--sans); }
+  table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: .9rem; }
+  th, td { border: 1px solid var(--border); padding: .55rem .85rem; text-align: left; vertical-align: top; }
+  th { background: var(--bg-card-2); color: var(--accent); }
+  tr:nth-child(even) { background: color-mix(in srgb, var(--text) 3%, transparent); }
+  .analogy::before { content: "🏠 生活类比 · "; color: var(--accent-4); font-weight: 700; font-size: .86rem; }
+  .def > strong:first-child { color: var(--accent); }
+
+  .fig { margin: 22px 0; overflow-x: auto; }
+  .fig svg { max-width: 100%; height: auto; }
+  .fig .box   { fill: var(--bg-card-2); stroke: var(--border-2); stroke-width: 1.2; }
+  .fig .box-a { fill: color-mix(in srgb, var(--accent) 14%, var(--bg-card)); stroke: var(--accent); stroke-width: 1.2; }
+  .fig .box-g { fill: color-mix(in srgb, var(--accent-3) 14%, var(--bg-card)); stroke: var(--accent-3); stroke-width: 1.2; }
+  .fig .box-p { fill: color-mix(in srgb, var(--accent-2) 14%, var(--bg-card)); stroke: var(--accent-2); stroke-width: 1.2; }
+  .fig .box-y { fill: color-mix(in srgb, var(--accent-4) 14%, var(--bg-card)); stroke: var(--accent-4); stroke-width: 1.2; }
+  .fig .box-r { fill: color-mix(in srgb, var(--danger) 14%, var(--bg-card)); stroke: var(--danger); stroke-width: 1.2; }
+  .fig .t   { fill: var(--text); font-size: 12px; }
+  .fig .tb  { fill: var(--text); font-size: 12.5px; font-weight: 700; }
+  .fig .ts  { fill: var(--text-dim); font-size: 10.5px; }
+  .fig .tm  { fill: var(--text-dim); font-size: 10.5px; font-family: var(--mono); }
+  .fig .ta  { fill: var(--accent); font-size: 12px; font-weight: 700; }
+  .fig .tg  { fill: var(--accent-3); font-size: 11px; font-weight: 600; }
+  .fig .ty  { fill: var(--accent-4); font-size: 11px; font-weight: 600; }
+  .fig .tr  { fill: var(--danger); font-size: 11px; font-weight: 600; }
+  .fig .ln  { stroke: var(--border-2); stroke-width: 1.4; fill: none; }
+  .fig .ln-a{ stroke: var(--accent); stroke-width: 1.6; fill: none; }
+  .fig .ln-g{ stroke: var(--accent-3); stroke-width: 1.6; fill: none; }
+  .fig .ln-r{ stroke: var(--danger); stroke-width: 1.6; fill: none; }
+  .fig .ln-d{ stroke: var(--text-mute); stroke-width: 1.2; fill: none; stroke-dasharray: 4 3; }
+  .fig .ar-a{ fill: var(--accent); }
+  .fig .ar-g{ fill: var(--accent-3); }
+  .fig .ar-r{ fill: var(--danger); }
+
+  .vs { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 16px 0; }
+  @media (max-width: 860px) { .vs { grid-template-columns: 1fr; } }
+  .vs > div { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+  .vs > div > h5 { margin: 0 0 6px; font-size: .88rem; }
+  .vs .bad  { border-color: color-mix(in srgb, var(--danger) 45%, var(--border)); background: color-mix(in srgb, var(--danger) 6%, var(--bg-card)); }
+  .vs .bad  > h5 { color: var(--danger); }
+  .vs .good { border-color: color-mix(in srgb, var(--accent-3) 45%, var(--border)); background: color-mix(in srgb, var(--accent-3) 6%, var(--bg-card)); }
+  .vs .good > h5 { color: var(--accent-3); }
+  .vs pre { margin: 6px 0 0; font-size: .78rem; }
+
+  .intuition { background: color-mix(in srgb, var(--accent) 8%, var(--bg-card)); border-left: 4px solid var(--accent-4); padding: 14px 18px; border-radius: 0 10px 10px 0; margin: 14px 0; font-size: 14px; line-height: 1.7; }
+  .intuition::before { content: "🎯 关键 · "; color: var(--accent-4); font-weight: 700; font-size: 13px; }
+  .tool-card { background: color-mix(in srgb, var(--accent) 8%, var(--bg-card)); border: 1px solid var(--border); border-radius: 10px; padding: 14px 18px; margin: 12px 0; border-left: 3px solid var(--accent); }
+  .tool-card h4 { margin: 0 0 8px; font-size: 14.5px; color: var(--accent); }
+  .tool-card.violet { border-left-color: var(--accent-2); } .tool-card.violet h4 { color: var(--accent-2); }
+  .tool-card.amber  { border-left-color: var(--accent-4); } .tool-card.amber h4  { color: var(--accent-4); }
+  .tool-card.green  { border-left-color: var(--accent-3); } .tool-card.green h4  { color: var(--accent-3); }
+  .tool-card.danger { border-left-color: var(--danger); }   .tool-card.danger h4 { color: var(--danger); }
+  .tool-card ul { margin: 6px 0 0; padding-left: 22px; }
+  .tool-card li { font-size: 13.5px; color: var(--text); line-height: 1.7; margin: 4px 0; }
+  .checklist { background: color-mix(in srgb, var(--green) 8%, var(--bg-card)); border: 1px solid color-mix(in srgb, var(--green) 30%, transparent); border-left: 4px solid var(--green); border-radius: 0 12px 12px 0; padding: 16px 20px; margin: 14px 0; }
+  .checklist h4 { color: var(--accent-3); margin: 0 0 10px; font-size: 14px; letter-spacing: .5px; }
+  .checklist ul { margin: 0; padding-left: 22px; }
+  .checklist li { font-size: 13.5px; color: var(--text); line-height: 1.7; margin: 6px 0; }
+  .insight-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin: 16px 0; }
+  .insight-grid .card { background: color-mix(in srgb, var(--accent) 8%, var(--bg-card)); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; min-width: 0; }
+  .insight-grid .card h4 { margin: 0 0 8px; font-size: 14px; color: var(--accent-4); }
+  .insight-grid .card.green  { border-left: 3px solid var(--accent-3); } .insight-grid .card.green h4  { color: var(--accent-3); }
+  .insight-grid .card.violet { border-left: 3px solid var(--accent-2); } .insight-grid .card.violet h4 { color: var(--accent-2); }
+  .insight-grid .card p { font-size: 13px; color: var(--text); line-height: 1.65; margin: 0; }
+  @media (max-width: 760px) { .insight-grid { grid-template-columns: 1fr; } }
+</style>
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="tn-shell-overlay has-topnav">
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="linux_system_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 110 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="progress" id="progress"></div>
+<div class="layout">
+  <aside class="toc">
+    <h2>内核同步与 RCU</h2>
+    <nav>
+      <ol>
+        <li><a href="#s1">内核并发从哪来</a></li>
+        <li><a href="#s2">原子操作与 READ_ONCE</a></li>
+        <li><a href="#s3">内存屏障</a></li>
+        <li><a href="#s4">spinlock 家族</a></li>
+        <li><a href="#s5">可睡眠锁：mutex / rwsem</a></li>
+        <li><a href="#s6">seqlock 与 per-CPU</a></li>
+        <li><a href="#s7">RCU 原理</a></li>
+        <li><a href="#s8">RCU 的边界与陷阱</a></li>
+        <li><a href="#s9">死锁排查与竞态检测</a></li>
+        <li><a href="#s10">面试题集（12 道）</a>
+          <ol>
+            <li><a href="#s10-1">10.1 基础</a></li>
+            <li><a href="#s10-2">10.2 中级</a></li>
+            <li><a href="#s10-3">10.3 高级</a></li>
+          </ol>
+        </li>
+      </ol>
+    </nav>
+  </aside>
+
+<main>
+
+  <header class="hero">
+    <div class="badge">Linux System · Kernel Sync · 2026</div>
+    <h1>内核同步原语与 RCU</h1>
+    <p class="sub">本站的 <a href="../cpp/memory_model.html">C++ 内存模型</a>与 <a href="../cpp/concurrency_deep.html">并发深入</a>讲的是<strong>用户态</strong>的内存序与并发，<a href="linux_device_driver.html">Linux 设备驱动</a>里只用一小节点到了驱动里的竞态。这篇讲<strong>内核态的同步</strong>——它和用户态的根本差别在于：你的代码可能跑在<strong>中断上下文（绝对不能睡眠）</strong>、可能被<strong>内核抢占</strong>打断、要面对 SMP 真并行与 CPU 乱序，而且<strong>一个死锁不是进程挂了，是整机 hang</strong>。</p>
+    <div class="meta-row">
+      <span class="pill red">核心难度 ★★★★★</span>
+      <span class="pill cyan">面试高频</span>
+      <span class="pill green">阅读时长 ~110 min</span>
+      <span class="pill amber">前置 进程调度 · 设备驱动 · C++ 内存模型</span>
+    </div>
+    <div class="meta">
+      <span>atomic_t · READ_ONCE</span>
+      <span>smp_mb · acquire/release</span>
+      <span>spinlock · qspinlock</span>
+      <span>seqlock · per-CPU</span>
+      <span>RCU · 宽限期</span>
+      <span>lockdep · KCSAN</span>
+    </div>
+  </header>
+
+<!-- ================================================================ §1 -->
+<section class="chapter" id="s1">
+  <div class="ch-head">
+    <div class="num">01</div>
+    <div class="t"><h2>内核并发从哪来</h2><p class="sub">四个并发源，决定了锁的种类</p></div>
+  </div>
+
+  <p>用户态写并发，你需要担心的东西其实很少：几个线程、一把 <code>std::mutex</code>、必要时上 <code>std::atomic</code> 配好 <code>memory_order</code>。这三样东西之所以够用，是因为用户态有一个巨大的前提——<strong>你的代码永远运行在一个可以睡眠的上下文里</strong>。锁不到就阻塞，阻塞就让出 CPU，内核会在合适的时候把你唤醒。整个 C++ 并发模型都建立在这个前提上。</p>
+
+  <p>内核里这个前提<strong>不成立</strong>。同一段内核函数，可能被系统调用路径调用（进程上下文，可以睡眠），也可能被网卡中断处理程序调用（中断上下文，绝对不能睡眠）；可能在持有自旋锁的时候被调用（原子上下文，一旦睡眠整机卡死）。这就是为什么内核里锁的种类比用户态多这么多——<strong>不是内核开发者喜欢造轮子，是不同的并发源必须用不同的手段挡住。</strong></p>
+
+  <div class="analogy">用户态并发像<strong>几个同事在同一间办公室协作</strong>：谁要用打印机就等一下，等的人可以先去喝咖啡（睡眠），没有额外成本。内核并发像<strong>医院急诊科的值班室</strong>：你正在写病历（进程上下文），救护车随时会拉响警报把你叫走（中断），叫走时你手上可能正拿着唯一那份公用病历夹（临界区）。如果你在拿着病历夹的时候跑去休息室睡觉（持锁睡眠），下一个来找病历的人就只能站在门口<strong>干等到天亮</strong>——而且他站的那台电梯还堵着（自旋烧 CPU）。急诊科的规矩之所以又多又死，就是因为「被叫走」是常态。</div>
+
+  <h3>1.1 四个并发源</h3>
+
+  <div class="insight-grid">
+    <div class="card"><h4>① SMP 真并行</h4><p>32 核机器上，32 段内核代码<strong>字面意义上同时</strong>在跑。两个 CPU 同时执行同一个函数、同时改同一个链表，这是最直观的并发源，也是唯一在单核机器上不存在的那个。</p></div>
+    <div class="card green"><h4>② 内核抢占</h4><p><code>CONFIG_PREEMPT</code> 下，进程上下文的内核代码<strong>可以在几乎任意一条指令处被更高优先级的任务抢走</strong>。哪怕只有一个 CPU，你的临界区也会被切成两半执行。</p></div>
+    <div class="card violet"><h4>③ 中断 / 软中断</h4><p>硬中断和软中断可以在<strong>同一个 CPU 上</strong>插到你的临界区中间，而且它们不是「另一个任务」——它们借用当前任务的内核栈，无法被调度器调走，只能等它跑完。</p></div>
+    <div class="card"><h4>④ 主动睡眠让出</h4><p><code>kmalloc(GFP_KERNEL)</code>、<code>copy_to_user</code>、<code>mutex_lock</code>、<code>msleep</code> 都<strong>可能</strong>睡。睡眠 = 调用 <code>schedule()</code> = 别人开始跑你刚才那段代码。这是最隐蔽的一个源。</p></div>
+  </div>
+
+  <div class="def"><strong>上下文（context）</strong>：内核用它描述「当前这段代码运行在什么身份下」，直接决定你能用哪些同步原语。<strong>进程上下文</strong>——由系统调用、内核线程进入，有 <code>current</code>，可以睡眠；<strong>中断上下文</strong>——硬中断处理程序、软中断/tasklet，借用当前任务的栈，<strong>不能睡眠</strong>（睡了就把一个无关的任务永久挂起，而且没人能唤醒中断）；<strong>原子上下文</strong>——广义概念，指 <code>preempt_count != 0</code> 的任何时刻，包括持有自旋锁、关中断、关抢占、在中断里，此时同样<strong>不能睡眠</strong>。</div>
+
+  <div class="def"><strong><code>preempt_count</code></strong>：内核为每个任务维护的一个复合计数器，把「抢占禁用层数」「软中断禁用层数」「硬中断嵌套层数」「NMI 层数」压在同一个 32 位整数的不同位段里。<code>preempt_disable()</code>、<code>local_bh_disable()</code>、进入硬中断都会给对应位段加一。<code>in_atomic()</code>、<code>in_interrupt()</code>、<code>might_sleep()</code> 全部靠读它来判断。<strong>后面所有「能不能睡」的讨论，本质都是在问这个数是不是 0。</strong></div>
+
+  <h3>1.2 谁能打断谁</h3>
+
+  <p>这张表是内核同步选型的<strong>唯一依据</strong>。选锁的过程其实就是：先问「我这段数据会被谁访问」，再从表里查「那个人能不能打断我」，能打断就必须挡住它。</p>
+
+  <table>
+    <thead><tr><th>打断者</th><th>能打断</th><th>不能打断</th><th>要挡住它，你得</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><strong>另一个 CPU</strong>（SMP）</td>
+        <td>所有上下文，包括对方关了中断的临界区</td>
+        <td>—（它是真并行，谈不上「打断」）</td>
+        <td>必须用<strong>真正的锁</strong>：<code>spin_lock</code> / <code>mutex</code>。单纯关中断、关抢占对它<strong>完全无效</strong>——这是新手最常犯的错</td>
+      </tr>
+      <tr>
+        <td><strong>硬中断</strong>（hardirq）</td>
+        <td>本 CPU 上的进程上下文、软中断</td>
+        <td>同 CPU 的另一个硬中断（现代内核的中断处理程序默认在本 CPU 关中断的状态下运行，不嵌套）</td>
+        <td><code>local_irq_save()</code> 或 <code>spin_lock_irqsave()</code></td>
+      </tr>
+      <tr>
+        <td><strong>软中断 / tasklet</strong></td>
+        <td>本 CPU 上的进程上下文</td>
+        <td>硬中断处理程序</td>
+        <td><code>local_bh_disable()</code> 或 <code>spin_lock_bh()</code></td>
+      </tr>
+      <tr>
+        <td><strong>内核抢占</strong></td>
+        <td>进程上下文里可抢占的区间</td>
+        <td><code>preempt_count != 0</code> 的区间（持自旋锁 / 关中断 / 中断里）</td>
+        <td><code>preempt_disable()</code>；<strong>持有 <code>spin_lock</code> 时已经自动关了抢占</strong></td>
+      </tr>
+      <tr>
+        <td><strong>自己睡眠让出</strong></td>
+        <td>你自己的临界区（醒来时世界已经变了）</td>
+        <td>—</td>
+        <td>要么别在临界区里调可能睡的函数，要么改用可睡眠锁把整段保护起来</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="intuition">选锁的口诀只有一句：<strong>和谁竞争，就关谁</strong>。只跟别的 CPU 竞争 → <code>spin_lock</code>；还跟本 CPU 的软中断竞争 → <code>spin_lock_bh</code>；还跟硬中断竞争 → <code>spin_lock_irqsave</code>；临界区里要睡 → <code>mutex</code>。多关是性能损失（关中断会推高中断延迟），少关是随机崩溃。</div>
+
+  <h3>1.3 一个经典竞态：中断与进程上下文共享队列</h3>
+
+  <p>下面这段是驱动里最常见的结构：中断处理程序把收到的数据包挂进链表，进程上下文的 <code>read()</code> 从链表里取走。它看起来毫无问题，但在真机上会随机 panic。</p>
+
+  <div class="vs">
+    <div class="bad">
+      <h5>❌ 只用了普通 spin_lock</h5>
+<pre><span class="cm">/* 进程上下文：用户调 read() 走到这里 */</span>
+<span class="kw">static</span> ssize_t drv_read(...)
+{
+    <span class="kw">struct</span> pkt *p = <span class="kw">NULL</span>;
+
+    spin_lock(&amp;dev-&gt;rx_lock);      <span class="cm">/* ← 只关了抢占 */</span>
+    <span class="kw">if</span> (!list_empty(&amp;dev-&gt;rx_list)) {
+        p = list_first_entry(&amp;dev-&gt;rx_list,
+                             <span class="kw">struct</span> pkt, node);
+        list_del(&amp;p-&gt;node);
+    }
+    spin_unlock(&amp;dev-&gt;rx_lock);
+    ...
+}
+
+<span class="cm">/* 硬中断：网卡收包 */</span>
+<span class="kw">static</span> irqreturn_t drv_isr(<span class="kw">int</span> irq, <span class="kw">void</span> *arg)
+{
+    spin_lock(&amp;dev-&gt;rx_lock);      <span class="cm">/* ★ 死锁点 */</span>
+    list_add_tail(&amp;pkt-&gt;node, &amp;dev-&gt;rx_list);
+    spin_unlock(&amp;dev-&gt;rx_lock);
+    <span class="kw">return</span> IRQ_HANDLED;
+}</pre>
+      <p style="font-size:.82rem;margin:8px 0 0">进程上下文在<strong>本 CPU</strong> 拿到锁，链表指针改了一半时网卡中断到来。ISR 在<strong>同一个 CPU</strong> 上尝试拿同一把锁——持锁者被中断挂着、永远回不去解锁，ISR 就在那儿自旋。<strong>这个 CPU 彻底卡死</strong>，几秒后 <code>watchdog: BUG: soft lockup</code>。</p>
+    </div>
+    <div class="good">
+      <h5>✅ 进程侧用 irqsave 挡住中断</h5>
+<pre><span class="kw">static</span> ssize_t drv_read(...)
+{
+    <span class="kw">struct</span> pkt *p = <span class="kw">NULL</span>;
+    <span class="kw">unsigned</span> <span class="kw">long</span> flags;
+
+    <span class="cm">/* 关本 CPU 中断 + 拿锁，一步完成 */</span>
+    spin_lock_irqsave(&amp;dev-&gt;rx_lock, flags);
+    <span class="kw">if</span> (!list_empty(&amp;dev-&gt;rx_list)) {
+        p = list_first_entry(&amp;dev-&gt;rx_list,
+                             <span class="kw">struct</span> pkt, node);
+        list_del(&amp;p-&gt;node);
+    }
+    spin_unlock_irqrestore(&amp;dev-&gt;rx_lock, flags);
+
+    <span class="cm">/* ★ 耗时操作放在临界区【外面】 */</span>
+    <span class="kw">if</span> (p) {
+        copy_to_user(buf, p-&gt;data, p-&gt;len);  <span class="cm">/* 可能睡 */</span>
+        kfree(p);
+    }
+    ...
+}
+
+<span class="cm">/* ISR 侧保持 spin_lock 即可：
+ * 它自己已经在关中断的上下文里跑 */</span></pre>
+      <p style="font-size:.82rem;margin:8px 0 0">关键在于<strong>只有可能被中断打断的那一侧需要关中断</strong>。ISR 本身已经在关中断状态，再 <code>irqsave</code> 只是多几条指令、没有正确性收益（但也不算错，很多驱动为了统一写法都用 <code>irqsave</code>）。</p>
+    </div>
+  </div>
+
+  <div class="box star"><strong>面试加分点</strong>：这个 bug 的可怕之处在于<strong>它在单 CPU 上更容易复现，在多 CPU 上反而可能长期潜伏</strong>。多核时 ISR 有很大概率跑在另一个核上，那样只是正常的锁等待，一切正常；只有 ISR 恰好落在持锁的那个核上才死。所以「在 16 核开发机上压测一周没问题，客户 2 核虚拟机上十分钟就 hang」是这类 bug 的典型表现。能说出这一层，说明你真的理解了「自旋锁的死锁是<strong>本 CPU</strong> 问题，不是跨 CPU 问题」。</div>
+
+  <div class="note"><strong>PREEMPT_RT 会改变这里的部分规则。</strong>在实时内核上，<code>spinlock_t</code> 被换成了可睡眠的 rt_mutex，持有它<strong>不再禁止抢占</strong>；真正的「关抢占自旋锁」变成了 <code>raw_spinlock_t</code>。中断处理程序默认也被线程化。所以 RT 上「持 <code>spinlock_t</code> 时能不能 <code>kmalloc(GFP_KERNEL)</code>」的答案和主线内核相反。写通用驱动时按主线内核的严格规则写（不睡眠、临界区短），在 RT 上一定是安全的；反过来不成立。详见 <a href="../embedded-realtime/preempt_rt_deep_dive.html">PREEMPT_RT 深入</a>。</div>
+</section>
+
+<!-- ================================================================ §2 -->
+<section class="chapter" id="s2">
+  <div class="ch-head">
+    <div class="num">02</div>
+    <div class="t"><h2>原子操作与 READ_ONCE / WRITE_ONCE</h2><p class="sub">最便宜的同步，和编译器的一场博弈</p></div>
+  </div>
+
+  <p>不是所有共享数据都值得上锁。如果共享的只是一个计数器、一个标志位，用一条 CPU 指令就能原子地改完，那么加锁的开销（争用时的 cacheline 迁移、可能的睡眠唤醒）就完全是浪费。内核为此提供了两套东西：<strong>原子类型 <code>atomic_t</code></strong>，以及<strong>比锁更基础、但极其容易被忽视的 <code>READ_ONCE()</code> / <code>WRITE_ONCE()</code></strong>。</p>
+
+  <h3>2.1 atomic_t 与常用 API</h3>
+
+  <div class="def"><strong><code>atomic_t</code></strong>：内核的原子整数类型，定义就是一个包了一层结构体的 <code>int</code>（<code>typedef struct { int counter; } atomic_t;</code>）。<strong>包这一层是刻意的</strong>——它让你没法对它做普通的 <code>++</code>、没法直接赋值，必须走 <code>atomic_*()</code> 接口，于是所有访问在代码里都是显式可见的。它是 <strong>32 位有符号</strong>的；需要 64 位就用 <code>atomic64_t</code>，需要位宽无关的长整型用 <code>atomic_long_t</code>。</div>
+
+<pre><span class="pp">#include</span> <span class="str">&lt;linux/atomic.h&gt;</span>
+
+<span class="kw">static</span> atomic_t   refcnt = ATOMIC_INIT(<span class="num">1</span>);
+<span class="kw">static</span> atomic64_t bytes_rx = ATOMIC64_INIT(<span class="num">0</span>);
+
+<span class="cm">/* ── 读写：不是 RMW，没有任何内存序保证 ───────────── */</span>
+<span class="kw">int</span> v = atomic_read(&amp;refcnt);        <span class="cm">/* 内部就是 READ_ONCE() */</span>
+atomic_set(&amp;refcnt, <span class="num">1</span>);              <span class="cm">/* 内部就是 WRITE_ONCE() */</span>
+
+<span class="cm">/* ── 无返回值的 RMW：原子，但【不带内存屏障】 ─────── */</span>
+atomic_inc(&amp;refcnt);
+atomic_dec(&amp;refcnt);
+atomic_add(<span class="num">4</span>, &amp;refcnt);
+
+<span class="cm">/* ── 有返回值的 RMW：原子 + 【全屏障】 ───────────── */</span>
+<span class="kw">int</span> now = atomic_add_return(<span class="num">1</span>, &amp;refcnt);
+<span class="kw">int</span> old = atomic_fetch_add(<span class="num">1</span>, &amp;refcnt);
+<span class="kw">bool</span> zero = atomic_dec_and_test(&amp;refcnt); <span class="cm">/* 减 1 后是否为 0 —— 引用计数的标准写法 */</span>
+
+<span class="cm">/* ── 比较交换：成功时全屏障，失败时【无序】 ──────── */</span>
+<span class="kw">int</span> prev = atomic_cmpxchg(&amp;refcnt, <span class="num">2</span>, <span class="num">3</span>);   <span class="cm">/* 返回旧值 */</span>
+<span class="kw">int</span> exp = <span class="num">2</span>;
+<span class="kw">if</span> (atomic_try_cmpxchg(&amp;refcnt, &amp;exp, <span class="num">3</span>))  <span class="cm">/* 更省一条比较指令，新代码首选 */</span>
+    ...;</pre>
+
+  <p>位操作是另一套，作用在 <code>unsigned long</code> 数组上，常用来实现标志位集合（<code>dev-&gt;flags</code> 这类）：</p>
+
+<pre><span class="pp">#include</span> <span class="str">&lt;linux/bitops.h&gt;</span>
+
+<span class="kw">enum</span> { F_RUNNING = <span class="num">0</span>, F_STOPPING = <span class="num">1</span>, F_FAULT = <span class="num">2</span> };
+<span class="kw">unsigned</span> <span class="kw">long</span> flags;             <span class="cm">/* 位图；&gt;64 位就用数组 + DECLARE_BITMAP */</span>
+
+set_bit(F_RUNNING, &amp;flags);        <span class="cm">/* 原子置位，无返回值 → 不带屏障 */</span>
+clear_bit(F_RUNNING, &amp;flags);
+<span class="kw">if</span> (test_bit(F_FAULT, &amp;flags))     <span class="cm">/* 纯读，无屏障 */</span>
+    ...;
+
+<span class="cm">/* 有返回值 → 全屏障。这是内核里最常见的「无锁上锁」惯用法： */</span>
+<span class="kw">if</span> (test_and_set_bit(F_STOPPING, &amp;flags))
+    <span class="kw">return</span>;                        <span class="cm">/* 已经有人在停了，我直接退出 */</span>
+<span class="cm">/* 走到这里说明【只有我】把 F_STOPPING 从 0 改成了 1 */</span>
+do_stop(dev);
+
+<span class="cm">/* __ 前缀 = 非原子版本，只保证编译器不乱动，快但要自己配锁 */</span>
+__set_bit(F_RUNNING, &amp;flags);      <span class="cm">/* 已经在锁里了，用它省掉 lock 前缀 */</span></pre>
+
+  <table>
+    <thead><tr><th>类别</th><th>例子</th><th>原子性</th><th>内存序（LKMM 视角）</th></tr></thead>
+    <tbody>
+      <tr><td>普通读写</td><td><code>atomic_read</code> / <code>atomic_set</code> / <code>test_bit</code></td><td>单次访问不撕裂</td><td><strong>无序</strong>。等价于 <code>READ_ONCE</code>/<code>WRITE_ONCE</code>，只挡编译器</td></tr>
+      <tr><td>无返回值 RMW</td><td><code>atomic_inc</code> / <code>atomic_add</code> / <code>set_bit</code></td><td>是</td><td><strong>无序</strong>。需要序就配 <code>smp_mb__before_atomic()</code> / <code>smp_mb__after_atomic()</code></td></tr>
+      <tr><td>有返回值 RMW</td><td><code>atomic_add_return</code> / <code>atomic_dec_and_test</code> / <code>test_and_set_bit</code> / <code>xchg</code></td><td>是</td><td><strong>全屏障</strong>（前后都不会跨越）</td></tr>
+      <tr><td>条件 RMW</td><td><code>atomic_cmpxchg</code> / <code>try_cmpxchg</code></td><td>是</td><td><strong>成功时全屏障；失败时无序</strong>——这一条最容易踩</td></tr>
+      <tr><td>显式弱序变体</td><td><code>atomic_add_return_relaxed</code> / <code>_acquire</code> / <code>_release</code></td><td>是</td><td>由后缀决定。热路径上用它省掉不需要的屏障</td></tr>
+    </tbody>
+  </table>
+
+  <div class="warn"><strong>「原子」不等于「有序」</strong>，这是内核原子操作最反直觉的一点，也是和 C++ <code>std::atomic</code> 最大的体感差异。C++ 的 <code>std::atomic</code> 默认是 <code>memory_order_seq_cst</code>——不写就是最强序；内核的 <code>atomic_inc()</code> 默认是<strong>最弱</strong>的，什么序都不保证。原因很实在：内核里绝大多数原子操作就是纯计数（统计、引用计数），根本不需要序，默认给强序等于给所有人上税。<strong>所以内核代码里看到 <code>atomic_t</code> 时不能假设它顺带解决了可见性问题</strong>，屏障要自己写。</div>
+
+  <div class="note"><strong>引用计数不要自己用 <code>atomic_t</code> 手搓。</strong>内核有专门的 <code>refcount_t</code>（<code>refcount_inc</code> / <code>refcount_dec_and_test</code>），它在计数溢出和「从 0 复活」时会 <code>WARN</code> 并饱和处理——这两种情况在 <code>atomic_t</code> 上是静默的 use-after-free，历史上被反复用来做提权。新代码一律用 <code>refcount_t</code>，<code>atomic_t</code> 留给真正的计数器。</div>
+
+  <h3>2.2 READ_ONCE / WRITE_ONCE：为什么必须存在</h3>
+
+  <p>这一节是整篇里最容易被跳过、也最容易在代码评审里被抓出来的部分。先看一段所有人都写过的代码：</p>
+
+  <div class="vs">
+    <div class="bad">
+      <h5>❌ 普通变量轮询：可能永久死循环</h5>
+<pre><span class="kw">static</span> <span class="kw">int</span> ready;   <span class="cm">/* 另一个 CPU 会置 1 */</span>
+
+<span class="kw">void</span> wait_for_peer(<span class="kw">void</span>)
+{
+    <span class="kw">while</span> (!ready)
+        ;
+    consume();
+}</pre>
+      <p style="font-size:.82rem;margin:8px 0 0">编译器<strong>完全有权</strong>把它变成：</p>
+<pre><span class="cm">/* 单线程语义下等价的合法优化 */</span>
+<span class="kw">if</span> (!ready)
+    <span class="kw">for</span> (;;)
+        ;       <span class="cm">/* ★ 永久死循环 */</span></pre>
+      <p style="font-size:.82rem;margin:8px 0 0">因为在 C 的抽象机里，循环体内没有任何东西修改 <code>ready</code>，所以「每次都重新读」是可以省掉的。<strong>这不是编译器 bug，是标准允许的行为</strong>——数据竞争在 C 里是未定义行为，编译器有权假设它不存在。</p>
+    </div>
+    <div class="good">
+      <h5>✅ 用 READ_ONCE 表达「每次都要真读」</h5>
+<pre><span class="kw">static</span> <span class="kw">int</span> ready;
+
+<span class="kw">void</span> wait_for_peer(<span class="kw">void</span>)
+{
+    <span class="kw">while</span> (!READ_ONCE(ready))
+        cpu_relax();      <span class="cm">/* 给超线程让路 + 省电 */</span>
+    smp_rmb();            <span class="cm">/* ★ 还需要屏障，见 §3 */</span>
+    consume();
+}
+
+<span class="cm">/* 写侧同样要成对： */</span>
+<span class="kw">void</span> peer_done(<span class="kw">void</span>)
+{
+    fill_data();
+    smp_wmb();
+    WRITE_ONCE(ready, <span class="num">1</span>);
+}</pre>
+      <p style="font-size:.82rem;margin:8px 0 0"><code>cpu_relax()</code> 在 x86 上展开成 <code>rep; nop</code>（PAUSE 指令）并<strong>自带 <code>"memory"</code> clobber</strong>，所以它顺带也挡住了提升。但<strong>不要依赖这个副作用</strong>：一旦有人重构掉了 <code>cpu_relax()</code>，代码就静默地变错了。<strong>用 <code>READ_ONCE</code> 把意图写在读的那一点上</strong>，这才是可维护的。</p>
+    </div>
+  </div>
+
+  <p>编译器对普通内存访问的「权力」远比大多数人想象的大。内核文档里列举了一整套它可以做、而且在真实优化级别下真的做过的变换：</p>
+
+  <table>
+    <thead><tr><th>编译器行为</th><th>它干了什么</th><th>后果</th><th>挡住它的</th></tr></thead>
+    <tbody>
+      <tr><td><strong>省略 / 合并读</strong>（load fusing）</td><td>把循环里的多次读优化成一次，值缓存在寄存器</td><td>轮询变死循环；「重新检查」检查了个寄存器</td><td><code>READ_ONCE</code></td></tr>
+      <tr><td><strong>省略 / 合并写</strong>（store fusing）</td><td><code>x=1; ...; x=2;</code> 里的第一次写被删掉</td><td>对端永远看不到中间状态（状态机丢一步）</td><td><code>WRITE_ONCE</code></td></tr>
+      <tr><td><strong>读撕裂</strong>（load tearing）</td><td>把一个 64 位读拆成两个 32 位读</td><td>拼出一个<strong>从未被写入过的值</strong>（高半旧、低半新）</td><td><code>READ_ONCE</code>（且变量不超过机器字长）</td></tr>
+      <tr><td><strong>写撕裂</strong>（store tearing）</td><td>把 <code>x = 0x0001DEAD;</code> 拆成两条 16 位立即数写</td><td>对端读到半个值</td><td><code>WRITE_ONCE</code></td></tr>
+      <tr><td><strong>凭空多读</strong>（invented load）</td><td>寄存器不够用时，把已读到寄存器的值<strong>丢掉再重读一遍</strong></td><td>「先检查后使用」两次读到不同值，检查白做了</td><td><code>READ_ONCE</code> 一次读到局部变量后只用局部变量</td></tr>
+      <tr><td><strong>凭空写</strong>（invented store）</td><td>把 <code>if (c) x = v;</code> 优化成 <code>x = c ? v : x;</code>（无条件写回）</td><td>把别人刚写进去的值覆盖回旧值</td><td><code>WRITE_ONCE</code></td></tr>
+      <tr><td><strong>重排</strong></td><td>在不改变单线程语义的前提下调整访问顺序</td><td>发布顺序反了，见 §3</td><td><strong>屏障</strong>，<code>READ_ONCE</code> 挡不住这个</td></tr>
+    </tbody>
+  </table>
+
+<pre><span class="cm">/* READ_ONCE 的本质（简化）—— 就是一次带 volatile 语义的访问 */</span>
+<span class="pp">#define</span> READ_ONCE(x)      (*(<span class="kw">const</span> <span class="kw">volatile</span> __unqual_scalar_typeof(x) *)&amp;(x))
+<span class="pp">#define</span> WRITE_ONCE(x, v)  (*(<span class="kw">volatile</span> __typeof__(x) *)&amp;(x) = (v))
+
+<span class="cm">/* 关键点：
+ *  1. 它只约束【这一次访问】，不改变变量的类型
+ *  2. 它【不是】CPU 屏障 —— 只挡编译器，不挡处理器乱序
+ *  3. 只对不超过机器字长的标量有效；对 struct 会编译报错
+ *     （更大的对象撕裂无法用一次访问避免）
+ *  4. READ_ONCE 顺带保证「地址依赖序」，这是 rcu_dereference 的基础
+ */</span></pre>
+
+  <div class="vs">
+    <div class="bad">
+      <h5>❌ 拿 volatile 糊</h5>
+<pre><span class="kw">static</span> <span class="kw">volatile</span> <span class="kw">int</span> ready;   <span class="cm">/* 别这样 */</span>
+
+<span class="kw">while</span> (!ready)
+    ;
+consume();</pre>
+      <ul style="font-size:.82rem;margin:8px 0 0;padding-left:20px">
+        <li><strong>解决不了真正的问题</strong>：<code>volatile</code> 不产生任何 CPU 屏障，上面这段在 ARM 上照样会读到 <code>ready==1</code> 但 <code>data</code> 是旧的。</li>
+        <li><strong>把优化全面关掉</strong>：变量的<strong>所有</strong>访问都变成 volatile，包括已经在锁里、本来完全可以放寄存器的那些。</li>
+        <li><strong>掩盖意图</strong>：看代码的人无法知道哪一次访问是「真的要求每次都读」，哪一次只是顺带。</li>
+        <li>内核文档 <code>volatile-considered-harmful.rst</code> 明确不建议给变量加 <code>volatile</code>；合法用途基本只剩 <code>jiffies</code> 这类和内存映射 I/O（后者应该用 <code>readl()</code>/<code>writel()</code>）。</li>
+      </ul>
+    </div>
+    <div class="good">
+      <h5>✅ 在访问点表达意图</h5>
+<pre><span class="kw">static</span> <span class="kw">int</span> ready;                <span class="cm">/* 类型保持干净 */</span>
+
+<span class="cm">/* 需要每次都读的地方显式标出来 */</span>
+<span class="kw">while</span> (!READ_ONCE(ready))
+    cpu_relax();
+smp_rmb();
+consume();
+
+<span class="cm">/* 已经在锁保护下的地方，普通访问即可，
+ * 编译器该怎么优化就怎么优化 */</span>
+spin_lock(&amp;lk);
+ready++;
+spin_unlock(&amp;lk);</pre>
+      <p style="font-size:.82rem;margin:8px 0 0"><strong>「锁里面不需要 <code>READ_ONCE</code>」</strong>是另一个常见误区的反面：锁的 acquire/release 语义已经包含了编译器屏障，锁内的普通访问是安全的。滥用 <code>READ_ONCE</code> 会让评审者以为「这里有无锁并发」，制造误导。</p>
+    </div>
+  </div>
+
+  <div class="box star"><strong>面试加分点</strong>：被问到「<code>READ_ONCE</code> 和 <code>volatile</code> 有什么区别」时，标准答案是「<code>READ_ONCE</code> 是访问点的标记，<code>volatile</code> 是类型的属性」。但真正体现深度的追问是：<strong>「<code>READ_ONCE</code> 能替代屏障吗？」</strong>——不能。它只解决<strong>编译器</strong>层的问题，CPU 层的乱序要靠 §3 的屏障。一段代码里 <code>READ_ONCE</code> 齐全但没有 <code>smp_rmb()</code>，在 x86 上跑一万年都不出错（x86 是 TSO，读读不重排），换到 ARM64 服务器上立刻炸——这是国产 ARM 服务器普及之后大量存量代码暴露出的真实问题。</div>
+</section>
+
+<!-- ================================================================ §3 -->
+<section class="chapter" id="s3">
+  <div class="ch-head">
+    <div class="num">03</div>
+    <div class="t"><h2>内存屏障</h2><p class="sub">屏障永远成对出现</p></div>
+  </div>
+
+  <p>乱序有<strong>两层</strong>，必须分开想：</p>
+
+  <div class="insight-grid">
+    <div class="card violet"><h4>编译器层</h4><p>为了减少访存、更好地用寄存器和流水线，编译器在不改变<strong>单线程</strong>可观测行为的前提下自由调整访问顺序。挡它的是 <code>barrier()</code>——一条不产生任何机器指令、只告诉编译器「这里之前之后的内存访问不能互穿」的空 asm。</p></div>
+    <div class="card"><h4>CPU 层</h4><p>写进 store buffer 还没落到 cache、读被推测执行提前拿了、cache 失效消息还在队列里排队。挡它的是真正的屏障指令（x86 的 <code>mfence</code>/<code>lock</code> 前缀、ARM 的 <code>dmb</code>/<code>dsb</code>）。</p></div>
+    <div class="card green"><h4>为什么 x86 上「没事」</h4><p>x86-64 是 TSO：只允许「写 → 读」这一种重排。所以 <code>smp_rmb()</code>/<code>smp_wmb()</code> 在 x86 上编译成纯编译器屏障、<strong>零指令</strong>。缺屏障的 bug 在 x86 上几乎无法复现，到 ARM64 / POWER 上立刻暴露。</p></div>
+  </div>
+
+  <div class="analogy">屏障像<strong>快递的「先包装后贴单」流程规定</strong>。仓库为了效率，会把「装箱」和「贴面单」这两道工序打乱着做（乱序执行）——反正最后箱子和单子都齐了。但如果下游是按面单来取货的，先贴了单、箱子还没装好，取货的人就会拿到一个<strong>空箱子</strong>。所以必须立一条规矩：<strong>面单只能在箱子彻底封好之后才贴</strong>（写侧 release）；同时取货方也要有规矩：<strong>看到面单才能开箱，看到之前不许提前偷看箱子</strong>（读侧 acquire）。两条规矩必须<strong>同时存在</strong>才有意义——只管好仓库不管取货方，取货方那边的「提前偷看」（推测执行）照样出问题。</div>
+
+  <h3>3.1 内核屏障 API</h3>
+
+  <table>
+    <thead><tr><th>API</th><th>约束</th><th>x86-64 上编译成</th><th>典型用途</th></tr></thead>
+    <tbody>
+      <tr><td><code>barrier()</code></td><td><strong>只管编译器</strong>，不产生指令</td><td><code>asm volatile("":::"memory")</code></td><td>同 CPU 内的顺序要求（如与信号/中断处理程序之间）</td></tr>
+      <tr><td><code>smp_mb()</code></td><td>全屏障：前面所有读写 → 后面所有读写</td><td><code>lock addl $0,-4(%rsp)</code> 或 <code>mfence</code></td><td>需要「读写都不许跨越」的地方，最贵也最保险</td></tr>
+      <tr><td><code>smp_wmb()</code></td><td>写 → 写</td><td>纯编译器屏障（TSO 免费）</td><td>先填内容、再发布标志/指针</td></tr>
+      <tr><td><code>smp_rmb()</code></td><td>读 → 读</td><td>纯编译器屏障</td><td>先读标志/指针、再读内容</td></tr>
+      <tr><td><code>smp_store_release(p, v)</code></td><td>前面所有访问 → 这次写</td><td><code>mov</code> + 编译器屏障</td><td><strong>发布</strong>。比 <code>smp_wmb()+WRITE_ONCE()</code> 语义更准确、在弱序架构上更便宜</td></tr>
+      <tr><td><code>smp_load_acquire(p)</code></td><td>这次读 → 后面所有访问</td><td><code>mov</code> + 编译器屏障</td><td><strong>订阅</strong>。与 release 配对</td></tr>
+      <tr><td><code>smp_mb__before_atomic()</code> / <code>_after_atomic()</code></td><td>给<strong>无返回值</strong>的原子操作补上序</td><td>视架构，x86 上多为空</td><td><code>set_bit()</code> 之后要保证别人看到位之前先看到数据</td></tr>
+      <tr><td><code>mb()</code> / <code>rmb()</code> / <code>wmb()</code></td><td>强制屏障，<strong>即使单核也生成指令</strong></td><td>真实的 fence 指令</td><td><strong>MMIO 与设备交互</strong>；不要用在纯 CPU 间同步上</td></tr>
+      <tr><td><code>dma_wmb()</code> / <code>dma_rmb()</code></td><td>约束一致性 DMA 内存的可见顺序</td><td>比 <code>mb()</code> 轻</td><td>网卡/存储的描述符环：先填描述符，再更新 ring 尾指针</td></tr>
+    </tbody>
+  </table>
+
+  <div class="warn"><strong><code>smp_*</code> 前缀的含义</strong>：这些屏障在 <code>CONFIG_SMP=n</code> 的内核上会退化成 <code>barrier()</code>（只剩编译器约束）。逻辑是「单核不存在跨 CPU 可见性问题」。但这也意味着<strong>和设备打交道时不能用 <code>smp_*</code></strong>——DMA 引擎不是 CPU，单核机器上它照样在旁边独立跑。设备侧一律用 <code>mb()</code> / <code>dma_wmb()</code> 家族。这是驱动里一类极难查的 bug：单核嵌入式板子上，<code>smp_wmb()</code> 变成了空操作，描述符还在 store buffer 里网卡就已经开始读了。</div>
+
+  <h3>3.2 铁律：屏障总是成对出现</h3>
+
+  <div class="intuition">一个屏障单独存在<strong>几乎总是 bug</strong>。屏障约束的是「同一个 CPU 上，我自己的访问之间的顺序」；要让另一个 CPU「看到正确的顺序」，对方必须<strong>也有一个屏障</strong>来保证它自己不提前读。写侧的 <code>release</code> 必须对上读侧的 <code>acquire</code>，写侧的 <code>smp_wmb()</code> 必须对上读侧的 <code>smp_rmb()</code>。<strong>看到代码里一个孤零零的 <code>smp_mb()</code>，第一反应应该是「它的对儿在哪」。</strong></div>
+
+  <p>最经典的成对模式就是「<strong>发布 — 订阅</strong>」：写者先把一个对象填好，再把指向它的指针发布出去；读者先拿到指针，再读对象内容。这个模式在内核里出现的频率高到夸张——RCU 的整套机制、per-CPU 数据的延迟初始化、模块加载、驱动的 probe，全都是它。</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 780 336" role="img" aria-label="发布-订阅模式：写侧 release 与读侧 acquire 成对配合，以及缺少屏障时读者看到未初始化对象的错误路径">
+      <text class="tb" x="160" y="18" text-anchor="middle">写侧 CPU 0（发布）</text>
+      <text class="tb" x="600" y="18" text-anchor="middle">读侧 CPU 1（订阅）</text>
+      <line class="ln-d" x1="390" y1="8" x2="390" y2="250"/>
+
+      <rect class="box" x="40" y="32" width="240" height="26" rx="6"/>
+      <text class="tm" x="160" y="50" text-anchor="middle">p = kzalloc(sizeof *p, GFP_KERNEL);</text>
+      <rect class="box-a" x="40" y="66" width="240" height="42" rx="6"/>
+      <text class="tm" x="160" y="83" text-anchor="middle">p-&gt;len  = 4096;</text>
+      <text class="tm" x="160" y="99" text-anchor="middle">p-&gt;data = buf;</text>
+      <text class="ts" x="296" y="92">① 先把对象填满</text>
+
+      <rect class="box-g" x="40" y="126" width="240" height="30" rx="6"/>
+      <text class="tm" x="160" y="146" text-anchor="middle">smp_store_release(&amp;gp, p);</text>
+      <text class="tg" x="160" y="172" text-anchor="middle">② release：保证 ① 已对外可见</text>
+      <text class="ts" x="160" y="188" text-anchor="middle">↑ 上面的写绝不会跨到这条之后</text>
+
+      <rect class="box-g" x="470" y="66" width="260" height="30" rx="6"/>
+      <text class="tm" x="600" y="86" text-anchor="middle">q = smp_load_acquire(&amp;gp);</text>
+      <text class="tg" x="600" y="112" text-anchor="middle">③ acquire：读到指针才允许往下读</text>
+      <text class="ts" x="600" y="128" text-anchor="middle">↓ 下面的读绝不会提到这条之前</text>
+
+      <rect class="box-a" x="470" y="146" width="260" height="42" rx="6"/>
+      <text class="tm" x="600" y="163" text-anchor="middle">if (q)</text>
+      <text class="tm" x="600" y="179" text-anchor="middle">    use(q-&gt;len, q-&gt;data);</text>
+      <text class="ts" x="600" y="208" text-anchor="middle">④ 一定看到 len=4096 / data=buf</text>
+
+      <path class="ln-g" d="M282 140 C 360 140, 400 90, 466 82" marker-end="url(#ksa)"/>
+      <text class="tg" x="392" y="232" text-anchor="middle">这一对屏障共同构成「happens-before」</text>
+
+      <line class="ln-d" x1="30" y1="252" x2="750" y2="252"/>
+      <text class="tr" x="40" y="274">❌ 少了任意一侧会发生什么</text>
+      <rect class="box-r" x="40" y="282" width="330" height="44" rx="6"/>
+      <text class="ts" x="52" y="299">写侧没有 release：gp 先可见，p-&gt;len 还在</text>
+      <text class="ts" x="52" y="315">store buffer 里 → 读者拿到指针、读到垃圾</text>
+      <rect class="box-r" x="400" y="282" width="350" height="44" rx="6"/>
+      <text class="ts" x="412" y="299">读侧没有 acquire：CPU 推测执行提前读了</text>
+      <text class="ts" x="412" y="315">q-&gt;len（旧值），之后才确认 gp → 同样是垃圾</text>
+
+      <defs><marker id="ksa" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path class="ar-g" d="M0,0 L6,3 L0,6 Z"/></marker></defs>
+    </svg>
+    <figcaption>发布-订阅：写侧 release 保证「对象内容先于指针可见」，读侧 acquire 保证「拿到指针后才读内容」——两侧缺一，读者都会看到未初始化的对象</figcaption>
+  </div>
+
+<pre><span class="cm">/* ── 写侧：发布一个新的配置对象 ─────────────────── */</span>
+<span class="kw">struct</span> cfg *newc = kzalloc(<span class="kw">sizeof</span>(*newc), GFP_KERNEL);
+<span class="kw">if</span> (!newc)
+    <span class="kw">return</span> -ENOMEM;
+newc-&gt;timeout = <span class="num">500</span>;
+newc-&gt;retries = <span class="num">3</span>;
+
+smp_store_release(&amp;dev-&gt;cfg, newc);   <span class="cm">/* ★ 发布点 */</span>
+
+<span class="cm">/* ── 读侧：热路径上取配置 ───────────────────────── */</span>
+<span class="kw">struct</span> cfg *c = smp_load_acquire(&amp;dev-&gt;cfg);   <span class="cm">/* ★ 订阅点 */</span>
+<span class="kw">if</span> (c &amp;&amp; now - start &gt; c-&gt;timeout)             <span class="cm">/* 保证读到 500 而不是 0 */</span>
+    handle_timeout(c-&gt;retries);
+
+<span class="cm">/* 等价但更啰嗦的老写法（在弱序架构上通常还更贵）：
+ *   写侧： ...填内容...; smp_wmb(); WRITE_ONCE(dev-&gt;cfg, newc);
+ *   读侧： c = READ_ONCE(dev-&gt;cfg); smp_rmb(); ...读内容...;
+ * 新代码优先用 acquire/release：语义就写在名字里，
+ * 而且 ARM64 有专门的 ldar/stlr 指令，比无条件 dmb 便宜。
+ */</span></pre>
+
+  <div class="box danger"><strong>控制依赖不可靠。</strong>有人会想：「读侧有个 <code>if (q)</code> 判断，CPU 总不能在还不知道 <code>q</code> 是不是 NULL 的时候就去读 <code>q-&gt;len</code> 吧？」——<strong>它真能</strong>。这叫控制依赖（control dependency），而 CPU 的分支预测 + 推测执行会先按预测的分支把 load 发出去，只在预测错时回滚。<strong>读侧的控制依赖对 load 完全不构成顺序保证</strong>（对后续的 store 才勉强算，而且限制一堆）。内核文档 <code>memory-barriers.txt</code> 里专门有一大节讲控制依赖的坑，结论是：<strong>别用它，用 acquire</strong>。<em>地址依赖</em>（用读到的指针去解引用）是另一回事，那个在现代内核里由 <code>READ_ONCE()</code>/<code>rcu_dereference()</code> 保证——历史上唯一需要显式屏障的 Alpha 已经退场，<code>smp_read_barrier_depends()</code> 也早已从内核里删掉了。</div>
+
+  <h3>3.3 和 C++11 memory_order 的对应</h3>
+
+  <p>如果你已经熟悉 <a href="../cpp/memory_model.html">C++ 内存模型</a>，这张表能省掉一半学习成本。两套模型的<strong>底层机器语义是同一套</strong>（毕竟跑在同一个 CPU 上），差别在默认值和表达方式。</p>
+
+  <table>
+    <thead><tr><th>Linux 内核</th><th>C++11 / C++20 等价物</th><th>差别与注意</th></tr></thead>
+    <tbody>
+      <tr><td><code>READ_ONCE(x)</code></td><td><code>x.load(memory_order_relaxed)</code></td><td>都只保证不撕裂、不被优化掉。内核版<strong>额外保证地址依赖序</strong>（C++ 的 <code>consume</code> 从未被真正实现）</td></tr>
+      <tr><td><code>WRITE_ONCE(x, v)</code></td><td><code>x.store(v, memory_order_relaxed)</code></td><td>基本一致</td></tr>
+      <tr><td><code>smp_load_acquire(&amp;x)</code></td><td><code>x.load(memory_order_acquire)</code></td><td>语义一致</td></tr>
+      <tr><td><code>smp_store_release(&amp;x, v)</code></td><td><code>x.store(v, memory_order_release)</code></td><td>语义一致</td></tr>
+      <tr><td><code>smp_mb()</code></td><td><code>atomic_thread_fence(memory_order_seq_cst)</code></td><td>内核的全屏障不带 C++ 那套「单一全序」的完整承诺，但工程上按等价用</td></tr>
+      <tr><td><code>smp_wmb()</code> / <code>smp_rmb()</code></td><td><strong>没有直接对应物</strong></td><td>C++ 只有 acquire/release/seq_cst 三档 fence，没有单向的读读/写写屏障。内核有，因为它要贴近硬件省开销</td></tr>
+      <tr><td><code>atomic_inc()</code></td><td><code>x.fetch_add(1, memory_order_relaxed)</code></td><td><strong>最大的坑</strong>：内核默认 relaxed，C++ 默认 <code>seq_cst</code>。从 C++ 换到内核开发时，<strong>所有「不写序」的地方语义都反了</strong></td></tr>
+      <tr><td><code>atomic_add_return()</code></td><td><code>x.fetch_add(1, memory_order_seq_cst)</code></td><td>「有返回值 = 全屏障」是内核的约定，C++ 里靠显式参数表达</td></tr>
+      <tr><td><code>barrier()</code></td><td><code>atomic_signal_fence(memory_order_seq_cst)</code></td><td>都只约束编译器。C++ 里它服务于信号处理函数，内核里服务于中断处理程序——<strong>是同一个问题</strong></td></tr>
+      <tr><td><code>rcu_dereference()</code></td><td>无（<code>memory_order_consume</code> 是个死掉的设计）</td><td>内核用「编译器不许破坏地址依赖」这条工程约定 + 少数架构的显式处理来实现，C++ 标准化尝试失败了</td></tr>
+    </tbody>
+  </table>
+
+  <div class="note">这张表也解释了为什么<strong>不能把用户态的无锁经验直接搬进内核</strong>。用户态写 <code>std::atomic&lt;int&gt; cnt; cnt++;</code> 是安全的（seq_cst），内核里写 <code>atomic_inc(&amp;cnt);</code> 只保证原子不保证序；反过来，用户态习惯了「默认最强序所以不用想」，到内核里每个操作都得自己判断需要哪一档。<strong>好消息是内核的 LKMM（Linux Kernel Memory Model）有形式化模型和验证工具 <code>tools/memory-model/</code>，可以用 <code>herd7</code> 把你的同步模式跑一遍，判断它在最弱的架构上是否成立</strong>——比在 x86 上压测靠谱得多。</div>
+</section>
+
+<!-- ================================================================ §4 -->
+<section class="chapter" id="s4">
+  <div class="ch-head">
+    <div class="num">04</div>
+    <div class="t"><h2>spinlock 家族</h2><p class="sub">忙等的锁，和「绝不能睡」这条红线</p></div>
+  </div>
+
+  <div class="def"><strong>自旋锁（spinlock）</strong>：拿不到锁时<strong>不睡眠、不让出 CPU</strong>，而是在一个循环里反复尝试直到拿到。它的全部意义在于<strong>省掉睡眠-唤醒的两次上下文切换</strong>（合计几微秒），代价是等待期间这个 CPU 完全在做无用功。所以它只适合<strong>极短的临界区</strong>，而且是<strong>中断上下文里唯一能用的锁</strong>。</div>
+
+  <div class="analogy">互斥锁像<strong>去银行取号排队</strong>：拿到号就可以坐下、甚至出去买杯咖啡，叫号了再回来（睡眠 + 唤醒）。自旋锁像<strong>在自动门前面等一个人先出来</strong>：你就站着盯着门，谁也不叫号——因为对方只需要两秒钟，去买咖啡的往返时间比等待本身长得多。但这也意味着：<strong>如果里面那个人进去睡了午觉，你就得一直站着</strong>，而且门口很快排起长队，全楼的人都堵在这儿。</div>
+
+  <h3>4.1 持锁期间绝不能睡眠</h3>
+
+  <p>这是内核里最硬的一条红线，理由有三层，从「性能差」到「必然死锁」：</p>
+
+  <div class="tool-card danger">
+    <h4>为什么持自旋锁不能睡</h4>
+    <ul>
+      <li><strong>① 别人在烧 CPU 等你。</strong>你睡了几毫秒，其他等锁的 CPU 就在自旋几毫秒——那是几百万条无用指令，还伴随着持续的 cacheline 争用。自旋锁的全部前提是「等待时间极短」，睡眠直接摧毁这个前提。</li>
+      <li><strong>② 同一个 CPU 上会真死锁。</strong><code>spin_lock()</code> 在主线内核里包含 <code>preempt_disable()</code>，本来就不允许在临界区里调度。但如果你调了一个会睡的函数，它会强行 <code>schedule()</code>。调度器可能选中同一个 CPU 上另一个也要拿这把锁的任务——它拿不到（持锁者在睡），于是自旋；而持锁者需要这个 CPU 才能被唤醒继续跑。<strong>互等，这个 CPU 死了。</strong></li>
+      <li><strong>③ 中断上下文里根本没有「睡眠」这个概念。</strong>中断处理程序借用的是<strong>某个无关任务</strong>的内核栈，它不是一个可调度实体。让它睡，等于把那个倒霉任务永久挂起，而且没有任何人会来唤醒「这个中断」。内核会直接报 <code>BUG</code>。</li>
+    </ul>
+  </div>
+
+  <p>内核有专门的检查来抓这件事。打开 <code>CONFIG_DEBUG_ATOMIC_SLEEP</code> 后，所有可能睡眠的函数入口处的 <code>might_sleep()</code> 会在 <code>preempt_count != 0</code> 时立刻打印：</p>
+
+<pre>BUG: sleeping function called from invalid context at mm/page_alloc.c:5316
+in_atomic(): 1, irqs_disabled(): 1, non_block: 0, pid: 143, name: kworker/2:1
+preempt_count: 1, expected: 0
+CPU: 2 PID: 143 Comm: kworker/2:1 Not tainted 6.1.0 #1
+Call Trace:
+ dump_stack_lvl+0x48/0x60
+ __might_resched.cold+0x11f/0x14b
+ __might_sleep+0x4b/0x60
+ __alloc_pages+0x2a4/0x330
+ kmalloc_order+0x2c/0xb0
+ <span class="cm">/* ↑ 罪魁祸首：在 spin_lock 里调了 kmalloc(GFP_KERNEL) */</span>
+ mydrv_add_entry+0x8c/0x120 [mydrv]
+
+<span class="cm"># 如果没开这个 CONFIG，你看到的会是更晚、更难懂的：</span>
+BUG: scheduling while atomic: kworker/2:1/143/0x00000002
+<span class="cm">#                                              ^^^^^^^^^^
+# 末尾这个十六进制就是 preempt_count。非 0 = 处于原子上下文。
+# 0x00000002 说明抢占被禁了 2 层（典型是两层嵌套的 spin_lock）。</span></pre>
+
+  <div class="checklist">
+    <h4>临界区里这些函数会睡，一律不能出现在 spin_lock 内</h4>
+    <ul>
+      <li><code>kmalloc(..., GFP_KERNEL)</code> / <code>vmalloc()</code> / <code>kzalloc(..., GFP_KERNEL)</code>——必须换成 <code>GFP_ATOMIC</code>（更容易失败、且吃紧急预留内存，能不在锁里分配就别在锁里分配）</li>
+      <li><code>copy_to_user()</code> / <code>copy_from_user()</code>——可能触发缺页，缺页要读磁盘，必睡</li>
+      <li><code>mutex_lock()</code> / <code>down()</code> / <code>down_read()</code> / <code>wait_event()</code> / <code>synchronize_rcu()</code></li>
+      <li><code>msleep()</code> / <code>schedule_timeout()</code> / <code>cond_resched()</code>（<code>udelay()</code>/<code>ndelay()</code> 是忙等，可以用但要极短）</li>
+      <li><code>printk()</code> ——不睡，但在锁里刷大量日志会把临界区拖到毫秒级，效果和睡差不多糟</li>
+      <li>任何<strong>你没读过实现的第三方内核模块函数</strong>——这是最现实的一条</li>
+    </ul>
+  </div>
+
+  <h3>4.2 变体与决策矩阵</h3>
+
+<pre><span class="pp">#include</span> <span class="str">&lt;linux/spinlock.h&gt;</span>
+
+<span class="kw">static</span> DEFINE_SPINLOCK(my_lock);           <span class="cm">/* 静态定义 + 初始化 */</span>
+<span class="cm">/* 或者放在结构体里： */</span>
+<span class="kw">struct</span> mydev {
+    spinlock_t        lock;
+    <span class="kw">struct</span> list_head  queue;
+    u32               count;
+};
+spin_lock_init(&amp;dev-&gt;lock);                <span class="cm">/* 动态初始化，必须调，lockdep 靠它注册锁类 */</span>
+
+<span class="cm">/* 四个变体 */</span>
+spin_lock(&amp;dev-&gt;lock);                     <span class="cm">/* 关抢占 */</span>
+spin_unlock(&amp;dev-&gt;lock);
+
+spin_lock_bh(&amp;dev-&gt;lock);                  <span class="cm">/* 关抢占 + 关软中断 */</span>
+spin_unlock_bh(&amp;dev-&gt;lock);
+
+spin_lock_irq(&amp;dev-&gt;lock);                 <span class="cm">/* 关抢占 + 无条件关中断 */</span>
+spin_unlock_irq(&amp;dev-&gt;lock);               <span class="cm">/* ★ 无条件【开】中断 —— 危险 */</span>
+
+<span class="kw">unsigned</span> <span class="kw">long</span> flags;
+spin_lock_irqsave(&amp;dev-&gt;lock, flags);      <span class="cm">/* 保存中断状态 + 关中断 */</span>
+spin_unlock_irqrestore(&amp;dev-&gt;lock, flags); <span class="cm">/* 恢复到【进来时】的状态 */</span>
+
+<span class="cm">/* 拿不到就走，不等 —— 常用于「能优化就优化，不行就算了」的路径 */</span>
+<span class="kw">if</span> (spin_trylock(&amp;dev-&gt;lock)) {
+    fast_path(dev);
+    spin_unlock(&amp;dev-&gt;lock);
+} <span class="kw">else</span> {
+    defer_to_workqueue(dev);
+}</pre>
+
+  <p>选哪个变体，唯一的依据是<strong>「我要和谁竞争」</strong>。把所有会碰这份数据的代码路径列出来，看它们分别跑在什么上下文里：</p>
+
+  <table>
+    <thead><tr><th>共享方（都会访问这份数据的路径）</th><th>该用的变体</th><th>为什么</th></tr></thead>
+    <tbody>
+      <tr><td>只有进程上下文（多个 CPU 上的系统调用 / 内核线程）</td><td><code>spin_lock()</code></td><td>只需挡住其他 CPU 和本 CPU 的抢占</td></tr>
+      <tr><td>进程上下文 + <strong>软中断 / tasklet / NAPI poll</strong></td><td>进程侧 <code>spin_lock_bh()</code>；软中断侧 <code>spin_lock()</code></td><td>软中断能在本 CPU 上打断进程上下文，所以进程侧要关 bh；软中断之间同 CPU 不并发，不必再关</td></tr>
+      <tr><td>进程上下文 + <strong>硬中断处理程序</strong></td><td>进程侧 <code>spin_lock_irqsave()</code>；ISR 侧 <code>spin_lock()</code></td><td>硬中断能打断一切，进程侧必须关中断。ISR 自己已在关中断状态</td></tr>
+      <tr><td>软中断 + 硬中断</td><td>软中断侧 <code>spin_lock_irqsave()</code></td><td>同上，硬中断能打断软中断</td></tr>
+      <tr><td>同一个软中断在<strong>多个 CPU</strong> 上并发（如 NAPI 多队列）</td><td><code>spin_lock()</code> 就够</td><td>同种软中断同 CPU 不重入，但<strong>跨 CPU 可以并发</strong>——这一点经常被漏掉</td></tr>
+      <tr><td>只有硬中断（同一个 ISR，多 CPU）</td><td><code>spin_lock()</code></td><td>中断已关，只需挡住其他 CPU</td></tr>
+      <tr><td>需要在最底层（调度器、时钟、lockdep 自身）用</td><td><code>raw_spin_lock*()</code></td><td>不会被 PREEMPT_RT 换成睡眠锁，也不参与 lockdep 的部分检查。<strong>普通驱动不要用</strong></td></tr>
+    </tbody>
+  </table>
+
+  <div class="vs">
+    <div class="bad">
+      <h5>❌ <code>spin_lock_irq</code> 的隐藏杀伤</h5>
+<pre><span class="kw">static</span> <span class="kw">void</span> inner(<span class="kw">struct</span> mydev *dev)
+{
+    spin_lock_irq(&amp;dev-&gt;lock);
+    dev-&gt;count++;
+    spin_unlock_irq(&amp;dev-&gt;lock);   <span class="cm">/* ★ 无条件开中断 */</span>
+}
+
+<span class="kw">static</span> <span class="kw">void</span> outer(<span class="kw">struct</span> mydev *dev)
+{
+    <span class="kw">unsigned</span> <span class="kw">long</span> f;
+    local_irq_save(f);             <span class="cm">/* 我特意关了中断 */</span>
+    ...
+    inner(dev);                    <span class="cm">/* ← 回来时中断已经【被打开了】 */</span>
+    critical_no_irq_allowed();     <span class="cm">/* 这里已经不受保护 */</span>
+    local_irq_restore(f);
+}</pre>
+      <p style="font-size:.82rem;margin:8px 0 0"><code>inner()</code> 单独看完全正确，<code>outer()</code> 单独看也完全正确，<strong>组合起来错了</strong>。而且这个错误<strong>不会报任何警告</strong>，只表现为极低概率的数据损坏。函数被复用、调用链变长之后，谁也说不清「调用这个函数时中断是开还是关」。</p>
+    </div>
+    <div class="good">
+      <h5>✅ 一律用 <code>irqsave</code></h5>
+<pre><span class="kw">static</span> <span class="kw">void</span> inner(<span class="kw">struct</span> mydev *dev)
+{
+    <span class="kw">unsigned</span> <span class="kw">long</span> flags;
+
+    spin_lock_irqsave(&amp;dev-&gt;lock, flags);
+    dev-&gt;count++;
+    spin_unlock_irqrestore(&amp;dev-&gt;lock, flags);
+    <span class="cm">/* 恢复到【进来时】的状态：
+     *   进来时中断开着 → 出去时开着
+     *   进来时中断关着 → 出去时【还是关着】
+     * 于是这个函数在任何上下文里都能安全调用。 */</span>
+}</pre>
+      <p style="font-size:.82rem;margin:8px 0 0">代价只有一条读标志寄存器的指令（x86 上 <code>pushf</code>/<code>popf</code>，几个周期）。<strong>换来的是「函数可以被任意上下文调用」这个可组合性</strong>，在几万行的驱动里这远比几个周期值钱。</p>
+      <p style="font-size:.82rem;margin:8px 0 0"><code>spin_lock_irq()</code> 的合法用途只剩一种：<strong>你能确定这段代码的调用者一定是开着中断的顶层路径</strong>（比如就是某个 ioctl 的入口）。内核核心代码里有不少这种用法，因为那里的调用关系是被严格审过的；驱动里请一律用 <code>irqsave</code>。</p>
+    </div>
+  </div>
+
+  <div class="warn"><strong><code>flags</code> 必须是局部变量。</strong>见过有人把它放进结构体里「共享」——那就成了两个 CPU 互相覆盖对方保存的中断状态，恢复出来的值完全随机。同理，<code>flags</code> 不能跨函数传递给另一个上下文去 restore。它就是一个纯粹的栈上临时值。</div>
+
+  <h3>4.3 实现演进：从 test-and-set 到 qspinlock</h3>
+
+  <p>自旋锁的实现史是一部「<strong>公平性</strong>和<strong>cacheline 争用</strong>的斗争史」。理解这段演进，能解释很多性能现象。</p>
+
+<pre><span class="cm">/* ── 第一代：test-and-set（最朴素） ─────────────────── */</span>
+<span class="kw">void</span> lock(<span class="kw">int</span> *l)   { <span class="kw">while</span> (xchg(l, <span class="num">1</span>) == <span class="num">1</span>) cpu_relax(); }
+<span class="kw">void</span> unlock(<span class="kw">int</span> *l) { WRITE_ONCE(*l, <span class="num">0</span>); }
+<span class="cm">/* 问题 1（公平性）：谁抢到算谁的。释放时所有等待者一起冲，
+ *   物理上离锁最近（同 core 的超线程、同 L3 的核）的赢面大得多。
+ *   高争用下可能出现【某个 CPU 饿死几十毫秒】。
+ * 问题 2（争用）：xchg 是带 lock 前缀的写操作，
+ *   N 个等待者就是 N 个核【持续写同一条 cacheline】，
+ *   每次都要把独占权从别的核抢过来 —— 锁还没拿到，
+ *   总线/互联已经被打满了。
+ */</span>
+
+<span class="cm">/* ── 第二代：ticket lock（x86 从 2.6.25 用到 4.2 前后） ── */</span>
+<span class="kw">struct</span> tlock { u16 next, owner; };
+<span class="kw">void</span> lock(<span class="kw">struct</span> tlock *l) {
+    u16 my = xadd(&amp;l-&gt;next, <span class="num">1</span>);          <span class="cm">/* 取号，只做一次原子操作 */</span>
+    <span class="kw">while</span> (READ_ONCE(l-&gt;owner) != my)     <span class="cm">/* 之后只【读】，不写 */</span>
+        cpu_relax();
+}
+<span class="kw">void</span> unlock(<span class="kw">struct</span> tlock *l) { l-&gt;owner++; }
+<span class="cm">/* ✅ 严格 FIFO，公平性解决了，不会饿死。
+ * ❌ 但所有等待者还是【读同一条 cacheline】：
+ *   owner 一变，N 个核的缓存副本全部失效，N 次一致性风暴，
+ *   而其中只有一个核是真的该醒。核数越多越糟（O(N) 流量）。
+ */</span></pre>
+
+  <div class="fig">
+    <svg viewBox="0 0 780 300" role="img" aria-label="test-and-set 锁与 qspinlock 的 cacheline 争用对比：前者所有 CPU 争抢同一条缓存行，后者每个等待者自旋在自己的本地 MCS 节点上">
+      <text class="tb" x="185" y="18" text-anchor="middle">ticket / test-and-set：全员盯同一条 cacheline</text>
+      <text class="tb" x="590" y="18" text-anchor="middle">qspinlock：只有队首盯锁，其余盯本地节点</text>
+      <line class="ln-d" x1="382" y1="8" x2="382" y2="292"/>
+
+      <rect class="box-r" x="130" y="130" width="112" height="44" rx="8"/>
+      <text class="tb" x="186" y="149" text-anchor="middle">锁变量</text>
+      <text class="ts" x="186" y="165" text-anchor="middle">一条 cacheline</text>
+
+      <rect class="box" x="20" y="40" width="70" height="30" rx="6"/><text class="ts" x="55" y="60" text-anchor="middle">CPU 0</text>
+      <rect class="box" x="20" y="235" width="70" height="30" rx="6"/><text class="ts" x="55" y="255" text-anchor="middle">CPU 1</text>
+      <rect class="box" x="282" y="40" width="70" height="30" rx="6"/><text class="ts" x="317" y="60" text-anchor="middle">CPU 2</text>
+      <rect class="box" x="282" y="235" width="70" height="30" rx="6"/><text class="ts" x="317" y="255" text-anchor="middle">CPU 3</text>
+
+      <path class="ln-r" d="M62 72 L150 126" marker-end="url(#ksr)"/>
+      <path class="ln-r" d="M62 233 L150 178" marker-end="url(#ksr)"/>
+      <path class="ln-r" d="M310 72 L222 126" marker-end="url(#ksr)"/>
+      <path class="ln-r" d="M310 233 L222 178" marker-end="url(#ksr)"/>
+      <text class="tr" x="186" y="200" text-anchor="middle">每次释放 → N 个副本全失效</text>
+      <text class="ts" x="186" y="216" text-anchor="middle">一致性流量随核数线性增长</text>
+      <text class="ts" x="186" y="112" text-anchor="middle">跨核 cacheline 迁移 ≈ 数十～数百纳秒</text>
+
+      <rect class="box-g" x="430" y="40" width="96" height="34" rx="7"/>
+      <text class="ts" x="478" y="62" text-anchor="middle">CPU 0 持锁</text>
+      <rect class="box-a" x="600" y="40" width="130" height="34" rx="7"/>
+      <text class="ts" x="665" y="62" text-anchor="middle">锁字（32 bit）</text>
+      <path class="ln-g" d="M528 57 L596 57" marker-end="url(#ksg)"/>
+
+      <rect class="box-y" x="430" y="110" width="96" height="30" rx="6"/><text class="ts" x="478" y="130" text-anchor="middle">CPU 1</text>
+      <rect class="box-y" x="430" y="160" width="96" height="30" rx="6"/><text class="ts" x="478" y="180" text-anchor="middle">CPU 2</text>
+      <rect class="box-y" x="430" y="210" width="96" height="30" rx="6"/><text class="ts" x="478" y="230" text-anchor="middle">CPU 3</text>
+
+      <rect class="box" x="590" y="110" width="146" height="30" rx="6"/><text class="tm" x="663" y="130" text-anchor="middle">本地 MCS 节点</text>
+      <rect class="box" x="590" y="160" width="146" height="30" rx="6"/><text class="tm" x="663" y="180" text-anchor="middle">本地 MCS 节点</text>
+      <rect class="box" x="590" y="210" width="146" height="30" rx="6"/><text class="tm" x="663" y="230" text-anchor="middle">本地 MCS 节点</text>
+      <path class="ln-a" d="M528 125 L586 125" marker-end="url(#ksa2)"/>
+      <path class="ln-a" d="M528 175 L586 175" marker-end="url(#ksa2)"/>
+      <path class="ln-a" d="M528 225 L586 225" marker-end="url(#ksa2)"/>
+      <path class="ln-d" d="M663 140 L663 158"/><path class="ln-d" d="M663 190 L663 208"/>
+      <text class="tg" x="590" y="266" text-anchor="middle">释放时只写【下一个】节点 → 只唤醒一个核</text>
+      <text class="ts" x="590" y="282" text-anchor="middle">争用流量 O(1)，且保持 FIFO 公平</text>
+
+      <defs>
+        <marker id="ksr" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path class="ar-r" d="M0,0 L6,3 L0,6 Z"/></marker>
+        <marker id="ksg" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path class="ar-g" d="M0,0 L6,3 L0,6 Z"/></marker>
+        <marker id="ksa2" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path class="ar-a" d="M0,0 L6,3 L0,6 Z"/></marker>
+      </defs>
+    </svg>
+    <figcaption>qspinlock 的核心思想：把「全员争抢一条缓存行」变成「一条链表，每个等待者只自旋在自己那条本地缓存行上」——争用流量从 O(N) 降到 O(1)</figcaption>
+  </div>
+
+  <div class="def"><strong>qspinlock（queued spinlock）</strong>：x86 上从 4.2 前后成为 <code>spinlock_t</code> 的默认实现。它基于 <strong>MCS 锁</strong>——每个等待者把一个<strong>per-CPU 的本地节点</strong>挂到队尾，然后<strong>只自旋在自己那个节点上</strong>；持锁者释放时只写「下一个节点」的标志，于是<strong>只有一条 cacheline 迁移、只唤醒一个核</strong>。为了让无争用的快路径仍然只有一条原子指令，内核把锁状态压进一个 32 位字（locked 字节 + pending 位 + 队尾 CPU 编号），只在真的开始排队时才动用 per-CPU 节点数组。<strong>结果是：单线程路径和 test-and-set 一样快，高争用路径是 O(1) 的争用流量并且严格 FIFO。</strong></div>
+
+  <h3>4.4 临界区要短：一笔可以算出来的账</h3>
+
+  <p>「临界区要尽量短」这句话人人都会说，但很少有人给出量级。算一下就清楚了：</p>
+
+  <table>
+    <thead><tr><th>操作</th><th>量级（同 NUMA 节点，供参考）</th><th>含义</th></tr></thead>
+    <tbody>
+      <tr><td>L1 命中的一次读</td><td>~1 ns（约 4 周期）</td><td>无争用时，一次原子操作的基准成本</td></tr>
+      <tr><td>无争用的 <code>spin_lock</code>+<code>unlock</code></td><td>~10–20 ns</td><td>一条 <code>lock cmpxchg</code>，cacheline 已在本核独占状态</td></tr>
+      <tr><td><strong>争用时的一次锁传递</strong></td><td><strong>~50–200 ns</strong></td><td>cacheline 要从另一个核迁过来。<strong>跨 socket 更贵，常见 2–5 倍</strong></td></tr>
+      <tr><td>一次上下文切换</td><td>~1–5 μs（含 cache/TLB 变冷的间接成本）</td><td>这是自旋锁想省掉的东西——所以自旋时间只要低于它就划算</td></tr>
+    </tbody>
+  </table>
+
+  <div class="intuition">关键不是「自旋 100 ns 有多贵」，而是<strong>争用是超线性放大的</strong>。临界区从 50 ns 拉长到 500 ns，单看是慢了 10 倍；但持锁时间变长 10 倍意味着「后来者撞上锁」的概率也涨了约 10 倍，于是排队长度涨、每个人的等待时间也涨——<strong>吞吐可能掉一个数量级，而且是在核数越多时掉得越狠</strong>。这就是为什么内核里会为了把一次 <code>kfree()</code> 移到锁外面而专门发一个补丁：那不是抠 100 ns，那是把一个会随核数爆炸的争用点掐掉。</div>
+
+  <div class="checklist">
+    <h4>缩短临界区的四个标准手法</h4>
+    <ul>
+      <li><strong>分配 / 释放挪到锁外</strong>：先在锁外 <code>kmalloc</code> 好对象，进锁只做链表挂接；删除时在锁内摘链、锁外 <code>kfree</code>。这是内核里最高频的一个模式。</li>
+      <li><strong>锁内只搬指针，不搬数据</strong>：需要拷贝 4 KB 就在锁内把指针换出来，拷贝放锁外。</li>
+      <li><strong>拆锁</strong>：一把大锁 → 每个哈希桶一把锁 / 每个队列一把锁 / per-CPU 一把锁。代价是「需要同时锁多个」时要定死加锁顺序（否则 AB-BA 死锁，见 §9）。</li>
+      <li><strong>换机制</strong>：读远多于写就上 §6 的 seqlock 或 §7 的 RCU；只是计数就上 per-CPU 计数器。<strong>把锁优化到极致不如把锁去掉。</strong></li>
+    </ul>
+  </div>
+
+  <div class="note"><strong>读写自旋锁（<code>rwlock_t</code>）基本已被弃用。</strong>它允许多个读者并发，看起来很美，但：① <strong>读侧也要写 cacheline</strong>（改读者计数），所以「多读者并发」在硬件层面依然是全员争抢一条缓存行，读多的场景下性能常常<strong>不如</strong>普通 <code>spin_lock</code>；② 它是读者优先的，<strong>写者可能长时间饿死</strong>；③ 不能递归读（在中断里再读会与等待的写者形成死锁）。新代码里「读多写少」的正确答案是 <strong>RCU</strong>（§7）或 <strong>seqlock</strong>（§6），不是 <code>rwlock_t</code>。</div>
+</section>
+
+<!-- ================================================================ §5 -->
+<section class="chapter" id="s5">
+  <div class="ch-head">
+    <div class="num">05</div>
+    <div class="t"><h2>可睡眠锁：mutex / rwsem / semaphore</h2><p class="sub">临界区长的时候，让出 CPU 才是对的</p></div>
+  </div>
+
+  <p>自旋锁省的是上下文切换，代价是等待时烧 CPU。一旦临界区可能长于「一次上下文切换的成本」（微秒量级），这笔账就反了——此时应该<strong>睡下去把 CPU 让给别人</strong>。这就是可睡眠锁的存在意义。它们的前置条件只有一个但很硬：<strong>只能在进程上下文使用</strong>。</p>
+
+  <h3>5.1 mutex：默认的第一选择</h3>
+
+<pre><span class="pp">#include</span> <span class="str">&lt;linux/mutex.h&gt;</span>
+
+<span class="kw">static</span> DEFINE_MUTEX(cfg_mutex);
+<span class="cm">/* 或结构体成员： */</span>
+mutex_init(&amp;dev-&gt;lock);
+
+<span class="cm">/* ── 三种加锁方式 ───────────────────────────────── */</span>
+mutex_lock(&amp;dev-&gt;lock);                    <span class="cm">/* 不可中断地等 —— 会让任务进 D 状态 */</span>
+...
+mutex_unlock(&amp;dev-&gt;lock);
+
+<span class="kw">if</span> (mutex_lock_interruptible(&amp;dev-&gt;lock))  <span class="cm">/* ★ 用户可 Ctrl-C 打断，返回 -EINTR */</span>
+    <span class="kw">return</span> -ERESTARTSYS;                   <span class="cm">/* 系统调用路径上【应该】优先用这个 */</span>
+
+<span class="kw">if</span> (!mutex_trylock(&amp;dev-&gt;lock))
+    <span class="kw">return</span> -EBUSY;
+
+<span class="cm">/* ── 硬性限制 ───────────────────────────────────── */</span>
+<span class="cm">/* ① 只能在进程上下文用，中断里用 = BUG
+ * ② 不可递归：同一任务再次 mutex_lock 同一把锁 = 自死锁
+ * ③ 必须由【持有者本人】解锁（不像 semaphore 可以别人 up）
+ * ④ 持有 mutex 时不能退出进程、不能 kfree 掉这把锁所在的对象
+ */</span></pre>
+
+  <div class="def"><strong>乐观自旋（optimistic spinning，<code>CONFIG_MUTEX_SPIN_ON_OWNER</code>）</strong>：<code>mutex_lock</code> 拿不到锁时<strong>不会立刻睡</strong>。它先看 <code>mutex</code> 里记录的 owner——如果 owner <strong>此刻正在另一个 CPU 上运行</strong>，说明它很可能马上就会释放，那就先自旋一会儿；只有当 owner 被调度走了（或自旋太久、或有更高优先级任务要跑）才真的睡下去。为了避免自旋者互相争抢缓存行，这些自旋者自己排成一条 MCS 队列。<strong>效果是：短临界区拿到了自旋锁的性能，长临界区保留了睡眠锁的语义。</strong>这也是「现代内核里 mutex 通常比 semaphore 快」的主要原因。</div>
+
+  <div class="analogy">乐观自旋像<strong>在便利店结账时看前面那个人</strong>：如果他已经在扫码、手在掏手机（owner 正在运行），你就站着等十秒钟，比走到隔壁自助机重新排队快；如果他忽然接了个电话走开了（owner 被调度走），你就该果断换队伍（睡眠让出 CPU）。<strong>关键信息是「前面那人现在到底在不在动」</strong>——这正是 mutex 记录 owner 的意义。</div>
+
+  <table>
+    <thead><tr><th>判据</th><th>选 spinlock</th><th>选 mutex</th></tr></thead>
+    <tbody>
+      <tr><td>调用上下文</td><td>任意（<strong>中断里只能选它</strong>）</td><td><strong>只能</strong>进程上下文</td></tr>
+      <tr><td>临界区里会不会睡</td><td>绝对不能</td><td>可以：<code>kmalloc(GFP_KERNEL)</code>、<code>copy_to_user</code>、读写文件都行</td></tr>
+      <tr><td>临界区长度</td><td>&lt; 1 μs 级（几十条指令、改几个字段）</td><td>可能超过微秒，或长度不可控（依赖用户输入、I/O）</td></tr>
+      <tr><td>持锁期间会不会被抢占</td><td>不会（关了抢占）——所以延迟可控</td><td>会——所以不适合有延迟要求的路径</td></tr>
+      <tr><td>对中断延迟的影响</td><td><code>irqsave</code> 变体会推高中断延迟，临界区必须极短</td><td>无影响</td></tr>
+      <tr><td>调试友好度</td><td>死锁 = 整机 hang，只能靠 lockdep 提前发现</td><td>死锁 = 任务卡在 D 状态，<code>hung task</code> 检测器会打出完整栈</td></tr>
+      <tr><td>默认怎么选</td><td>—</td><td><strong>能用 mutex 就用 mutex</strong>；只有「必须在中断/原子上下文访问」才被迫用 spinlock</td></tr>
+    </tbody>
+  </table>
+
+  <div class="box star"><strong>面试加分点</strong>：很多人会答「短临界区用 spinlock，长临界区用 mutex」，这只是判据之一，而且不是最重要的那条。<strong>真正的第一判据是上下文</strong>：如果这份数据会被中断处理程序访问，那么无论临界区多长你都<strong>只能</strong>用 spinlock（并且必须想办法把它做短）；反过来，如果临界区里必须调用可能睡眠的函数（<code>copy_to_user</code> 是最常见的），那么无论它多短你都<strong>只能</strong>用 mutex。长度判据只在「两者都合法」时才轮得到。能把这个优先级说清楚，比背长短更能体现你真写过内核代码。</div>
+
+  <h3>5.2 rwsem：可睡眠的读写锁</h3>
+
+<pre><span class="pp">#include</span> <span class="str">&lt;linux/rwsem.h&gt;</span>
+
+<span class="kw">static</span> DECLARE_RWSEM(cfg_sem);
+<span class="cm">/* 或 init_rwsem(&amp;dev-&gt;sem); */</span>
+
+down_read(&amp;dev-&gt;sem);          <span class="cm">/* 多个读者可以同时进 */</span>
+val = dev-&gt;cfg-&gt;timeout;
+up_read(&amp;dev-&gt;sem);
+
+down_write(&amp;dev-&gt;sem);         <span class="cm">/* 写者独占 */</span>
+dev-&gt;cfg-&gt;timeout = <span class="num">500</span>;
+up_write(&amp;dev-&gt;sem);
+
+<span class="cm">/* 变体 */</span>
+<span class="kw">if</span> (down_read_trylock(&amp;dev-&gt;sem)) { ... up_read(&amp;dev-&gt;sem); }
+<span class="kw">if</span> (down_write_killable(&amp;dev-&gt;sem))   <span class="cm">/* 可被 SIGKILL 打断，长等待路径应该用 */</span>
+    <span class="kw">return</span> -EINTR;
+downgrade_write(&amp;dev-&gt;sem);     <span class="cm">/* 写锁降级为读锁，不释放中间窗口 */</span>
+
+<span class="cm">/* 内核里的典型使用者：mmap_lock（原 mmap_sem）、
+ * 文件系统的 i_rwsem、cgroup 的各种 rwsem —— 都是
+ * 「读多、写少、且临界区可能很长（要访存/IO）」的场景。 */</span></pre>
+
+  <div class="warn"><strong>写者饥饿是读写锁的原罪。</strong>如果实现是「有读者就让读者进」，那么在读者源源不断的场景下，写者可以<strong>永远拿不到锁</strong>——而且它还堵在那里，让后面的读者体验也变差。内核在 5.x 对 rwsem 做过一轮重写，引入了 <strong>handoff 机制</strong>（写者等太久之后会「预定」这把锁，此后新来的读者必须排队而不能插队）和读者侧的乐观自旋，把饥饿问题压到了可接受的程度。但设计层面的结论没变：<strong>rwsem 适合「写很少但必须能写进去」的配置类数据，不适合写侧也有一定频率的热点数据。</strong></div>
+
+  <div class="danger"><strong>读写锁在「读多」场景下可能比互斥锁更慢</strong>，这是最反直觉的一点。原因是<strong>读侧也要写内存</strong>——获取读锁必须原子地修改读者计数，那是一次对<strong>同一条 cacheline</strong> 的写。于是 32 个核并发读，硬件层面就是 32 个核轮流争抢同一条缓存行的独占权，每次几十到几百纳秒。如果临界区里真正的工作只是「读一个 <code>int</code>」（几纳秒），那么<strong>99% 的开销都花在锁上，而这个开销随核数增长</strong>。此时 <code>rwsem</code>/<code>rwlock_t</code> 不但没帮上忙，反而比什么都不做（RCU）慢几十倍。<strong>判据：临界区里的工作量必须显著大于一次 cacheline 迁移，读写锁才有意义。</strong></div>
+
+  <h3>5.3 semaphore 与 completion</h3>
+
+<pre><span class="pp">#include</span> <span class="str">&lt;linux/semaphore.h&gt;</span>
+<span class="kw">static</span> DEFINE_SEMAPHORE(slots, <span class="num">4</span>);   <span class="cm">/* 计数信号量：最多 4 个并发 */</span>
+
+down(&amp;slots);        <span class="cm">/* 拿一个配额，没了就睡 */</span>
+use_hw_channel();
+up(&amp;slots);          <span class="cm">/* ★ 允许【别的任务】来 up —— 这既是特性也是坑 */</span>
+
+<span class="cm">/* ── 一次性等待请用 completion，别拿 semaphore 凑 ──── */</span>
+<span class="pp">#include</span> <span class="str">&lt;linux/completion.h&gt;</span>
+<span class="kw">struct</span> completion done;
+init_completion(&amp;done);
+
+<span class="cm">/* 提交方 */</span>
+submit_dma(dev, &amp;done);
+<span class="kw">if</span> (!wait_for_completion_timeout(&amp;done, msecs_to_jiffies(<span class="num">500</span>)))
+    <span class="kw">return</span> -ETIMEDOUT;      <span class="cm">/* ★ 一定要带超时，硬件是会不回话的 */</span>
+
+<span class="cm">/* 中断处理程序里 */</span>
+complete(&amp;done);            <span class="cm">/* ✅ complete() 可以在中断上下文调用 */</span></pre>
+
+  <div class="note"><strong><code>struct semaphore</code> 在现代内核里基本是历史遗留。</strong>它出现得比 mutex 早（曾经内核里的互斥锁就是「计数为 1 的 semaphore」），但它没有 owner 字段，因此：<strong>不能做乐观自旋</strong>（不知道谁持有、对方是否在跑）、<strong>lockdep 支持弱</strong>、<strong>无法检测「不是持有者却解锁」</strong>。所以互斥用 <code>mutex</code>、一次性事件通知用 <code>completion</code>、需要「等一个条件成立」用 <code>wait_event_*()</code>。<code>semaphore</code> 只剩一个不可替代的用途：<strong>真正的计数信号量</strong>（限制并发数为 N &gt; 1），而且这个用途本身也不常见。</div>
+
+  <div class="insight-grid">
+    <div class="card"><h4>要「互斥」</h4><p><code>mutex</code>。有 owner、能乐观自旋、lockdep 全支持、误用会被检测。这是 99% 的场景。</p></div>
+    <div class="card green"><h4>要「等一个事件」</h4><p><code>completion</code>（一次性，如等 DMA 完成）或 <code>wait_event_interruptible()</code>（等条件成立，如等队列非空）。<strong>都要考虑超时和信号打断。</strong></p></div>
+    <div class="card violet"><h4>要「限制并发为 N」</h4><p><code>struct semaphore</code>，或者更常见的做法：一个计数 + <code>wait_event</code>，或直接用工作队列的并发度限制。</p></div>
+  </div>
+</section>
+
+<!-- ================================================================ §6 -->
+<section class="chapter" id="s6">
+  <div class="ch-head">
+    <div class="num">06</div>
+    <div class="t"><h2>seqlock 与 per-CPU 变量</h2><p class="sub">两种把读侧成本压到接近零的思路</p></div>
+  </div>
+
+  <p>§4 末尾那个结论值得重复：<strong>读写锁在读侧极热时是负优化，因为读侧也要写 cacheline</strong>。内核给出了两条绕开它的路，思路完全不同但都极其有效：<strong>seqlock</strong>——读侧一个字都不写，靠版本号重试来保证一致性；<strong>per-CPU 变量</strong>——干脆让每个 CPU 有自己的一份，从根上消灭共享。</p>
+
+  <h3>6.1 seqlock：读侧无锁重试</h3>
+
+  <div class="def"><strong>seqlock</strong>：一个「序号 + 自旋锁」的组合。写者拿自旋锁并把<strong>序号加一（变奇数）</strong>，改完数据再<strong>加一（变偶数）</strong>。读者<strong>完全不写任何内存</strong>：先读序号，再读数据，再读一次序号；如果两次序号不同、或第一次读到的是奇数（说明读的时候有人在写），就<strong>整段重读</strong>。</div>
+
+  <div class="analogy">seqlock 像<strong>看火车站那种翻页式的车次牌</strong>。牌子旁边挂着一块「正在更新中」的小灯。你要抄下一整屏车次：先看灯是不是亮的（序号是否为奇数），然后一行行抄，抄完再看一眼灯有没有闪过（序号有没有变）。<strong>只要灯全程没动，你抄到的就是一致的一屏</strong>；如果动过，说明中间有人翻页了，你抄的可能是半新半旧的——那就<strong>从头再抄一遍</strong>。你从头到尾没有碰过牌子，所以一百个人同时抄也不会互相干扰。</div>
+
+<pre><span class="pp">#include</span> <span class="str">&lt;linux/seqlock.h&gt;</span>
+
+<span class="kw">struct</span> stats {
+    u64 packets;
+    u64 bytes;
+    u64 drops;
+};
+<span class="kw">static</span> seqlock_t     st_lock;
+<span class="kw">static</span> <span class="kw">struct</span> stats st;
+
+seqlock_init(&amp;st_lock);
+
+<span class="cm">/* ── 写侧：内含自旋锁，写者之间自动互斥 ────────────── */</span>
+<span class="kw">static</span> <span class="kw">void</span> account(u32 len, <span class="kw">bool</span> drop)
+{
+    write_seqlock(&amp;st_lock);         <span class="cm">/* 拿锁 + 序号++ （变奇数）*/</span>
+    <span class="kw">if</span> (drop) {
+        st.drops++;
+    } <span class="kw">else</span> {
+        st.packets++;
+        st.bytes += len;
+    }
+    write_sequnlock(&amp;st_lock);       <span class="cm">/* 序号++ （变偶数）+ 放锁 */</span>
+}
+<span class="cm">/* 如果写侧在中断里跑，用 write_seqlock_irqsave() */</span>
+
+<span class="cm">/* ── 读侧：一个字都不写 ─────────────────────────── */</span>
+<span class="kw">static</span> <span class="kw">void</span> snapshot(<span class="kw">struct</span> stats *out)
+{
+    <span class="kw">unsigned</span> <span class="kw">int</span> seq;
+
+    <span class="kw">do</span> {
+        seq = read_seqbegin(&amp;st_lock);   <span class="cm">/* 读序号；奇数会在这里等 */</span>
+
+        <span class="cm">/* ★ 这一段可能读到【撕裂的中间状态】，
+         *   所以只能【拷贝到局部】，绝不能在这里做决策/解引用 */</span>
+        out-&gt;packets = st.packets;
+        out-&gt;bytes   = st.bytes;
+        out-&gt;drops   = st.drops;
+
+    } <span class="kw">while</span> (read_seqretry(&amp;st_lock, seq));   <span class="cm">/* 序号变了 → 全部重来 */</span>
+
+    <span class="cm">/* 走到这里，out 里的三个值一定来自【同一个瞬间】 */</span>
+}</pre>
+
+  <div class="fig">
+    <svg viewBox="0 0 780 250" role="img" aria-label="seqlock 的读侧重试时间线：读者两次读到相同的偶数序号则成功，中间被写者插入导致序号变化则重试">
+      <text class="tb" x="60" y="20">seqlock 读侧重试</text>
+      <line class="ln" x1="60" y1="228" x2="750" y2="228"/>
+      <text class="ts" x="740" y="245" text-anchor="end">时间 →</text>
+
+      <text class="tb" x="52" y="58" text-anchor="end">写者</text>
+      <rect class="box-r" x="300" y="42" width="120" height="24" rx="5"/>
+      <text class="ts" x="360" y="59" text-anchor="middle">seq 3 → 改数据</text>
+      <text class="tr" x="300" y="34" text-anchor="middle">seq=3（奇）</text>
+      <text class="tg" x="424" y="34">seq=4（偶）</text>
+
+      <text class="tb" x="52" y="112" text-anchor="end">读者 A</text>
+      <rect class="box-r" x="240" y="96" width="240" height="24" rx="5"/>
+      <text class="ts" x="360" y="113" text-anchor="middle">读到 seq=2 → 抄数据 → 再读 seq=4 ≠ 2</text>
+      <text class="tr" x="500" y="113">✗ 重试</text>
+
+      <text class="tb" x="52" y="166" text-anchor="end">读者 A′</text>
+      <rect class="box-g" x="500" y="150" width="180" height="24" rx="5"/>
+      <text class="ts" x="590" y="167" text-anchor="middle">seq=4 → 抄 → seq=4 ✓</text>
+      <text class="tg" x="694" y="167">✓ 成功</text>
+
+      <text class="tb" x="52" y="206" text-anchor="end">读者 B</text>
+      <rect class="box-g" x="100" y="190" width="130" height="24" rx="5"/>
+      <text class="ts" x="165" y="207" text-anchor="middle">seq=2 → 抄 → 2 ✓</text>
+
+      <line class="ln-d" x1="300" y1="30" x2="300" y2="228"/>
+      <line class="ln-d" x1="420" y1="30" x2="420" y2="228"/>
+      <text class="ts" x="360" y="222" text-anchor="middle">写窗口</text>
+    </svg>
+    <figcaption>读者 B 完整落在写窗口之外，一次通过；读者 A 横跨写窗口，两次序号不等，整段重读——读侧从不写内存，所以读者之间零争用</figcaption>
+  </div>
+
+  <div class="checklist">
+    <h4>seqlock 的使用边界（每一条都是踩过的坑）</h4>
+    <ul>
+      <li><strong>读侧临界区必须可以安全地重跑</strong>：不能有任何副作用——不能改全局状态、不能 <code>printk</code>、不能分配/释放内存、不能唤醒任务。因为它可能被执行 2 次、5 次。</li>
+      <li><strong>读侧读到的数据可能是撕裂的、互相矛盾的</strong>。所以只能<strong>原样拷贝到局部变量</strong>，等 <code>read_seqretry()</code> 通过之后再用。在重试循环内部做 <code>if</code> 判断、算下标、除法（可能除零！）都是 bug。</li>
+      <li><strong>绝对不能读到一个指针就立刻解引用</strong>。那个指针可能是半新半旧拼出来的野值，解引用直接 oops——而这发生在 <code>read_seqretry()</code> 有机会告诉你「重试」之前。要保护含指针的结构，用 RCU，不要用 seqlock。</li>
+      <li><strong>写者会饿死读者</strong>。写侧持续不断时，读者可能一直重试。所以它要求<strong>写极少</strong>——不是「写比读少」，是「写少到读者几乎撞不上」。</li>
+      <li><strong>读侧不适合放很长的临界区</strong>：拷贝的字段越多，撞上写窗口的概率越大，重试越频繁。</li>
+      <li><strong>写侧自带自旋锁</strong>（<code>seqlock_t</code>），所以写侧不能睡；如果你已经有别的锁来串行化写者，可以用更轻的裸 <code>seqcount_t</code>（<code>write_seqcount_begin/end</code>），但那时<strong>写者互斥要你自己保证</strong>。</li>
+    </ul>
+  </div>
+
+  <div class="box tip"><strong>内核里最著名的 seqlock 使用者是 timekeeping</strong>。<code>clock_gettime()</code> 这条路径要读「上次更新的时刻 + 周期数 + 乘数 + 移位」这一整组必须彼此一致的字段，而它的调用频率高到离谱（每秒可能几百万次），写侧则只在时钟中断里更新。这正是 seqlock 的完美场景：读侧零写入、零争用，几十个核并发调 <code>clock_gettime()</code> 互不影响。此外 dentry 的路径查找（RCU-walk 模式配合 <code>rename_lock</code>）、任务的 CPU 时间统计也都用它。</div>
+
+  <h3>6.2 per-CPU 变量：最好的锁是没有锁</h3>
+
+  <div class="def"><strong>per-CPU 变量</strong>：一份数据，<strong>每个 CPU 有自己独立的一个副本</strong>，各自只访问自己那份。既然不共享，就<strong>不需要任何锁、任何原子操作、任何屏障</strong>——唯一要防的是「访问期间被抢占/迁移到了别的 CPU」。它是内核里最彻底的一种优化：<strong>不是把锁做快，是把共享消灭掉</strong>。</div>
+
+  <div class="analogy">per-CPU 变量像<strong>给每个收银员一个自己的钱箱</strong>，而不是全店共用一个保险柜。收钱时谁也不用等谁（零争用），代价是<strong>店长想知道今天总营业额，必须挨个箱子去数</strong>（汇总是 O(核数)），而且数的过程中前面的箱子可能又收了钱，所以拿到的永远是个<strong>近似值</strong>。绝大多数时候这个取舍是极其划算的：收钱每秒几千次，看总额一天几次。</div>
+
+<pre><span class="pp">#include</span> <span class="str">&lt;linux/percpu.h&gt;</span>
+
+<span class="cm">/* ── 静态定义 ───────────────────────────────────── */</span>
+<span class="kw">static</span> DEFINE_PER_CPU(u64, rx_packets);
+<span class="kw">static</span> DEFINE_PER_CPU(<span class="kw">struct</span> my_cache, cache);
+
+<span class="cm">/* ── 最简：this_cpu_* 系列，单条指令完成，抢占安全 ─── */</span>
+this_cpu_inc(rx_packets);              <span class="cm">/* ✅ x86 上是一条带 %gs 段前缀的 inc */</span>
+this_cpu_add(rx_bytes, len);
+u64 v = this_cpu_read(rx_packets);
+<span class="cm">/* 「抢占安全」的含义：它保证【读-改-写落在同一个 CPU 的副本上】，
+ * 不会因为中途被抢占而把结果写到另一个 CPU 的副本里。
+ * 它【不是】跨 CPU 原子的 —— 别指望它做同步。 */</span>
+
+<span class="cm">/* ── 拿指针操作复杂结构：必须防止 CPU 漂移 ────────── */</span>
+<span class="kw">struct</span> my_cache *c = get_cpu_ptr(&amp;cache);   <span class="cm">/* preempt_disable() + this_cpu_ptr() */</span>
+c-&gt;head = c-&gt;items[--c-&gt;n];                 <span class="cm">/* 这中间绝不会换 CPU */</span>
+put_cpu_ptr(&amp;cache);                        <span class="cm">/* preempt_enable() */</span>
+
+<span class="cm">/* 已经在关抢占/关中断/持自旋锁的上下文里，直接用轻量版： */</span>
+<span class="kw">struct</span> my_cache *c2 = this_cpu_ptr(&amp;cache);
+<span class="cm">/* ★ 在【可抢占】上下文里用 this_cpu_ptr 而不关抢占，
+ *   开了 CONFIG_DEBUG_PREEMPT 会报：
+ *   BUG: using smp_processor_id() in preemptible [00000000] code
+ *   这个警告的意思是：你算出的 CPU 号可能下一刻就过期了。 */</span>
+
+<span class="cm">/* ── 汇总：需要遍历所有【可能存在】的 CPU ──────────── */</span>
+u64 total = <span class="num">0</span>;
+<span class="kw">int</span> cpu;
+for_each_possible_cpu(cpu)             <span class="cm">/* ★ possible 而不是 online：
+                                        *   CPU 下线后它的副本还在，
+                                        *   用 online 会丢数据 */</span>
+    total += per_cpu(rx_packets, cpu);
+
+<span class="cm">/* ── 动态分配 ───────────────────────────────────── */</span>
+<span class="kw">struct</span> my_stats __percpu *ps = alloc_percpu(<span class="kw">struct</span> my_stats);
+<span class="kw">if</span> (!ps)
+    <span class="kw">return</span> -ENOMEM;
+this_cpu_ptr(ps)-&gt;n++;
+free_percpu(ps);</pre>
+
+  <table>
+    <thead><tr><th>方案</th><th>写侧成本（每次）</th><th>读侧成本</th><th>精度</th><th>适用</th></tr></thead>
+    <tbody>
+      <tr><td><code>spin_lock</code> + 普通变量</td><td>争用时 50–200 ns，且随核数恶化</td><td>同上</td><td>精确</td><td>写侧本来就不热，或者需要和其他数据一起原子更新</td></tr>
+      <tr><td><code>atomic64_inc</code></td><td>无争用 ~10 ns；<strong>多核同时写同一条 cacheline 时急剧恶化</strong></td><td>一次读，很便宜</td><td>精确</td><td>写侧频率中等（每秒几万次以内），需要随时读到准确值</td></tr>
+      <tr><td><strong>per-CPU 变量</strong></td><td><strong>~1 ns（一条普通指令，零争用）</strong></td><td><strong>O(CPU 数)</strong>，256 核要触碰 256 条 cacheline</td><td><strong>近似</strong>（汇总期间还在变）</td><td><strong>高频统计计数器</strong>——网络包数、字节数、各类 <code>/proc</code> 统计</td></tr>
+      <tr><td><code>percpu_counter</code></td><td>~1 ns（本地累加），攒够 batch 才碰一次全局值</td><td><code>_read()</code> O(1) 但粗；<code>_sum()</code> O(CPU 数) 且要拿锁</td><td>可控：误差 ≤ batch × CPU 数</td><td>既要高频写、又要「大致准确」的量，如文件系统的空闲块数</td></tr>
+    </tbody>
+  </table>
+
+  <div class="warn"><strong>per-CPU 的三个代价，别只看到零争用。</strong>① <strong>内存放大</strong>：一个 per-CPU 结构在 256 核机器上就是 256 份；结构体里塞个 4 KB 缓冲，那就是 1 MB。② <strong>汇总不便宜也不精确</strong>：<code>/proc</code> 里某个统计如果被监控系统每秒采集一次，而它需要遍历 256 个 CPU 的副本，那就是每秒 256 次跨 NUMA 的 cache miss——<strong>「读一个数」变成了一个实实在在的开销</strong>，历史上多次成为大核数机器上的性能问题。③ <strong>拿不到一致快照</strong>：遍历过程中前面的 CPU 还在改，所以「总数」永远是个近似值；如果业务逻辑需要「精确的总数等于 0 才能释放资源」，per-CPU 就不适用（或者要额外配一个 seqlock/RCU 屏障来保证）。</div>
+
+  <div class="box star"><strong>面试加分点</strong>：被问「怎么优化一个高频计数器」时，除了说出 per-CPU，加上这一层会明显不同——<strong>「per-CPU 把成本从写侧转移到了读侧」</strong>。这和 §7 的 RCU 是同一种思维：<strong>先判断读写比例，然后把开销挪到频率低的那一侧</strong>。RCU 是「读多写少 → 开销全给写侧」，per-CPU 计数器是「写多读少 → 开销全给读侧」。<strong>能识别出这是同一个设计原则的两个方向，说明你抓住了内核同步设计的主线，而不是在背 API。</strong></div>
+</section>
+
+<!-- ================================================================ §7 -->
+<section class="chapter" id="s7">
+  <div class="ch-head">
+    <div class="num">07</div>
+    <div class="t"><h2>RCU 原理</h2><p class="sub">读侧零开销，代价全给写侧</p></div>
+  </div>
+
+  <p>RCU（Read-Copy-Update）是内核同步里最有独创性的一项设计，也是面试里区分「读过书」和「读过代码」的分水岭。它解决的问题很具体：<strong>一份数据被极其频繁地读、极少被改（比如网络路由表、已加载模块列表、进程的文件描述符表、SELinux 策略），而读侧还常常在中断/软中断这种不能睡的上下文里</strong>。前面所有方案在这个场景下都不理想——rwsem 不能在中断里用，rwlock 的读侧要写 cacheline，seqlock 不能保护含指针的结构。</p>
+
+  <div class="intuition">RCU 的核心交易是：<strong>让读者永远不阻塞、不重试、甚至一条同步指令都不执行；把全部代价转移给写者——写者必须做拷贝，还必须等待一段「宽限期」才能释放旧数据。</strong>读写比例是 1000:1 时，这笔交易划算得离谱。</div>
+
+  <div class="analogy">RCU 像<strong>更换公告板上的通知</strong>。传统做法是把公告板锁上（加锁），撕下旧通知、贴上新的，期间所有人都在门外等。RCU 的做法是：<strong>在旁边先做好一张全新的通知（Copy + Update），然后把公告板上的「指向哪张通知」的箭头一挪</strong>（一次原子的指针替换）。挪箭头是瞬间的，正在看旧通知的人<strong>不受任何影响，可以慢慢看完</strong>；新来的人看到的自然是新通知。最后一步是关键：<strong>那张旧通知不能马上销毁</strong>——得等到「所有在换箭头之前就开始看的人都看完走了」，这段等待就是<strong>宽限期</strong>。</div>
+
+  <h3>7.1 读侧为什么能做到零开销</h3>
+
+<pre><span class="cm">/* 读侧的全部内容就这么多 */</span>
+rcu_read_lock();
+<span class="kw">struct</span> cfg *c = rcu_dereference(dev-&gt;cfg);
+<span class="kw">if</span> (c)
+    use(c-&gt;timeout, c-&gt;retries);
+rcu_read_unlock();
+
+<span class="cm">/* rcu_read_lock() 到底做了什么？关键在于它【不是一把锁】：
+ *   · 它不与任何人互斥 —— 写者可以在你读的时候照样改
+ *   · 它不会失败、不会阻塞、不会重试
+ *   · 多个读者之间毫无交互，可以任意嵌套
+ *   它做的唯一一件事是【标记出「我正在读」这段区间】，
+ *   好让写者能判断「宽限期结束了没有」。
+ *
+ * 在 CONFIG_PREEMPT_NONE 的内核里，它展开成 preempt_disable()；
+ * 而在不需要抢占计数的配置下，这几乎不产生任何指令 —— 只剩一个
+ * 编译器屏障。这就是「读侧零开销」的字面含义。
+ *
+ * 在抢占式内核（CONFIG_PREEMPT / PREEMPT_RT）里，读侧临界区【可以被抢占】，
+ * 所以它需要在当前任务上维护一个嵌套计数，并在被抢占时把这个任务
+ * 记录下来，让宽限期把它也等上。实现细节各版本有差异，
+ * 但【对使用者暴露的行为是一致的】：读侧不阻塞、不失败、不能睡眠。 */</span></pre>
+
+  <div class="def"><strong>宽限期（grace period）</strong>：从「写者完成指针替换」这一刻算起，到「所有<strong>在替换之前就已经进入</strong>读侧临界区的读者都退出」为止的这段时间。宽限期结束后可以断言：<strong>再也没有任何 CPU 能通过任何路径拿到旧对象的指针</strong>——因为新进入的读者只能看到新指针，而旧读者都走完了。此时才可以安全释放旧对象。注意它<strong>不需要等新进入的读者</strong>，也不需要知道到底有哪些读者——这正是它能做到读侧零开销的原因。</div>
+
+  <div class="def"><strong>静止状态（quiescent state）</strong>：一个 CPU「此刻肯定不在任何 RCU 读侧临界区里」的可判定时刻。在非抢占内核里，读侧临界区是关抢占的，所以<strong>一次上下文切换、进入 idle、返回用户态</strong>都足以证明这一点。宽限期的实现就是<strong>等每个 CPU 都至少经过一次静止状态</strong>——这也解释了「为什么内核里的死循环会导致 RCU stall」（§8）：那个 CPU 一直不经过静止状态，宽限期就永远结束不了。</div>
+
+  <h3>7.2 三件套：发布、订阅、宽限期</h3>
+
+  <table>
+    <thead><tr><th>动作</th><th>API</th><th>它保证什么</th><th>对应 §3 的什么</th></tr></thead>
+    <tbody>
+      <tr><td><strong>发布</strong></td><td><code>rcu_assign_pointer(p, v)</code></td><td>把新对象的<strong>内容</strong>先于<strong>指针</strong>发布出去。读者一旦看到新指针，就一定能看到完整初始化的对象</td><td>写侧 <code>smp_store_release()</code></td></tr>
+      <tr><td><strong>订阅</strong></td><td><code>rcu_dereference(p)</code></td><td>取指针，并保证<strong>后续通过这个指针的解引用不会被提前到取指针之前</strong>（地址依赖序）；同时带 lockdep 检查「你真的在读侧临界区里吗」</td><td>读侧的地址依赖 + <code>READ_ONCE()</code></td></tr>
+      <tr><td><strong>划界</strong></td><td><code>rcu_read_lock()</code> / <code>rcu_read_unlock()</code></td><td>标记读侧临界区。<strong>指针的有效期只在这一对之间</strong>——出了 <code>unlock</code>，之前拿到的指针立刻失效</td><td>—（RCU 特有）</td></tr>
+      <tr><td><strong>等待</strong></td><td><code>synchronize_rcu()</code> / <code>call_rcu()</code></td><td>等宽限期。之后旧对象可以释放</td><td>—（RCU 特有）</td></tr>
+    </tbody>
+  </table>
+
+  <div class="fig">
+    <svg viewBox="0 0 780 300" role="img" aria-label="RCU 宽限期时间线：写者移除节点后必须等待所有在移除前已进入读侧临界区的读者退出，之后才能释放旧对象">
+      <text class="tb" x="60" y="20">RCU 宽限期时间线</text>
+      <line class="ln" x1="60" y1="268" x2="756" y2="268"/>
+      <text class="ts" x="750" y="286" text-anchor="end">时间 →</text>
+
+      <line class="ln-r" x1="240" y1="30" x2="240" y2="268" stroke-dasharray="5 4"/>
+      <text class="tr" x="240" y="26" text-anchor="middle">list_del_rcu() + rcu_assign_pointer()</text>
+      <line class="ln-g" x1="530" y1="46" x2="530" y2="268" stroke-dasharray="5 4"/>
+      <text class="tg" x="600" y="42" text-anchor="middle">宽限期结束 → kfree(旧对象)</text>
+
+      <text class="tb" x="52" y="80" text-anchor="end">CPU 0</text>
+      <rect class="box-y" x="140" y="64" width="150" height="24" rx="5"/>
+      <text class="ts" x="215" y="81" text-anchor="middle">读者 R1（看得到旧节点）</text>
+
+      <text class="tb" x="52" y="128" text-anchor="end">CPU 1</text>
+      <rect class="box-y" x="196" y="112" width="304" height="24" rx="5"/>
+      <text class="ts" x="348" y="129" text-anchor="middle">读者 R2 —— 它决定了宽限期有多长</text>
+
+      <text class="tb" x="52" y="176" text-anchor="end">CPU 2</text>
+      <rect class="box-a" x="300" y="160" width="140" height="24" rx="5"/>
+      <text class="ts" x="370" y="177" text-anchor="middle">读者 R3（已看不到）</text>
+
+      <text class="tb" x="52" y="224" text-anchor="end">CPU 3</text>
+      <rect class="box-g" x="560" y="208" width="170" height="24" rx="5"/>
+      <text class="ts" x="645" y="225" text-anchor="middle">读者 R4（旧对象已消失）</text>
+
+      <path class="ln-g" d="M240 250 L526 250" marker-end="url(#ksg2)"/>
+      <path class="ln-g" d="M244 250 L244 250" />
+      <text class="tg" x="384" y="264" text-anchor="middle">宽限期：等 R1、R2 退出即可，不等 R3/R4</text>
+
+      <rect class="box" x="596" y="112" width="150" height="66" rx="7"/>
+      <text class="ts" x="671" y="132" text-anchor="middle">写者在这段时间里</text>
+      <text class="ts" x="671" y="148" text-anchor="middle">可以做别的事</text>
+      <text class="tm" x="671" y="166" text-anchor="middle">（call_rcu 异步）</text>
+
+      <defs><marker id="ksg2" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path class="ar-g" d="M0,0 L6,3 L0,6 Z"/></marker></defs>
+    </svg>
+    <figcaption>宽限期只需要等「跨越了移除点」的读者（R1、R2）；R3 在移除后才进入，已经拿不到旧指针，所以不影响宽限期长度。宽限期的实际长度由<strong>最慢的那个跨越读者</strong>决定</figcaption>
+  </div>
+
+  <h3>7.3 写侧模式与完整代码</h3>
+
+  <p>「Read-Copy-Update」这个名字就是写侧的流程：<strong>拷贝一份 → 改副本 → 原子替换指针 → 等宽限期 → 释放旧的</strong>。注意 RCU <strong>不解决写者之间的互斥</strong>——多个写者并发时仍然需要一把普通的锁（spinlock 或 mutex）把它们串起来。</p>
+
+<pre><span class="cm">/* ══ 模式一：整体替换一个配置对象 ═══════════════════ */</span>
+<span class="kw">static</span> <span class="kw">struct</span> cfg __rcu *g_cfg;
+<span class="kw">static</span> DEFINE_MUTEX(cfg_mutex);          <span class="cm">/* ★ 写者之间的互斥，RCU 不管这个 */</span>
+
+<span class="kw">static</span> <span class="kw">int</span> cfg_set_timeout(u32 t)
+{
+    <span class="kw">struct</span> cfg *old, *new;
+
+    new = kmalloc(<span class="kw">sizeof</span>(*new), GFP_KERNEL);
+    <span class="kw">if</span> (!new)
+        <span class="kw">return</span> -ENOMEM;
+
+    mutex_lock(&amp;cfg_mutex);
+    old = rcu_dereference_protected(g_cfg, mutex_is_locked(&amp;cfg_mutex));
+    *new = *old;                          <span class="cm">/* ① Copy */</span>
+    new-&gt;timeout = t;                     <span class="cm">/* ② Update（改副本，读者看不见）*/</span>
+    rcu_assign_pointer(g_cfg, new);       <span class="cm">/* ③ 原子发布，含 release 语义 */</span>
+    mutex_unlock(&amp;cfg_mutex);
+
+    synchronize_rcu();                    <span class="cm">/* ④ 等宽限期（会睡！只能在进程上下文）*/</span>
+    kfree(old);                           <span class="cm">/* ⑤ 现在没人能引用 old 了 */</span>
+    <span class="kw">return</span> <span class="num">0</span>;
+}
+
+<span class="cm">/* 读侧（可以在软中断、可以在 NAPI poll 里）： */</span>
+<span class="kw">static</span> u32 cfg_timeout(<span class="kw">void</span>)
+{
+    <span class="kw">struct</span> cfg *c;
+    u32 t;
+
+    rcu_read_lock();
+    c = rcu_dereference(g_cfg);
+    t = c ? c-&gt;timeout : DEFAULT_TIMEOUT;
+    rcu_read_unlock();
+    <span class="kw">return</span> t;                             <span class="cm">/* ★ 只能把【值】带出去，绝不能把 c 带出去 */</span>
+}</pre>
+
+<pre><span class="cm">/* ══ 模式二：RCU 保护的链表（最常见的用法）═════════ */</span>
+<span class="pp">#include</span> <span class="str">&lt;linux/rculist.h&gt;</span>
+
+<span class="kw">struct</span> entry {
+    <span class="kw">struct</span> list_head list;
+    <span class="kw">struct</span> rcu_head  rcu;      <span class="cm">/* ★ call_rcu 要用的回调头，嵌在对象里 */</span>
+    u32              key;
+    u32              val;
+};
+<span class="kw">static</span> LIST_HEAD(entries);
+<span class="kw">static</span> DEFINE_SPINLOCK(entries_lock);   <span class="cm">/* 只保护写者之间 */</span>
+
+<span class="cm">/* ── 读：不加任何锁，可以在中断上下文 ─────────────── */</span>
+<span class="kw">static</span> <span class="kw">bool</span> lookup(u32 key, u32 *out)
+{
+    <span class="kw">struct</span> entry *e;
+    <span class="kw">bool</span> found = <span class="kw">false</span>;
+
+    rcu_read_lock();
+    list_for_each_entry_rcu(e, &amp;entries, list) {   <span class="cm">/* 内部用 rcu_dereference */</span>
+        <span class="kw">if</span> (e-&gt;key == key) {
+            *out = e-&gt;val;                <span class="cm">/* 取值出去，不带指针出去 */</span>
+            found = <span class="kw">true</span>;
+            <span class="kw">break</span>;
+        }
+    }
+    rcu_read_unlock();
+    <span class="kw">return</span> found;
+}
+
+<span class="cm">/* ── 增：先填好再挂链，list_add_rcu 内含发布语义 ──── */</span>
+<span class="kw">static</span> <span class="kw">int</span> insert(u32 key, u32 val)
+{
+    <span class="kw">struct</span> entry *e = kmalloc(<span class="kw">sizeof</span>(*e), GFP_KERNEL);
+
+    <span class="kw">if</span> (!e)
+        <span class="kw">return</span> -ENOMEM;
+    e-&gt;key = key;
+    e-&gt;val = val;                         <span class="cm">/* ★ 挂链【之前】填完 */</span>
+
+    spin_lock(&amp;entries_lock);
+    list_add_rcu(&amp;e-&gt;list, &amp;entries);     <span class="cm">/* 读者要么看不到它，要么看到完整的它 */</span>
+    spin_unlock(&amp;entries_lock);
+    <span class="kw">return</span> <span class="num">0</span>;
+}
+
+<span class="cm">/* ── 删：摘链 + 延迟释放 ────────────────────────── */</span>
+<span class="kw">static</span> <span class="kw">void</span> entry_free_rcu(<span class="kw">struct</span> rcu_head *head)
+{
+    <span class="kw">struct</span> entry *e = container_of(head, <span class="kw">struct</span> entry, rcu);
+
+    kfree(e);
+}
+
+<span class="kw">static</span> <span class="kw">void</span> remove(u32 key)
+{
+    <span class="kw">struct</span> entry *e;
+
+    spin_lock(&amp;entries_lock);
+    list_for_each_entry(e, &amp;entries, list) {   <span class="cm">/* 写侧有锁，不必用 _rcu 版本 */</span>
+        <span class="kw">if</span> (e-&gt;key == key) {
+            list_del_rcu(&amp;e-&gt;list);       <span class="cm">/* ★★ 不是 list_del()！见下 */</span>
+            spin_unlock(&amp;entries_lock);
+            call_rcu(&amp;e-&gt;rcu, entry_free_rcu);  <span class="cm">/* 异步等宽限期后释放 */</span>
+            <span class="kw">return</span>;
+        }
+    }
+    spin_unlock(&amp;entries_lock);
+}
+
+<span class="cm">/* ── 改一个已存在的项：不能原地改（读者会看到半新半旧）── */</span>
+<span class="kw">static</span> <span class="kw">int</span> update(u32 key, u32 val)
+{
+    <span class="kw">struct</span> entry *old, *new;
+
+    new = kmalloc(<span class="kw">sizeof</span>(*new), GFP_KERNEL);
+    <span class="kw">if</span> (!new)
+        <span class="kw">return</span> -ENOMEM;
+
+    spin_lock(&amp;entries_lock);
+    old = find_locked(key);
+    <span class="kw">if</span> (!old) { spin_unlock(&amp;entries_lock); kfree(new); <span class="kw">return</span> -ENOENT; }
+    *new = *old;
+    new-&gt;val = val;
+    list_replace_rcu(&amp;old-&gt;list, &amp;new-&gt;list);   <span class="cm">/* 原子换节点 */</span>
+    spin_unlock(&amp;entries_lock);
+
+    kfree_rcu(old, rcu);                  <span class="cm">/* 最省事：宽限期后自动 kfree */</span>
+    <span class="kw">return</span> <span class="num">0</span>;
+}</pre>
+
+  <div class="box danger"><strong>必须用 <code>list_del_rcu()</code> 而不是 <code>list_del()</code>。</strong>普通的 <code>list_del()</code> 会把节点的 <code>next</code> 和 <code>prev</code> 都写成 <code>LIST_POISON1</code>/<code>LIST_POISON2</code>（一个故意非法的地址，用来让 use-after-free 立刻崩而不是静默损坏）。但 RCU 读者可能<strong>此刻正停在这个节点上</strong>，下一步要顺着 <code>next</code> 继续遍历——如果 <code>next</code> 被写成毒值，读者就跳到非法地址去了。<code>list_del_rcu()</code> 的差别就是<strong>保留 <code>next</code> 有效</strong>（只毒化 <code>prev</code>，因为 RCU 遍历总是单向的），让还在链上的读者能安全地走完剩下的节点。<strong>同理，绝不能在宽限期结束前 <code>kfree</code> 掉节点，哪怕它已经不在链上了。</strong></div>
+
+  <h3>7.4 synchronize_rcu / call_rcu / kfree_rcu 怎么选</h3>
+
+  <table>
+    <thead><tr><th>API</th><th>行为</th><th>能在什么上下文调</th><th>用它的时候</th><th>坑</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>synchronize_rcu()</code></td>
+        <td><strong>阻塞</strong>，直到宽限期结束才返回</td>
+        <td><strong>只能进程上下文</strong>（它会睡）；<strong>绝不能在 RCU 读侧临界区里调</strong>（自己等自己，必死）</td>
+        <td>代码简单直白，之后可以放心 <code>kfree</code>；适合<strong>低频</strong>的配置变更、模块卸载、设备移除</td>
+        <td><strong>可能阻塞很久</strong>——毫秒到几十毫秒是常态（要等所有 CPU 都过一次静止状态）。在热路径上调它会造成明显停顿；持锁时调它极易连环卡死</td>
+      </tr>
+      <tr>
+        <td><code>call_rcu(&amp;p-&gt;rcu, fn)</code></td>
+        <td><strong>立刻返回</strong>，宽限期后由内核在软中断（或专门的 rcuo 内核线程）里调用 <code>fn</code></td>
+        <td>几乎任何上下文，<strong>包括中断和原子上下文</strong></td>
+        <td>写侧不能阻塞时的标准选择；释放逻辑不只是 <code>kfree</code>（要先 <code>put</code> 引用、解注册）时用它</td>
+        <td>① 回调函数在<strong>软中断上下文</strong>执行，<strong>里面不能睡</strong>；② <strong>模块卸载前必须 <code>rcu_barrier()</code></strong>，否则回调函数所在的代码段已被卸载，调用时直接 oops；③ 大量调用会积压，见 §8</td>
+      </tr>
+      <tr>
+        <td><code>kfree_rcu(p, rcu_field)</code></td>
+        <td>宽限期后自动 <code>kfree(p)</code></td>
+        <td>同 <code>call_rcu</code></td>
+        <td><strong>释放动作就是一次 <code>kfree</code> 时的首选</strong>——绝大多数情况</td>
+        <td>不需要写回调函数，因此也<strong>不需要 <code>rcu_barrier()</code></strong>（没有模块代码被调用）。内核对它做了批量优化，比手写 <code>call_rcu(..., kfree_cb)</code> 更省</td>
+      </tr>
+      <tr>
+        <td><code>rcu_barrier()</code></td>
+        <td>阻塞，等<strong>所有已排队的 <code>call_rcu</code> 回调都执行完</strong></td>
+        <td>只能进程上下文</td>
+        <td><strong>模块 <code>exit</code> 路径的必备动作</strong></td>
+        <td>它不等于 <code>synchronize_rcu()</code>：后者只等宽限期，前者还要等回调真的跑完。<strong>两件事，别混</strong></td>
+      </tr>
+      <tr>
+        <td><code>synchronize_rcu_expedited()</code></td>
+        <td>用 IPI 强行催各 CPU 尽快报告静止状态，宽限期缩到几十微秒</td>
+        <td>进程上下文</td>
+        <td>真的等不了的关键路径（内核里用得很谨慎）</td>
+        <td><strong>会给所有 CPU 发 IPI</strong>——对实时性和低延迟业务是干扰源。<code>rcupdate.rcu_expedited=1</code> 会把全局都改成催促模式，<strong>不要随便开</strong></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="intuition">选择规则很简单：<strong>能用 <code>kfree_rcu()</code> 就用它；释放逻辑复杂就用 <code>call_rcu()</code>；只有「我必须确认旧对象已经彻底没人用了才能继续往下走」时才用 <code>synchronize_rcu()</code></strong>。第三种情况远比想象的少见——大多数写侧其实不关心旧对象什么时候真的被释放，只是需要保证「最终会释放」。</div>
+
+  <div class="note"><strong>RCU 和引用计数不是互斥的，经常配合用。</strong>典型模式：读侧在 RCU 临界区里找到对象，然后 <code>refcount_inc_not_zero()</code> 拿一个引用，出临界区后靠引用计数继续安全使用。这解决了「RCU 指针出了 <code>rcu_read_unlock()</code> 就失效」这个限制——<strong>RCU 保护「查找的过程」，引用计数保护「使用的过程」</strong>。内核里 <code>get_task_struct()</code>、socket 查找、dentry 查找都是这个套路。注意必须用 <code>_not_zero</code> 版本：对象可能已经在被销毁的路上了，此时计数是 0，不能复活它。</div>
+</section>
+
+<!-- ================================================================ §8 -->
+<section class="chapter" id="s8">
+  <div class="ch-head">
+    <div class="num">08</div>
+    <div class="t"><h2>RCU 的边界与陷阱</h2><p class="sub">它不是万能的，而且失效方式很隐蔽</p></div>
+  </div>
+
+  <h3>8.1 适用与不适用</h3>
+
+  <div class="vs">
+    <div class="good">
+      <h5>✅ RCU 的三个前提，缺一不可</h5>
+      <ul style="font-size:.86rem;margin:6px 0 0;padding-left:20px">
+        <li><strong>读远多于写</strong>。写侧要做拷贝 + 等宽限期，比加锁贵得多。经验阈值是<strong>读写比至少 10:1，理想是 100:1 以上</strong>。写比读还多的场景用 RCU 是纯负优化。</li>
+        <li><strong>能容忍读到稍旧的数据</strong>。读者可能在宽限期内一直看着旧版本。对「路由表」「配置」「已注册的回调列表」这类数据，晚几毫秒生效完全无害。</li>
+        <li><strong>对象可以延迟释放</strong>。宽限期是毫秒量级，期间旧对象一直占着内存。对象小、数量可控时没问题。</li>
+      </ul>
+    </div>
+    <div class="bad">
+      <h5>❌ 这些场景不要用 RCU</h5>
+      <ul style="font-size:.86rem;margin:6px 0 0;padding-left:20px">
+        <li><strong>读者必须看到最新值</strong>。比如「检查权限」——不能允许「策略已经收紧了但某些读者还在用旧策略放行」。这类语义要求必须用锁。</li>
+        <li><strong>写侧也很热</strong>。计数器、队列头尾指针这种每次都在改的东西，用 RCU 等于每次操作都分配一个对象再等一个宽限期。</li>
+        <li><strong>需要立刻回收资源</strong>。对象很大（几 MB 的缓冲）、或持有稀缺资源（fd、DMA 通道、硬件寄存器窗口），延迟释放会累积成资源耗尽。</li>
+        <li><strong>需要「修改后立即生效并确认」的语义</strong>。RCU 只能保证「最终一致」，要立即确认就得 <code>synchronize_rcu()</code>，那你就付了阻塞的代价。</li>
+        <li><strong>读侧要睡眠</strong>。普通 RCU 的读侧临界区里睡眠是明确的错误——要用 SRCU。</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>8.2 陷阱一：读侧临界区里睡眠</h3>
+
+  <p>普通 RCU 的读侧临界区里<strong>不能睡眠</strong>（非抢占内核里它就是关抢占；抢占式内核里虽然可以被抢占，但仍然不允许<strong>主动</strong>阻塞）。这意味着一整类操作在读侧被禁止：<code>mutex_lock</code>、<code>kmalloc(GFP_KERNEL)</code>、<code>copy_to_user</code>、<code>synchronize_rcu</code>。</p>
+
+<pre><span class="cm">/* ❌ 典型错误：想在 RCU 读侧把数据拷给用户 */</span>
+rcu_read_lock();
+e = find_entry_rcu(key);
+copy_to_user(buf, e-&gt;data, e-&gt;len);   <span class="cm">/* ★ 可能缺页 → 睡眠 → BUG */</span>
+rcu_read_unlock();
+
+<span class="cm">/* ✅ 方案 A：在临界区里只拿引用，出去之后再慢慢用 */</span>
+rcu_read_lock();
+e = find_entry_rcu(key);
+<span class="kw">if</span> (e &amp;&amp; !refcount_inc_not_zero(&amp;e-&gt;ref))
+    e = <span class="kw">NULL</span>;
+rcu_read_unlock();
+<span class="kw">if</span> (e) {
+    copy_to_user(buf, e-&gt;data, e-&gt;len);   <span class="cm">/* 有引用兜底，可以睡 */</span>
+    entry_put(e);
+}
+
+<span class="cm">/* ✅ 方案 B：在临界区里把需要的数据拷到内核栈/临时缓冲 */</span>
+rcu_read_lock();
+e = find_entry_rcu(key);
+<span class="kw">if</span> (e) { len = min(e-&gt;len, <span class="kw">sizeof</span> tmp); memcpy(tmp, e-&gt;data, len); }
+rcu_read_unlock();
+<span class="kw">if</span> (len) copy_to_user(buf, tmp, len);
+
+<span class="cm">/* ✅ 方案 C：确实需要在读侧睡眠 → 用 SRCU（Sleepable RCU）*/</span>
+<span class="kw">static</span> <span class="kw">struct</span> srcu_struct my_srcu;
+init_srcu_struct(&amp;my_srcu);           <span class="cm">/* 每个「域」一个，互不影响 */</span>
+
+<span class="kw">int</span> idx = srcu_read_lock(&amp;my_srcu);   <span class="cm">/* ★ 返回一个 idx，解锁时必须带回来 */</span>
+e = srcu_dereference(g_entry, &amp;my_srcu);
+copy_to_user(buf, e-&gt;data, e-&gt;len);   <span class="cm">/* ✅ 这里可以睡 */</span>
+srcu_read_unlock(&amp;my_srcu, idx);
+
+<span class="cm">/* 写侧对应用 synchronize_srcu(&amp;my_srcu) / call_srcu(...) */</span>
+<span class="cm">/* SRCU 的代价：读侧【不再是零开销】—— 它要维护 per-CPU 的计数，
+ * 读侧有真实的原子操作与屏障；宽限期也可能更长。
+ * 换来的是「读侧可以睡」和「每个域独立，一个域卡住不影响别人」。 */</span></pre>
+
+  <div class="box tip"><strong>SRCU 的「域隔离」是它另一个被低估的优点。</strong>普通 RCU 是全局的：任何一个 CPU 上的长时间不让出，都会拖长<strong>所有人</strong>的宽限期。SRCU 每个 <code>srcu_struct</code> 是独立的域——你的模块里有个读者卡了 10 秒，只会拖累你自己这个域的 <code>synchronize_srcu()</code>，不会影响内核其他部分。所以「读侧临界区可能很长」也是选 SRCU 的理由，不只是「要睡眠」。</div>
+
+  <h3>8.3 陷阱二：call_rcu 洪水导致 OOM</h3>
+
+  <p><code>call_rcu()</code> 是「立刻返回」的，这很爽，但它意味着<strong>释放动作被放进了一个队列</strong>。如果你产生回调的速度持续快于宽限期推进的速度，这个队列就会无限增长——<strong>内存被一堆「已经没人用、但还没被释放」的对象吃光</strong>。</p>
+
+  <div class="tool-card danger">
+    <h4>典型触发场景与表现</h4>
+    <ul>
+      <li><strong>场景</strong>：一个循环里高速删除表项（清空一张几百万条的连接跟踪表、卸载一个巨大的路由表、压测里疯狂增删），每条都 <code>call_rcu</code>。</li>
+      <li><strong>表现</strong>：内存持续上涨，<code>slabtop</code> 能看到对应的 slab 缓存暴增，但代码逻辑上「这些对象都已经删掉了」。严重时直接 OOM，而 OOM killer 杀谁都救不回来（内存不在任何进程账上）。</li>
+      <li><strong>内核的自我保护</strong>：RCU 有回调洪水检测——当某个 CPU 上待处理回调数超过阈值（<code>rcutree.qhimark</code>，默认 10000）时，它会切到更激进的模式加速宽限期、并提高单次处理的回调数上限。<strong>这是缓解，不是解决</strong>：它只是让你从「必定 OOM」变成「可能撑住，但会有明显的 CPU 尖峰和延迟抖动」。</li>
+      <li><strong>正确做法</strong>：批量删除路径上<strong>不要每条都 <code>call_rcu</code></strong>。要么先把整批节点摘下来、调<strong>一次</strong> <code>synchronize_rcu()</code>、再统一 <code>kfree</code> 整批（一个宽限期解决 N 个对象）；要么在循环里定期检查并主动限速。内核自己在很多批量销毁路径上就是这么做的。</li>
+    </ul>
+  </div>
+
+<pre><span class="cm">/* ❌ 一百万次 call_rcu */</span>
+list_for_each_entry_safe(e, tmp, &amp;huge_list, list) {
+    list_del_rcu(&amp;e-&gt;list);
+    call_rcu(&amp;e-&gt;rcu, entry_free_rcu);   <span class="cm">/* 队列爆炸 */</span>
+}
+
+<span class="cm">/* ✅ 一个宽限期解决全部 */</span>
+LIST_HEAD(dead);
+
+spin_lock(&amp;lock);
+list_splice_init_rcu(&amp;huge_list, &amp;dead, synchronize_rcu);
+<span class="cm">/* 或者手工：把节点全部摘到本地 dead 链表 */</span>
+spin_unlock(&amp;lock);
+
+synchronize_rcu();                        <span class="cm">/* ★ 只等【一次】宽限期 */</span>
+list_for_each_entry_safe(e, tmp, &amp;dead, list)
+    kfree(e);                             <span class="cm">/* 直接释放，不用 RCU */</span></pre>
+
+  <div class="note"><strong>相关的一个观测点</strong>：<code>/sys/kernel/debug/rcu/rcudata</code>（需要 <code>CONFIG_RCU_TRACE</code> 与 debugfs）能看到每个 CPU 的待处理回调数（<code>qlen</code>）。怀疑回调积压时先看这个数——如果它稳定在几万甚至几十万，那就确诊了。另外 <code>rcu_nocbs=</code> 内核参数可以把指定 CPU 的回调处理<strong>卸载到专门的 <code>rcuo</code> 内核线程</strong>，这是低延迟/实时场景的标配（避免 RCU 回调在软中断里抢你的关键线程），代价是多了一批内核线程需要绑核安置。</div>
+
+  <h3>8.4 陷阱三：读懂 RCU stall 报错</h3>
+
+  <p>如果宽限期迟迟不结束（默认 21 秒，由 <code>CONFIG_RCU_CPU_STALL_TIMEOUT</code> / <code>rcupdate.rcu_cpu_stall_timeout</code> 控制），内核会打印 stall 警告。这个报错在生产环境里非常常见，而且<strong>它指出的往往不是 RCU 的问题，而是「有人在内核里赖着不走」</strong>。</p>
+
+<pre>rcu: INFO: rcu_preempt detected stalls on CPUs/tasks:
+rcu:     3-...0: (1 GPs behind) idle=b2c/1/0x4000000000000000 softirq=8231/8232 fqs=2632
+rcu:     (detected by 0, t=21002 jiffies, g=15733, q=4127 ncpus=8)
+Sending NMI from CPU 0 to CPUs 3:
+NMI backtrace for cpu 3
+CPU: 3 PID: 2841 Comm: mydrv_worker Tainted: G           O       6.1.0 #1
+RIP: 0010:mydrv_scan_table+0x5c/0xf0 [mydrv]
+Call Trace:
+ &lt;TASK&gt;
+ mydrv_scan_table+0x5c/0xf0 [mydrv]
+ mydrv_work_fn+0x2a/0x60 [mydrv]
+ process_one_work+0x1c7/0x380
+ worker_thread+0x4d/0x380
+ kthread+0xe9/0x110</pre>
+
+  <div class="tool-card">
+    <h4>怎么读这段输出</h4>
+    <ul>
+      <li><strong><code>rcu_preempt</code></strong>：报告者是哪个 RCU 实例。抢占式内核里叫 <code>rcu_preempt</code>，非抢占内核里叫 <code>rcu_sched</code>。</li>
+      <li><strong><code>3-...0:</code></strong>：<strong>被点名的 CPU 是 3 号</strong>。后面那几个字符是这个 CPU 的内部状态标记（是否响应过 IPI、是否处于 dyntick-idle 等），具体含义随版本变化，查 <code>Documentation/RCU/stallwarn.rst</code>。<strong>排障时先看 CPU 号就够了。</strong></li>
+      <li><strong><code>(1 GPs behind)</code></strong>：这个 CPU 落后了 1 个宽限期，也就是它欠一次静止状态报告。</li>
+      <li><strong><code>t=21002 jiffies</code></strong>：宽限期已经等了 21002 个 tick。HZ=1000 时就是 21 秒——正好是默认阈值，说明这是第一次报警。<strong>如果这个数很大（比如几十万），说明它卡了几分钟，问题很严重。</strong></li>
+      <li><strong><code>q=4127</code></strong>：待处理的 RCU 回调数量。这个数如果很大，说明还伴随着 §8.3 的回调积压。</li>
+      <li><strong><code>detected by 0</code></strong>：由 CPU 0 检测到的（检测者本身是正常的，不要去查它）。</li>
+      <li><strong>最关键的是后面的 NMI backtrace</strong>：内核会给被点名的 CPU 发 NMI，强行打出它此刻的调用栈。<strong>这个栈就是答案</strong>——上面这例里 <code>mydrv_scan_table</code> 在一个工作队列里跑了 21 秒不让出，它就是罪魁。</li>
+    </ul>
+  </div>
+
+  <table>
+    <thead><tr><th>常见根因</th><th>特征</th><th>处方</th></tr></thead>
+    <tbody>
+      <tr><td>内核态长循环 / 长临界区</td><td>NMI 栈明确指向某个函数，而且多次报警都是同一个</td><td>在循环里插 <code>cond_resched()</code>（非抢占内核必需）；把大循环拆成多次工作队列执行</td></tr>
+      <tr><td>持锁自旋无法推进</td><td>NMI 栈落在 <code>native_queued_spin_lock_slowpath</code> 之类；通常同时还有 soft lockup 报警</td><td>这其实是死锁/活锁，按 §9 用 lockdep 查锁序</td></tr>
+      <tr><td>中断风暴</td><td><code>softirq=</code> 计数在两次报警之间涨得飞快；<code>/proc/interrupts</code> 某一行暴涨</td><td>查中断源（网卡、时钟、有故障的设备）；考虑中断亲和与 NAPI 预算</td></tr>
+      <tr><td>虚拟机被宿主抢走 CPU</td><td>Guest 里报 stall，但 Guest 内部找不到任何长跑代码；宿主 <code>steal</code> 时间高</td><td><strong>不是你的 bug</strong>。查宿主超卖；必要时调大 <code>rcu_cpu_stall_timeout</code></td></tr>
+      <tr><td><code>nohz_full</code> 配置下的用户态长跑</td><td>被点名 CPU 一直在用户态跑，没进过内核</td><td>正常情况下返回用户态就算静止状态；如果报了，检查 <code>nohz_full</code> 与 <code>rcu_nocbs</code> 是否配套设置</td></tr>
+      <tr><td>调试器/断点/大量 printk</td><td>开发环境特有，栈里能看到 <code>console</code> 相关帧</td><td>开发环境可忽略，或临时调大阈值</td></tr>
+    </tbody>
+  </table>
+
+  <div class="warn"><strong>常见误判</strong>：看到 <code>rcu: INFO: ... detected stalls</code> 就去查「RCU 是不是有 bug」「是不是我的 <code>rcu_read_lock</code> 用错了」。绝大多数情况下 RCU 只是<strong>报信的那个人</strong>——它是全内核唯一一个「所有 CPU 都必须定期报个到」的机制，所以任何「某个 CPU 长时间不让出」的问题都会先由它喊出来。<strong>正确的排查顺序是：先看被点名的 CPU 是谁、再看 NMI 栈里它在干什么，从那个函数往下查。</strong></div>
+
+  <h3>8.5 RCU 变体一览</h3>
+
+  <table>
+    <thead><tr><th>变体</th><th>读侧 API</th><th>解决什么</th><th>代价</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><strong>Tree RCU</strong>（就是「RCU」）</td>
+        <td><code>rcu_read_lock()</code> / <code>rcu_dereference()</code></td>
+        <td>通用场景。名字里的 Tree 指它用<strong>树形层级</strong>汇总各 CPU 的静止状态报告，避免几百个 CPU 争抢一个全局计数（那在大机器上本身就是个可扩展性瓶颈）</td>
+        <td>读侧接近零；写侧宽限期毫秒级</td>
+      </tr>
+      <tr>
+        <td><strong>SRCU</strong>（Sleepable RCU）</td>
+        <td><code>srcu_read_lock(&amp;sp)</code>（返回 idx）</td>
+        <td><strong>读侧可以睡眠</strong>；而且每个 <code>srcu_struct</code> 是独立域，互不拖累</td>
+        <td>读侧<strong>不再零开销</strong>（有 per-CPU 计数与屏障）；宽限期通常更长</td>
+      </tr>
+      <tr>
+        <td><strong>Tasks RCU</strong></td>
+        <td>无显式读侧标记</td>
+        <td>等「所有任务都至少<strong>自愿</strong>让出过一次 CPU（或处于 idle / 用户态）」。用于安全地替换/释放<strong>可执行代码</strong>——ftrace 的 trampoline 就靠它，因为「有任务的返回地址正指向那段代码」是无法用普通 RCU 临界区标记出来的</td>
+        <td>宽限期很长（要等到每个任务都自愿切换过）</td>
+      </tr>
+      <tr>
+        <td><strong>Tasks Trace RCU</strong></td>
+        <td><code>rcu_read_lock_trace()</code></td>
+        <td>为<strong>可睡眠 BPF 程序</strong>而生：BPF 程序可能睡，又要能安全地引用可能被卸载的映射/程序</td>
+        <td>比 Tasks RCU 更重的记账</td>
+      </tr>
+      <tr>
+        <td><strong>RCU-bh / RCU-sched</strong></td>
+        <td><code>rcu_read_lock_bh()</code> / <code>_sched()</code></td>
+        <td><strong>历史包袱。</strong>它们曾是三套<strong>独立</strong>的实现：RCU-bh 的静止状态判定考虑软中断（为了抵御网络软中断洪水下宽限期永远结束不了），RCU-sched 则用关抢占区间界定。三套并存意味着三份宽限期机制、三倍的记账开销，而且开发者经常选错</td>
+        <td><strong>4.20 前后被合并进统一实现</strong>：API 名字保留（大量存量代码在用），但底层是同一套宽限期机制，<code>synchronize_rcu()</code> 现在会同时等上所有这几种读侧临界区。<strong>新代码一律只用 <code>rcu_read_lock()</code></strong></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="box star"><strong>面试加分点</strong>：能讲出 RCU flavor 合并这段历史，是很强的信号。要点是<strong>为什么当初要分、以及为什么后来能合</strong>：分是因为不同场景对「静止状态」的定义不同（软中断里的读者、关抢占的读者），三套各自维护自己的宽限期；合是因为统一实现让宽限期同时满足所有几种读侧临界区的要求——<strong>代价是宽限期可能略长，收益是少了三分之二的记账开销、以及消灭了「用错 flavor 导致的静默 bug」这一整类问题</strong>。这个取舍本身就是内核工程哲学的好例子：<strong>宁可付一点确定的性能，也要消灭一类不确定的正确性风险。</strong></div>
+</section>
+
+<!-- ================================================================ §9 -->
+<section class="chapter" id="s9">
+  <div class="ch-head">
+    <div class="num">09</div>
+    <div class="t"><h2>死锁排查与竞态检测</h2><p class="sub">别靠压测和运气</p></div>
+  </div>
+
+  <p>内核同步的 bug 有一个共同特征：<strong>概率极低、后果极重、现场极难保留</strong>。一个 AB-BA 锁序问题可能一年触发一次，触发时整机 hang，没有 core dump，只有一屏烧在 console 上的栈。所以内核同步的工程实践不是「写完压测」，而是<strong>把一整套运行时验证工具打开，让 bug 在第一次跑到的时候就暴露</strong>。</p>
+
+  <h3>9.1 lockdep：不需要真死锁就能发现死锁</h3>
+
+  <div class="def"><strong>lockdep（<code>CONFIG_PROVE_LOCKING</code>）</strong>：内核内置的锁正确性验证器。它<strong>不检测「现在死锁了」，而是检测「这套加锁模式在某种时序下可能死锁」</strong>。原理是：给每个锁归一个「锁类」（同一行代码初始化出的所有锁实例算同一类），运行时记录<strong>每一对「持有 A 时获取 B」的先后关系</strong>，构建一张有向图；一旦新加入的边让图出现环，就立刻报警。此外它还记录每个锁类<strong>在什么上下文下被获取过</strong>（是否在硬中断里、是否开着中断），据此发现中断相关的不一致。</div>
+
+  <div class="analogy">lockdep 像<strong>建筑图纸的单向通道审查</strong>。它不需要等到真的有两队人在走廊里对头堵死，才说「这里设计有问题」；它只要在图纸上发现「A 房间的门只能通向 B，而 B 房间又有一条只能通向 A 的路」，就直接判定<strong>这个布局迟早会堵</strong>。<strong>关键优势是：只要这两条路各自被走过一次（不需要同时走），环就画出来了。</strong></div>
+
+  <div class="intuition">这就是 lockdep 最重要的价值：<strong>它把「需要两个 CPU 恰好在特定时刻交错」的概率性 bug，变成了「只要两条代码路径各自被执行过一次」的确定性检测</strong>。真死锁需要天时地利，lockdep 只需要你的测试跑到过那两行代码。这是从「靠运气发现」到「靠覆盖率发现」的质变。</div>
+
+  <h3>9.2 读 lockdep 报告：循环依赖</h3>
+
+<pre>======================================================
+WARNING: possible circular locking dependency detected
+6.1.0 #1 Tainted: G           O
+------------------------------------------------------
+kworker/1:2/98 is trying to acquire lock:
+ffff9a0e0421c0a0 (&amp;dev-&gt;tx_lock){+.+.}-{3:3}, at: tx_flush+0x2c/0x120 [mydrv]
+
+but task is already holding lock:
+ffff9a0e0421c060 (&amp;dev-&gt;rx_lock){+.+.}-{3:3}, at: rx_poll+0x41/0x1a0 [mydrv]
+
+which lock already depends on the new lock.
+
+the existing dependency chain (in reverse order) is:
+
+-&gt; #1 (&amp;dev-&gt;rx_lock){+.+.}-{3:3}:
+       __mutex_lock+0x9c/0x970
+       mutex_lock_nested+0x1b/0x20
+       rx_refill+0x3e/0x140 [mydrv]      <span class="cm">/* ← 这条路径先拿 tx 再拿 rx */</span>
+       tx_complete+0x88/0x100 [mydrv]
+
+-&gt; #0 (&amp;dev-&gt;tx_lock){+.+.}-{3:3}:
+       __lock_acquire+0x1284/0x2340
+       __mutex_lock+0x9c/0x970
+       tx_flush+0x2c/0x120 [mydrv]       <span class="cm">/* ← 这条路径先拿 rx 再拿 tx */</span>
+       rx_poll+0x9a/0x1a0 [mydrv]
+
+other info that might help us debug this:
+
+ Possible unsafe locking scenario:
+
+       CPU0                    CPU1
+       ----                    ----
+  lock(&amp;dev-&gt;rx_lock);
+                               lock(&amp;dev-&gt;tx_lock);
+                               lock(&amp;dev-&gt;rx_lock);
+  lock(&amp;dev-&gt;tx_lock);
+
+ *** DEADLOCK ***</pre>
+
+  <div class="tool-card violet">
+    <h4>这份报告的阅读顺序</h4>
+    <ul>
+      <li><strong>先跳到最后那个 <code>Possible unsafe locking scenario</code> 方框。</strong>lockdep 已经把「怎么死」画成了两栏时序图，这是整份报告里信息密度最高的部分。上面这例的意思是：CPU0 按 rx→tx 的顺序拿，CPU1 按 tx→rx 的顺序拿，两个各拿到第一把之后互等——<strong>经典 AB-BA</strong>。</li>
+      <li><strong>再看 <code>-&gt; #1</code> 和 <code>-&gt; #0</code> 两段栈。</strong>它们分别是「历史上记录过的那条边」和「现在正要加的这条边」的<strong>完整调用路径</strong>。这告诉你两个不同的加锁顺序分别来自哪两条业务流程——修复就是在这两条路径中选一条改掉。</li>
+      <li><strong><code>{+.+.}</code> 这四个字符是上下文使用标记</strong>，依次描述这把锁在「硬中断 / 硬中断读侧 / 软中断 / 软中断读侧」里被获取过的情况：<code>.</code> = 只在关中断且非中断上下文里拿过；<code>+</code> = 开着中断拿过；<code>-</code> = 在中断上下文里拿过；<code>?</code> = 在中断上下文里、且开着中断拿过（危险信号）。<strong><code>?</code> 出现就要重点看。</strong></li>
+      <li><strong><code>-{3:3}</code> 是等待类型</strong>（sleepable / spin / raw 之类的层级），用来发现「在 raw_spinlock 里拿 mutex」这种在 PREEMPT_RT 上会炸的组合。日常排 AB-BA 时可以先不管它。</li>
+      <li><strong>前面的 <code>ffff9a0e...</code> 是锁实例地址</strong>，用来区分「同一个锁类的两个不同实例」。<strong>如果报告里两个地址相同</strong>，那不是 AB-BA，是<strong>同一把锁被重复获取</strong>（另一种报告类型 <code>possible recursive locking</code>）。</li>
+    </ul>
+  </div>
+
+  <p>另一类高频报告是<strong>中断上下文不一致</strong>。它说的是：同一把锁，你有时候在开着中断的进程上下文里拿，有时候又在硬中断处理程序里拿——<strong>那么中断打断持锁者的那一刻就是死锁</strong>（正是 §1.3 那个例子）。</p>
+
+<pre>================================
+WARNING: inconsistent lock state
+6.1.0 #1 Tainted: G           O
+--------------------------------
+inconsistent {HARDIRQ-ON-W} -&gt; {IN-HARDIRQ-W} usage.
+swapper/3/0 [HC1[1]:SC0[0]:HE0:SE1] takes:
+ffff9a0e0421c060 (&amp;dev-&gt;rx_lock){?.+.}-{2:2}, at: mydrv_isr+0x1e/0x90 [mydrv]
+{HARDIRQ-ON-W} state was registered at:
+  lock_acquire+0xc7/0x2d0
+  _raw_spin_lock+0x33/0x40
+  mydrv_read+0x5c/0x120 [mydrv]          <span class="cm">/* ← 进程上下文，开着中断拿了这把锁 */</span>
+  vfs_read+0x9b/0x1a0
+...
+ Possible unsafe locking scenario:
+       CPU0
+       ----
+  lock(&amp;dev-&gt;rx_lock);
+  &lt;Interrupt&gt;
+    lock(&amp;dev-&gt;rx_lock);
+ *** DEADLOCK ***
+
+<span class="cm"># 读法：
+#   {HARDIRQ-ON-W}  = 曾经在「硬中断开着」的状态下以写者身份拿过
+#   {IN-HARDIRQ-W}  = 现在正在硬中断里以写者身份拿
+#   两者同时存在 → 中断插进临界区就死
+# 修复：进程侧改成 spin_lock_irqsave()
+# 注意这里的 DEADLOCK 图只有【一栏】—— 单 CPU 就能死，
+# 这也印证了 §1 说的「自旋锁死锁是本 CPU 问题」。</span></pre>
+
+  <table>
+    <thead><tr><th>lockdep 报告类型</th><th>含义</th><th>典型修法</th></tr></thead>
+    <tbody>
+      <tr><td><code>possible circular locking dependency</code></td><td>AB-BA 环（可能跨多个锁，形成 A→B→C→A）</td><td><strong>规定全局加锁顺序</strong>并写进注释；或用 <code>trylock</code> + 回退；或合并成一把锁</td></tr>
+      <tr><td><code>inconsistent lock state</code></td><td>同一把锁在中断/非中断上下文里的用法冲突</td><td>非中断侧改用 <code>_irqsave</code> / <code>_bh</code> 变体</td></tr>
+      <tr><td><code>possible recursive locking</code></td><td>同一任务重复获取同一把锁（或同一锁类的两个实例，而 lockdep 不知道它们有固定次序）</td><td>真递归 → 重构；<strong>同类不同实例的合法嵌套</strong> → 用 <code>spin_lock_nested()</code>/<code>mutex_lock_nested()</code> 显式告诉 lockdep 层级</td></tr>
+      <tr><td><code>suspicious RCU usage</code></td><td><code>rcu_dereference()</code> 在读侧临界区之外被调用（<code>PROVE_RCU</code> 检查）</td><td>补上 <code>rcu_read_lock()</code>；如果确实由别的锁保护，改用 <code>rcu_dereference_protected(p, 条件)</code></td></tr>
+      <tr><td><code>lock held when returning to user space</code></td><td>系统调用返回用户态时还持着锁</td><td>错误路径漏了 <code>unlock</code>——查所有 <code>goto err</code> 分支</td></tr>
+      <tr><td><code>BUG: MAX_LOCK_DEPTH too low</code></td><td>嵌套层数超限</td><td>几乎总是漏 <code>unlock</code> 导致的累积</td></tr>
+    </tbody>
+  </table>
+
+  <div class="warn"><strong>lockdep 的三个盲区，必须知道。</strong>① <strong>它只看跑到过的路径</strong>——测试没覆盖到的加锁组合它一无所知，所以 lockdep 的有效性直接取决于你的测试覆盖率。② <strong>它只认识内核的锁原语</strong>——你自己用原子标志 + 忙等搓的「土制锁」、用 <code>completion</code> 拼出的等待关系、跨内核-用户态的依赖（比如内核等一个用户态守护进程回话），它全都看不见，而这些恰恰是自研模块里死锁的重灾区。③ <strong>它不检测数据竞争</strong>——「这个变量根本没被任何锁保护」不在它的职责范围内，那是 KCSAN 的活。<strong>另外它开销很大</strong>（每次加锁都要查图、记账），只用于开发和测试内核，<strong>生产内核不开</strong>。</div>
+
+  <div class="box tip">lockdep 一旦报过一次警，就会<strong>把自己关掉</strong>（后续报告不再产生），因为它的内部状态已经可能不一致了。所以<strong>第一份报告最珍贵</strong>——不要在看到一条警告后继续跑，指望攒一批再看。同理，看到 <code>Tainted:</code> 里有 <code>W</code>（曾经 WARN 过）时要往上翻日志找第一条。</div>
+
+  <h3>9.3 KCSAN：找出「没有锁保护」的访问</h3>
+
+  <p>lockdep 回答「你的锁用得对不对」，KCSAN 回答一个更基础的问题：<strong>「这个变量到底有没有被保护」</strong>。它靠编译器插桩 + 采样式软件 watchpoint 工作：随机挑一些内存访问，在它前后短暂地「盯着」那个地址，如果期间有另一个 CPU 无同步地访问了同一地址，就报数据竞争。</p>
+
+<pre>==================================================================
+BUG: KCSAN: data-race in mydrv_rx_done [mydrv] / mydrv_stats_show [mydrv]
+
+write to 0xffff9a0e0421c100 of 8 bytes by interrupt on cpu 2:
+ mydrv_rx_done+0x54/0x120 [mydrv]
+ mydrv_isr+0x3a/0x90 [mydrv]
+ __handle_irq_event_percpu+0x8a/0x230
+ ...
+
+read to 0xffff9a0e0421c100 of 8 bytes by task 1893 on cpu 0:
+ mydrv_stats_show+0x3c/0xd0 [mydrv]
+ seq_read_iter+0x12d/0x4b0
+ ...
+
+value changed: 0x000000000001d4c0 -&gt; 0x000000000001d4c1
+
+Reported by Kernel Concurrency Sanitizer on:
+CPU: 0 PID: 1893 Comm: cat Tainted: G           O       6.1.0 #1
+==================================================================
+
+<span class="cm"># 读法：
+#   两段栈分别是【冲突的两次访问】，注意其中一个是 "by interrupt"
+#     —— 中断里写、进程上下文读，而且没有任何同步。
+#   "value changed" 说明它真的观察到了值在读的过程中被改掉。
+# 这里的修法不一定是加锁：如果这是个统计计数器，
+#   把读侧改成 READ_ONCE()、写侧改成 WRITE_ONCE() 就够了
+#   —— 那表达了「我知道这里有并发，撕裂是可接受的」。
+# KCSAN 会把 READ_ONCE/WRITE_ONCE/atomic_* 当作【已标注】的访问，
+#   不再对它们报警。这正是 §2 那些宏的另一层价值：
+#   它们是给人和工具看的【意图声明】。</span></pre>
+
+  <div class="tool-card green">
+    <h4>KCSAN / KASAN / lockdep 分工</h4>
+    <ul>
+      <li><strong>lockdep</strong>：锁的<strong>顺序</strong>与<strong>上下文</strong>用错 → 死锁风险。看的是「锁之间的关系」。</li>
+      <li><strong>KCSAN</strong>：<strong>缺少同步</strong>的并发访问 → 数据竞争。看的是「访问与访问之间有没有同步」。它能发现 lockdep 完全看不到的「这里压根没加锁」。</li>
+      <li><strong>KASAN</strong>：<strong>内存错误</strong>——越界、use-after-free、double-free。它和本篇的关系比看起来紧密：<strong>RCU 的延迟释放会让 UAF 推迟很久才暴露</strong>，等到崩溃时早已看不出是谁释放的。KASAN 用影子内存记录每块内存的状态，并在报错时同时打出<strong>分配栈和释放栈</strong>——「谁 <code>kfree</code> 的」这个关键问题它能直接回答。<strong>调 RCU 相关的 UAF，KASAN 基本是唯一有效手段。</strong></li>
+      <li><strong>三者独立、可同时开</strong>（开发内核里推荐全开）。共同点是<strong>都很慢</strong>：KASAN 约 2–3 倍开销，KCSAN 视采样率而定，lockdep 在锁密集路径上也能有几倍。<strong>它们都属于「开发/CI 内核」，不上生产。</strong></li>
+    </ul>
+  </div>
+
+  <h3>9.4 兜底检测器：hung task 与 lockup</h3>
+
+  <p>前面几样都需要提前编译进内核。生产内核上默认开着的是三个「兜底」检测器，它们不告诉你原因，但会在系统已经出问题时<strong>保住现场</strong>。</p>
+
+  <table>
+    <thead><tr><th>检测器</th><th>它在检测什么</th><th>阈值 / 参数</th><th>报出来意味着</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><strong>hung task</strong><br><code>CONFIG_DETECT_HUNG_TASK</code></td>
+        <td>有任务处于 <strong>D 状态</strong>（<code>TASK_UNINTERRUPTIBLE</code>）超过阈值一直没被调度</td>
+        <td><code>kernel.hung_task_timeout_secs</code>，默认 <strong>120</strong>；<code>kernel.hung_task_panic</code> 可选择直接 panic 留 dump</td>
+        <td><strong>可睡眠锁的死锁</strong>（mutex/rwsem AB-BA）、或在等一个永不到来的 I/O。栈里能直接看到卡在哪个 <code>down_read</code>/<code>mutex_lock</code></td>
+      </tr>
+      <tr>
+        <td><strong>soft lockup</strong><br><code>CONFIG_SOFTLOCKUP_DETECTOR</code></td>
+        <td>某个 CPU 长时间<strong>不给内核线程调度机会</strong>（per-CPU 的 watchdog 线程饿死）</td>
+        <td><code>kernel.watchdog_thresh</code>，默认 10；<strong>soft lockup 阈值是它的 2 倍 ≈ 20 秒</strong>。<code>kernel.softlockup_panic</code></td>
+        <td><strong>自旋锁死锁</strong>、内核态死循环、极长的关抢占区间。中断还在响应（所以能打印），只是任务调度停了</td>
+      </tr>
+      <tr>
+        <td><strong>hard lockup</strong><br><code>CONFIG_HARDLOCKUP_DETECTOR</code></td>
+        <td>某个 CPU <strong>连时钟中断都不响应</strong>了（靠 NMI 或架构 watchdog 检测）</td>
+        <td>同样受 <code>watchdog_thresh</code> 影响；<code>kernel.nmi_watchdog</code> 开关</td>
+        <td><strong>长时间关中断</strong>——典型是 <code>spin_lock_irqsave</code> 的临界区里死循环，或硬件/固件问题。比 soft lockup 严重</td>
+      </tr>
+    </tbody>
+  </table>
+
+<pre><span class="cm"># hung task 的典型输出：直接指向可睡眠锁的死锁</span>
+INFO: task mydrv_ctl:2317 blocked for more than 122 seconds.
+      Tainted: G           O       6.1.0 #1
+"echo 0 &gt; /proc/sys/kernel/hung_task_timeout_secs" disables this message.
+task:mydrv_ctl       state:D stack:0     pid:2317  ppid:1      flags:0x00000000
+Call Trace:
+ __schedule+0x2c5/0x1520
+ schedule+0x5d/0xe0
+ schedule_preempt_disabled+0x15/0x30
+ __mutex_lock+0x2f0/0x970
+ mydrv_ioctl+0x8c/0x200 [mydrv]      <span class="cm"># ← 卡在这把 mutex 上</span>
+ __x64_sys_ioctl+0x90/0xd0
+
+<span class="cm"># 排查三步走：
+#   1. 找出【所有】D 状态任务，看它们各自卡在哪把锁上：</span>
+ps -eo pid,stat,wchan:30,comm | awk '$2 ~ /D/'
+<span class="cm">#   2. 一次性打印所有阻塞任务的内核栈（这是最有用的一条命令）：</span>
+echo w &gt; /proc/sysrq-trigger &amp;&amp; dmesg | tail -n 200
+<span class="cm">#      （需要 kernel.sysrq 允许；'w' = 打印所有 blocked 任务的栈）
+#   3. 把这些栈里的锁对上：A 等 B 持有的锁、B 等 A 持有的锁 → 环找到了。
+#      单个栈只能告诉你「谁在等」，【环需要拼多个栈】才能看出来。</span>
+
+<span class="cm"># soft lockup：注意它给出的是【当时正在跑的代码】，那就是嫌疑人</span>
+watchdog: BUG: soft lockup - CPU#3 stuck for 22s! [mydrv_worker:2841]
+CPU: 3 PID: 2841 Comm: mydrv_worker Tainted: G           O       6.1.0 #1
+RIP: 0010:native_queued_spin_lock_slowpath+0x1c2/0x2c0
+<span class="cm">#      ↑ 卡在自旋锁慢路径 = 有人持锁不放，去查那把锁的另一个持有者</span></pre>
+
+  <h3>9.5 开发内核该开哪些 CONFIG</h3>
+
+  <table>
+    <thead><tr><th>CONFIG</th><th>作用</th><th>开发/CI</th><th>生产</th></tr></thead>
+    <tbody>
+      <tr><td><code>PROVE_LOCKING</code></td><td>lockdep 全套（含 <code>PROVE_RCU</code> 的 RCU 用法检查）</td><td><strong>必开</strong></td><td>❌ 开销大</td></tr>
+      <tr><td><code>DEBUG_ATOMIC_SLEEP</code></td><td>抓「在原子上下文里调可能睡眠的函数」</td><td><strong>必开</strong></td><td>❌</td></tr>
+      <tr><td><code>DEBUG_SPINLOCK</code> / <code>DEBUG_MUTEXES</code></td><td>未初始化的锁、解锁未持有的锁、锁被 <code>kfree</code> 时还持着</td><td><strong>必开</strong></td><td>❌</td></tr>
+      <tr><td><code>DEBUG_PREEMPT</code></td><td>抓「在可抢占上下文里用 <code>smp_processor_id()</code> / <code>this_cpu_ptr</code>」</td><td><strong>必开</strong>（per-CPU 代码尤其）</td><td>❌</td></tr>
+      <tr><td><code>DEBUG_LIST</code></td><td>链表操作时校验前后指针，能抓到「并发改链表」和「重复删除」</td><td><strong>必开</strong>（写 RCU 链表时价值极高）</td><td>❌ 有开销，但有些发行版会开</td></tr>
+      <tr><td><code>KASAN</code></td><td>越界 / UAF / double-free，报错带分配栈+释放栈</td><td><strong>必开</strong>（专门跑一轮）</td><td>❌ 2–3 倍开销</td></tr>
+      <tr><td><code>KCSAN</code></td><td>数据竞争检测（需要 Clang 或较新 GCC）</td><td>推荐（专门跑一轮）</td><td>❌</td></tr>
+      <tr><td><code>RCU_TORTURE_TEST</code></td><td>RCU 自身的压力测试模块，改动 RCU 相关代码后跑</td><td>按需</td><td>❌</td></tr>
+      <tr><td><code>LOCK_STAT</code></td><td><code>/proc/lock_stat</code>：每个锁类的争用次数、等待时间分布</td><td><strong>做锁优化时必开</strong></td><td>❌</td></tr>
+      <tr><td><code>DETECT_HUNG_TASK</code></td><td>D 状态超时检测</td><td>开</td><td><strong>✅ 开</strong>（开销可忽略）</td></tr>
+      <tr><td><code>SOFTLOCKUP_DETECTOR</code> / <code>HARDLOCKUP_DETECTOR</code></td><td>CPU 卡死检测</td><td>开</td><td><strong>✅ 开</strong></td></tr>
+      <tr><td><code>PANIC_ON_OOPS</code> + kdump</td><td>出问题时留下完整 vmcore</td><td>开</td><td><strong>✅ 强烈建议</strong>——没有 dump 的内核 bug 基本查不动</td></tr>
+    </tbody>
+  </table>
+
+<pre><span class="cm"># 确认当前内核开了哪些（发行版内核通常只开了兜底那几项）</span>
+grep -E 'PROVE_LOCKING|DEBUG_ATOMIC_SLEEP|LOCK_STAT|KASAN|KCSAN|DETECT_HUNG_TASK' \
+     /boot/config-$(uname -r)
+
+<span class="cm"># 锁争用统计：找出真正的热点锁（需要 CONFIG_LOCK_STAT）</span>
+echo 1 &gt; /proc/sys/kernel/lock_stat        <span class="cm"># 开始统计</span>
+<span class="cm"># ... 跑压测 ...</span>
+cat /proc/lock_stat | head -n 30
+<span class="cm"># 关注 con-bounces（争用导致的 cacheline 弹跳次数）
+# 和 waittime-max（最长等待）。排在最前面的就是该优化的对象。</span>
+
+<span class="cm"># lockdep 自身的状态（有没有因为报警而关掉、图有多大）</span>
+cat /proc/lockdep_stats
+
+<span class="cm"># 不改内核也能做的事：用 tracepoint 看锁争用</span>
+perf lock record -- ./your_workload
+perf lock report --sort=wait_total
+<span class="cm"># 更现代的做法是 bpftrace 挂 contention tracepoint，
+# 见本站《eBPF 可观测性》一篇。</span></pre>
+
+  <div class="checklist">
+    <h4>内核同步代码提交前 checklist</h4>
+    <ul>
+      <li><strong>每份共享数据都写下「谁访问它、在什么上下文」</strong>，并把选定的保护方式写进结构体定义旁的注释。这一步花五分钟，能省掉后面几天。</li>
+      <li><strong>确认锁变体和上下文匹配</strong>：会被硬中断访问 → <code>irqsave</code>；会被软中断访问 → <code>_bh</code>；只在进程上下文且可能长 → <code>mutex</code>。</li>
+      <li><strong>临界区里没有任何可能睡眠的调用</strong>（<code>GFP_KERNEL</code> 分配、<code>copy_*_user</code>、<code>mutex_lock</code>、<code>msleep</code>），也没有 <code>printk</code> 洪水。</li>
+      <li><strong>需要多把锁时，写下全局加锁顺序</strong>并在代码注释里声明。所有路径遵守同一顺序，包括错误处理路径。</li>
+      <li><strong>所有错误分支都释放了锁</strong>——用统一的 <code>goto unlock;</code> 收口，别每个分支各写一遍。</li>
+      <li><strong>无锁访问处都有 <code>READ_ONCE</code>/<code>WRITE_ONCE</code> 或 <code>atomic_*</code></strong>，并且屏障成对（找得到它的对儿）。</li>
+      <li><strong>RCU：</strong>指针没有逃出 <code>rcu_read_unlock()</code>；用了 <code>list_del_rcu</code> 而不是 <code>list_del</code>；批量删除只等一次宽限期；模块 <code>exit</code> 里有 <code>rcu_barrier()</code>（如果用过 <code>call_rcu</code>）。</li>
+      <li><strong>用开了 lockdep + DEBUG_ATOMIC_SLEEP + DEBUG_LIST 的内核跑完整测试</strong>，包括错误注入路径（<code>fail_page_alloc</code>、模块反复加载卸载、设备热插拔）。</li>
+      <li><strong>单独跑一轮 KASAN</strong>，特别是有 RCU 延迟释放的代码。</li>
+      <li><strong>如果可能，在弱序架构上跑一遍</strong>（ARM64）。x86 的 TSO 会掩盖掉整整一类屏障缺失的 bug。</li>
+    </ul>
+  </div>
+
+  <div class="note">观测手段的更完整清单见 <a href="observability_ebpf.html">eBPF 与可观测性</a>（锁争用、调度延迟的 BPF 工具），崩溃现场的分析见 <a href="../perf-debug/crash_debugging_guide.html">崩溃调试指南</a>，以及 <a href="process_scheduling.html">进程调度器</a>（<code>preempt_count</code>、抢占模型、上下文切换成本）与 <a href="numa_memory_advanced.html">NUMA 与内存进阶</a>（cacheline 伪共享、跨 socket 访问成本）。</div>
+</section>
+
+<!-- ================================================================ §10 -->
+<section class="chapter" id="s10">
+  <div class="ch-head">
+    <div class="num">10</div>
+    <div class="t"><h2>面试题集（12 道）</h2><p class="sub">按难度分层，先自测再对照</p></div>
+  </div>
+
+  <h3 id="s10-1">10.1 基础（必答）</h3>
+  <p class="qa-hint">点击每道题展开参考答案（先自测，再对照）。</p>
+  <ol class="qa-list">
+    <li><details class="qa">
+      <summary><span class="lvl basic">基础</span>为什么持有自旋锁期间绝对不能睡眠？</summary>
+      <div class="ans">
+        <p>三层理由，从「性能差」到「必然死锁」：</p>
+        <div class="point"><div class="label">① 别人在烧 CPU 等你</div><div>自旋锁的等待者不睡觉，就在循环里空转。你睡 5 ms，其他等锁的 CPU 就空转 5 ms——几百万条无用指令，还伴随持续的 cacheline 争用。<strong>自旋锁的全部前提是「等待极短」，睡眠直接摧毁这个前提。</strong></div></div>
+        <div class="point bad"><div class="label">② 同 CPU 上会真死锁</div><div><code>spin_lock()</code> 在主线内核里包含 <code>preempt_disable()</code>，睡眠会强行 <code>schedule()</code>。调度器可能选中<strong>同一个 CPU</strong> 上另一个也要这把锁的任务——它拿不到锁（持锁者在睡）于是自旋，而持锁者需要这个 CPU 才能醒过来继续跑。<strong>互等，这个 CPU 死了。</strong></div></div>
+        <div class="point bad"><div class="label">③ 中断上下文没有「睡眠」这个概念</div><div>中断处理程序借用某个<strong>无关任务</strong>的内核栈，它不是可调度实体。让它睡 = 把那个倒霉任务永久挂起，而且没有任何人会来唤醒「这个中断」。</div></div>
+        <div class="point warn"><div class="label">怎么被发现</div><div>开 <code>CONFIG_DEBUG_ATOMIC_SLEEP</code>，可能睡眠的函数入口的 <code>might_sleep()</code> 会在 <code>preempt_count != 0</code> 时打印 <code>BUG: sleeping function called from invalid context</code>。不开的话你看到的会是更晚更难懂的 <code>BUG: scheduling while atomic</code>——那行末尾的十六进制数就是 <code>preempt_count</code>。</div></div>
+        <div class="point deep"><div class="label">最容易踩的几个「隐形睡眠」</div><div><code>kmalloc(GFP_KERNEL)</code>（要换 <code>GFP_ATOMIC</code>）、<code>copy_to_user</code>（可能缺页）、<code>mutex_lock</code>、<code>synchronize_rcu</code>、<code>msleep</code>。<strong>以及任何你没读过实现的第三方内核函数</strong>——这是最现实的一条。</div></div>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl basic">基础</span><code>spin_lock</code> / <code>spin_lock_bh</code> / <code>spin_lock_irq</code> / <code>spin_lock_irqsave</code> 怎么选？为什么 <code>irqsave</code> 比 <code>irq</code> 更安全？</summary>
+      <div class="ans">
+        <p>选择依据只有一句：<strong>和谁竞争，就关谁</strong>。先把所有会访问这份数据的代码路径列出来，看它们跑在什么上下文：</p>
+        <ul>
+          <li>只有进程上下文（多 CPU 的系统调用/内核线程）→ <code>spin_lock()</code>（只需挡住其他 CPU + 本 CPU 抢占）</li>
+          <li>还会被<strong>软中断 / tasklet / NAPI</strong> 访问 → 进程侧 <code>spin_lock_bh()</code></li>
+          <li>还会被<strong>硬中断处理程序</strong>访问 → 进程侧 <code>spin_lock_irqsave()</code></li>
+          <li>ISR 自己那一侧用 <code>spin_lock()</code> 就够——它已经在关中断的状态下运行</li>
+        </ul>
+        <div class="point warn"><div class="label">irqsave vs irq</div><div><code>spin_unlock_irq()</code> 是<strong>无条件打开中断</strong>；<code>spin_unlock_irqrestore()</code> 是<strong>恢复到进来时的状态</strong>。差别在于「函数被谁调用」：如果上层调用者本来特意关了中断，你用 <code>_irq</code> 版本就会在返回时<strong>把中断悄悄打开</strong>，破坏上层的保护——而且<strong>不产生任何警告</strong>，只表现为极低概率的数据损坏。</div></div>
+        <div class="point good"><div class="label">结论</div><div><code>irqsave</code> 的代价只有一条读标志寄存器的指令，换来的是「<strong>这个函数可以被任何上下文安全调用</strong>」这个可组合性。<strong>驱动里一律用 <code>irqsave</code>。</strong><code>spin_lock_irq()</code> 只在「能确定调用者一定是开着中断的顶层路径」时才合法，内核核心代码里有这种用法是因为那里的调用关系被严格审过。</div></div>
+        <div class="point deep"><div class="label">容易漏的一条</div><div>同一种软中断在<strong>同一个 CPU 上不会重入，但在不同 CPU 上可以并发</strong>。所以多队列 NAPI 的 poll 函数之间访问共享数据，仍然需要 <code>spin_lock()</code>——「都是软中断所以不用锁」是错的。</div></div>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl basic">基础</span><code>READ_ONCE()</code> / <code>WRITE_ONCE()</code> 为什么必须存在？直接用 <code>volatile</code> 不行吗？</summary>
+      <div class="ans">
+        <p>因为<strong>编译器对普通内存访问的优化权力比大多数人想象的大</strong>，而这些优化在单线程语义下全都合法。最经典的例子：</p>
+<pre><span class="kw">while</span> (!ready)      <span class="cm">/* ready 由另一个 CPU 置 1 */</span>
+    ;
+<span class="cm">/* 编译器可以合法地变成：
+     if (!ready) for (;;) ;     ← 永久死循环
+   因为循环体内没有任何东西修改 ready，
+   「每次重新读」是可以省掉的。 */</span></pre>
+        <p>除了这种<strong>合并读</strong>，编译器还会做：合并/删除写（状态机丢一步）、<strong>读撕裂</strong>（把 64 位读拆成两个 32 位读，拼出一个从未被写过的值）、<strong>写撕裂</strong>、<strong>凭空多读</strong>（寄存器不够用时把值丢掉重读一遍，导致「先检查后使用」两次读到不同值）。<code>READ_ONCE</code>/<code>WRITE_ONCE</code> 的本质就是一次带 <code>volatile</code> 语义的访问，用来<strong>禁止这一类变换</strong>。</p>
+        <div class="point bad"><div class="label">为什么不用 volatile 变量</div><div>① <strong>解决不了真正的问题</strong>——<code>volatile</code> 不产生任何 CPU 屏障，在 ARM 上照样会读到 <code>ready==1</code> 但数据是旧的；② <strong>把优化全面关掉</strong>——这个变量的所有访问都变 volatile，包括已经在锁里、本可以放寄存器的那些；③ <strong>掩盖意图</strong>——看代码的人无法知道哪次访问是「真的要求每次都读」。内核文档 <code>volatile-considered-harmful.rst</code> 明确不建议这么做。</div></div>
+        <div class="point warn"><div class="label">必须记住的一条</div><div><strong><code>READ_ONCE</code> 不是屏障</strong>。它只挡编译器，不挡 CPU 乱序。「<code>READ_ONCE</code> 齐全但没有 <code>smp_rmb()</code>」的代码在 x86 上（TSO，读读不重排）能跑一万年不出错，换到 ARM64 上立刻炸。<strong>这是国产 ARM 服务器普及后大量存量代码暴露出的真实问题。</strong></div></div>
+        <div class="point good"><div class="label">反过来也要注意</div><div>已经在锁保护下的访问<strong>不需要</strong> <code>READ_ONCE</code>——锁的 acquire/release 已经包含编译器屏障。滥用它会让评审者误以为「这里有无锁并发」。</div></div>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl basic">基础</span>RCU 里的「宽限期」是什么？为什么需要它？</summary>
+      <div class="ans">
+        <p><strong>宽限期（grace period）</strong>：从「写者完成指针替换」这一刻算起，到「所有<strong>在替换之前就已经进入</strong>读侧临界区的读者都退出」为止的这段时间。</p>
+        <p><strong>为什么需要它</strong>：RCU 的读者<strong>不加锁、不阻塞</strong>，所以写者替换指针的那一刻，可能有一堆读者<strong>手里正拿着指向旧对象的指针</strong>在读。写者不能立刻 <code>kfree</code> 旧对象——那就是 use-after-free。它必须等到「确信再也没有人能引用旧对象」为止，这个等待就是宽限期。</p>
+        <div class="point good"><div class="label">关键：它不需要等谁</div><div><strong>宽限期只需要等「跨越了替换点」的那些读者</strong>。替换之后新进入的读者只能看到新指针，本来就拿不到旧对象，不必等。<strong>而且写者完全不需要知道到底有哪些读者</strong>——正是这一点让读侧可以做到零记账、零开销。</div></div>
+        <div class="point deep"><div class="label">怎么判断宽限期结束</div><div>靠<strong>静止状态（quiescent state）</strong>——一个 CPU「此刻肯定不在任何 RCU 读侧临界区里」的可判定时刻。非抢占内核里读侧临界区是关抢占的，所以<strong>一次上下文切换、进入 idle、返回用户态</strong>都足以证明。宽限期的实现就是等每个 CPU 都至少经过一次静止状态。</div></div>
+        <div class="point warn"><div class="label">由此推出两个实用结论</div><div>① <strong>宽限期是毫秒量级</strong>（要等所有 CPU 都过一次静止状态），所以 <code>synchronize_rcu()</code> 不能放在热路径上；② <strong>「有 CPU 一直在内核里不让出」会让宽限期永远结束不了</strong>——这就是 RCU stall 报错的来源，也是为什么长循环里要插 <code>cond_resched()</code>。</div></div>
+      </div>
+    </details></li>
+  </ol>
+
+  <h3 id="s10-2">10.2 中级（区分熟练度）</h3>
+  <ol class="qa-list" start="5">
+    <li><details class="qa">
+      <summary><span class="lvl mid">中级</span>为什么说「内存屏障总是成对出现」？只在写侧加屏障会怎样？</summary>
+      <div class="ans">
+        <p>因为<strong>屏障约束的只是「同一个 CPU 上，我自己的访问之间的顺序」</strong>。写侧的 <code>smp_wmb()</code> 保证「我发出去的写，对外可见的顺序是 A 先于 B」；但它管不到读侧的 CPU——<strong>读侧的 CPU 完全可以推测执行，提前把 B 读了，之后才去读 A</strong>。那么读侧看到的仍然是「B 新 A 旧」，写侧的努力白费。</p>
+        <p>标准的成对模式是<strong>发布-订阅</strong>：</p>
+<pre><span class="cm">/* 写侧 */</span>
+p-&gt;len = 4096;
+p-&gt;data = buf;
+smp_store_release(&amp;gp, p);   <span class="cm">/* ① 保证内容先于指针可见 */</span>
+
+<span class="cm">/* 读侧 */</span>
+q = smp_load_acquire(&amp;gp);   <span class="cm">/* ② 保证拿到指针后才读内容 */</span>
+<span class="kw">if</span> (q)
+    use(q-&gt;len, q-&gt;data);</pre>
+        <p><strong>只有 ① 没有 ②</strong>：读侧 CPU 提前读了 <code>q-&gt;len</code>（旧值/垃圾），之后才确认 <code>gp</code>。<strong>只有 ② 没有 ①</strong>：写侧的 <code>gp</code> 先落地，<code>p-&gt;len</code> 还在 store buffer 里，读者拿到指针读到未初始化的内容。<strong>两种情况的结果一样糟。</strong></p>
+        <div class="point good"><div class="label">配对关系</div><div><code>smp_store_release</code> ↔ <code>smp_load_acquire</code>；<code>smp_wmb</code> ↔ <code>smp_rmb</code>；<code>rcu_assign_pointer</code> ↔ <code>rcu_dereference</code>（RCU 就是这个模式的一个特化）。<strong>看到代码里一个孤零零的 <code>smp_mb()</code>，第一反应应该是「它的对儿在哪」。</strong></div></div>
+        <div class="point bad"><div class="label">不要指望控制依赖</div><div>「读侧有 <code>if (q)</code> 判断，CPU 总不能在不知道 <code>q</code> 是否为 NULL 时就读 <code>q-&gt;len</code> 吧？」——<strong>它真能</strong>。分支预测 + 推测执行会先把 load 发出去，预测错才回滚。<strong>控制依赖对后续的 load 完全不构成顺序保证。</strong>（<em>地址</em>依赖是另一回事，那个由 <code>READ_ONCE</code>/<code>rcu_dereference</code> 保证。）</div></div>
+        <div class="point deep"><div class="label">为什么在 x86 上测不出来</div><div>x86-64 是 TSO，只允许「写→读」这一种重排。所以 <code>smp_rmb()</code>/<code>smp_wmb()</code> 在 x86 上编译成<strong>纯编译器屏障、零指令</strong>——少写一个完全没影响。到 ARM64 / POWER 上立刻暴露。<strong>写内核同步代码必须按最弱的内存模型思考，不能按测试平台。</strong>内核有形式化模型和 <code>tools/memory-model/</code> 下的验证工具可以帮你判断。</div></div>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl mid">中级</span>seqlock 的读侧有哪些限制？为什么不能在读侧读到一个指针就解引用？</summary>
+      <div class="ans">
+        <p>seqlock 的读侧模型是「<strong>读序号 → 读数据 → 再读序号，不等就整段重试</strong>」。它的所有限制都来自这个模型的两个事实：<strong>读侧临界区可能被执行多次</strong>，而且<strong>期间读到的数据可能是撕裂的、互相矛盾的</strong>。</p>
+        <ul>
+          <li><strong>必须可以安全地重跑</strong>：不能有副作用——不能改全局状态、不能 <code>printk</code>、不能分配/释放内存、不能唤醒任务。</li>
+          <li><strong>只能把数据原样拷到局部变量</strong>，等 <code>read_seqretry()</code> 通过之后再用。在重试循环里做判断、算下标、做除法（可能除零）都是 bug——那些计算是基于可能矛盾的数据做的。</li>
+          <li><strong>写者会饿死读者</strong>：写侧持续不断时读者可能一直重试。所以它要求「写少到读者几乎撞不上」，不只是「写比读少」。</li>
+          <li><strong>读侧不宜太长</strong>：拷贝的字段越多，撞上写窗口的概率越大。</li>
+        </ul>
+        <div class="point bad"><div class="label">为什么绝不能解引用读到的指针</div><div>因为那个指针值可能是<strong>半新半旧拼出来的野值</strong>（写者正在改它的时候你读了它）。解引用一个野指针 = 立刻 oops——<strong>而这发生在 <code>read_seqretry()</code> 有机会告诉你「数据不一致，重试」之前</strong>。重试机制只能在你读完之后才生效，它救不了一次已经执行了的非法访问。<strong>要保护含指针的结构，用 RCU，不要用 seqlock。</strong></div></div>
+        <div class="point good"><div class="label">它的甜点场景</div><div>「一组必须彼此一致的标量，读极多写极少」。内核最著名的使用者是 <strong>timekeeping</strong>：<code>clock_gettime()</code> 要读「上次更新的时刻 + 周期数 + 乘数 + 移位」这一整组字段，调用频率每秒可能上百万次，写侧只在时钟中断里更新。读侧零写入 → 几十个核并发调用互不影响，这是 rwlock 做不到的。</div></div>
+        <div class="point deep"><div class="label">与 RCU 的分工</div><div>seqlock 保护<strong>值</strong>（一组标量的一致快照），RCU 保护<strong>对象</strong>（可以安全解引用的指针）。seqlock 的写者<strong>原地改</strong>、不需要额外内存、不需要延迟释放；RCU 的写者要<strong>拷贝 + 等宽限期</strong>。所以「读一组计数器」用 seqlock，「读一张会增删条目的表」用 RCU。</div></div>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl mid">中级</span>per-CPU 变量为什么快？它的代价是什么？什么时候不该用？</summary>
+      <div class="ans">
+        <p><strong>快的原因很朴素：它不共享，所以不需要任何同步。</strong>一份数据每个 CPU 一个副本，各自只碰自己那份——不需要锁、不需要原子指令、不需要屏障，<code>this_cpu_inc()</code> 在 x86 上就是一条带段前缀的普通 <code>inc</code>，约 1 ns 且<strong>零争用</strong>。对比一下：<code>atomic64_inc</code> 在多核同时写同一条 cacheline 时会退化到几十甚至上百纳秒，而且<strong>随核数恶化</strong>。</p>
+        <p><strong>唯一要防的不是「别的 CPU」，是「自己漂移到别的 CPU」</strong>：拿了 <code>this_cpu_ptr()</code> 之后如果被抢占并迁移，后面的操作就写到别人的副本上去了。所以要用 <code>get_cpu_ptr()</code>/<code>put_cpu_ptr()</code>（内含关/开抢占），或者确认自己已经在关抢占/关中断/持自旋锁的上下文里。</p>
+        <div class="point warn"><div class="label">三个代价</div><div>① <strong>内存放大</strong>——256 核上就是 256 份，结构体里塞个 4 KB 缓冲就是 1 MB；② <strong>汇总是 O(CPU 数) 且不便宜</strong>——某个 <code>/proc</code> 统计被监控系统每秒采一次，就是每秒 256 次跨 NUMA 的 cache miss，历史上多次成为大核数机器上的性能问题；③ <strong>拿不到一致快照</strong>——遍历过程中前面的 CPU 还在改，总数永远是近似值。</div></div>
+        <div class="point bad"><div class="label">什么时候不该用</div><div>① <strong>业务需要精确总数</strong>（比如「计数必须严格等于 0 才能释放资源」）——近似值不够，要么加额外的同步，要么别用 per-CPU；② <strong>读侧也很热</strong>——读写都热的话 per-CPU 只是把开销搬了个地方；③ <strong>数据本身很大</strong>——内存放大扛不住。这时可以退一步用 <code>percpu_counter</code>：本地累加，攒够 batch 才碰一次全局值，用「误差 ≤ batch × CPU 数」换 O(1) 的粗读。</div></div>
+        <div class="point deep"><div class="label">遍历要用 possible 而不是 online</div><div><code>for_each_possible_cpu()</code>，<strong>不是</strong> <code>for_each_online_cpu()</code>。CPU 下线之后它的 per-CPU 副本还在，里面攒的数还算数；用 <code>online</code> 会在 CPU 热插拔后<strong>静默丢数据</strong>，表现为「统计值突然变小」。</div></div>
+        <div class="point good"><div class="label">往上抽一层</div><div>per-CPU 和 RCU 是同一个设计原则的两个方向：<strong>先判断读写比例，再把开销挪到频率低的那一侧</strong>。RCU 是「读多写少 → 开销全给写侧」，per-CPU 计数器是「写多读少 → 开销全给读侧」。能识别出这一点，比记住 API 更重要。</div></div>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl mid">中级</span><code>synchronize_rcu()</code>、<code>call_rcu()</code>、<code>kfree_rcu()</code> 分别在什么时候用？</summary>
+      <div class="ans">
+        <table>
+          <thead><tr><th>API</th><th>行为</th><th>上下文</th><th>用它的时候</th></tr></thead>
+          <tbody>
+            <tr><td><code>synchronize_rcu()</code></td><td><strong>阻塞</strong>到宽限期结束</td><td>只能进程上下文（会睡）；<strong>不能在 RCU 读侧临界区里调</strong>（自己等自己，必死）</td><td>低频操作：配置变更、模块卸载、设备移除。代码最直白，返回后可以放心 <code>kfree</code></td></tr>
+            <tr><td><code>call_rcu(&amp;p-&gt;rcu, fn)</code></td><td>立刻返回，宽限期后回调 <code>fn</code></td><td>几乎任何上下文，<strong>包括中断和原子上下文</strong></td><td>写侧不能阻塞时；释放逻辑不只是 <code>kfree</code>（要先 <code>put</code> 引用、解注册）</td></tr>
+            <tr><td><code>kfree_rcu(p, rcu)</code></td><td>宽限期后自动 <code>kfree(p)</code></td><td>同 <code>call_rcu</code></td><td><strong>释放动作就是一次 <code>kfree</code> 时的首选</strong>，也就是绝大多数情况</td></tr>
+          </tbody>
+        </table>
+        <div class="point good"><div class="label">选择规则</div><div><strong>能用 <code>kfree_rcu()</code> 就用它；释放逻辑复杂用 <code>call_rcu()</code>；只有「我必须确认旧对象彻底没人用了才能往下走」才用 <code>synchronize_rcu()</code></strong>。第三种情况远比想象的少——大多数写侧其实不关心旧对象何时真的被释放，只需要保证「最终会释放」。</div></div>
+        <div class="point warn"><div class="label">call_rcu 的三个坑</div><div>① 回调在<strong>软中断上下文</strong>执行，<strong>里面不能睡</strong>；② <strong>模块卸载前必须 <code>rcu_barrier()</code></strong>，否则回调函数所在的代码段已被卸载，调用时直接 oops（<code>kfree_rcu</code> 不需要，因为没有模块代码被调用）；③ <strong>回调洪水会 OOM</strong>——见下。</div></div>
+        <div class="point bad"><div class="label">批量删除千万别每条都 call_rcu</div><div>清空一张几百万条的表时逐条 <code>call_rcu</code>，回调队列会无限增长，内存被一堆「已经没人用但还没释放」的对象吃光。<code>slabtop</code> 里那个 slab 暴增，但代码逻辑上「都删掉了」。<strong>正确做法：把整批节点摘到本地链表，调一次 <code>synchronize_rcu()</code>，然后统一 <code>kfree</code>——一个宽限期解决 N 个对象。</strong>RCU 内部有回调洪水检测（<code>rcutree.qhimark</code> 默认 10000）会加速宽限期，但那只是缓解，代价是 CPU 尖峰和延迟抖动。</div></div>
+        <div class="point deep"><div class="label">rcu_barrier ≠ synchronize_rcu</div><div><code>synchronize_rcu()</code> 只等宽限期；<code>rcu_barrier()</code> 还要等<strong>所有已排队的回调真的执行完</strong>。两件事，别混。模块 <code>exit</code> 路径要的是后者。</div></div>
+      </div>
+    </details></li>
+  </ol>
+
+  <h3 id="s10-3">10.3 高级（体现深度）</h3>
+  <ol class="qa-list" start="9">
+    <li><details class="qa">
+      <summary><span class="lvl adv">高级</span>RCU 读侧为什么能做到「零开销」？这个开销去哪了？</summary>
+      <div class="ans">
+        <p><strong>关键在于 <code>rcu_read_lock()</code> 不是一把锁。</strong>它不与任何人互斥（写者可以在你读的时候照样改）、不会失败、不会阻塞、不会重试、多个读者之间毫无交互。它做的唯一一件事是<strong>标记出「我正在读」这段区间</strong>，好让写者能判断宽限期结束了没有。</p>
+        <p>而「标记一段区间」这件事，在<strong>非抢占内核</strong>里可以做得极其便宜：读侧临界区只要<strong>关抢占</strong>，那么「这个 CPU 发生了一次上下文切换」就自动证明了「它已经不在任何读侧临界区里」。于是 <code>rcu_read_lock()</code> 展开成 <code>preempt_disable()</code>——而在不需要抢占计数的配置下，这几乎不产生任何指令，<strong>只剩一个编译器屏障</strong>。这就是「零开销」的字面含义：<strong>没有原子指令、没有屏障指令、没有 cacheline 争用、没有任何写内存</strong>。</p>
+        <div class="point deep"><div class="label">抢占式内核里呢</div><div>读侧临界区<strong>可以被抢占</strong>，所以「上下文切换」不再能证明「不在临界区里」。此时它需要在当前任务上维护一个嵌套计数，并在被抢占时把这个任务记录下来，让宽限期把它也等上。<strong>具体实现各版本有差异，但对使用者暴露的行为一致</strong>：读侧不阻塞、不失败、不能主动睡眠。开销比非抢占内核大，但仍然远低于任何一把真锁。</div></div>
+        <div class="point good"><div class="label">开销去哪了：全给写侧</div><div>① 写侧必须<strong>拷贝</strong>一份对象（不能原地改，否则读者会看到半新半旧）；② 必须<strong>等一个宽限期</strong>（毫秒量级）才能释放旧对象；③ 期间旧对象一直<strong>占着内存</strong>；④ 写者之间还需要<strong>另一把普通锁</strong>来互斥（RCU 完全不管这个）。<strong>所以 RCU 的本质是一笔交易：用「写侧贵一个数量级」换「读侧便宜到接近零」。</strong>读写比 1000:1 时这笔交易划算得离谱，写比读多时是纯负优化。</div></div>
+        <div class="point warn"><div class="label">相应的硬约束</div><div>零开销是有代价的——因为读侧不记账，所以<strong>指针的有效期严格限于 <code>rcu_read_lock()</code>/<code>rcu_read_unlock()</code> 之间</strong>，出了 unlock 立刻失效，不能存到全局、不能带出函数。要延长使用期，标准做法是在临界区里 <code>refcount_inc_not_zero()</code> 拿一个引用——<strong>RCU 保护「查找的过程」，引用计数保护「使用的过程」</strong>。<code>get_task_struct()</code>、socket 查找、dentry 查找都是这个套路。</div></div>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl adv">高级</span>什么场景下 RCU 是错误选择？举出至少三类并说明原因。</summary>
+      <div class="ans">
+        <p>RCU 有三个前提，缺一不可：<strong>读远多于写</strong>、<strong>能容忍读到稍旧的数据</strong>、<strong>对象可以延迟释放</strong>。任何一条不成立就要换方案。</p>
+        <div class="point bad"><div class="label">① 读者必须看到最新值</div><div>最典型的是<strong>权限/策略检查</strong>：不能允许「策略已经收紧了，但某些读者还在用旧策略放行」。RCU 只保证最终一致——写者替换指针后，读者可能在整个宽限期内继续看着旧版本。这类要求「立即生效」的语义只能用锁（或者用 <code>synchronize_rcu()</code> 阻塞到确认为止，但那就付了阻塞的代价，RCU 的优势也没了）。</div></div>
+        <div class="point bad"><div class="label">② 写侧也很热</div><div>计数器、队列的头尾指针这类<strong>每次操作都在改</strong>的数据。用 RCU 等于每次都要分配一个新对象、拷贝、等一个宽限期——比加锁贵几个数量级。经验阈值是<strong>读写比至少 10:1，理想 100:1 以上</strong>。这类数据的正确答案是 per-CPU（如果是计数）或普通自旋锁。</div></div>
+        <div class="point bad"><div class="label">③ 需要立刻回收资源</div><div>对象很大（几 MB 缓冲）、或者持有<strong>稀缺资源</strong>（文件描述符、DMA 通道、硬件寄存器窗口、许可证）。宽限期是毫秒量级，高频增删下延迟释放会累积成资源耗尽——而且这种 OOM 特别难查，因为内存不在任何进程账上，<code>slabtop</code> 才看得见。</div></div>
+        <div class="point bad"><div class="label">④ 读侧要睡眠</div><div>普通 RCU 的读侧临界区里不能睡（<code>copy_to_user</code>、<code>mutex_lock</code>、<code>GFP_KERNEL</code> 分配都不行）。这种情况要用 <strong>SRCU</strong>——它允许读侧睡眠，而且每个域独立（一个域里的慢读者不会拖累内核其他部分）。代价是读侧<strong>不再零开销</strong>（要维护 per-CPU 计数，有真实的原子操作与屏障），宽限期也可能更长。</div></div>
+        <div class="point warn"><div class="label">⑤ 数据结构不适合「替换式更新」</div><div>RCU 要求「读者要么看到旧版本、要么看到新版本，不能看到中间态」。<strong>能靠一次原子指针替换完成的更新</strong>（换一个对象、链表增删）最适合。反过来，需要同时改多个位置才能保持不变式的结构（比如平衡树的旋转、双向索引的同步更新）用 RCU 会非常别扭——要么设计成「重建整棵子树再替换」（写侧极贵），要么就得承认读者可能看到不一致的中间态。</div></div>
+        <div class="point good"><div class="label">怎么答得更好</div><div>不要只罗列场景，说出<strong>判断流程</strong>：先量读写比例（有没有到 10:1）→ 再问业务能不能容忍陈旧读 → 再问对象延迟几毫秒释放有没有问题 → 最后确认读侧不需要睡眠。四个都过了才上 RCU，否则老老实实用锁或 per-CPU。<strong>「知道什么时候不用某个技术」通常比「知道怎么用」更能体现工程判断力。</strong></div></div>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl adv">高级</span>lockdep 能发现哪些「真死锁发现不了」的问题？它的盲区在哪？</summary>
+      <div class="ans">
+        <p><strong>lockdep 的核心价值：它检测的不是「现在死锁了」，而是「这套加锁模式在某种时序下可能死锁」。</strong>原理是给每个锁归一个「锁类」，运行时记录每一对「持有 A 时获取 B」的先后关系，构建有向图，一旦出现环就报警。</p>
+        <div class="point good"><div class="label">这带来一个质变</div><div>真死锁需要「两个 CPU 恰好在特定时刻交错」——可能一年触发一次，触发时整机 hang、没有 dump。而 lockdep <strong>只需要那两条代码路径【各自】被执行过一次</strong>（不需要同时、不需要交错），就能把环画出来并报警。<strong>这把概率性 bug 变成了确定性检测，从「靠运气发现」变成「靠覆盖率发现」。</strong></div></div>
+        <p><strong>它能发现的几类，真死锁都很难自然触发到：</strong></p>
+        <ul>
+          <li><strong>AB-BA 环</strong>（含 A→B→C→A 的多跳环）：两条路径可能分别在两个完全不同的业务流程里，正常运行时永远不交错。</li>
+          <li><strong>中断上下文不一致</strong>（<code>inconsistent lock state</code>）：同一把锁有时在开中断的进程上下文拿、有时在硬中断里拿。真死锁只在「中断恰好打断持锁者、且在同一个 CPU 上」时发生——多核机器上这个概率极低，可以潜伏数年。</li>
+          <li><strong>RCU 用法错误</strong>（<code>suspicious RCU usage</code>）：<code>rcu_dereference()</code> 在读侧临界区之外被调用。这个错误<strong>永远不会「死锁」</strong>，只会在极偶然的时机产生 UAF——不靠工具几乎不可能发现。</li>
+          <li><strong>返回用户态时还持着锁</strong>：错误路径漏了 <code>unlock</code>。这往往只在某个罕见的 <code>goto err</code> 分支上，正常测试根本走不到。</li>
+          <li><strong>等待类型冲突</strong>（<code>-{3:3}</code> 那部分）：在 <code>raw_spinlock</code> 里拿 <code>mutex</code>——在主线内核上可能只是「不优雅」，在 PREEMPT_RT 上是必死。</li>
+        </ul>
+        <div class="point bad"><div class="label">三个盲区（这才是区分深度的部分）</div><div>① <strong>只看跑到过的路径</strong>——没被测试覆盖的加锁组合它一无所知，所以 lockdep 的有效性直接取决于测试覆盖率（包括错误注入、热插拔、模块反复加载卸载这些冷路径）。② <strong>只认识内核的锁原语</strong>——你自己用原子标志 + 忙等搓的「土制锁」、用 <code>completion</code> 拼出的等待关系、内核等一个用户态守护进程回话形成的跨态依赖，它全都看不见，<strong>而这些恰恰是自研模块里死锁的重灾区</strong>。③ <strong>不检测数据竞争</strong>——「这个变量根本没被任何锁保护」不在它职责内，那是 KCSAN 的活。</div></div>
+        <div class="point warn"><div class="label">两个实操细节</div><div>① <strong>lockdep 报过一次警就会把自己关掉</strong>（内部状态可能已不一致），所以<strong>第一份报告最珍贵</strong>，不要攒一批再看，看到 <code>Tainted: ...W...</code> 要往上翻找第一条。② <strong>读报告先跳到最后的 <code>Possible unsafe locking scenario</code> 方框</strong>——lockdep 已经把「怎么死」画成了两栏时序图，那是信息密度最高的部分；再回头看 <code>-&gt; #1</code>/<code>-&gt; #0</code> 两段栈，它们分别是「历史上那条边」和「现在这条边」的完整调用路径，修复就是在这两条路径里选一条改掉。</div></div>
+        <div class="point deep"><div class="label">合法的「同类嵌套」要显式告知</div><div>报 <code>possible recursive locking</code> 不一定是真递归——也可能是「同一个锁类的两个不同实例」的合法嵌套（比如同时锁父子 inode）。此时用 <code>mutex_lock_nested()</code> / <code>spin_lock_nested()</code> 把层级显式告诉 lockdep，而不是把警告关掉。<strong>报告里两个锁实例地址相同才是真递归。</strong></div></div>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl adv">高级</span>内核的同步原语和 C++ 的 <code>memory_order</code> 怎么对应？从 C++ 转内核开发最容易踩什么？</summary>
+      <div class="ans">
+        <p>两套模型的<strong>底层机器语义是同一套</strong>（毕竟跑在同一个 CPU 上），差别在<strong>默认值</strong>和<strong>表达方式</strong>。</p>
+        <table>
+          <thead><tr><th>Linux 内核</th><th>C++ 等价物</th><th>注意</th></tr></thead>
+          <tbody>
+            <tr><td><code>READ_ONCE(x)</code></td><td><code>x.load(memory_order_relaxed)</code></td><td>内核版<strong>额外保证地址依赖序</strong></td></tr>
+            <tr><td><code>WRITE_ONCE(x, v)</code></td><td><code>x.store(v, memory_order_relaxed)</code></td><td>基本一致</td></tr>
+            <tr><td><code>smp_load_acquire</code> / <code>smp_store_release</code></td><td><code>load(acquire)</code> / <code>store(release)</code></td><td>语义一致，这是最好用的一对</td></tr>
+            <tr><td><code>smp_mb()</code></td><td><code>atomic_thread_fence(seq_cst)</code></td><td>工程上按等价用</td></tr>
+            <tr><td><code>smp_wmb()</code> / <code>smp_rmb()</code></td><td><strong>没有对应物</strong></td><td>C++ 只有 acquire/release/seq_cst 三档 fence，没有单向的读读/写写屏障。内核有，因为它要贴近硬件省开销</td></tr>
+            <tr><td><code>barrier()</code></td><td><code>atomic_signal_fence(seq_cst)</code></td><td>都只约束编译器。C++ 里服务于信号处理函数，内核里服务于中断处理程序——<strong>是同一个问题</strong></td></tr>
+            <tr><td><code>rcu_dereference()</code></td><td>无（<code>memory_order_consume</code> 是个死掉的设计）</td><td>内核靠「编译器不许破坏地址依赖」这条工程约定实现，C++ 的标准化尝试失败了</td></tr>
+          </tbody>
+        </table>
+        <div class="point bad"><div class="label">最大的坑：默认值反了</div><div>C++ 的 <code>std::atomic</code> 默认 <code>memory_order_seq_cst</code>——<strong>不写就是最强序</strong>，所以 <code>cnt++</code> 天然安全。内核的 <code>atomic_inc()</code> 默认<strong>最弱</strong>——原子但<strong>什么序都不保证</strong>。从 C++ 转过来的人最容易带着「原子操作自带同步」的直觉写内核代码，结果所有「没写序」的地方语义都反了。内核的规则是：<strong>无返回值的 RMW（<code>atomic_inc</code>、<code>set_bit</code>）无序；有返回值的 RMW（<code>atomic_add_return</code>、<code>test_and_set_bit</code>）是全屏障；<code>cmpxchg</code> 成功时全屏障、失败时无序</strong>。</div></div>
+        <div class="point warn"><div class="label">第二个坑：上下文这件事在 C++ 里不存在</div><div>用户态所有代码都跑在「可以睡眠」的上下文里，所以 C++ 从来不需要区分「这段代码能不能阻塞」。内核里这是<strong>第一判据</strong>：会被中断访问的数据只能用自旋锁（无论临界区多长），临界区里要 <code>copy_to_user</code> 就只能用 mutex（无论多短）。<strong>把「长短」当成选锁的首要依据，是用户态思维的残留。</strong></div></div>
+        <div class="point warn"><div class="label">第三个坑：失败的后果不一样</div><div>用户态死锁 = 一个进程卡住，<code>gdb</code> 上去看栈，kill 掉重启。内核死锁 = <strong>整机 hang</strong>，没有 dump、没有日志（可能连 console 都刷不出来）。所以内核的工程实践重心完全不同：<strong>不是「出问题了怎么调试」，而是「怎么让问题在第一次跑到时就被工具抓住」</strong>——lockdep、KCSAN、KASAN、DEBUG_ATOMIC_SLEEP 全开，配 kdump 兜底。</div></div>
+        <div class="point good"><div class="label">可以带过去的经验</div><div>发布-订阅（release/acquire 配对）的思维方式是完全通用的；「屏障成对」在两边都成立；「先判断读写比例，再把开销挪到频率低的那一侧」这个原则在两边都对（用户态的 <code>seqlock</code> 手法、读多写少的 hazard pointer / epoch-based reclamation 本质就是 RCU 的用户态版本）。<strong>而内核额外多给你的东西是：LKMM 有形式化模型和 <code>tools/memory-model/</code> 下的验证工具，可以把你的同步模式在最弱架构上跑一遍判断是否成立——这比在 x86 上压测靠谱得多。</strong></div></div>
+      </div>
+    </details></li>
+  </ol>
+</section>
+
+<div class="footer-nav">
+  <a href="linux_device_driver.html">⬅️ Linux 设备驱动</a>
+  <a href="process_scheduling.html">⚙️ 进程调度器</a>
+  <a href="../cpp/memory_model.html">🧠 C++ 内存模型</a>
+  <a href="../embedded-realtime/preempt_rt_deep_dive.html">⏱️ PREEMPT_RT</a>
+  <a href="observability_ebpf.html">🔍 eBPF 可观测性</a>
+  <a href="linux_system_directory.html">📚 目录</a>
+  <a href="../index.html">🏠 主页</a>
+</div>
+
+</main>
+</div>
+
+<footer>
+  <p>内核同步原语与 RCU — 原子操作 · 内存屏障 · spinlock · seqlock · per-CPU · RCU · lockdep — Kavin Tech Notes · 2026</p>
+</footer>
+
+<script>
+(function(){var b=document.getElementById('progress');if(!b)return;function u(){var h=document.documentElement;b.style.width=(h.scrollTop/(h.scrollHeight-h.clientHeight)*100)+'%'}window.addEventListener('scroll',u,{passive:true});u();})();
+</script>
+<script>
+document.querySelectorAll('aside.toc nav a').forEach(a=>{a.addEventListener('click',e=>{e.preventDefault();const t=document.querySelector(a.getAttribute('href'));if(t)t.scrollIntoView({behavior:'smooth'})})});
+const obs=new IntersectionObserver(es=>{es.forEach(e=>{if(e.isIntersecting){document.querySelectorAll('aside.toc nav a').forEach(a=>a.classList.remove('active'));const l=document.querySelector(`aside.toc nav a[href="#${e.target.id}"]`);if(l)l.classList.add('active')}})},{threshold:.2});
+document.querySelectorAll('section[id]').forEach(s=>obs.observe(s));
+</script>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

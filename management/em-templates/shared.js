@@ -9,41 +9,15 @@
   'use strict';
 
   // ----------------------------------------------------------
-  // Mermaid: paper-doc theme
-  // ----------------------------------------------------------
-  function initMermaid() {
-    if (typeof mermaid === 'undefined') return;
-    try {
-      mermaid.initialize({
-        startOnLoad: true,
-        securityLevel: 'loose',
-        theme: 'base',
-        themeVariables: {
-          fontFamily: 'Inter, system-ui, sans-serif',
-          fontSize: '13px',
-          primaryColor: '#fcfaf5',
-          primaryTextColor: '#1a1a1a',
-          primaryBorderColor: '#1c3a5e',
-          lineColor: '#6b6b6b',
-          secondaryColor: '#e8eef5',
-          tertiaryColor: '#faf2dc',
-          background: '#fdfcf7',
-          mainBkg: '#ffffff',
-          secondBkg: '#fcfaf5',
-          tertiaryBkg: '#f4efe3',
-          textColor: '#1a1a1a',
-          nodeBorder: '#1c3a5e',
-          clusterBkg: 'rgba(28,58,94,.04)',
-          clusterBorder: 'rgba(28,58,94,.2)',
-          edgeLabelBackground: '#fdfcf7'
-        },
-        flowchart: { curve: 'basis', padding: 16, htmlLabels: true, useMaxWidth: true }
-      });
-    } catch (e) {
-      console.error('mermaid init failed', e);
-    }
-  }
-
+  // Mermaid 由 assets/mermaid-theme.js 统一初始化
+  //
+  // 这里原本写死了一套 paper 风格的浅色 themeVariables。但这些模板页
+  // 是支持明暗切换的（<head> 里有 tn-theme-init），于是深色模式下图表
+  // 变成「深底上一块白纸」。配色是 initialize() 时烘进 SVG 的，改 CSS
+  // 变量救不回来，只能按主题重新渲染 —— 那件事交给共享脚本做。
+  //
+  // 有图的页面请在 mermaid.min.js 之后引入 assets/mermaid-theme.js，
+  // 不要在这里或页面里再调一次 mermaid.initialize()。
   // ----------------------------------------------------------
   // Tabs with hash deep-link
   // ----------------------------------------------------------
@@ -124,7 +98,6 @@
   // Init
   // ----------------------------------------------------------
   document.addEventListener('DOMContentLoaded', () => {
-    initMermaid();
     initTabs();
     initCopy();
   });

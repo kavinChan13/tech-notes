@@ -19,7 +19,19 @@ alwaysApply: true
 （`perf-debug/perf_landscape.html` 曾被 `system/` 三个页面引用而根本不存在，就是这么漏过去的。）
 
 - 写 `href="../topic/page.html#sec"` 时，**同时确认两件事**：目标文件存在、目标文件里真有 `id="sec"`。
-  跨目录引用别凭记忆写章节号，去目标页确认一次实际的 `id`。
+ 跨目录引用别凭记忆写章节号，去目标页确认一次实际的 `id`。
+
+⚠️ **「跨文件链接不要带锚点」是一条被误传的规则，正确说法是下面这条：**
+
+> 带锚点是**好事**——它能把读者送到具体那一节，而不是一篇两小时长文的开头。
+> 前提是**你真的去目标页确认过那个 `id` 存在**。禁止的是「凭记忆编一个锚点」，
+> 不是「使用锚点」。
+
+批量补内容时如果给下游写了「链接只写文件名、不带 `#`」这类简化指令，要说清它的**理由**
+（防止编造未验证的锚点），否则会出现两种相反的处理：有人删掉了本来有效、且精确指向
+相关章节的既有锚点（`comm_software_arch` → `comm_design_patterns.html#s9` 就被误删过，
+而 `#s9` 恰好就是那段文字在讲的「案例：重画 O-DU 软件视图」），有人保留。
+**已验证存在的锚点一律保留；新写的锚点必须先去目标页核对。**
 - 章节 `id` 命名全站统一用 `s<N>` / `s<N>-<M>`（如 `s10` `s10-4`），**不要写 `sec10` / `modern-linker`
   这类自创名字**——自创名字改版时最容易失联，而且引用方无从推断。
 - 新建页面前先 `Grep` 一下预期的文件名：可能已经有页面在链它了（那就是"待补"而不是"新增"）。
@@ -39,9 +51,13 @@ alwaysApply: true
  正确写法是：整段纯文本直接写在 div 里、不加 `</p>`；要分两段就**两段都用完整的 `<p>…</p>` 包起来**。
 - **没闭合的行内标签**：`<strong>` `<a>` `<span>` 漏了闭合，样式会渗到后面整段。
 - **正文/`<pre>` 里没转义的尖括号**：`<algorithm>`、`<unfinished ...>` 会被当成真标签吃掉，
-  一律写成 `&lt;algorithm&gt;`。实际踩过的：CUDA 的 `vecAdd<<<grid, block>>>(…)`、
-  数学式里的 `P(x_t | x_{<t})`、示意用的 `<tool_call>`。**在 `<pre><code>` 里也照样要转义**——
-  `<pre>` 只保留空白，不改变 HTML 解析。
+ 一律写成 `&lt;algorithm&gt;`。实际踩过的：CUDA 的 `vecAdd<<<grid, block>>>(…)`、
+ 数学式里的 `P(x_t | x_{<t})`、示意用的 `<tool_call>`。**在 `<pre><code>` 里也照样要转义**——
+ `<pre>` 只保留空白，不改变 HTML 解析。
+- **`<pre>` 里的裸 `&` 同样要写成 `&amp;`**。`&&`、`&ev`、`R&D`、`2>&1` 这些今天渲染正常，
+ 但那是运气不是设计：HTML5 至今仍会解析一批**不带分号**的遗留实体名，
+ 所以哪天有人在代码示例里贴进 `&copy` 或 `&reg`，就会静默变成 © 和 ®。
+ 全站曾有 86 处躺在 21 个文件里，已清零并进了 `audit_html_nesting.py`。
 - **容器与折叠块的闭合顺序写反**：
   ```html
   <details class="interview-card">
@@ -69,6 +85,7 @@ python scripts/audit_html_nesting.py   # 块级嵌套
 python scripts/audit_interview_qa.py   # 面试题格式（见 interview-qa-format 规则）
 python scripts/audit_page_shell.py     # 离线自包含 / 主题初始化 / 样式表顺序 / a11y
 python scripts/audit_counts.py         # 首页与目录页的篇数计数（`--fix` 可自动改写）
+python scripts/audit_read_time.py      # 阅读时长标注三处一致（`--fix` 可自动改写）
 python scripts/build_search_index.py   # 刷新全文索引
 python scripts/build_sitemap.py        # 刷新 sitemap.xml + robots.txt
 node   scripts/test_search_index_loader.mjs   # 懒加载器行为
@@ -82,8 +99,41 @@ node   scripts/test_search_index_loader.mjs   # 懒加载器行为
 （全站唯一带大写字母的文件名）因此在两边排到不同位置，本地跑干净、CI 却报索引过期。
 排序一律用 `key=lambda p: p.as_posix()`。
 
+## 标题被吃掉前导数字
+
+有一类缺陷渲染完全正常、也过得了所有自检，只有人读到才会觉得别扭：
+**标题丢了开头的数字**。`10 个调优陷阱` 变成 `个调优陷阱`、`2026 现状` 变成 `6 现状`、
+`8 道高频面试题` 变成 `道高频面试题`。多半是某次批量生成/替换时截断的。
+
+⚠️ **不要用「标题以量词开头」这种纯词法规则去找**——`条件路由` `类型系统` `项目管理`
+`张量` `层级结构` `次梯度` 全都会被误判，信噪比极低（实测 22 个命中里 10 个是误报）。
+
+可靠的判据是**拿标题和 TOC 里同一个 `id` 的文字互相对照**：一边以数字开头、
+另一边以光秃秃的量词（`个` `条` `道` `张` `款`）开头，才是真截断。没有对应 TOC 项时，
+再看它是不是 `个X` / `道X` 这种读起来就缺主语的形式。
+
+修的时候**数字要从正文数出来**（段内的 `h3` 小节数、`div.q` 问答数、`Pattern N` 编号），
+不要照抄 TOC——TOC 自己也可能是错的。全站已清过一轮，修了 12 处，
+分布在 `pm/`（7）、`ai-native/` `cpp/` `interview/` `embedded-realtime/` 各 1–2 处。
+
+### ⚠ 这些脚本只接受**目录名**，传文件路径会静默跳过
+
+`python scripts/audit_guides.py system/foo.html` 会打印 `Total problems: 0` —— 但它
+**一个文件都没打开**。所有 `audit_*.py` 的位置参数都走 `content_files(dirs)`，
+它按目录名解析，拿到 `system/foo.html` 这种带斜杠的字符串时匹配不到任何目录，
+于是扫描集合为空、直接报 0。改完单个文件想快速验证，**只能传它所在的目录**
+（`python scripts/audit_guides.py system`）。
+
+这个假绿灯很容易骗过人：改完一页、跑一遍、看到 0、以为过了。
+
+### 别在文件还没写完时判读结果
+
+批量生成/多 agent 并行写页时，对一个正在被写入的 HTML 跑 `audit_html_nesting.py`
+会拿到 `</section> closes over unclosed ['div']` 这类**假阳性**——那只是中途快照。
+等文件定稿再验，别急着去追一个不存在的嵌套 bug。
+
 - `audit_html_nesting.py` / `audit_interview_qa.py` 只对各自的 `CLEAN_DIRS` /
-  `MIGRATED_DIRS` 判失败。`CLEAN_DIRS` 现在**包含全部 19 个内容目录**；
+ `MIGRATED_DIRS` 判失败。`CLEAN_DIRS` 现在**包含全部 19 个内容目录**；
   `MIGRATED_DIRS` 仍是子集（面试题格式迁移还在推进），
   想看整体积压用 `audit_interview_qa.py --all`。
 - 脚本自动跳过 `.private/`、`?cats=` 之类的查询串、以及 `${...}` / `'+href+'` 这类 JS 拼接。

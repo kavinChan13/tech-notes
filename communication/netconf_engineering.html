@@ -31,7 +31,7 @@
       <a class="tn-home" href="../index.html">← 主页</a>
       <a href="communication_directory.html">目录</a>
       <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
-      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 26 min</span>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 95 min</span>
       <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
     </div>
   </div>
@@ -52,6 +52,13 @@
         <li><a href="#s5">libnetconf2 实战</a></li>
         <li><a href="#s6">与 O-RAN O1 的联系</a></li>
         <li><a href="#s7">工程陷阱</a></li>
+        <li><a href="#s8">面试题（12 道）</a>
+          <ol>
+            <li><a href="#s8-1">8.1 基础（必答）</a></li>
+            <li><a href="#s8-2">8.2 中级（区分熟练度）</a></li>
+            <li><a href="#s8-3">8.3 高级（体现深度）</a></li>
+          </ol>
+        </li>
       </ol>
     </nav>
   </aside>
@@ -64,7 +71,7 @@
       <p class="sub">上一篇讲了 NETCONF/YANG 是什么。这一篇落到工程：NETCONF 到底怎么跑起来？SSH 和 TLS 两种传输怎么选、证书怎么配、cert-to-name 是什么、candidate/commit 工作流如何用、以及在 O-RAN O1 场景里用 libnetconf2 实现一个 server/client 要注意什么。</p>
       <div class="meta-row">
         <span class="pill cyan">Module 07</span>
-        <span class="pill green">阅读 ~26 min</span>
+        <span class="pill green">阅读 ~95 min</span>
         <span class="pill red">工程向</span>
       </div>
     </header>
@@ -81,6 +88,113 @@
   </div>
 
   <div class="box star">对比 eCPRI（Module 05）的"薄封装 over 以太网"：NETCONF 是"厚封装"——多了 SSH/TLS + TCP。这不是浪费，而是<strong>管理面对可靠性/安全性的刚需</strong>。传输机制永远服务于业务特性：<strong>管理面要稳要安全 → TCP+TLS/SSH；用户面(前传)要快 → eCPRI/以太网。</strong></div>
+
+  <div class="box info"><strong>本篇的边界。</strong>NETCONF 的协议分层、操作语义与 YANG 语法在 <a href="netconf_yang.html">NETCONF / YANG</a> 里讲过了；NETCONF 与 RESTCONF / SNMP / gNMI 的横向取舍在 <a href="network_mgmt_comparison.html">管理协议对比</a>。这一篇只回答一个问题：<strong>把 NETCONF 真正跑起来、并且在几百上千台设备上跑稳，工程上要做哪些事、会撞上哪些墙。</strong>所以后面出现的都是库、命令、代码骨架、超时参数和故障现象。</div>
+
+  <h3 id="s1-1">一条会话的完整生命周期</h3>
+
+  <p>先把整条时间线摆出来。工程上 90% 的"连不上"问题，都能定位到下面这七步里的某一步——而每一步失败时看到的错误信息完全不同，这是排障能不能快的关键。</p>
+
+  <pre><span class="cm"># ── 一次 NETCONF over SSH 会话，从零到能下发配置 ─────────────</span>
+① TCP 三次握手           → 目标端口 830        失败：Connection refused / timeout
+② SSH 传输层握手         → 密钥交换、算法协商   失败：no matching key exchange method
+③ SSH 认证               → publickey / password 失败：Permission denied
+④ 打开 subsystem         → 名字固定为 "netconf" 失败：subsystem request failed
+⑤ 双方各发一条 &lt;hello&gt;   → 交换 capability     失败：会话建立后立刻被关
+⑥ N 条 &lt;rpc&gt; / &lt;rpc-reply&gt;（可穿插 &lt;notification&gt;）
+⑦ &lt;close-session&gt; 或 TCP 断开
+
+<span class="cm"># 关键点：①~④ 是纯 SSH 的事，NETCONF 一个字节都还没出现。</span>
+<span class="cm"># 所以 ①~④ 的问题不要去翻 NETCONF 日志，要去翻 sshd 的日志。</span></pre>
+
+  <div class="box tip">这条分界线值得单独记住：<strong>SSH 层的失败在 NETCONF 服务端往往是"无感"的</strong>——netopeer2 的日志里可能一行都没有，因为会话根本没有交到它手上。反过来，第 ⑤ 步之后的问题在 sshd 日志里也看不出名堂。<strong>先判断卡在哪一侧，再决定看哪份日志</strong>，比一上来就开 debug 级日志有效得多。</div>
+
+  <h3 id="s1-2">hello 与 capability：开场 5 毫秒决定后面能干什么</h3>
+
+  <p>会话建立后，<strong>双方各自无条件发出一条 <code>&lt;hello&gt;</code></strong>（不是请求-应答，是两条独立的单向消息），列出自己支持的能力集。服务端的 hello 里还多一个 <code>&lt;session-id&gt;</code>。</p>
+
+  <pre><span class="cm">&lt;!-- 客户端 → 服务端 --&gt;</span>
+&lt;hello xmlns=<span class="str">"urn:ietf:params:xml:ns:netconf:base:1.0"</span>&gt;
+  &lt;capabilities&gt;
+    &lt;capability&gt;urn:ietf:params:netconf:base:1.0&lt;/capability&gt;
+    &lt;capability&gt;urn:ietf:params:netconf:base:1.1&lt;/capability&gt;
+  &lt;/capabilities&gt;
+&lt;/hello&gt;]]&gt;]]&gt;
+
+<span class="cm">&lt;!-- 服务端 → 客户端（真实设备上这条常有几百行） --&gt;</span>
+&lt;hello xmlns=<span class="str">"urn:ietf:params:xml:ns:netconf:base:1.0"</span>&gt;
+  &lt;capabilities&gt;
+    &lt;capability&gt;urn:ietf:params:netconf:base:1.0&lt;/capability&gt;
+    &lt;capability&gt;urn:ietf:params:netconf:base:1.1&lt;/capability&gt;
+    &lt;capability&gt;urn:ietf:params:netconf:capability:candidate:1.0&lt;/capability&gt;
+    &lt;capability&gt;urn:ietf:params:netconf:capability:confirmed-commit:1.1&lt;/capability&gt;
+    &lt;capability&gt;urn:ietf:params:netconf:capability:validate:1.1&lt;/capability&gt;
+    &lt;capability&gt;urn:ietf:params:netconf:capability:notification:1.0&lt;/capability&gt;
+    &lt;capability&gt;urn:ietf:params:netconf:capability:interleave:1.0&lt;/capability&gt;
+    <span class="cm">&lt;!-- 随后是每一个已加载 YANG 模块的 URI，带 revision 与 features --&gt;</span>
+    &lt;capability&gt;http://example.com/yang/vendor-radio?module=vendor-radio&amp;amp;revision=2024-03-11&amp;amp;features=beamforming&lt;/capability&gt;
+  &lt;/capabilities&gt;
+  &lt;session-id&gt;41&lt;/session-id&gt;
+&lt;/hello&gt;]]&gt;]]&gt;</pre>
+
+  <p>这条消息在工程上有三重价值，很多人只用到第一重：</p>
+
+  <table>
+    <thead><tr><th>能力 URI（省略 <code>urn:ietf:params:netconf:</code> 前缀）</th><th>缺了它会怎样</th><th>客户端必须做的降级</th></tr></thead>
+    <tbody>
+      <tr><td><code>base:1.1</code></td><td>只能用 <code>]]&gt;]]&gt;</code> 分帧</td><td>不能发含该序列的内容；大消息更容易踩解析坑</td></tr>
+      <tr><td><code>capability:candidate:1.0</code></td><td><strong>没有草稿库</strong>，改一条生效一条</td><td>退化成"直接写 running"，必须自己保证顺序与幂等</td></tr>
+      <tr><td><code>capability:writable-running:1.0</code></td><td>running 只读</td><td>必须走 candidate；两者都没有基本无法配置</td></tr>
+      <tr><td><code>capability:validate:1.1</code></td><td>不能单独校验</td><td>只能靠 commit 自己报错，出错点更靠后</td></tr>
+      <tr><td><code>capability:confirmed-commit:1.1</code></td><td><strong>没有自动回滚护栏</strong></td><td>远程改网络配置前必须自己准备带外恢复手段</td></tr>
+      <tr><td><code>capability:rollback-on-error:1.0</code></td><td>edit-config 出错时可能"改了一半"</td><td>只能用 <code>stop-on-error</code> + 自己反向补偿</td></tr>
+      <tr><td><code>capability:startup:1.0</code></td><td>没有独立 startup 库</td><td>running 即持久，或需厂商私有 RPC 保存</td></tr>
+      <tr><td><code>capability:notification:1.0</code></td><td>收不到告警/事件</td><td>只能改成轮询（代价见第 06 章）</td></tr>
+      <tr><td><code>capability:interleave:1.0</code></td><td><strong>订阅后同一会话不能再发 RPC</strong></td><td>必须开第二条会话专门收通知</td></tr>
+      <tr><td><code>capability:xpath:1.0</code></td><td>过滤只能用 subtree</td><td>复杂条件要拉回本地过滤，流量放大</td></tr>
+      <tr><td><code>capability:with-defaults:1.0</code></td><td>不能控制默认值是否回显</td><td>两端对"缺省即默认"的理解可能不一致</td></tr>
+    </tbody>
+  </table>
+
+  <p>第二重价值是<strong>模块清单</strong>：hello 后半段列出的每一个 <code>?module=&amp;revision=&amp;features=</code> 就是这台设备的"能被配置什么"的完整声明。自动化脚本应该在连上的第一时间把它存档——设备升级后模块 revision 变了、某个 feature 被关掉了，都能靠比对这份清单立刻发现，而不是等某条 <code>edit-config</code> 被拒才知道。</p>
+
+  <p>第三重价值最容易被忽略：<strong>hello 是判断"服务端活着"的第一个也是最廉价的探针</strong>。TCP 通、SSH 认证过、subsystem 开了，但 hello 迟迟不来，说明服务端进程虽然在，但主循环卡住了（常见于上一条大 <code>edit-config</code> 的回调还没返回）。libnetconf2 为此有一个 <strong>hello 超时</strong>，默认量级是几十秒；把它调小到 5~10 秒，能让"服务端假死"这类故障从"客户端挂很久"变成"快速失败并重连"。</p>
+
+  <div class="box danger"><strong>capability 的存在不等于实现是对的。</strong>见过不止一次：设备宣告了 <code>confirmed-commit:1.1</code>，但超时后并不真的回滚；宣告了 <code>validate:1.1</code>，但 <code>&lt;validate&gt;</code> 只检查语法不检查 <code>must</code>/<code>leafref</code>。<strong>把每一条你依赖的 capability 在实验室里实测一遍，写进设备准入清单</strong>——尤其是那些"出事时才会被用到"的能力，因为它们在日常流程里永远不会被触发。</div>
+
+  <h3 id="s1-3">分帧：为什么会有两套，以及混用会怎样</h3>
+
+  <p>SSH 给的是<strong>无边界的字节流</strong>，而 NETCONF 是一条一条的 XML 消息。谁来告诉接收方"这条消息到此为止"？这就是 RFC 6242 的分帧（framing）要解决的问题，它给了两套机制。</p>
+
+  <div class="def"><strong>End-of-Message 分帧（base:1.0）</strong>：在每条消息后面追加特殊序列 <code>]]&gt;]]&gt;</code>。<strong>Chunked 分帧（base:1.1）</strong>：每条消息切成若干块，每块前面写明字节数，消息结束用 <code>\n##\n</code> 标记。</div>
+
+  <pre><span class="cm"># base:1.0 —— End-of-Message</span>
+&lt;rpc message-id="1" ...&gt;...&lt;/rpc&gt;]]&gt;]]&gt;
+
+<span class="cm"># base:1.1 —— Chunked（\n 是真实的换行符）</span>
+\n#<span class="num">312</span>\n
+&lt;rpc message-id="1" ...&gt;...(恰好 312 字节)...&lt;/rpc&gt;
+\n#<span class="num">57</span>\n
+...(再 57 字节)...
+\n##\n                       <span class="cm">← 消息结束</span></pre>
+
+  <p>为什么要换掉 <code>]]&gt;]]&gt;</code>？因为它<strong>是一个可能合法出现在 XML 内容里的序列</strong>——CDATA 段的结束标记就是 <code>]]&gt;</code>，而某些配置值（正则表达式、脚本片段、证书之外的 base64 变体、日志文本）也可能凑出这串字符。一旦出现，接收方会在消息中间误判结束，剩下的半截被当成下一条消息的开头，<strong>后果是会话从此永久错位</strong>：每条回复都对不上请求，而错误信息通常只是一句无头无脑的 "XML parse error"。chunked 分帧靠长度前缀，内容里出现什么字节都无所谓。</p>
+
+  <table>
+    <thead><tr><th>维度</th><th><code>]]&gt;]]&gt;</code>（base:1.0）</th><th>chunked（base:1.1）</th></tr></thead>
+    <tbody>
+      <tr><td>边界判定</td><td>扫描特殊序列</td><td>读长度前缀</td></tr>
+      <tr><td>内容透明性</td><td><strong>不透明</strong>：内容不能含该序列</td><td>完全透明</td></tr>
+      <tr><td>接收端能否预分配缓冲</td><td>不能，只能边收边找</td><td><strong>能</strong>，按 chunk 大小分配</td></tr>
+      <tr><td>能否边收边解析</td><td>可以但要处理跨界匹配</td><td>可以，天然按块</td></tr>
+      <tr><td>对超大消息的友好度</td><td>差：整条读完才知道多大</td><td>好：可以流式喂给 XML 解析器</td></tr>
+      <tr><td>协商条件</td><td>默认</td><td><strong>双方都宣告 base:1.1</strong> 才启用</td></tr>
+    </tbody>
+  </table>
+
+  <div class="box danger"><strong>唯一的例外：<code>&lt;hello&gt;</code> 本身永远用 <code>]]&gt;]]&gt;</code> 结束。</strong>逻辑上没有别的选择——分帧方式要靠 hello 协商出来，那么 hello 自己就不能用协商结果。自己手写客户端时这是最经典的坑：hello 发对了、后面的 rpc 用了 chunked，或者反过来 hello 用了 chunked，两种情况都会让对端在解析上直接卡死，而且<strong>因为对端也在等你的数据，表现是"连上了但什么都不发生"</strong>，比报错更难查。</div>
+
+  <p>还有一个量级问题：<strong>chunk 的大小上限允许到 2<sup>32</sup>-1 字节，但真实实现会有自己的消息大小上限</strong>。一次拉全量配置的 <code>&lt;get-config&gt;</code> 在一台配置饱满的设备上做到几 MB 到几十 MB 很正常，如果服务端的单消息上限设得比它小，你会拿到一个含糊的错误或者被直接断链。这就是第 07 章"大配置"那一节要处理的第一件事。</p>
 </section>
 
 <section class="chapter" id="s2">
@@ -98,6 +212,94 @@ netopeer2-cli
     <li><strong>认证方式</strong>：密码 或 SSH 公钥。生产环境优先公钥/证书，避免明文密码。</li>
     <li><strong>优点</strong>：部署简单、运维熟悉、默认选项。</li>
   </ul>
+
+  <h3 id="s2-1">subsystem 到底是什么机制</h3>
+
+  <p>这是理解 NETCONF over SSH 的关键，也是最常被跳过的一环。SSH 连上之后，客户端要告诉服务端"我这条通道要干什么"，一共三种请求：</p>
+
+  <table>
+    <thead><tr><th>SSH channel request</th><th>服务端做什么</th><th>典型用途</th></tr></thead>
+    <tbody>
+      <tr><td><code>shell</code></td><td>起一个交互式 shell，接上伪终端</td><td><code>ssh user@host</code> 登进去敲命令</td></tr>
+      <tr><td><code>exec</code></td><td>起一个进程执行指定命令行</td><td><code>ssh user@host "ls -l"</code></td></tr>
+      <tr><td><strong><code>subsystem</code></strong></td><td>按名字查表，起<strong>预先注册好</strong>的那个程序，<strong>不给伪终端</strong></td><td><code>sftp</code>、<code>netconf</code></td></tr>
+    </tbody>
+  </table>
+
+  <div class="def"><strong>SSH subsystem</strong>：一种"具名服务"机制。服务端在配置里把一个名字（如 <code>netconf</code>）绑定到一个处理程序，客户端用 <code>ssh -s host netconf</code> 按名字请求。它与 <code>exec</code> 的本质区别是<strong>名字由服务端定义、客户端无法指定任意命令行</strong>——这既是安全边界，也意味着"名字没注册就一定连不上"。</div>
+
+  <p>为什么 NETCONF 要用 subsystem 而不是 exec？三个理由，都很实际：</p>
+
+  <ul>
+    <li><strong>不分配伪终端（PTY）。</strong>PTY 会做行规程处理：把 <code>\n</code> 变成 <code>\r\n</code>、拦截 Ctrl-C、对某些字节做转义。XML 是二进制敏感的字节流，被 PTY 改一个字节整条消息就废了。subsystem 天然是裸管道。</li>
+    <li><strong>不经过登录 shell。</strong>不会执行 <code>.bashrc</code>，不会有欢迎横幅（banner）、<code>motd</code>、<code>fortune</code> 之类的输出混进流里。<strong>"某台设备的 NETCONF 连上就解析失败，别的设备都正常"，十有八九是它的 shell 启动脚本往 stdout 打了东西</strong>——这个坑在用 <code>exec</code> 自己拼命令行时几乎必踩。</li>
+    <li><strong>可以独立做授权。</strong>可以给一个账号只开 <code>netconf</code> subsystem、不开 shell，做到"能配置设备但登不进操作系统"。</li>
+  </ul>
+
+  <pre><span class="cm"># 服务端：OpenSSH 复用 22 端口时，在 sshd_config 里注册</span>
+Subsystem netconf /usr/bin/netopeer2-server-wrapper
+<span class="cm"># 更常见的做法是让 NETCONF 服务端自己监听 830，内置 SSH 服务器</span>
+<span class="cm">（netopeer2 走这条路，用 libssh 自己实现 SSH 服务端，不依赖 sshd）</span>
+
+<span class="cm"># 客户端：三种等价写法</span>
+ssh -s -p 830 admin@ru-device netconf          <span class="cm"># -s = 请求 subsystem</span>
+ssh -p 830 -N -o "Subsystem netconf" ...        <span class="cm"># 不常用</span>
+netopeer2-cli                                   <span class="cm"># 交互式，推荐调试用</span>
+
+<span class="cm"># 判断"是 SSH 的问题还是 NETCONF 的问题"的一条命令：</span>
+ssh -vvv -s -p 830 admin@ru-device netconf 2&gt;&amp;1 | tail -40
+<span class="cm">#   看到 "Requesting subsystem netconf" 之后立刻 exit → 名字没注册 / 账号无权限</span>
+<span class="cm">#   看到 &lt;hello ...&gt;]]&gt;]]&gt; 打出来        → SSH 侧完全正常，问题在 NETCONF 层</span></pre>
+
+  <div class="box tip"><strong>上面最后那条命令是本篇最值得记住的一行。</strong>它用纯 SSH 客户端把 NETCONF 会话的前五步走完，把 hello 原样打在屏幕上。能看到 hello，说明端口、认证、subsystem、服务端进程全部正常，剩下的问题一定在你的客户端代码或模型层——排障范围一下砍掉一半，而且不需要在设备上装任何工具。</div>
+
+  <h3 id="s2-2">端口 830 与复用 22 之争</h3>
+
+  <p>RFC 6242 给 NETCONF 分了独立端口 <strong>830</strong>，但也允许在 22 上跑（靠 subsystem 名字区分）。实践中怎么选：</p>
+
+  <table>
+    <thead><tr><th>方案</th><th>好处</th><th>代价</th><th>什么场景选它</th></tr></thead>
+    <tbody>
+      <tr><td><strong>独立 830</strong></td><td>防火墙/ACL 里能按端口区分管理流量；NETCONF 服务端进程独立，崩了不影响 SSH 登录；能单独限速、单独统计</td><td>多一个端口要在所有中间设备上放通</td><td><strong>网元设备的默认选择</strong>，O-RAN 场景基本都是它</td></tr>
+      <tr><td>复用 22</td><td>不用额外开洞；沿用现有 sshd 的认证与审计</td><td>NETCONF 与运维登录共享连接数与资源；<code>sshd</code> 重启会一起断；ACL 无法区分</td><td>通用服务器、已有严格端口管控的环境</td></tr>
+    </tbody>
+  </table>
+
+  <p>还有一个容易被忽略的差别：<strong>如果 NETCONF 服务端自带 SSH 实现（netopeer2 用 libssh），它和系统 sshd 是两套独立的算法策略、两套主机密钥、两套认证配置。</strong>安全扫描要求"禁用某个弱算法"时，改了 <code>/etc/ssh/sshd_config</code> 对 830 端口毫无作用——这是安全整改时反复出现的返工点。</p>
+
+  <h3 id="s2-3">认证：公钥、密码，以及主机密钥校验这件麻烦事</h3>
+
+  <p>客户端认证服务端、服务端认证客户端，是两个独立的方向，工程上难度完全不对称。</p>
+
+  <p><strong>服务端认客户端</strong>相对简单：公钥认证。把客户端公钥灌进设备的 <code>authorized_keys</code>（在 YANG 化的设备上是 <code>ietf-netconf-server</code> 或厂商模块里的一个 list）。<strong>密码认证在生产上应当关掉</strong>，理由不只是"明文"（SSH 里其实是加密的），而是密码没法做到"一机一密"，一旦泄露波及全网。</p>
+
+  <p><strong>客户端认服务端</strong>才是真麻烦：SSH 靠 <strong>主机密钥指纹</strong>（known_hosts），第一次连接时提示 "The authenticity of host ... can't be established"。在自动化场景里这一步没有人来点"yes"，于是几乎所有脚本都写成了：</p>
+
+  <pre><span class="cm"># ❌ 生产上最常见的一行错误代码</span>
+m = manager.connect(host=ip, port=830, username=u,
+                    hostkey_verify=<span class="lit">False</span>)   <span class="cm"># 等于关掉服务端身份校验</span>
+
+<span class="cm"># ✅ 预置 known_hosts：设备出厂/开站时把主机公钥录入资产库</span>
+ssh-keyscan -p 830 -t ed25519 ru-device &gt;&gt; ~/.ssh/known_hosts_netconf
+m = manager.connect(host=ip, port=830, username=u,
+                    key_filename=<span class="str">"/etc/smo/id_ed25519"</span>,
+                    hostkey_verify=<span class="lit">True</span>,
+                    device_params={<span class="str">'name'</span>: <span class="str">'default'</span>})</pre>
+
+  <div class="box danger"><code>hostkey_verify=False</code> 把 SSH 降级成"只加密不认证"：链路上的中间人可以完整地代理这条会话，读到你下发的每一条配置，还能篡改。<strong>它之所以到处都是，是因为不关它自动化就跑不起来</strong>——而"跑不起来"是立刻可见的，"能被中间人"是永远不可见的。这正是 O-RAN 前传 M 平面选择 TLS + 证书的直接动机：<strong>证书体系天然解决了"我怎么知道对面是不是那台设备"，而不需要为每台设备手工维护一条指纹记录。</strong></div>
+
+  <h3 id="s2-4">SSH 层的三个参数会直接决定运维体感</h3>
+
+  <table>
+    <thead><tr><th>参数</th><th>作用</th><th>配小了</th><th>配大了</th><th>建议量级</th></tr></thead>
+    <tbody>
+      <tr><td>TCP keepalive / SSH keepalive</td><td>探测对端是否还在</td><td>抖动时误断连</td><td><strong>设备重启后旧会话残留</strong>，占着锁不放</td><td>探测间隔 30~60 s，3 次失败判死</td></tr>
+      <tr><td>hello 超时</td><td>等对端 hello 的上限</td><td>慢启动设备连不上</td><td>服务端假死时客户端长时间挂住</td><td>5~15 s</td></tr>
+      <tr><td>会话空闲超时（idle timeout）</td><td>多久没消息就回收会话</td><td>长事务中途被踢</td><td>僵死会话堆积，吃满并发上限</td><td>看用途：长连接监控设 0/很大，脚本会话设 5~15 min</td></tr>
+    </tbody>
+  </table>
+
+  <p>"设备重启后旧会话残留"值得展开：<strong>TCP 连接的一端掉电时，另一端在没有数据要发的情况下是察觉不到的</strong>——它会一直以为连接还在。如果这条僵死会话上还锁着 candidate 库，那么设备重启回来后新会话去 <code>&lt;lock&gt;</code> 会被拒（服务端认为锁还被那个 session-id 持有），直到空闲超时把它清掉。<strong>这就是"设备刚重启完反而配不了"的典型成因</strong>，而它看起来完全不像一个网络问题。keepalive 与 idle timeout 就是用来给这个状态兜底的。</p>
 </section>
 
 <section class="chapter" id="s3">
@@ -112,6 +314,108 @@ netopeer2-cli
     <div class="card violet"><h4>SSH vs TLS 选择</h4><ul><li>SSH：运维简单、默认；适合传统网管</li><li>TLS+mTLS：证书体系、可扩展、自动化友好；O-RAN M 平面常用</li></ul></div>
   </div>
   <div class="box tip">证书/CA/mTLS 的原理见 <a href="tls_ssh_cert.html">TLS / SSH / Certificate</a>。这里只需记住：TLS 让"设备信任谁能管它"变成可用证书体系集中治理的问题，非常契合 O-RAN 多厂商、大规模场景。</div>
+
+  <h3 id="s3-1">RFC 7589 与 RFC 6242 的真正差别不在"换了个加密层"</h3>
+
+  <p>把两者并排看，会发现差别集中在<strong>身份是怎么建立的</strong>，而不是加密强度：</p>
+
+  <table>
+    <thead><tr><th>维度</th><th>NETCONF over SSH（RFC 6242）</th><th>NETCONF over TLS（RFC 7589）</th></tr></thead>
+    <tbody>
+      <tr><td>默认端口</td><td><strong>830</strong></td><td><strong>6513</strong></td></tr>
+      <tr><td>Call Home 端口</td><td>4334</td><td>4335</td></tr>
+      <tr><td>客户端身份</td><td>用户名 + 公钥/密码</td><td><strong>X.509 客户端证书（强制双向认证）</strong></td></tr>
+      <tr><td>服务端身份</td><td>主机公钥指纹，靠 <code>known_hosts</code> 逐台维护</td><td>服务端证书，靠 <strong>一个 CA</strong> 背书全网设备</td></tr>
+      <tr><td>身份 → 用户名</td><td>SSH 认证结果<strong>本身就是用户名</strong></td><td>需要一层 <strong>cert-to-name</strong> 映射</td></tr>
+      <tr><td>撤销机制</td><td>无标准机制：得逐台删 <code>authorized_keys</code></td><td><strong>CRL / OCSP</strong>，可集中撤销</td></tr>
+      <tr><td>轮换成本（N 台设备）</td><td>O(N)：每台都要动</td><td><strong>O(1) 改 CA 信任 + O(N) 换设备证书，但可自动化</strong></td></tr>
+      <tr><td>分帧</td><td colspan="2"><strong>完全相同</strong>：同样是 RFC 6242 定义的 <code>]]&gt;]]&gt;</code> / chunked</td></tr>
+      <tr><td>依赖系统时间</td><td>否</td><td><strong>是</strong>（证书有效期校验）</td></tr>
+    </tbody>
+  </table>
+
+  <p>最后两行是选型的实质。<strong>分帧完全一样</strong>，意味着上层的 NETCONF 代码一行都不用改，换传输只是换一个连接函数——这也是为什么"SSH 还是 TLS"应该被当成部署决策而不是架构决策。而<strong>"依赖系统时间"</strong>则是 TLS 引入的一个全新失败模式，第 07 章会专门讲它和 PTP 撞在一起时有多难查。</p>
+
+  <div class="card violet">
+    <h4>🏨 生活类比：门禁卡 vs 身份证</h4>
+    <p>SSH 公钥像<strong>一栋楼自己发的门禁卡</strong>：每栋楼的前台各自登记一份"谁的卡能进"。楼少的时候很好用；等你管一千栋楼，某个人离职要收回权限，你得跑一千个前台。TLS 证书像<strong>公安发的身份证</strong>：每栋楼只需要认"公安局的章"（信任 CA），谁能进由随身携带的证件说了算，作废也只要发一份挂失名单（CRL）。<strong>代价是你得先有一个公安局</strong>——PKI 的搭建与运营成本，正是 TLS 在小规模场景里显得笨重的原因。</p>
+  </div>
+
+  <h3 id="s3-2">cert-to-name：证书与 NACM 之间那道必须存在的胶水</h3>
+
+  <p>TLS 握手结束时，服务端手里只有一张证书。而 NETCONF 的访问控制（NACM，RFC 8341）是<strong>按用户名和用户组授权</strong>的：哪个组能读哪条 XPath、哪个组能调哪个 RPC。中间必须有人把证书翻译成用户名——这就是 cert-to-name。</p>
+
+  <p>标准做法来自 <code>ietf-x509-cert-to-name</code>（RFC 7407 定义的 grouping，被 <code>ietf-netconf-server</code> 复用）。它是一张<strong>按优先级排序的规则表</strong>，每条规则含三部分：证书指纹、映射方式、以及（部分方式下的）用户名模板。</p>
+
+  <table>
+    <thead><tr><th><code>map-type</code></th><th>用户名从哪儿来</th><th>适用场景与风险</th></tr></thead>
+    <tbody>
+      <tr><td><code>specified</code></td><td>规则里<strong>直接写死</strong>一个名字</td><td>最可控。适合"这张特定证书 = 这个账号"。缺点是换证书要改配置</td></tr>
+      <tr><td><code>san-dns-name</code></td><td>证书 SAN 扩展里的 DNS 名</td><td>SMO/EMS 侧常用，名字与主机名对齐；要求 SAN 里确实有</td></tr>
+      <tr><td><code>san-rfc822-name</code></td><td>SAN 里的邮件地址</td><td>人员证书场景</td></tr>
+      <tr><td><code>san-ip-address</code></td><td>SAN 里的 IP</td><td>IP 会变的环境慎用</td></tr>
+      <tr><td><code>san-any</code></td><td>SAN 里第一个可用项</td><td><strong>不推荐</strong>：谁被选中取决于证书里的排列顺序</td></tr>
+      <tr><td><code>common-name</code></td><td>Subject 的 CN 字段</td><td>兼容老 PKI；CN 的语义历史上很混乱，容易撞名</td></tr>
+    </tbody>
+  </table>
+
+  <pre><span class="cm">&lt;!-- 一条 cert-to-name 规则（结构示意，字段名以所用 YANG 模型版本为准） --&gt;</span>
+&lt;cert-to-name&gt;
+  &lt;id&gt;<span class="num">10</span>&lt;/id&gt;                        <span class="cm">&lt;!-- 优先级：数字小的先匹配 --&gt;</span>
+  &lt;fingerprint&gt;04:B1:9A:...:7C&lt;/fingerprint&gt;  <span class="cm">&lt;!-- 首字节是哈希算法标识 --&gt;</span>
+  &lt;map-type&gt;x509c2n:specified&lt;/map-type&gt;
+  &lt;name&gt;smo-operator&lt;/name&gt;             <span class="cm">&lt;!-- 映射结果，交给 NACM --&gt;</span>
+&lt;/cert-to-name&gt;
+&lt;cert-to-name&gt;
+  &lt;id&gt;<span class="num">20</span>&lt;/id&gt;
+  &lt;fingerprint&gt;<span class="cm">&lt;!-- 中间 CA 的指纹 --&gt;</span>&lt;/fingerprint&gt;
+  &lt;map-type&gt;x509c2n:san-dns-name&lt;/map-type&gt;  <span class="cm">&lt;!-- 用名换名，无需逐台登记 --&gt;</span>
+&lt;/cert-to-name&gt;</pre>
+
+  <p><strong>指纹字段可以填叶子证书的指纹，也可以填签发它的 CA 的指纹。</strong>这两种用法的规模化差别巨大：</p>
+
+  <ul>
+    <li>填<strong>叶子证书指纹</strong>：等价于白名单。每加一个客户端、每换一次证书，都要去每台设备上改配置——这就把 TLS 退化回了 SSH <code>authorized_keys</code> 的运维模型，白搭了 PKI。</li>
+    <li>填 <strong>CA 指纹 + <code>san-dns-name</code></strong>：任何由这个 CA 签发、SAN 里带合法名字的客户端都能自动落到对应用户上。<strong>新增一个网管节点不需要碰任何一台设备</strong>。这才是 TLS 在大规模场景下的价值所在。</li>
+  </ul>
+
+  <div class="box star">面试里这道题的分水岭在于能不能说清<strong>"为什么不能直接拿证书做授权"</strong>。答案是：NETCONF 的授权模型（NACM）早于、且独立于传输层，它认的是 <code>user-name</code> 与 <code>group</code>；如果让 TLS 层直接决定权限，就等于每套传输各自实现一份 ACL，SSH 一套、TLS 一套、Call Home 又一套。<strong>cert-to-name 的设计意图是"把所有传输的认证结果收敛成同一种身份表示"，从而让授权只写一遍。</strong>这是一个典型的"加一层间接解决 N×M 问题"的工程决策。</div>
+
+  <h3 id="s3-3">O-RAN 前传 M 平面为什么偏好 TLS + 双向认证</h3>
+
+  <p>把前传的场景条件列出来，结论几乎是被逼出来的：</p>
+
+  <table>
+    <thead><tr><th>前传场景的现实条件</th><th>它对管理通道提出的要求</th><th>SSH 能满足吗</th></tr></thead>
+    <tbody>
+      <tr><td>一个网络里几百到几千台 O-RU，还在持续新增</td><td>新设备接入不能要求逐台手工登记</td><td><strong>不能</strong>：<code>known_hosts</code> 与 <code>authorized_keys</code> 都是 O(N)</td></tr>
+      <tr><td>多厂商混合组网</td><td>信任关系要能跨厂商统一治理</td><td>不能：各家密钥管理方式不同</td></tr>
+      <tr><td>O-RU 装在杆上、楼顶、室内分布点，<strong>物理不可信</strong></td><td>设备被拆走后必须能远程作废其身份</td><td><strong>不能</strong>：没有撤销机制</td></tr>
+      <tr><td>拿到 M 平面 = 能改载波、能刷软件</td><td>必须双向强认证 + 可审计</td><td>可以，但服务端认证实践中常被关掉</td></tr>
+      <tr><td>O-RU 上电后主动找网管（Call Home）</td><td>"主动连出去"时更要确认对面是真网管</td><td>不能：设备侧维护网管指纹同样是 O(N)</td></tr>
+    </tbody>
+  </table>
+
+  <p>第三行是最硬的一条。<strong>O-RU 的物理安全性远低于机房设备</strong>——它就挂在外面。一台被拆走的 O-RU，里面的私钥就在攻击者手上；如果用的是 SSH 公钥模型，你没有任何标准手段让全网"忘掉"这把钥匙，只能挨台去删。而证书体系里，把它的序列号加进 CRL 就完事了。</p>
+
+  <div class="box danger"><strong>但 CRL/OCSP 在嵌入式设备上是有代价的，别想当然。</strong>O-RU 要校验客户端证书是否被撤销，就得能拿到 CRL——而 CRL 分发点通常是一个 HTTP URL，这要求 O-RU 在<strong>还没被纳管、可能还没有完整路由</strong>的时候就能访问外网，这在前传隔离网里常常不成立。现实中的折中有三种：① 把 CRL 通过 M 平面自身下发（先信任、后收紧）；② 用<strong>短有效期证书</strong>（几天到几周）代替撤销，靠自动续签兜底；③ 只校验证书链与有效期，撤销靠改设备上的 truststore。<strong>三种都不完美，选哪种要在设计阶段定，不要留给现场。</strong></div>
+
+  <h3 id="s3-4">证书的生命周期才是长期运维成本的大头</h3>
+
+  <p>TLS 上线那天最顺利，第 365 天最痛苦。把生命周期上的事提前想清楚：</p>
+
+  <table>
+    <thead><tr><th>阶段</th><th>要解决的问题</th><th>常见做法</th><th>典型坑</th></tr></thead>
+    <tbody>
+      <tr><td>初始信任（bootstrap）</td><td>空白设备凭什么信任你的 CA</td><td>出厂预置厂商 IDevID 证书 + 运营商 CA；或产线灌装</td><td>IDevID 由厂商 CA 签，运营商必须愿意信任厂商 CA</td></tr>
+      <tr><td>签发</td><td>给设备发运营商域的工作证书</td><td>纳管流程里通过 M 平面下发（先用 IDevID 建通道）</td><td>私钥应当在设备内生成、只把 CSR 送出去</td></tr>
+      <tr><td>续签</td><td>到期前自动换新</td><td>剩余寿命低于阈值时自动触发</td><td><strong>阈值太短</strong>：设备离线一周回来就已过期</td></tr>
+      <tr><td>撤销</td><td>设备丢失/退网</td><td>CRL / OCSP / 短周期证书</td><td>见上一条 danger</td></tr>
+      <tr><td>CA 轮换</td><td>根 CA 到期或私钥泄露</td><td>交叉签名、双 truststore 并存过渡</td><td><strong>没做过渡期就切换 = 全网失联</strong></td></tr>
+    </tbody>
+  </table>
+
+  <p>其中"CA 轮换"是最容易被推迟到不可收拾的一件事。根 CA 的有效期通常十年二十年，上线时没人会去想；但一旦发生私钥泄露或算法淘汰，就得在<strong>不能通过管理面登录设备</strong>的前提下更换设备信任的 CA——这是个鸡生蛋问题。<strong>唯一的解法是从第一天起就让 truststore 支持"同时信任多个 CA"，并且把"往 truststore 里加一个 CA"做成一个例行可执行的操作</strong>，而不是等到需要时才发现流程根本不存在。</p>
 </section>
 
 <section class="chapter" id="s4">
@@ -172,12 +476,333 @@ netopeer2-cli
   </div>
 
   <div class="box star"><strong>confirmed-commit（保命技能）</strong>：<code>&lt;commit&gt;</code> 带 confirmed + timeout，若在超时内没收到二次确认，设备<strong>自动回滚</strong>到提交前状态。远程改 O-RU 网络配置时若不慎把自己"配失联"，它能自动救回——这是运维远端设备的必备护栏。</div>
+
+  <h3 id="s4-1">五步链路的完整报文</h3>
+
+  <p>上面五步每一步的实际报文长这样。注意 <code>message-id</code> 是客户端自己维护的、单调递增的编号，<strong>回复靠它对上请求</strong>——这是 NETCONF 允许在一条会话上并发发多个 RPC（pipelining）的基础。</p>
+
+  <pre><span class="cm">&lt;!-- ① 锁 candidate。锁的粒度是"整个 datastore"，不是某个子树 --&gt;</span>
+&lt;rpc message-id="101" xmlns="urn:ietf:params:xml:ns:netconf:base:1.0"&gt;
+  &lt;lock&gt;&lt;target&gt;&lt;candidate/&gt;&lt;/target&gt;&lt;/lock&gt;
+&lt;/rpc&gt;
+
+<span class="cm">&lt;!-- ② 写草稿。default-operation 与 error-option 是两个必须显式指定的参数 --&gt;</span>
+&lt;rpc message-id="102" xmlns="urn:ietf:params:xml:ns:netconf:base:1.0"&gt;
+  &lt;edit-config&gt;
+    &lt;target&gt;&lt;candidate/&gt;&lt;/target&gt;
+    &lt;default-operation&gt;merge&lt;/default-operation&gt;
+    &lt;error-option&gt;rollback-on-error&lt;/error-option&gt;
+    &lt;config&gt;
+      &lt;interfaces xmlns="urn:ietf:params:xml:ns:yang:ietf-interfaces"&gt;
+        &lt;interface&gt;
+          &lt;name&gt;eth0&lt;/name&gt;
+          &lt;mtu nc:operation="replace"
+               xmlns:nc="urn:ietf:params:xml:ns:netconf:base:1.0"&gt;9000&lt;/mtu&gt;
+        &lt;/interface&gt;
+      &lt;/interfaces&gt;
+    &lt;/config&gt;
+  &lt;/edit-config&gt;
+&lt;/rpc&gt;
+
+<span class="cm">&lt;!-- ③ 校验：跑一遍 must / when / leafref / unique，但不生效 --&gt;</span>
+&lt;rpc message-id="103" ...&gt;&lt;validate&gt;&lt;source&gt;&lt;candidate/&gt;&lt;/source&gt;&lt;/validate&gt;&lt;/rpc&gt;
+
+<span class="cm">&lt;!-- ④ 带确认的提交：600 秒内没有二次 commit 就自动回滚 --&gt;</span>
+&lt;rpc message-id="104" ...&gt;
+  &lt;commit&gt;
+    &lt;confirmed/&gt;
+    &lt;confirm-timeout&gt;600&lt;/confirm-timeout&gt;
+    &lt;persist&gt;batch-2026-0904-A&lt;/persist&gt;   <span class="cm">&lt;!-- 允许换一条会话来确认 --&gt;</span>
+  &lt;/commit&gt;
+&lt;/rpc&gt;
+
+<span class="cm">&lt;!-- ④' 业务验证通过后，二次提交确认（不带 confirmed） --&gt;</span>
+&lt;rpc message-id="105" ...&gt;&lt;commit&gt;&lt;persist-id&gt;batch-2026-0904-A&lt;/persist-id&gt;&lt;/commit&gt;&lt;/rpc&gt;
+
+<span class="cm">&lt;!-- ⑤ 解锁 --&gt;</span>
+&lt;rpc message-id="106" ...&gt;&lt;unlock&gt;&lt;target&gt;&lt;candidate/&gt;&lt;/target&gt;&lt;/unlock&gt;&lt;/rpc&gt;</pre>
+
+  <h3 id="s4-2">两个被默认值坑过很多人的参数</h3>
+
+  <p><code>&lt;edit-config&gt;</code> 上有两个参数，不写就走默认值，而<strong>默认值在批量场景下几乎总是错的</strong>。</p>
+
+  <table>
+    <thead><tr><th>参数</th><th>取值</th><th>含义</th><th>什么时候用</th></tr></thead>
+    <tbody>
+      <tr><td rowspan="3"><code>default-operation</code><br>（默认 <code>merge</code>）</td><td><code>merge</code></td><td>把发过来的树<strong>合并</strong>进目标库，没提到的保持不变</td><td>增量修改，绝大多数场景</td></tr>
+      <tr><td><code>replace</code></td><td>发过来的树<strong>整体替换</strong>对应子树，没提到的<strong>被删</strong></td><td>"我要把这个设备配成完全这个样子"的声明式下发</td></tr>
+      <tr><td><code>none</code></td><td>不做隐式操作，<strong>只执行显式标了 <code>operation</code> 的节点</strong></td><td><strong>精确删除</strong>：想删一项时必须用它，否则父节点会被 merge 出来</td></tr>
+      <tr><td rowspan="3"><code>error-option</code><br>（默认 <code>stop-on-error</code>）</td><td><code>stop-on-error</code></td><td>遇错停下，<strong>已经改的部分留在 candidate 里</strong></td><td>单条修改；批量时是灾难</td></tr>
+      <tr><td><code>continue-on-error</code></td><td>跳过错的继续做</td><td>几乎不该用：结果不可预测</td></tr>
+      <tr><td><strong><code>rollback-on-error</code></strong></td><td>任一处出错<strong>整条 edit-config 全部撤回</strong></td><td><strong>批量下发的唯一正确选择</strong>（需 <code>rollback-on-error:1.0</code> 能力）</td></tr>
+    </tbody>
+  </table>
+
+  <div class="box danger">默认组合 <code>merge</code> + <code>stop-on-error</code> 的后果是：一条包含 200 个节点的 <code>edit-config</code>，在第 137 个节点上因为一个 <code>must</code> 约束失败，<strong>前 136 个改动留在了 candidate 里</strong>。如果这时候有人（或你的重试逻辑）执行了 <code>&lt;commit&gt;</code>，设备就进入了一个"配了一部分"的状态——而这个状态从任何一份配置文件里都推导不出来。<strong>所以批量脚本里 <code>error-option</code> 必须显式写 <code>rollback-on-error</code>，并且失败路径上必须 <code>&lt;discard-changes&gt;</code>。</strong></div>
+
+  <p>还有一个不在参数里、但同样重要的动作：<strong>拿到 candidate 锁之后的第一件事应该是 <code>&lt;discard-changes&gt;</code></strong>。candidate 是<strong>全局共享的一份草稿</strong>，不是"你这条会话的草稿"。上一个客户端异常退出、锁被超时释放，它留在 candidate 里的半截改动会原封不动地等着——你 commit 的时候会把别人的半成品一起提交上去。</p>
+
+  <h3 id="s4-3">confirmed-commit：不只是"超时回滚"</h3>
+
+  <p>confirmed-commit 的完整语义比大多数人以为的丰富。RFC 4741/6241 定义的 <code>:confirmed-commit:1.1</code> 里有三件事值得单独讲：</p>
+
+  <div class="grid-2">
+    <div class="card accent"><h4><code>&lt;persist&gt;</code> / <code>&lt;persist-id&gt;</code></h4><p>不带 <code>persist</code> 时，<strong>发起 confirmed-commit 的那条会话一断，立刻触发回滚</strong>——不等超时。这在"改网络配置把自己配断"的场景下正是想要的。但如果你是想改完之后<strong>换一条会话</strong>来确认（比如让另一个流程去做业务验证），就必须带 <code>persist</code> 起个名字，确认时用 <code>persist-id</code> 认领。</p></div>
+    <div class="card violet"><h4>可以续期，也可以主动放弃</h4><p>超时内再发一条带 <code>&lt;confirmed/&gt;</code> 的 commit，会<strong>刷新超时计时器</strong>而不是确认——适合验证时间不确定的场景，每 5 分钟续一次。想立刻回滚不必等超时，直接 <code>&lt;cancel-commit&gt;</code>。</p></div>
+  </div>
+
+  <p>超时时间怎么定？这是个被低估的决策：</p>
+
+  <table>
+    <thead><tr><th>场景</th><th>建议超时</th><th>理由</th></tr></thead>
+    <tbody>
+      <tr><td>改管理网 IP / VLAN / 路由</td><td>60~120 s</td><td>连通性验证很快就有结论；配断了要尽快回来</td></tr>
+      <tr><td>改载波/射频参数</td><td>300~600 s</td><td>需要等小区重建、UE 重新接入才能判断好坏</td></tr>
+      <tr><td>批量下发（几十台）</td><td>600~1800 s + <code>persist</code></td><td>要等整批都下完再统一确认，否则先做的等不及后做的</td></tr>
+    </tbody>
+  </table>
+
+  <div class="box danger"><strong>confirmed-commit 回滚的是配置，不是世界。</strong>它把 running 恢复到提交前的内容，但<strong>你的应用因为那次配置已经做过的副作用不会撤销</strong>：重启过的进程不会回到重启前、发出去的告警不会收回、写进外部数据库的记录还在。所以订阅回调（第 05 章）里做的事情必须是<strong>可重入、可反向执行</strong>的——sysrepo 之所以专门给一个 <code>ABORT</code> 事件，就是为了让你有地方写这段撤销逻辑。</div>
+
+  <h3 id="s4-4">并发变更：三种冲突与各自的处理</h3>
+
+  <p>真实系统里同时想改一台设备的往往不止一个：SMO 的编排流程、值班工程师的手工操作、自动优化算法、以及厂商的巡检脚本。冲突分三类，处理方式完全不同。</p>
+
+  <table>
+    <thead><tr><th>冲突类型</th><th>表现</th><th>NETCONF 提供的手段</th><th>正确处理</th></tr></thead>
+    <tbody>
+      <tr><td><strong>① 抢锁</strong></td><td><code>&lt;lock&gt;</code> 返回 <code>lock-denied</code>，<code>error-info</code> 里带持锁的 <code>session-id</code></td><td><code>&lt;lock&gt;</code> 的原子性</td><td><strong>带抖动的退避重试</strong>；重试若干次后上报人工，<strong>不要无限等</strong></td></tr>
+      <tr><td><strong>② 覆盖（lost update）</strong></td><td>A 读了配置、算出改动、写回；期间 B 改过同一处，A 的写把 B 覆盖了</td><td>无内建乐观锁</td><td>用 <code>merge</code> + <strong>只写自己负责的最小子树</strong>；或读取时记下关键值，写时用 <code>test-option=test-then-set</code> 前先复核</td></tr>
+      <tr><td><strong>③ 语义冲突</strong></td><td>两边各自合法，合起来违反 <code>must</code>/<code>unique</code>（如两个流程各分配了同一个 VLAN）</td><td><code>&lt;validate&gt;</code> 与 commit 时的模型校验</td><td><strong>把分配类资源收敛到单一权威</strong>（SMO 侧的资源池），设备侧校验只当最后一道网</td></tr>
+    </tbody>
+  </table>
+
+  <p>关于 ① 有个反直觉的建议：<strong>不要为了"稳"而把锁的持有时间拉长。</strong>锁的作用范围是整个 candidate 库，持锁期间别人一条配置都下不了。一个持锁 10 分钟做业务验证的流程，会让同一台设备上所有其它自动化全部超时失败，而它们的日志里只会写"lock-denied"，没人知道是谁占着。<strong>正确做法是：锁只覆盖 edit + validate + commit 这几秒，验证放在 commit 之后、靠 confirmed-commit 兜底。</strong></p>
+
+  <pre><span class="cm"># 一个健壮的加锁重试（伪码，量级参数是实测出来的经验值）</span>
+<span class="kw">for</span> attempt <span class="kw">in</span> range(<span class="num">5</span>):
+    <span class="kw">try</span>:
+        m.lock(<span class="str">'candidate'</span>)
+        <span class="kw">break</span>
+    <span class="kw">except</span> RPCError <span class="kw">as</span> e:
+        <span class="kw">if</span> e.tag != <span class="str">'lock-denied'</span>:
+            <span class="kw">raise</span>                       <span class="cm"># 别的错误不该重试</span>
+        holder = e.info                       <span class="cm"># 里面有 session-id，记进日志</span>
+        time.sleep(min(<span class="num">2</span> ** attempt, <span class="num">16</span>) * (<span class="num">0.5</span> + random.random()))
+<span class="kw">else</span>:
+    <span class="kw">raise</span> Timeout(<span class="str">f"candidate 被 session {holder} 长期占用，需人工介入"</span>)</pre>
+
+  <div class="box tip"><strong>抖动（jitter）那一项不是装饰。</strong>SMO 对一批设备并行下发时，如果每个 worker 都用同样的退避序列，它们会在同一时刻一起重试、一起失败、再一起重试——形成稳定的活锁。乘一个 <code>0.5 + random()</code> 的随机因子就能把它们打散。这个坑在单机测试时永远不出现，只在规模上去之后出现。</div>
+
+  <h3 id="s4-5">没有 candidate 的设备怎么办</h3>
+
+  <p>不是所有设备都支持 candidate——尤其是资源受限的嵌入式设备，可能只宣告 <code>:writable-running:1.0</code>。这时候上面那条链路要退化：</p>
+
+  <table>
+    <thead><tr><th></th><th>有 candidate</th><th>只有 writable-running</th></tr></thead>
+    <tbody>
+      <tr><td>原子性</td><td>整批 commit 一起生效</td><td><strong>每条 edit-config 内部原子，批次之间不原子</strong></td></tr>
+      <tr><td>失败回退</td><td><code>discard-changes</code>，零成本</td><td>必须自己发反向 edit-config 补偿</td></tr>
+      <tr><td>护栏</td><td>confirmed-commit 自动回滚</td><td><strong>没有</strong>；只能靠外部看门狗 + 带外通道</td></tr>
+      <tr><td>并发保护</td><td>lock candidate</td><td>lock running（代价更大：锁住的是生效配置）</td></tr>
+      <tr><td>工程建议</td><td>照标准五步走</td><td><strong>把一次变更压进一条 <code>edit-config</code></strong>，靠 <code>rollback-on-error</code> 拿到批内原子性</td></tr>
+    </tbody>
+  </table>
+
+  <p>最后一行是关键技巧：<strong>在没有 candidate 的设备上，"一条 edit-config" 就是你能拿到的最大事务边界。</strong>所以要把本该分成五条的改动拼成一条大的，宁可 XML 长一点，也不要拆成多条——拆开就等于放弃了原子性。</p>
 </section>
 
 <section class="chapter" id="s5">
   <div class="ch-head"><div class="num">05</div><div class="t"><h2>libnetconf2 实战</h2><p class="sub">C 语言实现 NETCONF 的事实标准库</p></div></div>
 
   <div class="def"><strong>libnetconf2</strong>：CESNET 开源的 C 库，实现 NETCONF 客户端/服务端（配合 <strong>libyang</strong> 解析 YANG、<strong>sysrepo</strong> 做 datastore、<strong>netopeer2</strong> 做参考 server）。是 O-RAN O-RU/O-DU 上实现 NETCONF server 的常见选择。</div>
+
+  <h3 id="s5-1">四个组件，四件不同的事</h3>
+
+  <p>这套栈最值得先弄清的是<strong>职责边界</strong>。很多人把它们当成"一个大黑盒"，结果排障时不知道该看谁的日志、性能瓶颈也定位不到层。</p>
+
+  <div class="diag">
+    <svg viewBox="0 0 760 400" width="760" height="400" role="img" aria-label="Netopeer2 / libnetconf2 / sysrepo / libyang 四层分工图：从 SSH/TLS 会话、协议与分帧、datastore 与订阅、到 YANG 解析与校验，最下层是业务应用">
+      <g font-family="Inter, sans-serif" font-size="11" fill="var(--ps-text-dim)">
+        <text x="380" y="20" text-anchor="middle" fill="var(--ps-text-bright)" font-weight="700" font-size="13.5">一条 edit-config 从网口到业务代码，依次经过谁</text>
+
+        <rect x="40" y="40" width="220" height="46" rx="8" fill="color-mix(in srgb, var(--ps-accent) 16%, var(--ps-card))" stroke="var(--ps-accent)" stroke-width="1.5"/>
+        <text x="150" y="60" text-anchor="middle" fill="var(--ps-accent)" font-weight="700">NETCONF client</text>
+        <text x="150" y="77" text-anchor="middle" font-size="10">SMO / O-DU / ncclient 脚本</text>
+
+        <line x1="150" y1="86" x2="150" y2="118" stroke="var(--ps-text-dim)" stroke-width="1.5"/>
+        <text x="162" y="106" font-size="10">TCP 830 / 6513</text>
+
+        <rect x="40" y="118" width="680" height="52" rx="8" fill="color-mix(in srgb, var(--ps-purple) 15%, var(--ps-card))" stroke="var(--ps-purple)" stroke-width="1.5"/>
+        <text x="150" y="140" text-anchor="middle" fill="var(--ps-purple)" font-weight="700">libnetconf2</text>
+        <text x="150" y="157" text-anchor="middle" font-size="10">SSH/TLS 会话 · 分帧 · RPC 收发</text>
+        <text x="440" y="140" fill="var(--ps-text)" font-size="10.5">管"线"：监听端口、握手、认证、hello 协商、chunked 分帧、</text>
+        <text x="440" y="157" fill="var(--ps-text)" font-size="10.5">把字节流变成一个个 RPC 对象；不认识任何一个业务字段</text>
+
+        <rect x="40" y="182" width="680" height="52" rx="8" fill="color-mix(in srgb, var(--ps-green) 15%, var(--ps-card))" stroke="var(--ps-green)" stroke-width="1.5"/>
+        <text x="150" y="204" text-anchor="middle" fill="var(--ps-green)" font-weight="700">netopeer2-server</text>
+        <text x="150" y="221" text-anchor="middle" font-size="10">服务端框架 / RPC 分派</text>
+        <text x="440" y="204" fill="var(--ps-text)" font-size="10.5">管"骨架"：把 get-config / edit-config / lock / commit 这些标准</text>
+        <text x="440" y="221" fill="var(--ps-text)" font-size="10.5">RPC 翻译成 sysrepo 调用；实现 NACM；管理会话生命周期</text>
+
+        <rect x="40" y="246" width="680" height="52" rx="8" fill="color-mix(in srgb, var(--ps-yellow) 15%, var(--ps-card))" stroke="var(--ps-yellow)" stroke-width="1.5"/>
+        <text x="150" y="268" text-anchor="middle" fill="var(--ps-yellow)" font-weight="700">sysrepo</text>
+        <text x="150" y="285" text-anchor="middle" font-size="10">datastore · 订阅 · 两阶段提交</text>
+        <text x="440" y="268" fill="var(--ps-text)" font-size="10.5">管"状态"：running/candidate/startup/operational 的存储与差分，</text>
+        <text x="440" y="285" fill="var(--ps-text)" font-size="10.5">把变更按模块/XPath 分发给订阅者，驱动 CHANGE→DONE/ABORT</text>
+
+        <rect x="40" y="310" width="680" height="52" rx="8" fill="color-mix(in srgb, var(--ps-orange) 15%, var(--ps-card))" stroke="var(--ps-orange)" stroke-width="1.5"/>
+        <text x="150" y="332" text-anchor="middle" fill="var(--ps-orange)" font-weight="700">libyang</text>
+        <text x="150" y="349" text-anchor="middle" font-size="10">模型解析 · 数据树 · 校验</text>
+        <text x="440" y="332" fill="var(--ps-text)" font-size="10.5">管"规则"：编译 .yang、构造/校验数据树、执行 must/when/</text>
+        <text x="440" y="349" fill="var(--ps-text)" font-size="10.5">leafref/unique；上面三层全都建立在它的数据树之上</text>
+
+        <rect x="40" y="374" width="680" height="20" rx="5" fill="color-mix(in srgb, var(--ps-red) 14%, var(--ps-card))" stroke="var(--ps-red)" stroke-width="1.2"/>
+        <text x="380" y="388" text-anchor="middle" fill="var(--ps-red)" font-size="10.5" font-weight="700">你的业务应用：订阅感兴趣的子树，在回调里真正把配置作用到硬件</text>
+      </g>
+    </svg>
+  </div>
+
+  <table>
+    <thead><tr><th>组件</th><th>它<strong>负责</strong>什么</th><th>它<strong>不</strong>负责什么</th><th>出问题时的典型症状</th></tr></thead>
+    <tbody>
+      <tr><td><strong>libyang</strong></td><td>把 <code>.yang</code> 编译成 schema；构造、校验、序列化数据树</td><td>不碰网络、不碰存储</td><td>模块加载失败、<code>must</code> 校验报错、命名空间不匹配</td></tr>
+      <tr><td><strong>libnetconf2</strong></td><td>SSH/TLS 服务端与客户端、会话、分帧、RPC 编解码</td><td>不理解任何业务语义，不存数据</td><td>连不上、hello 超时、分帧解析错、会话数打满</td></tr>
+      <tr><td><strong>sysrepo</strong></td><td>datastore 存储与差分、订阅分发、两阶段提交、操作数据聚合</td><td>不做 SSH，不做 NACM</td><td>commit 卡住（某个订阅者不返回）、模块未安装、共享内存/权限问题</td></tr>
+      <tr><td><strong>netopeer2-server</strong></td><td>把标准 RPC 接到 sysrepo；NACM；会话管理；通知转发</td><td>不实现具体业务配置</td><td>RPC 返回 <code>access-denied</code>、<code>operation-not-supported</code></td></tr>
+      <tr><td><strong>你的应用</strong></td><td>订阅回调里把配置写进硬件；提供 operational 数据；产告警</td><td>—</td><td><strong>配置"提交成功"但硬件没变</strong>——回调里吞了错误</td></tr>
+    </tbody>
+  </table>
+
+  <div class="box star">这张分层表本身就是一道好面试题的答案。加分点是指出<strong>厂商自研栈几乎必然是同一个分层</strong>：不管用不用开源实现，"协议/会话层""事务/datastore 层""模型/校验层""业务生效层"这四件事都必须有人做，而且必须分开做。理由是它们的<strong>变化频率完全不同</strong>——协议层十年不动，模型层每个版本都在扩，业务层随硬件改。<strong>把它们糅在一起的实现，最终都会因为"改一个 YANG 字段要动网络代码"而重构。</strong></div>
+
+  <h3 id="s5-2">从零把服务端跑起来：模块安装与启动</h3>
+
+  <p>sysrepo 的核心概念是<strong>"模块要先安装到 datastore，才谈得上配置"</strong>。这一步没做，客户端连上后会发现设备上根本没有你的模块——hello 里不会宣告，<code>edit-config</code> 会被拒。</p>
+
+  <pre><span class="cm"># ── ① 安装 YANG 模块（-s 指定依赖的搜索目录） ──────────────</span>
+sysrepoctl -i ./yang/vendor-radio.yang -s ./yang -p 660
+sysrepoctl -i ./yang/o-ran-hardware.yang -s ./yang
+
+<span class="cm"># 打开某个 feature（模型里 if-feature 保护的分支默认是关的）</span>
+sysrepoctl -c vendor-radio --enable-feature beamforming
+
+<span class="cm"># 查看已安装模块与其状态（I=installed, N=implemented）</span>
+sysrepoctl -l | head -20
+
+<span class="cm"># 升级模块 revision：先卸后装会丢配置，用 -U 做原地升级</span>
+sysrepoctl -U ./yang/vendor-radio@2026-03-11.yang -s ./yang
+
+<span class="cm"># ── ② 灌入初始配置 ──────────────────────────────────────</span>
+sysrepocfg --import=init.xml -d startup -m vendor-radio -f xml
+sysrepocfg --copy-from=startup -d running -m vendor-radio
+
+<span class="cm"># 导出当前 running（排障时第一件事）</span>
+sysrepocfg -X -d running -m vendor-radio -f xml
+
+<span class="cm"># ── ③ 启动服务端 ───────────────────────────────────────</span>
+netopeer2-server -d -v3          <span class="cm"># -d 前台运行，-v3 debug 日志，调试用</span>
+netopeer2-server                  <span class="cm"># 生产：后台，日志走 syslog</span>
+
+<span class="cm"># 监听端口/主机密钥/认证方式在较新版本里由 ietf-netconf-server 模型配置，</span>
+<span class="cm"># 各发行版附带的初始化脚本名称不同，以所用版本的 README 为准。</span></pre>
+
+  <div class="box danger"><strong>模块升级不要用"卸载再安装"。</strong><code>sysrepoctl -u</code>（uninstall）会连同该模块在所有 datastore 里的配置数据一起删掉，重装后设备回到空配置——在现场设备上这等于一次业务中断。原地升级（<code>-U</code>）会尝试把旧数据迁移到新 revision，只有在模型做了不兼容变更时才会失败。<strong>软件包升级流程里必须显式区分这两条路径</strong>，这是 O-RU 远程升级最容易翻车的一处。</div>
+
+  <h3 id="s5-3">订阅配置变更：两阶段提交与那三个事件</h3>
+
+  <p>这是服务端实现里<strong>唯一真正需要你写代码</strong>的地方。sysrepo 的模型是：你声明关心哪个模块的哪棵子树，当有人 commit 时，sysrepo 会分阶段回调你。</p>
+
+  <div class="def"><strong>两阶段提交</strong>：sysrepo 先用 <code>CHANGE</code> 事件问所有订阅者"这份改动你能接受吗"，任何一个返回错误就整体作废，已经答应过的订阅者会收到 <code>ABORT</code> 让它们撤销；全部答应才发 <code>DONE</code>，此时改动已经写进 running，<strong>不能再拒绝</strong>。</div>
+
+  <table>
+    <thead><tr><th>事件</th><th>什么时候到</th><th>你在这里应该做什么</th><th>返回错误的后果</th></tr></thead>
+    <tbody>
+      <tr><td><code>SR_EV_UPDATE</code></td><td>校验之前</td><td>需要<strong>修改</strong>本次变更（补默认值、联动字段）时用；可以往 session 里写数据</td><td>整个变更失败</td></tr>
+      <tr><td><strong><code>SR_EV_CHANGE</code></strong></td><td>校验通过后、生效前</td><td><strong>只做检查与预留资源</strong>：参数合不合理、硬件当前状态允不允许、内存够不够</td><td><strong>整批回滚</strong>，客户端收到你填的 error message</td></tr>
+      <tr><td><strong><code>SR_EV_DONE</code></strong></td><td>已经写进 running 之后</td><td><strong>真正把配置作用到硬件</strong>；这里的失败无法阻止提交</td><td>无法回滚，只能自己产告警 / 触发自愈</td></tr>
+      <tr><td><code>SR_EV_ABORT</code></td><td>别人否决了本次变更</td><td><strong>释放你在 CHANGE 阶段预留的资源</strong></td><td>忽略</td></tr>
+      <tr><td><code>SR_EV_ENABLED</code></td><td>订阅刚建立时（带该选项）</td><td>拿到当前已有配置，做初始化同步</td><td>订阅失败</td></tr>
+    </tbody>
+  </table>
+
+  <p><strong>CHANGE 与 DONE 的分工是整套机制的核心，也是最常写错的地方。</strong>把"写硬件"放在 CHANGE 里，看起来能"失败就拒绝"，实际上是灾难：如果同一次 commit 涉及三个模块，你在 CHANGE 里已经改了硬件，而第三个模块的订阅者否决了，sysrepo 会告诉客户端"提交失败、配置未变更"——<strong>但你的硬件已经变了，软件配置与硬件状态从此分叉。</strong></p>
+
+  <pre><span class="cm">/* sysrepo 2.x 订阅骨架（1.x 回调签名没有 sub_id 参数） */</span>
+#include &lt;sysrepo.h&gt;
+
+<span class="kw">static</span> <span class="type">int</span> radio_change_cb(sr_session_ctx_t *sess, <span class="type">uint32_t</span> sub_id,
+                           <span class="kw">const</span> <span class="type">char</span> *module, <span class="kw">const</span> <span class="type">char</span> *xpath,
+                           sr_event_t event, <span class="type">uint32_t</span> request_id, <span class="type">void</span> *priv)
+{
+    sr_change_iter_t *it = NULL;
+    sr_change_oper_t op;
+    <span class="kw">const</span> <span class="kw">struct</span> lyd_node *node;
+    <span class="kw">const</span> <span class="type">char</span> *prev_val;
+    <span class="type">int</span> rc;
+
+    <span class="cm">/* 只在这两个阶段遍历差分；ABORT 走另一条撤销路径 */</span>
+    <span class="kw">if</span> (event != SR_EV_CHANGE &amp;&amp; event != SR_EV_DONE) {
+        <span class="kw">if</span> (event == SR_EV_ABORT) release_reserved(priv);
+        <span class="kw">return</span> SR_ERR_OK;
+    }
+
+    <span class="cm">/* "//." 表示这棵子树下的所有节点，含被删除的 */</span>
+    rc = sr_get_changes_iter(sess, <span class="str">"/vendor-radio:carriers//."</span>, &amp;it);
+    <span class="kw">if</span> (rc != SR_ERR_OK) <span class="kw">return</span> rc;
+
+    <span class="kw">while</span> (sr_get_change_tree_next(sess, it, &amp;op, &amp;node,
+                                  &amp;prev_val, NULL, NULL) == SR_ERR_OK) {
+        <span class="kw">if</span> (event == SR_EV_CHANGE) {
+            <span class="cm">/* 阶段一：只校验 + 预留，绝不碰硬件 */</span>
+            <span class="kw">if</span> (!carrier_params_acceptable(node)) {
+                sr_session_set_error_message(sess,
+                    <span class="str">"carrier %s: bandwidth exceeds RF capability"</span>,
+                    node_key(node));
+                sr_free_change_iter(it);
+                <span class="kw">return</span> SR_ERR_VALIDATION_FAILED;   <span class="cm">/* → 整批回滚 */</span>
+            }
+            reserve_dsp_resources(node);
+        } <span class="kw">else</span> {
+            <span class="cm">/* 阶段二：已成定局，把它作用到硬件 */</span>
+            <span class="kw">switch</span> (op) {
+            <span class="kw">case</span> SR_OP_CREATED:  hw_carrier_add(node);            <span class="kw">break</span>;
+            <span class="kw">case</span> SR_OP_MODIFIED: hw_carrier_update(node, prev_val); <span class="kw">break</span>;
+            <span class="kw">case</span> SR_OP_DELETED:  hw_carrier_del(node);            <span class="kw">break</span>;
+            <span class="kw">case</span> SR_OP_MOVED:    hw_carrier_reorder(node);        <span class="kw">break</span>;
+            }
+        }
+    }
+    sr_free_change_iter(it);
+    <span class="kw">return</span> SR_ERR_OK;
+}
+
+<span class="type">int</span> main(<span class="type">void</span>)
+{
+    sr_conn_ctx_t *conn;  sr_session_ctx_t *sess;  sr_subscription_ctx_t *sub = NULL;
+
+    sr_connect(<span class="num">0</span>, &amp;conn);
+    sr_session_start(conn, SR_DS_RUNNING, &amp;sess);
+
+    <span class="cm">/* SR_SUBSCR_ENABLED：订阅时先拿一遍当前配置，避免重启后与硬件不同步 */</span>
+    sr_module_change_subscribe(sess, <span class="str">"vendor-radio"</span>, <span class="str">"/vendor-radio:carriers"</span>,
+                               radio_change_cb, NULL, <span class="num">0</span>,
+                               SR_SUBSCR_ENABLED, &amp;sub);
+
+    <span class="cm">/* 提供 operational 数据（只读状态，如实测发射功率） */</span>
+    sr_oper_get_subscribe(sess, <span class="str">"vendor-radio"</span>, <span class="str">"/vendor-radio:carriers/carrier/measured-power"</span>,
+                          oper_power_cb, NULL, <span class="num">0</span>, &amp;sub);
+
+    <span class="kw">while</span> (!stop) pause();
+    sr_disconnect(conn);                       <span class="cm">/* 会一并释放 sub */</span>
+    <span class="kw">return</span> <span class="num">0</span>;
+}</pre>
+
+  <div class="box danger"><strong>回调是在 commit 的关键路径上同步执行的。</strong>你在回调里睡 30 秒，客户端的 <code>&lt;commit&gt;</code> 就阻塞 30 秒；你在回调里死锁，这台设备的所有配置操作从此全部超时——而客户端看到的只是一个笼统的 timeout，完全指不到你。<strong>硬性纪律：DONE 回调里只做"把参数塞进队列/写寄存器"这种确定性短操作，凡是可能长耗时的（等硬件锁定、重建小区、等外部服务）必须异步化，用 operational 数据或通知回报结果。</strong>sysrepo 有回调超时机制，超时后整批变更被判失败——量级是秒级，可配，别指望它很宽松。</div>
+
+  <p>关于订阅优先级（<code>sr_module_change_subscribe</code> 的 <code>priority</code> 参数）：同一模块多个订阅者时，<strong>数值大的先被回调</strong>。这在有依赖顺序的场景下必要，比如"先建端口、再建端口上的载波"。但要警惕：<strong>依赖优先级排序等于把模块间的耦合藏进了两个整数里</strong>，代码里看不出来。能靠模型的 <code>leafref</code>/<code>must</code> 表达的依赖就交给模型，实在不行再用 priority，并且在代码里写清楚为什么是这个数。</p>
+
+  <h3 id="s5-4">客户端骨架（C）</h3>
 
   <p>一个 NETCONF client 的骨架（示意，突出流程而非完整可编译）：</p>
 <pre><span class="cm">// 依赖 libyang + libnetconf2</span>
@@ -213,6 +838,180 @@ int main(void) {
     <li><strong>libnetconf2</strong> 负责 SSH/TLS 会话、RPC 收发、分帧。</li>
     <li>server 侧还要接 <strong>sysrepo</strong>（datastore + 订阅回调）：当 SMO 下发 edit-config，sysrepo 通知你的应用去真正生效配置。</li>
   </ul>
+
+  <h3 id="s5-5">Python 侧：ncclient 的一个完整可跑脚本</h3>
+
+  <p>自动化侧几乎没人手写 C 客户端。<code>ncclient</code>（Python）是事实标准，下面这段是<strong>把第 04 章那条完整链路真正实现出来</strong>的样子，可以直接改改地址跑：</p>
+
+  <pre><span class="cm">#!/usr/bin/env python3</span>
+<span class="cm"># pip install ncclient  (0.6+)</span>
+<span class="kw">import</span> random, sys, time
+<span class="kw">from</span> ncclient <span class="kw">import</span> manager
+<span class="kw">from</span> ncclient.operations <span class="kw">import</span> RPCError, TimeoutExpiredError
+
+HOST, PORT, USER, KEY = <span class="str">"ru-device"</span>, <span class="num">830</span>, <span class="str">"smo-operator"</span>, <span class="str">"/etc/smo/id_ed25519"</span>
+
+CFG = <span class="str">"""
+&lt;config xmlns="urn:ietf:params:xml:ns:netconf:base:1.0"&gt;
+  &lt;interfaces xmlns="urn:ietf:params:xml:ns:yang:ietf-interfaces"&gt;
+    &lt;interface&gt;
+      &lt;name&gt;eth0&lt;/name&gt;
+      &lt;type xmlns:ianaift="urn:ietf:params:xml:ns:yang:iana-if-type"
+            &gt;ianaift:ethernetCsmacd&lt;/type&gt;
+      &lt;mtu&gt;9000&lt;/mtu&gt;
+    &lt;/interface&gt;
+  &lt;/interfaces&gt;
+&lt;/config&gt;"""</span>
+
+
+<span class="kw">def</span> <span class="fn">acquire_lock</span>(m, target=<span class="str">"candidate"</span>, tries=<span class="num">5</span>):
+    <span class="kw">for</span> i <span class="kw">in</span> range(tries):
+        <span class="kw">try</span>:
+            m.lock(target)
+            <span class="kw">return</span>
+        <span class="kw">except</span> RPCError <span class="kw">as</span> e:
+            <span class="kw">if</span> e.tag != <span class="str">"lock-denied"</span>:
+                <span class="kw">raise</span>
+            time.sleep(min(<span class="num">2</span> ** i, <span class="num">16</span>) * (<span class="num">0.5</span> + random.random()))
+    <span class="kw">raise</span> RuntimeError(<span class="str">"candidate 长期被占用"</span>)
+
+
+<span class="kw">with</span> manager.connect(
+        host=HOST, port=PORT, username=USER, key_filename=KEY,
+        hostkey_verify=<span class="lit">True</span>,              <span class="cm"># 生产必须 True，见第 02 章</span>
+        device_params={<span class="str">"name"</span>: <span class="str">"default"</span>},  <span class="cm"># 标准 NETCONF 设备</span>
+        timeout=<span class="num">120</span>,                      <span class="cm"># 单条 RPC 的超时，不是连接超时</span>
+        allow_agent=<span class="lit">False</span>, look_for_keys=<span class="lit">False</span>) <span class="kw">as</span> m:
+
+    <span class="cm"># ── 0. 先看它到底支持什么，别假设 ──────────────────────</span>
+    caps = {c.split(<span class="str">"?"</span>)[<span class="num">0</span>] <span class="kw">for</span> c <span class="kw">in</span> m.server_capabilities}
+    has = <span class="kw">lambda</span> s: any(s <span class="kw">in</span> c <span class="kw">for</span> c <span class="kw">in</span> caps)
+    <span class="kw">if</span> <span class="kw">not</span> has(<span class="str">"candidate:1.0"</span>):
+        sys.exit(<span class="str">"该设备无 candidate，需走 writable-running 分支"</span>)
+    use_confirm = has(<span class="str">"confirmed-commit"</span>)
+
+    <span class="cm"># ── 1. 只读需要的子树，别整树拉 ────────────────────────</span>
+    flt = <span class="str">"""&lt;interfaces xmlns="urn:ietf:params:xml:ns:yang:ietf-interfaces"&gt;
+                 &lt;interface&gt;&lt;name&gt;eth0&lt;/name&gt;&lt;/interface&gt;&lt;/interfaces&gt;"""</span>
+    before = m.get_config(source=<span class="str">"running"</span>, filter=(<span class="str">"subtree"</span>, flt))
+
+    <span class="cm"># ── 2. 事务：锁 → 清残留 → 改 → 校验 → 提交 ────────────</span>
+    acquire_lock(m)
+    <span class="kw">try</span>:
+        m.discard_changes()               <span class="cm"># candidate 是全局共享的，先清干净</span>
+        m.edit_config(target=<span class="str">"candidate"</span>, config=CFG,
+                      default_operation=<span class="str">"merge"</span>,
+                      error_option=<span class="str">"rollback-on-error"</span>)
+        <span class="kw">if</span> has(<span class="str">"validate"</span>):
+            m.validate(source=<span class="str">"candidate"</span>)
+
+        <span class="kw">if</span> use_confirm:
+            m.commit(confirmed=<span class="lit">True</span>, timeout=<span class="str">"120"</span>,
+                     persist=<span class="str">"batch-A"</span>)          <span class="cm"># 允许换会话确认</span>
+        <span class="kw">else</span>:
+            m.commit()
+    <span class="kw">except</span> (RPCError, TimeoutExpiredError) <span class="kw">as</span> e:
+        m.discard_changes()               <span class="cm"># 失败路径必须清 candidate</span>
+        <span class="kw">raise</span>
+    <span class="kw">finally</span>:
+        m.unlock(<span class="str">"candidate"</span>)              <span class="cm"># 无论如何都要解锁</span>
+
+    <span class="cm"># ── 3. 业务验证：确认设备还活着、参数真的生效了 ────────</span>
+    after = m.get_config(source=<span class="str">"running"</span>, filter=(<span class="str">"subtree"</span>, flt))
+    ok = <span class="str">"&lt;mtu&gt;9000&lt;/mtu&gt;"</span> <span class="kw">in</span> str(after)
+
+    <span class="cm"># ── 4. 确认 or 让它自动回滚 ────────────────────────────</span>
+    <span class="kw">if</span> use_confirm:
+        <span class="kw">if</span> ok:
+            m.commit(persist_id=<span class="str">"batch-A"</span>)    <span class="cm"># 二次提交 = 落定</span>
+        <span class="kw">else</span>:
+            m.cancel_commit(persist_id=<span class="str">"batch-A"</span>)  <span class="cm"># 立刻回滚，不等超时</span>
+
+    <span class="cm"># ── 5. 需要掉电保持时才写 startup ─────────────────────</span>
+    <span class="kw">if</span> ok <span class="kw">and</span> has(<span class="str">"startup:1.0"</span>):
+        m.copy_config(source=<span class="str">"running"</span>, target=<span class="str">"startup"</span>)</pre>
+
+  <p>这段代码里有<strong>四个"看起来多余、其实必要"的地方</strong>，也是评审别人脚本时该重点看的：</p>
+
+  <table>
+    <thead><tr><th>写法</th><th>省掉它会怎样</th></tr></thead>
+    <tbody>
+      <tr><td>开头查 <code>server_capabilities</code></td><td>在不支持 candidate 的设备上，脚本会在 <code>lock</code> 那一步报一个含义模糊的错，而不是给出可读的原因</td></tr>
+      <tr><td>拿到锁后 <code>discard_changes()</code></td><td>把上一个异常退出的会话留在 candidate 里的半截改动一起提交上去</td></tr>
+      <tr><td><code>finally: unlock()</code></td><td>异常路径漏解锁，这台设备被挂住直到 idle timeout（可能是几十分钟）</td></tr>
+      <tr><td>失败时 <code>cancel_commit</code> 而不是干等</td><td>设备要多带着坏配置跑满整个 confirm-timeout，白白延长故障时间</td></tr>
+    </tbody>
+  </table>
+
+  <div class="box tip"><code>manager.connect()</code> 的 <code>timeout</code> 是<strong>单条 RPC 的等待上限</strong>，不是 TCP 连接超时。默认值（30 s 量级）对 <code>get-config</code> 拉全量或者对慢设备的 <code>commit</code> 常常不够，超时后 ncclient 抛异常、但<strong>设备那边可能还在老老实实地执行</strong>——于是脚本以为失败去重试，设备上就出现了两次同样的操作。这是第 07 章真实案例的直接成因之一。<strong>凡是可能长耗时的 RPC，宁可把 timeout 设大到 5~10 分钟，也不要让客户端先放弃。</strong></div>
+
+  <h3 id="s5-6">netopeer2-cli：手工调试的正确工具</h3>
+
+  <p>写脚本之前先用交互式客户端把流程走通一遍，能省掉大量"到底是我的代码不对还是设备不对"的时间。</p>
+
+  <pre>$ netopeer2-cli
+&gt; connect --host ru-device --port 830 --login smo-operator
+&gt; status                                  <span class="cm"># 看会话 id 与协商出的 capability</span>
+
+&gt; get-schema --model o-ran-uplane-conf     <span class="cm"># 直接从设备拉 YANG 源文件！</span>
+&gt; get-config --source running --filter-xpath /ietf-interfaces:interfaces
+&gt; get --filter-xpath /ietf-interfaces:interfaces-state   <span class="cm"># 含状态数据</span>
+
+&gt; lock --target candidate
+&gt; edit-config --target candidate --config=./mtu.xml --defop merge --error rollback
+&gt; validate --source candidate
+&gt; commit
+&gt; unlock --target candidate
+
+&gt; subscribe --stream NETCONF               <span class="cm"># 订阅通知，之后事件直接打屏</span>
+&gt; user-rpc --content=./vendor-rpc.xml      <span class="cm"># 调厂商私有 RPC</span>
+&gt; disconnect</pre>
+
+  <div class="box star"><code>get-schema</code> 是这里最被低估的一条命令。它来自 <strong>RFC 6022（ietf-netconf-monitoring）</strong>，作用是<strong>从设备上把它实际加载的那份 <code>.yang</code> 原文下载下来</strong>。为什么重要：文档里的模型、你本地仓库里的模型、设备上真正跑的模型，三者经常对不上——尤其是厂商做了 <code>deviation</code> 之后。<strong>"以设备为准"的唯一可靠办法就是把它自己的模型拉下来看</strong>。批量纳管时应该在首次连接后自动把全部 schema 拉下来存档，作为该设备的能力基线。</div>
+
+  <h3 id="s5-7">通知订阅：RFC 5277 的模型与它的两个限制</h3>
+
+  <p>NETCONF 的事件通知走 <strong>RFC 5277</strong>：客户端发一条 <code>&lt;create-subscription&gt;</code>，之后服务端在<strong>同一条会话</strong>上单向推送 <code>&lt;notification&gt;</code>，直到会话关闭。没有取消订阅的 RPC——想停就断会话。</p>
+
+  <pre><span class="cm">&lt;!-- 订阅：可选 stream / filter / startTime / stopTime --&gt;</span>
+&lt;rpc message-id="201" xmlns="urn:ietf:params:xml:ns:netconf:base:1.0"&gt;
+  &lt;create-subscription xmlns="urn:ietf:params:xml:ns:netconf:notification:1.0"&gt;
+    &lt;stream&gt;NETCONF&lt;/stream&gt;
+    &lt;filter type="subtree"&gt;
+      &lt;alarm-notif xmlns="urn:o-ran:fm:1.0"/&gt;   <span class="cm">&lt;!-- 命名空间以所用模型为准 --&gt;</span>
+    &lt;/filter&gt;
+    &lt;startTime&gt;2026-09-04T06:00:00Z&lt;/startTime&gt; <span class="cm">&lt;!-- 有 replay 才有效 --&gt;</span>
+  &lt;/create-subscription&gt;
+&lt;/rpc&gt;
+
+<span class="cm">&lt;!-- 之后服务端单向推送，注意它不是 rpc-reply，没有 message-id --&gt;</span>
+&lt;notification xmlns="urn:ietf:params:xml:ns:netconf:notification:1.0"&gt;
+  &lt;eventTime&gt;2026-09-04T06:14:22.371Z&lt;/eventTime&gt;
+  &lt;netconf-config-change xmlns="urn:ietf:params:xml:ns:yang:ietf-netconf-notifications"&gt;
+    &lt;changed-by&gt;&lt;username&gt;smo-operator&lt;/username&gt;&lt;session-id&gt;41&lt;/session-id&gt;&lt;/changed-by&gt;
+    &lt;datastore&gt;running&lt;/datastore&gt;
+    &lt;edit&gt;&lt;target&gt;/if:interfaces/if:interface[if:name='eth0']&lt;/target&gt;
+          &lt;operation&gt;merge&lt;/operation&gt;&lt;/edit&gt;
+  &lt;/netconf-config-change&gt;
+&lt;/notification&gt;</pre>
+
+  <pre><span class="cm"># Python 侧收通知（ncclient）</span>
+<span class="kw">with</span> manager.connect(host=HOST, port=<span class="num">830</span>, username=USER, key_filename=KEY,
+                     hostkey_verify=<span class="lit">True</span>) <span class="kw">as</span> m:
+    m.create_subscription(stream_name=<span class="str">"NETCONF"</span>)
+    <span class="kw">while</span> <span class="lit">True</span>:
+        n = m.take_notification(block=<span class="lit">True</span>, timeout=<span class="num">60</span>)
+        <span class="kw">if</span> n <span class="kw">is</span> <span class="lit">None</span>:
+            <span class="cm"># 60 秒静默：是真没事，还是连接已经悄悄死了？无法区分——</span>
+            <span class="cm"># 这正是需要独立心跳（O-RAN 用 supervision watchdog）的原因</span>
+            <span class="kw">continue</span>
+        handle(n.event_time, n.notification_xml)</pre>
+
+  <p>标准里有两个流是基本可以指望的：<strong><code>NETCONF</code></strong>（默认流，RFC 5277 规定必须存在）承载通用事件；<strong>RFC 6470</strong> 又在其上定义了一组基础通知——<code>netconf-config-change</code>（谁在什么时候改了哪条路径，<strong>这就是免费的配置审计日志</strong>）、<code>netconf-session-start</code>/<code>-end</code>、<code>netconf-capability-change</code>、<code>netconf-confirmed-commit</code>。厂商与 O-RAN 会另外定义自己的流。</p>
+
+  <p>能不能补收断连期间漏掉的事件，取决于设备是否支持 <strong>replay</strong>。查 <code>/netconf-state/streams</code> 里该流的 <code>replaySupport</code>，支持才可以用 <code>startTime</code> 回放。<strong>嵌入式设备上 replay 缓冲通常很小（几百到几千条），或者干脆不支持</strong>——所以不能把"通知一定不会丢"写进设计假设，恢复连接后必须有一次<strong>全量状态同步</strong>（重新 <code>&lt;get&gt;</code> 当前告警列表）来对齐。</p>
+
+  <div class="box danger"><strong><code>interleave</code> 能力决定了你要开几条会话。</strong>RFC 5277 规定：如果服务端不支持 <code>:interleave:1.0</code>，那么一条会话在 <code>create-subscription</code> 之后<strong>不能再发任何其它 RPC</strong>。很多嵌入式实现确实不支持。所以规模化架构里的标准做法是<strong>两条会话</strong>：一条长连接专门收通知，一条按需连接做配置——顺带还有个好处，配置会话卡住时不影响告警上报。</div>
 </section>
 
 <section class="chapter" id="s6">
@@ -234,6 +1033,135 @@ int main(void) {
   </div>
 
   <div class="note">所以"网络管理协议 NETCONF 为什么出现在无线 RAN 里"就完全说通了：O-RAN 把设备管理开放化，选用了成熟、结构化、可编程的 NETCONF/YANG 作为 O1 与前传 M 平面的管理协议。</div>
+
+  <h3 id="s6-1">先分清 O1 和前传 M 平面</h3>
+
+  <p>两者都用 NETCONF/YANG，但它们是<strong>不同的接口、不同的对端、不同的模型族</strong>，混为一谈会让后面所有讨论都错位。</p>
+
+  <table>
+    <thead><tr><th></th><th>O1 接口</th><th>前传 M 平面（Open Fronthaul M-Plane）</th></tr></thead>
+    <tbody>
+      <tr><td>两端是谁</td><td><strong>SMO ↔ O-CU / O-DU</strong>（以及 hybrid 下的 O-RU）</td><td><strong>O-DU 和/或 NMS ↔ O-RU</strong></td></tr>
+      <tr><td>规范归属</td><td>O-RAN WG10（O1 接口规范）</td><td>O-RAN WG4（M-Plane 规范）</td></tr>
+      <tr><td>模型族</td><td>3GPP NRM 相关 + <code>o-ran-*</code> 管理模型</td><td><code>o-ran-*</code> 前传设备模型</td></tr>
+      <tr><td>关注点</td><td>网元级：配置、FM、PM、软件、跟踪</td><td>设备级：射频、载波、eAxC、同步、时延窗、硬件</td></tr>
+      <tr><td>设备形态</td><td>通常是服务器/云化网元，资源充裕</td><td><strong>嵌入式，资源受限</strong>：CPU/内存/存储都紧</td></tr>
+    </tbody>
+  </table>
+
+  <p>"资源受限"这一行决定了 M 平面上所有工程决策的基调：<strong>O-RU 上的 NETCONF 服务端往往只能撑个位数的并发会话、单条消息有明确的大小上限、通知缓冲很小、XML 解析本身就是一笔可观的 CPU 开销。</strong>拿管服务器的思路去管 O-RU，几乎一定会撞墙。</p>
+
+  <h3 id="s6-2">hierarchical 与 hybrid：谁有权管 O-RU</h3>
+
+  <p>O-RAN WG4 定义了两种 M 平面架构模型，差别只有一件事：<strong>O-RU 上有几个 NETCONF client 连着。</strong></p>
+
+  <div class="diag">
+    <svg viewBox="0 0 760 260" width="760" height="260" role="img" aria-label="Hierarchical 与 Hybrid 两种 M 平面模型对比：Hierarchical 下只有 O-DU 直接管理 O-RU，Hybrid 下 O-DU 与 SMO/NMS 同时作为 NETCONF 客户端连接 O-RU">
+      <g font-family="Inter, sans-serif" font-size="11" fill="var(--ps-text-dim)">
+        <text x="190" y="20" text-anchor="middle" fill="var(--ps-accent)" font-weight="700" font-size="12.5">Hierarchical（分层）</text>
+        <text x="570" y="20" text-anchor="middle" fill="var(--ps-orange)" font-weight="700" font-size="12.5">Hybrid（混合）</text>
+        <line x1="380" y1="34" x2="380" y2="250" stroke="var(--ps-border)" stroke-dasharray="4 4"/>
+
+        <rect x="110" y="40" width="160" height="38" rx="7" fill="color-mix(in srgb, var(--ps-accent) 16%, var(--ps-card))" stroke="var(--ps-accent)" stroke-width="1.4"/>
+        <text x="190" y="64" text-anchor="middle" fill="var(--ps-accent)" font-weight="700">SMO / NMS</text>
+        <rect x="110" y="118" width="160" height="38" rx="7" fill="color-mix(in srgb, var(--ps-green) 16%, var(--ps-card))" stroke="var(--ps-green)" stroke-width="1.4"/>
+        <text x="190" y="142" text-anchor="middle" fill="var(--ps-green)" font-weight="700">O-DU（NETCONF client）</text>
+        <rect x="110" y="196" width="160" height="38" rx="7" fill="color-mix(in srgb, var(--ps-purple) 16%, var(--ps-card))" stroke="var(--ps-purple)" stroke-width="1.4"/>
+        <text x="190" y="220" text-anchor="middle" fill="var(--ps-purple)" font-weight="700">O-RU（NETCONF server）</text>
+        <line x1="190" y1="78" x2="190" y2="118" stroke="var(--ps-accent)" stroke-width="1.6"/>
+        <text x="200" y="102" font-size="9.5">O1</text>
+        <line x1="190" y1="156" x2="190" y2="196" stroke="var(--ps-green)" stroke-width="1.6"/>
+        <text x="200" y="180" font-size="9.5">M 平面（唯一入口）</text>
+        <text x="190" y="252" text-anchor="middle" font-size="10">O-RU 只认一个主人，责任边界清晰</text>
+
+        <rect x="480" y="40" width="180" height="38" rx="7" fill="color-mix(in srgb, var(--ps-accent) 16%, var(--ps-card))" stroke="var(--ps-accent)" stroke-width="1.4"/>
+        <text x="570" y="64" text-anchor="middle" fill="var(--ps-accent)" font-weight="700">SMO / NMS</text>
+        <rect x="430" y="118" width="140" height="38" rx="7" fill="color-mix(in srgb, var(--ps-green) 16%, var(--ps-card))" stroke="var(--ps-green)" stroke-width="1.4"/>
+        <text x="500" y="142" text-anchor="middle" fill="var(--ps-green)" font-weight="700">O-DU（client）</text>
+        <rect x="450" y="196" width="180" height="38" rx="7" fill="color-mix(in srgb, var(--ps-purple) 16%, var(--ps-card))" stroke="var(--ps-purple)" stroke-width="1.4"/>
+        <text x="540" y="220" text-anchor="middle" fill="var(--ps-purple)" font-weight="700">O-RU（NETCONF server）</text>
+        <line x1="530" y1="78" x2="500" y2="118" stroke="var(--ps-accent)" stroke-width="1.6"/>
+        <line x1="500" y1="156" x2="510" y2="196" stroke="var(--ps-green)" stroke-width="1.6"/>
+        <line x1="620" y1="78" x2="600" y2="196" stroke="var(--ps-orange)" stroke-width="1.6" stroke-dasharray="5 3"/>
+        <text x="640" y="140" font-size="9.5" fill="var(--ps-orange)">直连 M 平面</text>
+        <text x="570" y="252" text-anchor="middle" font-size="10">两个 client 并存，必须靠 NACM 划分权限</text>
+      </g>
+    </svg>
+  </div>
+
+  <table>
+    <thead><tr><th></th><th>Hierarchical</th><th>Hybrid</th></tr></thead>
+    <tbody>
+      <tr><td>谁连 O-RU</td><td><strong>只有 O-DU</strong></td><td><strong>O-DU 与 SMO/NMS 同时连</strong></td></tr>
+      <tr><td>SMO 想管 O-RU</td><td>只能经 O-DU 代理</td><td>可以直连</td></tr>
+      <tr><td>责任边界</td><td>清晰：O-RU 的一切由 O-DU 负责</td><td><strong>模糊：两个 client 可能改同一份配置</strong></td></tr>
+      <tr><td>软件升级、证书轮换等"设备级"操作</td><td>要 O-DU 厂商配合实现代理</td><td><strong>SMO 可直接做，不依赖 O-DU 厂商</strong></td></tr>
+      <tr><td>多厂商解耦程度</td><td>较低：O-DU 必须理解 O-RU 的全部模型</td><td>较高</td></tr>
+      <tr><td>关键工程要求</td><td>O-DU 侧要实现一个完整的 NETCONF client</td><td><strong>NACM 必须把两个 client 的可写范围切开</strong></td></tr>
+    </tbody>
+  </table>
+
+  <div class="box danger">Hybrid 模型下最容易出的事故是<strong>两个 client 争 candidate 锁</strong>，或者更糟——各自 <code>merge</code> 了对方不知道的字段，谁后提交谁生效。O-RU 的 candidate 是全局一份，它<strong>分不清"这是 O-DU 的草稿"和"这是 SMO 的草稿"</strong>。所以选 hybrid 时必须在设计阶段就把职责切干净：典型划法是<strong>"C/U 面相关的配置归 O-DU，设备级的（软件、证书、日志、硬件清单）归 SMO"</strong>，并用 NACM 规则把这条线固化到设备上，而不是靠双方"约好了不碰"。</div>
+
+  <h3 id="s6-3"><code>o-ran-*</code> 模型族大致怎么分</h3>
+
+  <p>O-RU 上加载的模型是 <strong>IETF 通用模型 + O-RAN 前传模型</strong>两部分。按用途大致可以分成六类（<strong>具体模块名、revision 与 feature 以所用 O-RAN WG4 M-Plane 版本发布的模型包为准</strong>，各版本之间有增删；判断设备实际支持什么，用第 05 章的 <code>get-schema</code>）：</p>
+
+  <table>
+    <thead><tr><th>类别</th><th>管什么</th><th>典型内容</th></tr></thead>
+    <tbody>
+      <tr><td><strong>接入与安全</strong></td><td>M 平面自身怎么建立</td><td>NETCONF 端点、用户与权限、证书/密钥、Call Home 的目标地址</td></tr>
+      <tr><td><strong>硬件与清单</strong></td><td>这是台什么设备</td><td>型号、序列号、组件树、软件版本、能力上报（基于 <code>ietf-hardware</code> 扩展）</td></tr>
+      <tr><td><strong>传输与接口</strong></td><td>网口怎么配</td><td>以太口、VLAN、MAC/IP、MTU、处理单元与传输端点的绑定</td></tr>
+      <tr><td><strong>同步</strong></td><td>S 面</td><td>PTP/SyncE 配置、时钟源优选、锁定状态与 <code>clockClass</code> 上报</td></tr>
+      <tr><td><strong>U/C 面配置</strong></td><td>射频与前传时序</td><td>载波（中心频率、带宽、功率）、eAxC 划分、压缩方式与位宽、接收窗时延参数</td></tr>
+      <tr><td><strong>运维</strong></td><td>日常运行</td><td>故障管理（告警）、性能测量、软件下载与激活、文件管理、日志与排障采集、监督心跳</td></tr>
+    </tbody>
+  </table>
+
+  <div class="box tip"><strong>最后一类里的"监督心跳"值得单独记住。</strong>M 平面上有一个 watchdog 机制：O-RU 期待 NETCONF client <strong>周期性地调用一个复位监督定时器的 RPC</strong>，超时未收到就认为 M 平面连接已失效，进而触发重连/Call Home 流程。它解决的正是第 05 章提到的那个问题——<strong>TCP 层察觉不到对端已死</strong>。设计客户端时必须实现这个心跳，而且它的周期要短于 O-RU 侧配置的超时；<strong>"设备莫名其妙自己断开重连"最常见的原因就是心跳漏发或被慢 RPC 挤掉了。</strong></div>
+
+  <h3 id="s6-4">O-RU 上电后是怎么被纳管的：Call Home</h3>
+
+  <p>传统 NETCONF 是"网管去连设备"，这在前传场景下有三个硬伤：<strong>①</strong> O-RU 的 IP 是 DHCP 动态分配的，网管不知道它是多少；<strong>②</strong> O-RU 常在 NAT 或私网后面，网管连不进去；<strong>③</strong> 一台从未配置过的新设备，网管压根不知道它存在。</p>
+
+  <div class="def"><strong>Call Home（RFC 8071）</strong>：把 <strong>TCP 连接方向反过来</strong>——由设备主动向网管发起 TCP 连接。但连上之后<strong>协议角色不变</strong>：设备仍然是 SSH/TLS 服务端、仍然是 NETCONF 服务端，网管仍然是客户端。端口用专门分配的 <strong>4334（over SSH）/ 4335（over TLS）</strong>，网管在这两个端口上监听。</div>
+
+  <p>"发起连接的一方却是服务端"这个反直觉设计是有意的：<strong>它让认证与授权模型完全不用改。</strong>设备照样出示服务端证书、照样校验客户端证书、照样跑同一套 cert-to-name 与 NACM，一行都不用为 Call Home 特殊处理。变的只是谁先拨号。</p>
+
+  <pre><span class="cm"># 一台出厂 O-RU 从上电到被纳管，典型流程</span>
+① 上电，链路 up
+② 获取 IP：DHCP（v4）或 SLAAC/DHCPv6（v6）
+③ 获取"网管在哪里"：DHCP 厂商特定选项 / 预置 FQDN / 本地静态配置
+④ 向 4334 或 4335 发起 TCP 连接（失败则按退避策略重试）
+⑤ SSH/TLS 握手：O-RU 是服务端，出示<strong>出厂预置证书</strong>；
+   网管出示自己的证书，O-RU 用 truststore 校验 → 双向认证成立
+⑥ hello 交换 → 网管拿到模块清单与能力
+⑦ 网管读硬件/软件清单，判断"这是谁"，与规划数据匹配
+⑧ 下发运营商域工作证书、账号权限、软件包（如需升级）
+⑨ 下发业务配置：接口 → 同步 → 载波 → eAxC → 时延窗
+⑩ 建立通知订阅 + 启动监督心跳 → 进入常态运维</pre>
+
+  <div class="box star">被问"Call Home 解决什么问题"时，只说"设备在 NAT 后面"是不完整的。完整的答案是它同时解决了<strong>三件事</strong>：<strong>可达性</strong>（NAT/私网/动态 IP 下网管连不进来）、<strong>发现</strong>（网管不需要维护一份"有哪些设备、IP 是多少"的清单，也不需要扫段）、以及<strong>时序</strong>（设备什么时候真正 ready 只有它自己知道，主动上报比网管轮询探测既快又省）。再补一句"协议角色不变、认证模型完全复用"，就说明你读过 RFC 而不只是听说过这个词。<strong>注意方向反转也带来新的攻击面：任何能连上 4334/4335 的东西都能声称自己是设备，所以网管侧的客户端证书校验必须严格，不能因为"是设备主动来的"就放松。</strong></div>
+
+  <h3 id="s6-5">告警与 PM：NETCONF 通知能干什么，不能干什么</h3>
+
+  <p>M 平面上主要有两类上行数据，它们的传输方式完全不同，这个区别经常被忽略：</p>
+
+  <table>
+    <thead><tr><th></th><th>故障管理（FM / 告警）</th><th>性能管理（PM / 计数）</th></tr></thead>
+    <tbody>
+      <tr><td>触发</td><td><strong>事件驱动</strong>：状态跳变时立刻发</td><td><strong>周期驱动</strong>：按测量周期汇总</td></tr>
+      <tr><td>典型周期 / 时延</td><td>秒级上报</td><td>粒度常见 15 min（也有 1 min / 5 min 档）</td></tr>
+      <tr><td>数据量</td><td>小，一条告警几百字节</td><td><strong>大</strong>：几百到几千个计数器 × 每个测量对象</td></tr>
+      <tr><td>传输方式</td><td><strong>NETCONF Notification</strong></td><td>常见做法是<strong>设备生成文件、通过文件传输取走</strong>，NETCONF 只发"文件已就绪"的通知</td></tr>
+      <tr><td>丢了怎么办</td><td>重连后全量 <code>&lt;get&gt;</code> 当前告警列表对齐</td><td>文件还在设备上，可以补取</td></tr>
+    </tbody>
+  </table>
+
+  <p>为什么 PM 要走文件而不是直接用通知？<strong>因为量级差了两三个数量级。</strong>一个测量周期内的计数器如果逐条封装成 XML 通知推出来，光 XML 标签的开销就能比数据本身大好几倍，而且要在一条会话上串行推送几千条——O-RU 那点 CPU 会被 XML 序列化吃掉。<strong>打包成文件（常见是压缩后的 XML/CSV）再一次性取走，是用"少量大传输"换掉"大量小传输"</strong>，这是所有网管系统在 PM 上的共同选择。</p>
+
+  <div class="box danger"><strong>NETCONF 通知不适合高频遥测，原因是叠加的，不是单一的。</strong>① <strong>编码开销</strong>：XML 冗长，同样的数值比二进制编码大数倍。② <strong>单条会话串行</strong>：所有通知挤在一条 TCP 流上，一个慢消费者就会造成背压，进而阻塞服务端。③ <strong>没有流控与背压语义</strong>：RFC 5277 没定义"我处理不过来了"怎么表达。④ <strong>缺少可靠的补发</strong>：replay 支持与缓冲深度都靠不住。⑤ <strong>推的是事件而不是数据流</strong>：想要"每 100 ms 一个采样"，标准里根本没有对应的订阅语义。<br>这些正是 <strong>gNMI</strong>（gRPC + Protobuf + 流式订阅）出现的动机，也是 IETF 用 <strong>RFC 8639 / 8641（Subscribed Notifications 与 YANG-Push）</strong>补齐 NETCONF 侧周期/变更订阅的原因。<strong>横向取舍见 <a href="network_mgmt_comparison.html">管理协议对比</a>，本篇不展开。</strong></div>
 </section>
 
 <section class="chapter" id="s7">
@@ -249,24 +1177,394 @@ int main(void) {
 
   <div class="box info"><strong>还有一类坑不在协议里，在会话对象的并发结构上。</strong>一个 NETCONF 会话会被三个来源并发访问：IO 线程（收到 RPC）、定时器线程（会话/confirmed-commit 超时）、通知线程（数据变更要推 notification）。最直觉的做法是给会话加一把锁，于是必然踩到「持锁做 IO，对端读得慢就把整个会话卡住」和「<code>edit-config</code> 校验里回调业务代码、业务代码又碰这把锁 → 死锁」。<br>把它改成 <strong>Active Object</strong>（每会话一个邮箱、三个入口只投递不执行）能一次性消掉这一整类竞态，连"定时器到期时会话已销毁"的悬垂问题都顺带解决。改造前后的完整代码对照见 <a href="comm_design_patterns.html#s5">通信软件设计模式 §05</a>；Call Home 下"设备变主动方"如何与被动方共用同一份会话代码见同篇 <a href="comm_design_patterns.html#s3">§03 Acceptor-Connector</a>。</div>
 
+  <h3 id="s7-1">大配置下发的耗时都花在哪</h3>
+
+  <p>"下发一个配置要 40 秒"这句话没有任何行动价值，因为 40 秒可能花在五个完全不同的地方，而每个地方的优化手段互不相干。先把它拆开：</p>
+
+  <table>
+    <thead><tr><th>阶段</th><th>发生了什么</th><th>随什么增长</th><th>它是瓶颈时的特征</th><th>怎么压</th></tr></thead>
+    <tbody>
+      <tr><td>① 传输</td><td>XML 经 SSH/TLS 送到设备</td><td>字节数 / 带宽</td><td>只在链路很窄或配置极大时明显</td><td>压缩、只发差分</td></tr>
+      <tr><td>② XML 解析 + 建树</td><td>libyang 把 XML 变成数据树</td><td><strong>节点数</strong>（近似线性）</td><td>CPU 满、内存涨；小设备上最先撞墙</td><td>减少节点数；避免整树 replace</td></tr>
+      <tr><td>③ 模型校验</td><td>执行 <code>must</code>/<code>when</code>/<code>leafref</code>/<code>unique</code></td><td><strong>可能超线性</strong>：<code>leafref</code> 与 <code>must</code> 里的 XPath 每次都要遍历</td><td>CPU 满但内存不涨；<strong>去掉几条约束耗时断崖式下降</strong></td><td>模型侧优化；批量时合并成一次 validate</td></tr>
+      <tr><td>④ datastore 差分与写入</td><td>sysrepo 算 diff、写共享内存/文件</td><td>变更节点数</td><td>IO wait 高</td><td>只改真正变了的节点</td></tr>
+      <tr><td>⑤ <strong>订阅回调</strong></td><td>你的业务代码把配置写进硬件</td><td><strong>完全取决于你</strong></td><td><strong>CPU 不忙，但就是慢</strong>——典型是在等硬件</td><td>异步化；见第 05 章的纪律</td></tr>
+    </tbody>
+  </table>
+
+  <p>经验上，<strong>在配置节点数上千的场景里，③ 和 ⑤ 通常吃掉绝大部分时间，① 几乎可以忽略。</strong>这个分布很反直觉——大家的第一反应总是"XML 太啰嗦所以慢"，于是去想压缩、想换协议，但传输本来就不是瓶颈。<strong>判别方法很简单：在设备上把同一份配置用 <code>sysrepocfg --import</code> 直接灌进去（绕过网络与 NETCONF 层），如果耗时差不多，那问题就在 ③④⑤。</strong></p>
+
+  <table>
+    <thead><tr><th>操作</th><th>在资源充裕的网元上</th><th>在资源受限的 O-RU 上</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td>建立会话（TCP+SSH+hello）</td><td>百毫秒量级</td><td><strong>秒级</strong></td><td>密钥交换是 CPU 密集的；TLS 首次握手更贵</td></tr>
+      <tr><td>小改动（几十个节点）</td><td>百毫秒量级</td><td>百毫秒 ~ 秒级</td><td>—</td></tr>
+      <tr><td>整树 <code>get-config</code></td><td>秒级</td><td><strong>秒 ~ 十秒级</strong></td><td>输出可达几 MB，序列化开销大</td></tr>
+      <tr><td>大批量 <code>edit-config</code> + <code>commit</code></td><td>秒级</td><td><strong>十秒 ~ 分钟级</strong></td><td>取决于校验复杂度与回调</td></tr>
+      <tr><td>软件包下载与激活</td><td colspan="2"><strong>分钟级</strong>，且通常伴随重启</td><td>必须走异步 + 通知回报，不能同步等</td></tr>
+    </tbody>
+  </table>
+
+  <p class="note">上表是<strong>数量级参考</strong>，用来判断"我现在这个耗时是不是离谱"，不是性能承诺。真实数字与 CPU 型号、模型复杂度、实现质量都强相关，<strong>每个项目都应该在实验室里量出自己的基线并写进准入门槛</strong>——没有基线就没法判断某台设备是不是异常。</p>
+
+  <h3 id="s7-2">规模化：一千台设备的连接怎么管</h3>
+
+  <p>单台设备跑通和一千台跑稳，是两个问题。核心矛盾是：<strong>设备侧能承受的并发会话数是个位数到几十，而 SMO 侧想同时对几百台做操作。</strong></p>
+
+  <table>
+    <thead><tr><th>策略</th><th>长连接（常驻）</th><th>按需连接（用完就断）</th><th>混合（推荐）</th></tr></thead>
+    <tbody>
+      <tr><td>建连开销</td><td>只付一次</td><td><strong>每次操作都要付</strong>（O-RU 上是秒级）</td><td>只在配置时付</td></tr>
+      <tr><td>设备侧资源占用</td><td><strong>N 台 × 常驻会话</strong>，吃内存与会话槽位</td><td>接近 0</td><td>1 条常驻/台</td></tr>
+      <tr><td>能否收通知</td><td><strong>能</strong></td><td><strong>不能</strong>（会话断了就没有推送）</td><td>能</td></tr>
+      <tr><td>故障感知</td><td>连接断即知（配合心跳）</td><td><strong>下次操作才知道</strong></td><td>即时</td></tr>
+      <tr><td>SMO 侧资源</td><td>N 个 socket + N 个线程/协程</td><td>只占用峰值并发数</td><td>N 个轻量 socket + 有限的配置 worker</td></tr>
+      <tr><td>设备重启后</td><td>需要重连逻辑与退避</td><td>无感</td><td>需要重连逻辑</td></tr>
+    </tbody>
+  </table>
+
+  <p>实践中收敛出来的架构基本是同一套：</p>
+
+  <ul>
+    <li><strong>每台设备一条常驻"通知会话"</strong>：只做 <code>create-subscription</code> + 心跳，不发配置 RPC。它很轻（几乎不消耗 CPU），但换来了实时告警与"设备是否在线"的即时判断。这也正好绕开了 <code>interleave</code> 不支持的问题。</li>
+    <li><strong>一个受限并发的"配置会话池"</strong>：需要下发时才建连，用完立刻断。<strong>池的大小是全局限流阀门</strong>——它决定了同时有多少台设备在被改，也决定了 SMO 自己的 CPU/内存上限。</li>
+    <li><strong>批量作业分批 + 抖动</strong>：一千台不要一起下，切成每批几十台，批与批之间留间隔，并给每台的起始时刻加随机抖动。理由和第 04 章的重试抖动一样：<strong>同步化的批量操作会在共享环节（DNS、证书服务、日志后端、SMO 自己的数据库）上制造周期性尖峰。</strong></li>
+    <li><strong>每台设备一把本地互斥</strong>：SMO 内部要保证同一台设备同时只有一个配置作业在跑。指望设备侧的 <code>lock</code> 来串行化是不够的——那只会把冲突变成一堆 <code>lock-denied</code> 重试。</li>
+  </ul>
+
+  <div class="box star">面试里聊到这里，值得主动提一句<strong>反向的规模化手段：Call Home 让"连接管理"从推模型变成拉模型。</strong>设备主动来连，SMO 侧就不需要维护"有哪些设备、IP 是多少、现在通不通"这份状态，也不需要扫段探测；设备重启后自己会回来，退避重试的逻辑在设备侧而不是 SMO 侧。<strong>在几千台规模上，这个方向的改变比任何连接池调优都更有效。</strong></div>
+
+  <h3 id="s7-3">超时参数：五个，而且互相有约束</h3>
+
+  <table>
+    <thead><tr><th>参数</th><th>在哪一侧</th><th>建议量级</th><th>配错的后果</th></tr></thead>
+    <tbody>
+      <tr><td>TCP 连接超时</td><td>客户端</td><td>5~15 s</td><td>太长：探测一台死设备要等很久，批量作业整体被拖慢</td></tr>
+      <tr><td>hello 超时</td><td>两侧</td><td>5~15 s</td><td>太长：服务端假死时客户端挂住；太短：慢设备连不上</td></tr>
+      <tr><td>单条 RPC 超时</td><td>客户端</td><td><strong>按 RPC 分档</strong>：读 30~60 s，大 commit 300~600 s</td><td>太短：<strong>客户端放弃了但设备还在执行 → 重试造成重复操作</strong></td></tr>
+      <tr><td>回调超时</td><td>服务端（sysrepo）</td><td>秒级，可配</td><td>太短：正常的慢回调被判失败；太长：一个卡住的订阅者能冻结整台设备</td></tr>
+      <tr><td>confirm-timeout</td><td>协议参数</td><td>见第 04 章表</td><td>太短：还没验证完就自动回滚；太长：坏配置多跑很久</td></tr>
+      <tr><td>会话空闲超时</td><td>服务端</td><td>通知会话设很大/0；配置会话 5~15 min</td><td>太短：长事务被踢；太长：僵死会话占满槽位与锁</td></tr>
+    </tbody>
+  </table>
+
+  <div class="box danger"><strong>必须满足的一条不等式：客户端的单条 RPC 超时 &gt; 服务端可能的最长处理时间。</strong>反过来（客户端先放弃）是所有超时类问题里最难查的一种，因为它<strong>制造出一个双方认知不一致的状态</strong>：客户端记录"失败"，设备记录"成功"。接下来无论是自动重试还是人工重做，都是在一个未知状态上叠加操作。<strong>如果实在无法保证这条不等式（比如设备处理时间不可预测），那么客户端超时后的第一个动作必须是"重新读一遍实际状态"，而不是"重试"。</strong></div>
+
+  <h3 id="s7-4">排障：现象 → 先看什么</h3>
+
+  <p>NETCONF 排障有个特殊困难：<strong>它跑在加密通道里，抓包看不到内容。</strong>所以排障路径和普通网络协议不一样，要靠"分层排除"而不是"抓包看真相"。下面这张表按<strong>现象</strong>索引，每行给出最省力的第一步。</p>
+
+  <table>
+    <thead><tr><th>现象</th><th>最可能的原因</th><th>先做这一步</th><th>判读</th></tr></thead>
+    <tbody>
+      <tr><td><code>Connection refused</code></td><td>服务端没起 / 端口不对</td><td><code>nc -vz device 830</code>，设备上 <code>ss -ltnp | grep 830</code></td><td>端口没监听 → 进程问题；监听了但连不上 → 防火墙/ACL</td></tr>
+      <tr><td>连接超时（无响应）</td><td>路由/ACL/防火墙静默丢弃</td><td>先 ping，再 <code>traceroute -T -p 830</code></td><td>ping 通但 TCP 不通 = 中间设备在拦端口</td></tr>
+      <tr><td><code>Permission denied (publickey)</code></td><td>公钥没灌 / 账号不存在 / 权限位不对</td><td>设备侧看 sshd 或 netopeer2 日志</td><td>日志里会明说是找不到用户还是密钥不匹配</td></tr>
+      <tr><td><strong>认证过了，随即断开</strong></td><td><strong>subsystem "netconf" 没注册或无权限</strong></td><td><code>ssh -vvv -s -p 830 user@dev netconf</code></td><td>看到 <code>subsystem request failed</code> 即确诊</td></tr>
+      <tr><td>连上但一直没有 hello</td><td>服务端主循环卡死（多半被上一条大 RPC 或慢回调堵住）</td><td>设备上看进程状态、CPU、线程栈</td><td>CPU 0% 但不响应 = 阻塞在某个回调/锁上</td></tr>
+      <tr><td>TLS 握手失败</td><td>证书过期/未生效、CA 不在 truststore、SAN 不匹配</td><td><code>openssl s_client -connect dev:6513 -showcerts</code>；同时<strong>核对两端系统时间</strong></td><td>报 <code>certificate is not yet valid</code> 基本就是时间问题</td></tr>
+      <tr><td><code>access-denied</code></td><td>NACM 规则 / cert-to-name 映射到了错的用户</td><td>读 <code>/nacm</code> 配置；看会话日志里认定的 <code>username</code></td><td>用户名不是你以为的那个 → 查 cert-to-name 优先级</td></tr>
+      <tr><td><code>operation-not-supported</code></td><td>设备不支持该 capability</td><td>打印 <code>server_capabilities</code> 逐条比对</td><td>—</td></tr>
+      <tr><td><code>unknown-namespace</code> / <code>unknown-element</code></td><td>模块没装、revision 不同、feature 没开、命名空间写错</td><td><code>get-schema</code> 把设备上的模型拉下来对</td><td><strong>永远以设备上的模型为准，不要信文档</strong></td></tr>
+      <tr><td><code>lock-denied</code></td><td>别的会话持锁，或僵死会话未回收</td><td>读 <code>ietf-netconf-monitoring</code> 的会话列表，看谁是那个 session-id</td><td>找不到对应活跃会话 = 僵死，等 idle timeout 或重启服务</td></tr>
+      <tr><td>commit 超时</td><td>某个订阅回调不返回；或校验太慢</td><td>设备上看哪个订阅进程在忙 / 在等</td><td>回调卡住时整台设备的配置操作都会超时，不只是你这条</td></tr>
+      <tr><td>"提交成功但硬件没变"</td><td><strong>DONE 回调里吞了错误</strong></td><td>读 operational 数据（不是 running）看真实状态</td><td>running 与 operational 不一致即确诊</td></tr>
+      <tr><td>大配置偶发失败</td><td>消息大小上限 / 客户端超时早于设备完成</td><td>把同一份配置拆小重试；同时把客户端 timeout 加大</td><td>拆小就成功 = 大小或耗时上限问题</td></tr>
+    </tbody>
+  </table>
+
+  <h4>抓包这条路怎么走</h4>
+
+  <p>NETCONF 在 SSH 里是<strong>不可解密</strong>的（SSH 没有类似 TLS 的会话密钥导出标准做法），所以：</p>
+
+  <table>
+    <thead><tr><th>想看什么</th><th>SSH 承载</th><th>TLS 承载</th></tr></thead>
+    <tbody>
+      <tr><td>TCP 层（重传、RST、窗口、MTU）</td><td colspan="2"><strong>抓包完全可见</strong>，这也是抓包在 NETCONF 排障里的主要价值</td></tr>
+      <tr><td>握手与证书</td><td>能看到算法协商失败</td><td><strong>能看到完整证书链与告警码</strong>，很有用</td></tr>
+      <tr><td>NETCONF 报文内容</td><td><strong>看不到</strong></td><td>可以：用 <code>SSLKEYLOGFILE</code> 导出会话密钥给 Wireshark，或在网管侧用测试证书做中间人</td></tr>
+      <tr><td>替代手段</td><td colspan="2"><strong>服务端日志（netopeer2 <code>-v3</code>）、客户端日志（ncclient 的 <code>DEBUG</code> 会打印完整 XML）、以及 <code>netconf-config-change</code> 通知</strong></td></tr>
+    </tbody>
+  </table>
+
+  <div class="box tip"><strong>结论：在 NETCONF 上，"开日志"比"抓包"有效得多。</strong>抓包只用来回答"包有没有到、TCP 层有没有异常"这类问题；一旦确认 TCP 正常，就该转去看两端的应用日志。<strong>所以设备准入时应当确认它能打出足够细的 NETCONF 日志、并且能在不重启的情况下动态调日志级别</strong>——现场故障往往不可复现，"重启一下开 debug 再看"等于放弃这次机会。</div>
+
+  <h3 id="s7-5">真实案例：批量下发在部分设备上静默失败</h3>
+
+  <div class="box real">
+    <p><strong>现象。</strong>某次例行变更，SMO 向 <strong>420 台 O-RU</strong> 批量下发同一份参数调整。作业报告显示 <strong>391 台成功、29 台失败</strong>。失败的 29 台里，报告给出的原因有两种：<strong>17 台是 "RPC timeout"，12 台是 <code>lock-denied</code></strong>。运维按流程重跑失败清单，第二轮又变成 8 台失败——<strong>失败集合每次都不一样</strong>，于是被判定为"网络抖动"，计划第三轮重跑。</p>
+
+    <p><strong>第一个不对劲的地方：抽查发现"成功"的也不一定成功。</strong>随机挑了 20 台报告成功的设备读回配置，其中 <strong>3 台的目标参数根本没变</strong>。这一下把问题性质变了：不是"部分失败需要重试"，而是<strong>"作业报告不可信"</strong>。在这种情况下继续重跑是危险的——你不知道自己在往什么状态上叠加操作。作业被立刻叫停。</p>
+
+    <p><strong>第一步：把三类失败分开，不要合并统计。</strong>把 29 台按型号、软件版本、所属 O-DU、所在批次列了一张表，立刻看出分布不是随机的：<strong>12 台 <code>lock-denied</code> 全部集中在 3 个站点</strong>，而 <strong>17 台 timeout 全部是同一个厂商同一个软件版本</strong>。加上那 3 台"假成功"——这是三个独立的问题，被一次批量作业同时暴露出来。合在一起看永远看不出规律。</p>
+
+    <p><strong>问题一：<code>lock-denied</code> —— 两个 client 在抢。</strong>那 3 个站点是 hybrid 模型部署，O-DU 和 SMO 都直连 O-RU 的 M 平面。读 <code>ietf-netconf-monitoring</code> 的会话列表，发现持锁的 <code>session-id</code> 属于 O-DU：它的巡检任务每 15 分钟会锁一次 candidate 读写一小段配置。批量作业恰好和巡检窗口重叠。<strong>SMO 的重试逻辑退避到 16 秒就放弃了，而 O-DU 的巡检持锁约 20 秒</strong>——差一点点。第二轮重跑时错开了窗口，所以"好了"，这正是失败集合每次不同的原因。</p>
+
+    <p><strong>问题二：17 台 timeout —— 客户端先放弃，设备还在干。</strong>在实验室复现：同一份配置在这个版本上耗时 <strong>90~110 秒</strong>，而其它厂商的设备只要 8~15 秒。SMO 侧的 RPC 超时是全局统一的 <strong>60 秒</strong>。所以客户端在 60 秒抛出 timeout、把这台标记为失败，<strong>而设备在第 95 秒老老实实地提交成功了</strong>。作业报告里的"失败"是假的——这批设备其实都配上了。更糟的是，如果第二轮重跑赶在第一次 commit 完成之前发起，就会撞上 <code>lock-denied</code>，把两个问题搅在一起。<br>继续追这 90 秒花在哪：在设备上直接 <code>sysrepocfg --import</code> 灌同一份配置，仍然要 80 多秒——<strong>排除了网络和 NETCONF 层</strong>。最后定位到该版本的模型里有一条 <code>must</code> 表达式，XPath 里用了对一个大列表的全局遍历，节点一多就退化成平方复杂度。厂商在下个版本改掉了这条约束，耗时回到 12 秒。</p>
+
+    <p><strong>问题三：3 台"假成功" —— deviation 把字段悄悄变成了只读。</strong>这三台是同型号但更老的硬件批次。用 <code>get-schema</code> 把它们实际加载的模型拉下来对比，发现厂商为这个硬件批次发布了一份 <strong><code>deviation</code></strong>，把我们要改的那个叶子标成了 <code>not-supported</code>。<strong>关键在于设备的行为：它接受了 <code>edit-config</code>、接受了 <code>commit</code>、返回了 <code>&lt;ok/&gt;</code>，但那个节点根本没有被写进去</strong>——从客户端看不出任何异常。这是本案里最隐蔽的一个，因为它连错误码都没有。</p>
+
+    <p><strong>为什么三个问题会同时暴露。</strong>它们平时都不出现：单台操作不会撞上巡检窗口；慢设备单独测时没人卡表；deviation 影响的三台从来没人回读过配置。<strong>批量作业的价值不只是省事，它同时还是一次覆盖全网的一致性测试</strong>——把平时藏在长尾里的差异一次性抖出来。</p>
+
+    <p><strong>处置与沉淀（五条，都写进了作业框架）。</strong><br>
+    ① <strong>写后必读</strong>：每次变更结束后回读关键字段做比对，比对不通过才算失败。<strong>不要相信 <code>&lt;ok/&gt;</code></strong>——它只保证"设备接受了这次请求"，不保证"你想改的东西真的变了"。<br>
+    ② <strong>超时按设备画像分档</strong>，不用全局统一值；并且<strong>超时后的第一个动作是"回读状态"而不是"重试"</strong>。<br>
+    ③ <strong>锁重试的总时长必须大于对端已知的最长持锁时间</strong>；hybrid 部署要把对端（O-DU）的周期性任务窗口当成已知参数写进配置，而不是靠试。<br>
+    ④ <strong>首次纳管时用 <code>get-schema</code> 拉全量模型存档</strong>，并在每次软件升级后重新拉一次做 diff。deviation、revision 变化、feature 开关，这三样任何一样变了都会静默改变行为。<br>
+    ⑤ <strong>作业报告要区分"确认失败"和"结果未知"</strong>。原来的框架把 timeout 归为失败，这是错的——timeout 的语义是<strong>不知道</strong>，它需要的是一次状态查询，而不是一次重试。这一条改动带来的收益最大：它让后续所有批量作业的报告第一次变得可信。</p>
+  </div>
+
   <div class="card">
     <div class="card-title">🎯 本篇要点回顾</div>
     <ul>
       <li>NETCONF over SSH(830)/TLS(6513) over TCP/IP/以太网——管理面要可靠+安全</li>
-      <li>TLS+mTLS 用证书体系；cert-to-name 把证书身份映射成 NETCONF 用户</li>
-      <li>安全改配置：lock→edit(candidate)→validate→commit→unlock；confirmed-commit 防失联</li>
-      <li>libnetconf2 + libyang + sysrepo + netopeer2 是 C 语言实现栈</li>
-      <li>O-RAN O1 + 前传 M 平面都用 NETCONF/YANG 管理 CU/DU/RU</li>
+      <li>SSH 靠 subsystem 机制（不给 PTY、不过登录 shell）；<code>ssh -vvv -s -p 830 user@dev netconf</code> 是分层排障的第一条命令</li>
+      <li>TLS+mTLS 用证书体系；cert-to-name 把证书身份映射成 NETCONF 用户，从而让 NACM 只写一遍</li>
+      <li>安全改配置：lock→discard→edit(candidate)→validate→commit→unlock；<code>rollback-on-error</code> 与 confirmed-commit 是两道不同的护栏</li>
+      <li>libnetconf2(会话/分帧) + netopeer2(RPC/NACM) + sysrepo(datastore/订阅) + libyang(模型/校验)；<strong>CHANGE 只校验、DONE 才写硬件</strong></li>
+      <li>ncclient 做自动化，netopeer2-cli 做调试；<code>get-schema</code> 是"以设备为准"的唯一可靠手段</li>
+      <li>通知走 RFC 5277（配 <code>interleave</code> 决定要不要开第二条会话）；PM 走文件；高频遥测不归 NETCONF 管</li>
+      <li>规模化 = 每台一条常驻通知会话 + 受限并发的配置会话池 + 分批抖动 + Call Home 把连接管理反转</li>
+      <li>耗时主要在模型校验与订阅回调，不在传输；<strong>客户端超时必须大于设备最长处理时间</strong></li>
+      <li>SSH 里抓不到明文：靠分层排除 + 两端日志；timeout 的语义是"未知"，正确响应是回读状态</li>
     </ul>
   </div>
 
-  <div class="box tip">下一步 → <a href="network_mgmt_comparison.html">网络管理协议对比：NETCONF / RESTCONF / SNMP / gNMI</a>。</div>
+  <div class="box tip">下一步 → <a href="network_mgmt_comparison.html">网络管理协议对比：NETCONF / RESTCONF / SNMP / gNMI</a>。想复习协议本身与 YANG 语法回 <a href="netconf_yang.html">NETCONF / YANG</a>；M 平面在四平面里的位置见 <a href="oran_planes.html">O-RAN 三平面</a>。</div>
+</section>
+
+<section class="chapter" id="s8">
+  <div class="ch-head"><div class="num">08</div><div class="t"><h2>面试题（12 道）</h2><p class="sub">分层自测</p></div></div>
+
+  <h3 id="s8-1">8.1 基础（必答）</h3>
+  <p class="qa-hint">点击每道题展开参考答案（先自测，再对照）。</p>
+  <ol class="qa-list">
+    <li><details class="qa">
+      <summary><span class="lvl basic">基础</span>830 和 6513 分别是什么端口？两种承载除了加密层，还有什么不同？</summary>
+      <div class="ans">
+        <p><strong>830 是 NETCONF over SSH（RFC 6242）的默认端口，6513 是 NETCONF over TLS（RFC 7589）的默认端口。</strong>另外 Call Home（RFC 8071）有自己的两个端口：<strong>4334（over SSH）、4335（over TLS）</strong>，由网管侧监听。</p>
+        <p>只答端口号是基础分。要说清的是<strong>两者相同的部分和不同的部分</strong>：</p>
+        <ul>
+          <li><strong>完全相同的是分帧。</strong>TLS 承载沿用 RFC 6242 定义的同一套分帧（<code>]]&gt;]]&gt;</code> 或 chunked），也沿用同样的 hello 协商。<strong>所以上层 NETCONF 代码一行都不用改，换传输只是换一个连接函数。</strong></li>
+          <li><strong>不同的是身份怎么建立。</strong>SSH 里认证结果本身就是用户名；TLS 里拿到的是一张 X.509 证书，需要 <strong>cert-to-name</strong> 映射成用户名才能交给 NACM。</li>
+          <li><strong>RFC 7589 强制双向认证</strong>：客户端必须出示证书。SSH 侧虽然也能做服务端认证（<code>known_hosts</code>），但自动化场景里经常被 <code>hostkey_verify=False</code> 关掉。</li>
+          <li><strong>TLS 依赖系统时间</strong>（证书有效期），SSH 不依赖。这是 TLS 引入的一个全新失败模式。</li>
+        </ul>
+        <p>还可以补一句部署层面的差别：用独立端口（而不是复用 22）的好处是防火墙能按端口区分管理流量、NETCONF 进程崩了不影响运维登录、能单独限速统计。<strong>而且如果服务端自带 SSH 实现（netopeer2 用 libssh），它和系统 sshd 是两套独立配置——安全整改改了 <code>sshd_config</code> 对 830 毫无作用。</strong></p>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl basic">基础</span>libnetconf2、netopeer2-server、sysrepo、libyang 各自负责什么？</summary>
+      <div class="ans">
+        <p>四个组件对应四件互不重叠的事，按"一条 <code>edit-config</code> 从网口走到硬件"的顺序：</p>
+        <ul>
+          <li><strong>libnetconf2 — 管"线"</strong>：SSH/TLS 服务端与客户端、会话生命周期、hello 协商、RFC 6242 分帧、RPC 的收发与编解码。<strong>它不理解任何业务字段</strong>，对它来说 <code>edit-config</code> 和 <code>get</code> 只是两个不同的 XML 结构。</li>
+          <li><strong>netopeer2-server — 管"骨架"</strong>：把标准 RPC 翻译成 sysrepo 调用，实现 NACM 访问控制，管理会话与通知转发。它是"服务端框架"，不实现具体业务配置。</li>
+          <li><strong>sysrepo — 管"状态"</strong>：running / candidate / startup / operational 的存储与差分，把变更按模块和 XPath 分发给订阅者，驱动 <code>CHANGE → DONE / ABORT</code> 的两阶段提交。</li>
+          <li><strong>libyang — 管"规则"</strong>：编译 <code>.yang</code>，构造与校验数据树，执行 <code>must</code>/<code>when</code>/<code>leafref</code>/<code>unique</code>。<strong>上面三层全都建立在它的数据树之上。</strong></li>
+          <li><strong>你的应用</strong>：订阅感兴趣的子树，在回调里把配置真正作用到硬件，并提供 operational 数据。</li>
+        </ul>
+        <p><strong>加分点：厂商自研栈几乎必然是同一个分层。</strong>不管用不用开源实现，"协议/会话""事务/datastore""模型/校验""业务生效"这四件事都必须有人做、而且必须分开做——因为它们的变化频率完全不同：协议层十年不动，模型层每个版本都在扩，业务层随硬件改。<strong>糅在一起的实现最终都会因为"改一个 YANG 字段要动网络代码"而重构。</strong></p>
+        <p>这个分层在排障时也很有用：连不上、hello 超时、分帧错 → libnetconf2；<code>access-denied</code>/<code>operation-not-supported</code> → netopeer2；commit 卡住、模块没装 → sysrepo；<code>must</code> 校验失败、命名空间不对 → libyang；<strong>"提交成功但硬件没变" → 你自己的回调</strong>。</p>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl basic">基础</span>改配置为什么要先 <code>&lt;lock&gt;</code>？它有什么风险？</summary>
+      <div class="ans">
+        <p><strong>为什么需要</strong>：candidate 是设备上<strong>全局共享的一份草稿</strong>，不是每条会话各有一份。没有锁的话，A 会话写了一半、B 会话执行 <code>commit</code>，就会把 A 的半成品一起提交上去；或者 A、B 交替写入，最终 candidate 里是两份改动的任意交织。<strong>锁保证的是"从 edit 到 commit 这段时间里，candidate 只归我"。</strong></p>
+        <p><strong>三个风险</strong>：</p>
+        <ul>
+          <li><strong>粒度太粗。</strong>锁的对象是整个 datastore，不是某棵子树。一个流程持锁，这台设备上所有其它自动化全部 <code>lock-denied</code>。（RFC 5717 定义了 partial-lock，但支持的设备不多。）</li>
+          <li><strong>忘了解锁。</strong>异常路径漏 <code>unlock</code>，这台设备被挂住直到空闲超时——可能是几十分钟。所以 <code>unlock</code> 必须写在 <code>finally</code> 里。</li>
+          <li><strong>僵死会话占锁。</strong>持锁的一端掉电时，TCP 另一端在没有数据要发的情况下察觉不到，锁会一直挂着。<strong>这正是"设备刚重启完反而配不了"的典型成因</strong>，需要 keepalive 与 idle timeout 来兜底。</li>
+        </ul>
+        <p><strong>两条实践纪律</strong>：① <strong>锁只覆盖 edit + validate + commit 这几秒</strong>，业务验证放到 commit 之后靠 confirmed-commit 兜底，不要持锁做长时间验证；② <strong>拿到锁后的第一件事是 <code>&lt;discard-changes&gt;</code></strong>，清掉上一个异常退出的会话留在 candidate 里的残留。</p>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl basic">基础</span>什么是 cert-to-name？为什么 TLS 承载必须有这一层？</summary>
+      <div class="ans">
+        <p><strong>cert-to-name 是一张"X.509 证书 → NETCONF 用户名"的映射规则表</strong>，来自 <code>ietf-x509-cert-to-name</code>（RFC 7407 定义的 grouping，被 <code>ietf-netconf-server</code> 复用）。每条规则含优先级 <code>id</code>、证书或 CA 的 <code>fingerprint</code>、<code>map-type</code>，以及部分方式下的用户名。</p>
+        <p><strong>为什么必须有</strong>：TLS 握手结束后服务端手里只有一张证书，而 NETCONF 的访问控制 NACM（RFC 8341）是<strong>按用户名和用户组授权</strong>的。中间必须有人把证书翻译成用户名。</p>
+        <p><strong>更好的答法是讲设计意图</strong>：NACM 早于、也独立于传输层而存在。如果让 TLS 层直接决定权限，就等于每套传输各实现一份 ACL——SSH 一套、TLS 一套、Call Home 再一套。<strong>cert-to-name 的作用是把所有传输的认证结果收敛成同一种身份表示，从而让授权只写一遍</strong>，是典型的"加一层间接解决 N×M 问题"。</p>
+        <p>常见 <code>map-type</code>：<code>specified</code>（规则里直接写死名字）、<code>san-dns-name</code>、<code>san-rfc822-name</code>、<code>san-ip-address</code>、<code>san-any</code>、<code>common-name</code>。</p>
+        <p><strong>工程上最关键的一点</strong>：<code>fingerprint</code> 既可以填叶子证书的指纹，也可以填签发它的 CA 的指纹。填叶子指纹等于白名单，每加一个客户端、每换一次证书都要去每台设备改配置——<strong>那就把 TLS 退化回了 SSH <code>authorized_keys</code> 的运维模型，白搭了 PKI</strong>。填 CA 指纹 + <code>san-dns-name</code>，才能做到"新增一个网管节点不需要碰任何一台设备"。</p>
+      </div>
+    </details></li>
+  </ol>
+
+  <h3 id="s8-2">8.2 中级（区分熟练度）</h3>
+  <ol class="qa-list" start="5">
+    <li><details class="qa">
+      <summary><span class="lvl mid">中级</span>SSH 还是 TLS？O-RAN 前传 M 平面为什么偏好 TLS + 双向认证？</summary>
+      <div class="ans">
+        <p>先给判据，再讲 O-RAN 的特殊性。<strong>决定因素不是加密强度（两者都够），而是身份管理的规模化成本。</strong></p>
+        <table>
+          <thead><tr><th></th><th>SSH</th><th>TLS + mTLS</th></tr></thead>
+          <tbody>
+            <tr><td>服务端身份</td><td>主机指纹，<strong>逐台维护 <code>known_hosts</code></strong></td><td>服务端证书，<strong>一个 CA 背书全网</strong></td></tr>
+            <tr><td>客户端身份</td><td>公钥，逐台灌 <code>authorized_keys</code></td><td>客户端证书，CA 签发</td></tr>
+            <tr><td>撤销</td><td><strong>无标准机制</strong>，只能挨台删</td><td>CRL / OCSP / 短周期证书</td></tr>
+            <tr><td>N 台设备的轮换成本</td><td>O(N) 手工</td><td>可自动化</td></tr>
+            <tr><td>前置投入</td><td>几乎为零</td><td><strong>要先有一套 PKI</strong></td></tr>
+          </tbody>
+        </table>
+        <p><strong>所以小规模、设备在可信机房里、运维熟悉 SSH → 用 SSH 完全合理。</strong>TLS 的价值只有在规模上来之后才兑现。</p>
+        <p><strong>O-RAN 前传的四个场景条件把结论逼向了 TLS：</strong></p>
+        <ul>
+          <li>一个网络里几百到几千台 O-RU 且持续新增，<strong>新设备接入不能要求逐台手工登记</strong>；</li>
+          <li>多厂商混合组网，信任关系需要跨厂商统一治理；</li>
+          <li><strong>O-RU 物理不可信</strong>——它挂在杆上、楼顶、室内分布点。设备被拆走后必须能远程作废其身份，而 SSH 公钥模型没有任何标准手段做到这一点；</li>
+          <li>O-RU 主动 Call Home，此时更需要确认"对面是不是真网管"，而设备侧维护网管指纹同样是 O(N)。</li>
+        </ul>
+        <p><strong>加分：主动说出 TLS 的代价。</strong>① 依赖系统时间——设备时间没同步好会误判证书"未生效"，而前传恰好还没配好 PTP 时最容易踩；② <strong>CRL/OCSP 在嵌入式设备上未必可用</strong>：CRL 分发点通常是 HTTP URL，要求 O-RU 在还没被纳管、可能还没有完整路由时就能访问外网，前传隔离网里常常不成立，现实中要在"CRL 经 M 平面下发""短有效期证书自动续签""只校验链与有效期"之间选一个；③ <strong>CA 轮换必须从第一天就设计</strong>，truststore 要支持同时信任多个 CA，否则根 CA 出事时会全网失联。</p>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl mid">中级</span>sysrepo 的配置变更回调怎么写？<code>CHANGE</code> 和 <code>DONE</code> 有什么区别？</summary>
+      <div class="ans">
+        <p>用 <code>sr_module_change_subscribe(session, module, xpath, cb, priv, priority, opts, &amp;sub)</code> 订阅一棵子树，回调里用 <code>sr_get_changes_iter()</code> + <code>sr_get_change_tree_next()</code> 遍历差分，拿到每个节点的操作类型（<code>CREATED</code>/<code>MODIFIED</code>/<code>DELETED</code>/<code>MOVED</code>）。</p>
+        <p><strong>关键是事件分阶段，这是两阶段提交：</strong></p>
+        <ul>
+          <li><code>SR_EV_UPDATE</code>：校验之前，用来<strong>修改</strong>本次变更（补默认值、联动字段）。</li>
+          <li><code>SR_EV_CHANGE</code>：校验通过、生效之前。这里<strong>只做检查与资源预留</strong>，返回错误会让整批变更回滚，客户端收到你填的错误消息。</li>
+          <li><code>SR_EV_DONE</code>：已经写进 running 之后。<strong>这里才真正把配置作用到硬件</strong>，此时无法再拒绝。</li>
+          <li><code>SR_EV_ABORT</code>：别人否决了本次变更，用来<strong>释放你在 CHANGE 阶段预留的资源</strong>。</li>
+          <li><code>SR_EV_ENABLED</code>：订阅建立时先给一遍当前配置，用于重启后与硬件对齐。</li>
+        </ul>
+        <p><strong>为什么不能把"写硬件"放在 CHANGE 里</strong>：如果一次 commit 涉及三个模块，你在 CHANGE 里已经改了硬件，而第三个模块的订阅者否决了，sysrepo 会告诉客户端"提交失败、配置未变更"——<strong>但你的硬件已经变了，软件配置与硬件状态从此分叉，而且没有任何地方记录这件事。</strong></p>
+        <p><strong>三条必须说出来的纪律：</strong></p>
+        <ul>
+          <li><strong>回调在 commit 的关键路径上同步执行。</strong>你睡 30 秒，客户端的 commit 就阻塞 30 秒；你死锁，这台设备的所有配置操作从此全部超时。凡是可能长耗时的（等硬件锁定、重建小区、调外部服务）必须异步化，用 operational 数据或通知回报结果。sysrepo 有秒级的回调超时，超时即判整批失败。</li>
+          <li><strong>DONE 里的失败无法回滚</strong>，只能自己产告警或触发自愈——所以 DONE 里的动作应该是"确定能成功"的那种。</li>
+          <li><strong>confirmed-commit 回滚的是配置，不是副作用。</strong>你重启过的进程、发出去的告警、写进外部库的记录都不会撤销。<code>ABORT</code> 事件的存在就是给你写这段撤销逻辑的地方。</li>
+        </ul>
+        <p>关于 <code>priority</code>：数值大的先回调，用于有依赖顺序的场景（先建端口再建载波）。但要提醒<strong>它把模块间耦合藏进了两个整数里，代码上看不出来</strong>——能用 <code>leafref</code>/<code>must</code> 在模型里表达的依赖优先交给模型。</p>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl mid">中级</span>confirmed-commit 怎么用？超时该设多少？</summary>
+      <div class="ans">
+        <p><strong>机制</strong>：<code>&lt;commit&gt;</code> 带 <code>&lt;confirmed/&gt;</code> 和 <code>&lt;confirm-timeout&gt;</code>，配置立刻生效但处于"待确认"状态；超时内没有收到第二条不带 <code>confirmed</code> 的 <code>&lt;commit&gt;</code>，设备<strong>自动回滚</strong>到提交前。用于远程改配置时防止"把自己配失联"。能力标识是 <code>:confirmed-commit:1.1</code>。</p>
+        <p><strong>三个细节，答出来才算真用过：</strong></p>
+        <ul>
+          <li><strong><code>&lt;persist&gt;</code> / <code>&lt;persist-id&gt;</code></strong>：不带 <code>persist</code> 时，<strong>发起会话一断就立刻回滚，不等超时</strong>——这在"配断了自己"的场景下正是想要的行为。但如果要换一条会话来确认（让另一个流程做业务验证），就必须带 <code>persist</code> 起个名字，确认时用 <code>persist-id</code> 认领。</li>
+          <li><strong>可以续期</strong>：超时内再发一条带 <code>&lt;confirmed/&gt;</code> 的 commit 是<strong>刷新计时器</strong>而不是确认，适合验证时长不确定的场景。</li>
+          <li><strong>可以主动放弃</strong>：<code>&lt;cancel-commit&gt;</code> 立刻回滚，不用干等超时。<strong>验证失败时应该主动 cancel，而不是让设备多带着坏配置跑满整个超时。</strong></li>
+        </ul>
+        <p><strong>超时怎么定</strong>——判据是"多久能得出这次变更好不好的结论"：改管理网 IP/VLAN/路由 <strong>60~120 s</strong>（连通性很快有结论）；改载波/射频参数 <strong>300~600 s</strong>（要等小区重建、UE 重新接入）；批量下发几十台 <strong>600~1800 s + <code>persist</code></strong>（要等整批下完再统一确认）。</p>
+        <p><strong>两条重要的限制</strong>：① 它只回滚配置，<strong>不撤销你的应用已经产生的副作用</strong>；② <strong>capability 宣告了不等于实现是对的</strong>——见过设备宣告 <code>confirmed-commit:1.1</code> 但超时后并不真回滚。这类"只在出事时才会被用到"的能力，日常流程永远不会触发它，<strong>必须在实验室实测一遍并写进设备准入清单</strong>。</p>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl mid">中级</span>NETCONF Notification 为什么不适合高频遥测？</summary>
+      <div class="ans">
+        <p>先说清它是什么：RFC 5277 的模型是客户端发一条 <code>&lt;create-subscription&gt;</code>（可带 stream / filter / startTime），之后服务端在<strong>同一条会话</strong>上单向推送 <code>&lt;notification&gt;</code>，直到会话关闭——<strong>没有取消订阅的 RPC</strong>。</p>
+        <p><strong>不适合高频遥测的原因是叠加的，不是单一的：</strong></p>
+        <ul>
+          <li><strong>编码开销</strong>：XML 冗长，同样的数值比二进制编码大数倍；序列化本身在嵌入式设备上就是可观的 CPU 开销。</li>
+          <li><strong>单条会话串行</strong>：所有通知挤在一条 TCP 流上，一个慢消费者造成背压就会阻塞服务端。</li>
+          <li><strong>没有流控与背压语义</strong>：RFC 5277 没定义"我处理不过来了"该怎么表达。</li>
+          <li><strong>补发不可靠</strong>：能不能补收断连期间的事件取决于 <code>replaySupport</code>，嵌入式设备上缓冲通常只有几百到几千条，或者干脆不支持。</li>
+          <li><strong>语义不对</strong>：它推的是<strong>事件</strong>，不是数据流。"每 100 ms 采一个值"这种订阅在标准里根本没有对应表达。</li>
+        </ul>
+        <p><strong>那它适合什么</strong>：秒级、低频、事件驱动的东西——告警（FM）、配置变更审计（RFC 6470 的 <code>netconf-config-change</code> 会告诉你谁在什么时候改了哪条 XPath，这是免费的审计日志）、会话与能力变化、confirmed-commit 事件。<strong>性能计数（PM）的常见做法不是推通知，而是设备生成文件、NETCONF 只发一条"文件已就绪"，再通过文件传输取走</strong>——用"少量大传输"换掉"大量小传输"。</p>
+        <p><strong>业界的两条演进路径</strong>：IETF 侧用 <strong>RFC 8639 / 8641（Subscribed Notifications 与 YANG-Push）</strong>补齐了周期订阅与 on-change 订阅；另一条是 <strong>gNMI</strong>（gRPC + Protobuf + 流式订阅），从编码到传输整体换掉。<strong>横向取舍见管理协议对比篇。</strong></p>
+        <p><strong>再补一个实现细节会显得你真部署过</strong>：<code>:interleave:1.0</code> 能力决定了架构。不支持它的服务端上，一条会话 <code>create-subscription</code> 之后<strong>不能再发任何其它 RPC</strong>，而很多嵌入式实现确实不支持。所以规模化的标准做法是<strong>两条会话</strong>：一条常驻收通知，一条按需做配置；顺带的好处是配置会话卡住时不影响告警上报。</p>
+      </div>
+    </details></li>
+  </ol>
+
+  <h3 id="s8-3">8.3 高级（体现深度）</h3>
+  <ol class="qa-list" start="9">
+    <li><details class="qa">
+      <summary><span class="lvl adv">高级</span>Call Home 解决了什么问题？它为什么把连接方向反过来却不改协议角色？</summary>
+      <div class="ans">
+        <p><strong>Call Home（RFC 8071）：由设备主动向网管发起 TCP 连接</strong>，端口 <strong>4334（over SSH）/ 4335（over TLS）</strong>，网管在这两个端口上监听。</p>
+        <p><strong>它同时解决三件事</strong>，只说"设备在 NAT 后面"是不完整的：</p>
+        <ul>
+          <li><strong>可达性</strong>：O-RU 的 IP 是 DHCP 动态分配的，还常在 NAT 或私网后面，网管连不进去。</li>
+          <li><strong>发现</strong>：网管不需要维护一份"有哪些设备、IP 是多少"的清单，也不需要扫段探测。一台从未配置过的新设备，网管压根不知道它存在——只能由它自己来报到。</li>
+          <li><strong>时序</strong>：设备什么时候真正 ready 只有它自己知道，主动上报比网管轮询探测既快又省。</li>
+        </ul>
+        <p><strong>为什么协议角色不变</strong>：连上之后，<strong>设备仍然是 SSH/TLS 服务端、仍然是 NETCONF 服务端</strong>，网管仍然是客户端。这个看起来别扭的设计是有意的——<strong>它让认证与授权模型完全不用改</strong>：设备照样出示服务端证书、照样校验客户端证书、照样跑同一套 cert-to-name 与 NACM。变的只是"谁先拨号"这一件事。如果连角色也一起反转，就要为 Call Home 单独设计一套认证与权限，那才是真正的复杂度。</p>
+        <p><strong>一台出厂 O-RU 的纳管流程</strong>：上电 → DHCP/SLAAC 拿 IP → 从 DHCP 厂商特定选项或预置 FQDN 得知网管在哪 → 连 4334/4335（失败按退避重试）→ SSH/TLS 握手，出示<strong>出厂预置证书</strong>，双向认证 → hello 交换拿到模块清单 → 网管读硬件/软件清单与规划数据匹配 → 下发运营商域工作证书、账号、软件包 → 下发业务配置（接口 → 同步 → 载波 → eAxC → 时延窗）→ 建立通知订阅 + 启动监督心跳。</p>
+        <p><strong>三个加分点</strong>：① <strong>方向反转带来新的攻击面</strong>——任何能连上 4334/4335 的东西都能声称自己是设备，网管侧的客户端证书校验必须严格，不能因为"是设备主动来的"就放松；② 初始信任是个鸡生蛋问题，靠出厂预置的厂商 IDevID 证书破局，前提是运营商愿意信任厂商 CA；③ <strong>在几千台规模上，Call Home 把"连接管理"从推模型变成拉模型</strong>，设备重启后自己会回来，退避重试逻辑在设备侧——这个方向的改变比任何连接池调优都更有效。</p>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl adv">高级</span>SMO 要管上千台设备，连接怎么管？长连接还是按需连接？</summary>
+      <div class="ans">
+        <p><strong>核心矛盾要先点出来</strong>：设备侧能承受的并发会话数是个位数到几十（O-RU 是资源受限的嵌入式设备），而 SMO 侧想同时对几百台做操作。所以这不是"选一种"的问题，答"长连接"或"按需"都只能得一半分。</p>
+        <table>
+          <thead><tr><th></th><th>长连接</th><th>按需连接</th></tr></thead>
+          <tbody>
+            <tr><td>建连开销</td><td>只付一次</td><td>每次操作都付（O-RU 上是<strong>秒级</strong>，密钥交换很贵）</td></tr>
+            <tr><td>设备侧资源</td><td>吃内存与会话槽位</td><td>接近 0</td></tr>
+            <tr><td>能否收通知</td><td><strong>能</strong></td><td><strong>不能</strong></td></tr>
+            <tr><td>故障感知</td><td>即时</td><td>下次操作才知道</td></tr>
+          </tbody>
+        </table>
+        <p><strong>实践中收敛出来的是混合架构，四个组成部分：</strong></p>
+        <ul>
+          <li><strong>每台设备一条常驻"通知会话"</strong>：只做 <code>create-subscription</code> + 心跳，不发配置 RPC。它几乎不消耗 CPU，换来实时告警和"设备是否在线"的即时判断，<strong>同时天然绕开了 <code>interleave</code> 不支持的问题</strong>。</li>
+          <li><strong>一个受限并发的"配置会话池"</strong>：需要下发时才建连、用完立刻断。<strong>池的大小就是全局限流阀门</strong>，它决定了同时有多少台设备在被改，也决定了 SMO 自己的资源上限。</li>
+          <li><strong>批量作业分批 + 抖动</strong>：一千台切成每批几十台，批间留间隔，每台起始时刻加随机抖动。<strong>同步化的批量操作会在共享环节（DNS、证书服务、日志后端、SMO 数据库）上制造周期性尖峰</strong>；重试退避同样要加抖动，否则一批 worker 会形成稳定活锁——这个坑单机测试永远不出现。</li>
+          <li><strong>每台设备一把 SMO 侧的本地互斥</strong>：保证同一台设备同时只有一个配置作业。指望设备侧的 <code>lock</code> 来串行化是不够的，那只会把冲突变成一堆 <code>lock-denied</code> 重试。</li>
+        </ul>
+        <p><strong>还要说超时分档</strong>：全局统一的 RPC 超时在异构设备群里必然出事——快设备 8 秒、慢设备 100 秒，取任何一个统一值都错。<strong>超时要按设备画像分档，而且必须满足"客户端超时 &gt; 设备最长处理时间"</strong>，否则会制造"客户端认为失败、设备其实成功"的不一致状态。</p>
+        <p><strong>最高层的加分</strong>：如果设备支持 Call Home，就把连接管理从推模型改成拉模型——SMO 不再需要维护设备清单与可达性状态，设备重启后自己回来。<strong>在几千台规模上这是收益最大的一个架构决策。</strong></p>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl adv">高级</span>NETCONF 全程加密，抓包看不到明文，怎么排障？</summary>
+      <div class="ans">
+        <p><strong>先摆正方法论：NETCONF 排障靠"分层排除"，不靠"抓包看真相"。</strong>SSH 承载下的报文内容是不可解密的（SSH 没有类似 TLS 的会话密钥导出的通行做法），所以抓包只用来回答"包有没有到、TCP 层有没有异常"。</p>
+        <p><strong>第一步是把故障定位到分界线的哪一侧。</strong>一条命令就够：</p>
+        <pre>ssh -vvv -s -p 830 admin@device netconf</pre>
+        <p>它用纯 SSH 客户端把会话的前五步（TCP → SSH 握手 → 认证 → subsystem → hello）全部走完，把服务端的 <code>&lt;hello&gt;</code> 原样打在屏幕上。<strong>能看到 hello，说明端口、认证、subsystem、服务端进程全部正常，问题一定在你的客户端代码或模型层</strong>——排障范围一下砍掉一半，而且不需要在设备上装任何工具。反之在哪一步停下，就对应哪一类原因。</p>
+        <p><strong>分层看日志</strong>：SSH 层的失败在 NETCONF 服务端往往完全无感（会话根本没交到它手上），要看 sshd / libssh 的日志；hello 之后的问题在 sshd 日志里又看不出名堂，要看 netopeer2（<code>-v3</code>）与你自己的订阅进程。<strong>先判断卡在哪一侧，再决定看哪份日志。</strong></p>
+        <p><strong>抓包还能干什么</strong>：TCP 重传、RST、零窗口、MTU 黑洞这类问题抓包完全可见，而且只有抓包能看见；TLS 承载下还能看到完整证书链与 TLS 告警码，排"证书未生效/CA 不匹配"非常直接。想看 TLS 里的明文，可以用 <code>SSLKEYLOGFILE</code> 把会话密钥导给 Wireshark。</p>
+        <p><strong>比抓包更有价值的三个信息源</strong>：① <strong>ncclient 的 DEBUG 日志会打印完整 XML</strong>，客户端侧的"我到底发了什么"一目了然；② <strong><code>ietf-netconf-monitoring</code></strong> 能读到当前会话列表（排 <code>lock-denied</code> 时直接看是谁持锁）与全部 schema；③ <strong>RFC 6470 的 <code>netconf-config-change</code> 通知</strong>记录了谁在什么时候改了哪条 XPath，是现成的审计线索。</p>
+        <p><strong>再给一条判据</strong>：现象是"提交成功但硬件没变"时，去比对 <strong>running 与 operational</strong> 两个 datastore——不一致就说明问题在订阅回调里被吞掉了，跟传输一点关系都没有。</p>
+        <p><strong>最后一句是设备准入建议</strong>：要求设备能打出足够细的 NETCONF 日志，<strong>并且能在不重启的情况下动态调整日志级别</strong>。现场故障往往不可复现，"重启一下开 debug 再看"等于放弃这次机会。</p>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl adv">高级</span>批量配置下发到一半失败了，设备处于什么状态？怎么恢复？</summary>
+      <div class="ans">
+        <p>这道题的关键是<strong>先拒绝笼统作答</strong>——"失败"至少有五种，各自的设备状态完全不同，恢复动作也不同。上来就说"回滚"的，说明没在生产上处理过。</p>
+        <table>
+          <thead><tr><th>失败发生在</th><th>设备实际状态</th><th>正确恢复动作</th></tr></thead>
+          <tbody>
+            <tr><td><code>edit-config</code> 报错，且用了 <code>rollback-on-error</code></td><td>candidate 干净，running 未动</td><td>修正内容重试即可，无残留</td></tr>
+            <tr><td><code>edit-config</code> 报错，用的是默认 <code>stop-on-error</code></td><td><strong>candidate 里留着改了一半的内容</strong>，running 未动</td><td><strong>必须 <code>discard-changes</code></strong>，否则下一个 commit 会把半成品提交上去</td></tr>
+            <tr><td><code>commit</code> 报错</td><td>running 未动（commit 是原子的）</td><td><code>discard-changes</code> + 查错误信息</td></tr>
+            <tr><td><strong>客户端 RPC 超时</strong></td><td><strong>未知</strong>：设备可能还在执行，也可能已经成功</td><td><strong>回读状态，不要重试</strong></td></tr>
+            <tr><td>DONE 回调里硬件操作失败</td><td><strong>running 已变，硬件没变——软硬件分叉</strong></td><td>读 operational 比对；靠告警/自愈，配置层面回滚也救不回副作用</td></tr>
+          </tbody>
+        </table>
+        <p><strong>第四行是最重要的一条：timeout 的语义是"不知道"，不是"失败"。</strong>客户端超时后设备很可能还在老老实实地执行，此时重试会撞上 <code>lock-denied</code>，或者在一个未知状态上叠加第二次操作。<strong>超时后的第一个动作必须是重新读一遍实际状态。</strong></p>
+        <p><strong>"批量"还会多出一层不原子</strong>：单台设备内部有 commit 的原子性，但<strong>"420 台设备"这个层面没有任何事务语义</strong>。跨设备的一致性只能靠编排层自己实现——记录每台的实际结果、支持从断点续做、以及必要时的反向补偿。</p>
+        <p><strong>恢复的通用流程（顺序不能变）：</strong></p>
+        <ol>
+          <li><strong>停止一切重试。</strong>状态未知时继续操作只会让它更不可知。</li>
+          <li><strong>回读真实状态</strong>：<code>get-config running</code> 看配置，<code>get</code> / operational 看硬件实际生效值。<strong>两者不一致本身就是一条重要线索。</strong></li>
+          <li><strong>清残留</strong>：<code>discard-changes</code>；确认没有僵死会话占着锁（读 <code>ietf-netconf-monitoring</code> 的会话列表）。</li>
+          <li><strong>按回读结果重新分类</strong>成"已生效/未生效/部分生效"，只对真正未生效的重做。</li>
+          <li><strong>部分生效的最麻烦</strong>：如果有 startup 备份或变更前的完整配置快照，用 <code>copy-config</code> 整体恢复到已知基线再重来，比逐条补偿可靠得多。<strong>所以变更前抓一份配置快照是必须动作。</strong></li>
+        </ol>
+        <p><strong>预防才是这道题真正想听的</strong>：① <code>error-option</code> 显式写 <code>rollback-on-error</code>，失败路径必 <code>discard-changes</code>；② 远程改关键配置用 <strong>confirmed-commit</strong>，验证失败主动 <code>cancel-commit</code>；③ <strong>写后必读</strong>——不要相信 <code>&lt;ok/&gt;</code>，它只保证"设备接受了请求"，不保证"你想改的字段真的变了"（模型 <code>deviation</code> 把字段标成 <code>not-supported</code> 时，设备会返回 <code>&lt;ok/&gt;</code> 但静默丢弃）；④ 超时按设备画像分档，保证客户端超时大于设备最长处理时间；⑤ 作业报告必须<strong>区分"确认失败"和"结果未知"</strong>，这是让报告变得可信的关键一步。</p>
+      </div>
+    </details></li>
+  </ol>
 </section>
 
 <div class="footer-nav">
   <a href="netconf_yang.html">⬅️ NETCONF/YANG</a>
   <a href="network_mgmt_comparison.html">➡️ 管理协议对比</a>
   <a href="tls_ssh_cert.html">🔐 TLS/SSH/证书</a>
+  <a href="oran_planes.html">🧭 O-RAN 三平面</a>
   <a href="oran_interfaces.html">🔌 O1 接口</a>
   <a href="communication_directory.html">📚 目录</a>
   <a href="../index.html">🏠 主页</a>

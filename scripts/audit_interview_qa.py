@@ -35,7 +35,7 @@ from _site import ROOT, content_dirs, content_files  # noqa: E402
 # Directories whose interview sections are already migrated: legacy layouts
 # found there are hard failures rather than "not yet converted".
 MIGRATED_DIRS = {"algorithms", "cpp", "perf-debug", "stl", "desktop-gui",
-                 "robotics-comm"}
+                 "robotics-comm", "system", "embedded-realtime", "communication"}
 
 LEVELS = {"basic": "基础", "principle": "原理", "mid": "中级", "pro": "进阶",
           "adv": "高级", "eng": "工程", "expert": "专家", "risk": "安全"}

@@ -1,0 +1,2110 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>内核崩溃分析 · Oops / panic / lockup / kdump / crash 工具 / KASAN / 动态调试</title>
+<meta name="description" content="内核崩溃分析：整机挂掉时没有 core、没有 GDB，你只有一段 dmesg 或一个 vmcore。这篇讲清 Oops 与 panic 的分野、逐字段读懂 Oops、kdump/kexec 为什么能保住现场、crash 工具从 vmcore 定位真凶的完整走查、slab poison 与 KASAN 报告怎么读、hung task / soft lockup / hard lockup 检测器原理与调参，以及生产上把「机器无故重启」变成可归因事件的落地方案。">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<style>
+  html { scroll-behavior: smooth; }
+  body { line-height: 1.75; min-height: 100vh; overflow-x: hidden; }
+  main { min-width: 0; }
+  pre { font-family: var(--mono); font-size: .85rem; line-height: 1.6; }
+  code { font-family: var(--mono); }
+  svg text { font-family: var(--sans); }
+  table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: .9rem; }
+  th, td { border: 1px solid var(--border); padding: .55rem .85rem; text-align: left; vertical-align: top; }
+  th { background: var(--bg-card-2); color: var(--accent); }
+  tr:nth-child(even) { background: color-mix(in srgb, var(--text) 3%, transparent); }
+  .analogy::before { content: "🏠 生活类比 · "; color: var(--accent-4); font-weight: 700; font-size: .86rem; }
+  .def > strong:first-child { color: var(--accent); }
+
+  .fig svg { max-width: 100%; height: auto; }
+  .fig .box   { fill: var(--bg-card-2); stroke: var(--border-2); stroke-width: 1.2; }
+  .fig .box-a { fill: color-mix(in srgb, var(--accent) 14%, var(--bg-card)); stroke: var(--accent); stroke-width: 1.2; }
+  .fig .box-g { fill: color-mix(in srgb, var(--accent-3) 14%, var(--bg-card)); stroke: var(--accent-3); stroke-width: 1.2; }
+  .fig .box-p { fill: color-mix(in srgb, var(--accent-2) 14%, var(--bg-card)); stroke: var(--accent-2); stroke-width: 1.2; }
+  .fig .box-y { fill: color-mix(in srgb, var(--accent-4) 14%, var(--bg-card)); stroke: var(--accent-4); stroke-width: 1.2; }
+  .fig .box-r { fill: color-mix(in srgb, var(--danger) 14%, var(--bg-card)); stroke: var(--danger); stroke-width: 1.2; }
+  .fig .t   { fill: var(--text); font-size: 12px; }
+  .fig .tb  { fill: var(--text); font-size: 12.5px; font-weight: 700; }
+  .fig .ts  { fill: var(--text-dim); font-size: 10.5px; }
+  .fig .tm  { fill: var(--text-dim); font-size: 10.5px; font-family: var(--mono); }
+  .fig .ta  { fill: var(--accent); font-size: 12px; font-weight: 700; }
+  .fig .tg  { fill: var(--accent-3); font-size: 11px; font-weight: 600; }
+  .fig .ty  { fill: var(--accent-4); font-size: 11px; font-weight: 600; }
+  .fig .tr  { fill: var(--danger); font-size: 11px; font-weight: 600; }
+  .fig .ln  { stroke: var(--border-2); stroke-width: 1.4; fill: none; }
+  .fig .ln-a{ stroke: var(--accent); stroke-width: 1.6; fill: none; }
+  .fig .ln-g{ stroke: var(--accent-3); stroke-width: 1.6; fill: none; }
+  .fig .ln-d{ stroke: var(--text-mute); stroke-width: 1.2; fill: none; stroke-dasharray: 4 3; }
+  .fig .ar-a{ fill: var(--accent); }
+  .fig .ar-g{ fill: var(--accent-3); }
+
+  .vs { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 16px 0; }
+  @media (max-width: 860px) { .vs { grid-template-columns: 1fr; } }
+  .vs > div > h5 { margin: 0 0 6px; font-size: .88rem; }
+  .vs .bad  { border-color: color-mix(in srgb, var(--danger) 45%, var(--border)); background: color-mix(in srgb, var(--danger) 6%, var(--bg-card)); }
+  .vs .bad  > h5 { color: var(--danger); }
+  .vs .good { border-color: color-mix(in srgb, var(--accent-3) 45%, var(--border)); background: color-mix(in srgb, var(--accent-3) 6%, var(--bg-card)); }
+  .vs .good > h5 { color: var(--accent-3); }
+  .vs pre { margin: 6px 0 0; font-size: .78rem; }
+
+  .intuition { background: color-mix(in srgb, var(--accent) 8%, var(--bg-card)); border-left: 4px solid var(--accent-4); padding: 14px 18px; border-radius: 0 10px 10px 0; margin: 14px 0; font-size: 14px; line-height: 1.7; }
+  .intuition::before { content: "🎯 关键 · "; color: var(--accent-4); font-weight: 700; font-size: 13px; }
+  .tool-card { background: color-mix(in srgb, var(--accent) 8%, var(--bg-card)); border: 1px solid var(--border); border-radius: 10px; padding: 14px 18px; margin: 12px 0; border-left: 3px solid var(--accent); }
+  .tool-card h4 { margin: 0 0 8px; font-size: 14.5px; color: var(--accent); }
+  .tool-card.violet { border-left-color: var(--accent-2); } .tool-card.violet h4 { color: var(--accent-2); }
+  .tool-card.amber  { border-left-color: var(--accent-4); } .tool-card.amber  h4 { color: var(--accent-4); }
+  .tool-card.green  { border-left-color: var(--accent-3); } .tool-card.green  h4 { color: var(--accent-3); }
+  .tool-card.danger { border-left-color: var(--danger);   } .tool-card.danger h4 { color: var(--danger); }
+  .tool-card ul { margin: 6px 0 0; padding-left: 22px; }
+  .tool-card li { font-size: 13.5px; color: var(--text); line-height: 1.7; margin: 4px 0; }
+  .tool-card code { background: color-mix(in srgb, var(--accent) 14%, var(--bg-card)); color: var(--accent-4); padding: 1px 5px; border-radius: 3px; font-size: 12px; font-family: var(--mono); }
+  .cheatsheet { border: 1px solid var(--border); border-radius: 10px; margin: 18px 0; overflow: hidden; }
+  .cheatsheet table { width: 100%; border-collapse: collapse; font-size: 13px; margin: 0; }
+  .cheatsheet thead th { background: color-mix(in srgb, var(--accent) 13%, var(--bg-card)); color: var(--accent); text-align: left; padding: 10px 14px; border-bottom: 2px solid var(--border); font-family: var(--mono); font-size: 11.5px; letter-spacing: 1px; }
+  .cheatsheet tbody td { padding: 10px 14px; border-bottom: 1px dashed var(--border); color: var(--text); vertical-align: top; }
+  .cheatsheet tbody tr:nth-child(even) { background: color-mix(in srgb, var(--accent) 5%, var(--bg-card)); }
+  .cheatsheet tbody td code { background: color-mix(in srgb, var(--accent) 14%, var(--bg-card)); color: var(--accent-4); padding: 1px 6px; border-radius: 3px; font-size: 11.5px; font-family: var(--mono); }
+  .checklist { background: color-mix(in srgb, var(--green) 8%, var(--bg-card)); border: 1px solid color-mix(in srgb, var(--green) 30%, transparent); border-left: 4px solid var(--green); border-radius: 0 12px 12px 0; padding: 16px 20px; margin: 14px 0; }
+  .checklist h4 { color: var(--accent-3); margin: 0 0 10px; font-size: 14px; letter-spacing: 1px; }
+  .checklist ul { margin: 0; padding-left: 22px; }
+  .checklist li { font-size: 13.5px; color: var(--text); line-height: 1.7; margin: 6px 0; }
+  .checklist li code { background: color-mix(in srgb, var(--accent) 14%, var(--bg-card)); color: var(--accent-4); padding: 1px 5px; border-radius: 3px; font-size: 12px; font-family: var(--mono); }
+  .insight-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin: 16px 0; }
+  .insight-grid .card { background: color-mix(in srgb, var(--accent) 8%, var(--bg-card)); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; min-width: 0; }
+  .insight-grid .card h4 { margin: 0 0 8px; font-size: 14px; color: var(--accent-4); }
+  .insight-grid .card.green  { border-left: 3px solid var(--accent-3); } .insight-grid .card.green  h4 { color: var(--accent-3); }
+  .insight-grid .card.violet { border-left: 3px solid var(--accent-2); } .insight-grid .card.violet h4 { color: var(--accent-2); }
+  .insight-grid .card p { font-size: 13px; color: var(--text); line-height: 1.65; margin: 0; }
+  @media (max-width: 760px) { .insight-grid { grid-template-columns: 1fr; } }
+</style>
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="tn-shell-overlay has-topnav">
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="linux_system_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 110 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="progress" id="progress"></div>
+<div class="layout">
+  <aside class="toc">
+    <h2>内核崩溃分析</h2>
+    <nav>
+      <ol>
+        <li><a href="#s1">内核出问题的几种形态</a></li>
+        <li><a href="#s2">读懂一段 Oops</a></li>
+        <li><a href="#s3">kdump / kexec 机制</a></li>
+        <li><a href="#s4">crash 工具实战</a></li>
+        <li><a href="#s5">常见根因与对应证据</a></li>
+        <li><a href="#s6">不崩溃时的内核调试手段</a></li>
+        <li><a href="#s7">检测器原理与调参</a></li>
+        <li><a href="#s8">生产落地</a></li>
+        <li><a href="#s9">决策树与 checklist</a></li>
+        <li><a href="#s10">面试题集（12 道）</a>
+          <ol>
+            <li><a href="#s10-1">10.1 基础</a></li>
+            <li><a href="#s10-2">10.2 中级</a></li>
+            <li><a href="#s10-3">10.3 高级</a></li>
+          </ol>
+        </li>
+      </ol>
+    </nav>
+  </aside>
+
+<main>
+
+  <header class="hero">
+    <div class="badge">Linux System · Kernel Crash · 2026</div>
+    <h1>内核崩溃分析</h1>
+    <p class="sub">本站 <a href="../perf-debug/crash_debugging_guide.html">崩溃调试指南</a>讲的是<strong>用户态进程崩溃</strong>——有 core dump，有 GDB，可以慢慢看。这一篇讲<strong>内核崩溃</strong>：整机挂掉，没有 core，没有 GDB，进程连同它的调试器一起消失了。你手上只有一段抢救出来的 dmesg，或者一个几 GB 的 <code>vmcore</code>。<strong>本文要解决的是「怎么从这两样东西里把根因挖出来」。</strong></p>
+    <div class="meta-row">
+      <span class="pill red">核心难度 ★★★★★</span>
+      <span class="pill cyan">排障主线</span>
+      <span class="pill green">阅读时长 ~110 min</span>
+      <span class="pill amber">前置 进程调度 · 设备驱动</span>
+    </div>
+    <div class="meta">
+      <span>Oops · panic · lockup</span>
+      <span>kdump · kexec · makedumpfile</span>
+      <span>crash · faddr2line</span>
+      <span>KASAN · slub_debug · ftrace</span>
+    </div>
+  </header>
+
+<!-- ================================================================ §1 -->
+<section class="chapter" id="s1">
+  <div class="ch-head">
+    <div class="num">01</div>
+    <div class="t"><h2>内核出问题的几种形态</h2><p class="sub">先分类，再取证——走错路会浪费一整天</p></div>
+  </div>
+
+  <p>「机器挂了」在内核视角下不是一件事，而是<strong>至少八种性质完全不同的事</strong>。它们的共同点只有一个：日志出现在 dmesg 里而不是应用日志里。它们的排查路径、取证手段、甚至「该不该去看代码」的答案都不一样。<strong>排障的第一步永远是分类</strong>——把一个 OOM 当成驱动 bug 去追，或者把一次 ECC 内存故障当成竞态去 review 代码，是最常见的时间浪费。</p>
+
+  <div class="analogy">用户态崩溃像<strong>一个租户在自己屋里把杯子摔了</strong>：物业（内核）会给你留一份现场照片（core dump），你可以慢慢看，整栋楼照常运转。内核崩溃像<strong>大楼的承重结构出问题</strong>：没有第三方能替你拍照，因为「能拍照的那个人」也在这栋楼里。所以内核必须<strong>提前把相机和胶卷藏在一块谁也动不了的角落</strong>（这就是 kdump 预留内存），出事那一刻自己抢救自己。</div>
+
+  <h3>用一句话区分：内核还能不能继续跑</h3>
+  <p>这是所有分类的主轴。<strong>Oops</strong> 是「内核检测到了一个本不该发生的异常，杀掉肇事的那个上下文，然后<em>试图</em>继续跑」；<strong>panic</strong> 是「走不下去了，停机」。<strong>lockup / hung task / RCU stall</strong> 则完全是另一类：内核逻辑上没错，只是<strong>某个东西不动了</strong>，是检测器主动报出来的，本身不改变系统状态。<strong>OOM killer</strong> 更是「系统按设计正常工作」——它只是杀了个进程，属于容量问题而不是缺陷。</p>
+
+  <table>
+    <thead><tr><th>形态</th><th>典型 dmesg 首行</th><th>之后内核还跑吗</th><th>成因分布</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><strong>Oops</strong></td>
+        <td><code>BUG: kernel NULL pointer dereference, address: 0000000000000008</code><br><code>Oops: 0002 [#1] SMP PTI</code></td>
+        <td>杀掉当前进程后<strong>可能</strong>继续；系统已处于不可信状态</td>
+        <td>绝大多数是驱动 / 内核模块的空指针、野指针</td>
+      </tr>
+      <tr>
+        <td><strong>panic</strong></td>
+        <td><code>Kernel panic - not syncing: Fatal exception in interrupt</code><br><code>Kernel panic - not syncing: Attempted to kill init!</code></td>
+        <td>否，停机或按 <code>kernel.panic</code> 重启</td>
+        <td>中断上下文里 Oops、根文件系统挂不上、init 退出、显式 <code>panic()</code></td>
+      </tr>
+      <tr>
+        <td><strong>BUG()</strong></td>
+        <td><code>kernel BUG at mm/slub.c:305!</code><br>紧跟 <code>invalid opcode: 0000 [#1] SMP</code></td>
+        <td>等同 Oops（多数场景直接升级为 panic）</td>
+        <td>内核代码里的断言失败——「这里绝对不该走到」</td>
+      </tr>
+      <tr>
+        <td><strong>WARN()</strong></td>
+        <td><code>WARNING: CPU: 3 PID: 1274 at drivers/foo/bar.c:88 foo_stop+0x5a/0x90 [foo]</code></td>
+        <td>是，正常继续</td>
+        <td>可恢复的异常状态；<strong>但它是最好的早期信号</strong>，别忽略</td>
+      </tr>
+      <tr>
+        <td><strong>hung task</strong></td>
+        <td><code>INFO: task jbd2/sda1-8:412 blocked for more than 120 seconds.</code></td>
+        <td>是，只是这个任务不动</td>
+        <td>IO 卡死（存储、NFS）、内核互斥锁死锁</td>
+      </tr>
+      <tr>
+        <td><strong>soft lockup</strong></td>
+        <td><code>watchdog: BUG: soft lockup - CPU#2 stuck for 22s! [kworker/2:1:187]</code></td>
+        <td>是（其他 CPU 正常）</td>
+        <td>某 CPU 在内核态长时间不让出：死循环、超长临界区、锁自旋</td>
+      </tr>
+      <tr>
+        <td><strong>hard lockup</strong></td>
+        <td><code>watchdog: Watchdog detected hard LOCKUP on cpu 3</code></td>
+        <td>该 CPU 完全失联；常配置为直接 panic</td>
+        <td><strong>关中断状态下死循环 / 自旋锁死锁</strong>，连时钟中断都进不来</td>
+      </tr>
+      <tr>
+        <td><strong>RCU stall</strong></td>
+        <td><code>rcu: INFO: rcu_preempt detected stalls on CPUs/tasks: { 3-.... }</code></td>
+        <td>是，但内存回收会被拖住</td>
+        <td>某 CPU 长时间不经过静止态：长时间关抢占 / 关中断 / 内核态死循环</td>
+      </tr>
+      <tr>
+        <td><strong>OOM killer</strong></td>
+        <td><code>java invoked oom-killer: gfp_mask=0x140dca(...), order=0, oom_score_adj=0</code><br><code>Out of memory: Killed process 3412 (java) total-vm:...</code></td>
+        <td>是——<strong>这是设计行为，不是崩溃</strong></td>
+        <td>容量规划 / cgroup 限额 / 应用泄漏；<strong>极少数是内核泄漏</strong></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="def"><strong>Oops</strong>：内核在自己的地址空间里踩到了不该踩的东西（最常见是解引用空指针或非法地址），CPU 抛出异常，内核的异常处理路径发现「这是内核态发生的、且没有 fixup 表项能救」，于是打印一份现场快照，把<strong>当前进程</strong>杀掉，然后返回主循环继续调度。名字来自那句无奈的 "Oops"——内核自己也知道这不该发生。</div>
+
+  <div class="danger"><strong>「Oops 之后系统还活着」是一种危险的错觉。</strong>被杀掉的那个上下文可能<strong>正持有自旋锁、正持有 mutex、正在改一个内核链表改到一半、刚从某个 slab 分配了对象还没登记</strong>。内核没有回滚机制，这些资源永远泄漏、这些锁永远不会被释放。所以一次 Oops 之后：后续访问同一子系统的任务会一个个卡死在 D 状态，几分钟后 hung task 报警，再过一会儿可能整机雪崩。<strong>Oops 之后的任何现象都不可信，只有第一次 Oops 的堆栈才是真相</strong>——这也是 <code>[#1]</code> 那个计数器存在的意义：<code>[#2]</code> <code>[#3]</code> 的堆栈通常是第一次的次生灾害，不要去追。</div>
+
+  <h3>典型日志长什么样：一次对照</h3>
+  <p>下面这段是把各类首行摘在一起的速查。<strong>排障时先在 dmesg 里 grep 这些关键词，命中哪一类就走哪条路</strong>——这比从头往下读几万行日志高效得多。</p>
+
+<pre><span class="cm"># ① 空指针 Oops —— 看 address 和 RIP</span>
+BUG: kernel NULL pointer dereference, address: 0000000000000008
+#PF: supervisor read access in kernel mode
+Oops: 0000 [#1] SMP PTI
+
+<span class="cm"># ② 断言失败 BUG() —— 编译成 ud2 非法指令，所以是 invalid opcode</span>
+kernel BUG at fs/ext4/inode.c:1932!
+invalid opcode: 0000 [#1] SMP NOPTI
+
+<span class="cm"># ③ 可恢复警告 WARN_ON() —— 系统继续跑，但这是最早的线索</span>
+WARNING: CPU: 1 PID: 0 at net/sched/sch_generic.c:472 dev_watchdog+0x25d/0x270
+
+<span class="cm"># ④ 任务卡在不可中断睡眠 —— 后面紧跟这个任务的栈</span>
+INFO: task nfsd:1043 blocked for more than 122 seconds.
+      Tainted: G           OE     6.1.0-18-amd64 #1
+"echo 0 &gt; /proc/sys/kernel/hung_task_timeout_secs" disables this message.
+
+<span class="cm"># ⑤ 某 CPU 不让出（中断还在，所以能打印） </span>
+watchdog: BUG: soft lockup - CPU#2 stuck for 23s! [worker:4102]
+
+<span class="cm"># ⑥ 连 NMI 都喂不上 —— 通常关中断死循环</span>
+watchdog: Watchdog detected hard LOCKUP on cpu 3
+
+<span class="cm"># ⑦ RCU 宽限期迟迟结束不了</span>
+rcu: INFO: rcu_preempt detected stalls on CPUs/tasks:
+rcu:     3-...0: (1 GPs behind) idle=... softirq=...
+
+<span class="cm"># ⑧ 内存不够 —— 这是设计行为，去查容量不要去查代码</span>
+kworker/0:2 invoked oom-killer: gfp_mask=0x cc0(GFP_KERNEL), order=0
+Out of memory: Killed process 3412 (java) total-vm:9812344kB, anon-rss:7734112kB</pre>
+
+  <div class="note"><strong>为什么 hard lockup 那条信息还能打印出来？</strong>这正是它的精妙之处：普通时钟中断已经进不去了（中断被关着），但 <strong>NMI（不可屏蔽中断）不受 <code>cli</code> 影响</strong>，硬件依然能把它送进 CPU。内核在 NMI 处理函数里发现「这个 CPU 的时钟中断计数已经很久没涨了」，于是在 NMI 上下文里把栈打出来。<strong>能看到 hard lockup 报告，说明 NMI 通路是好的</strong>；如果连这条都没有、机器直接静默复位，那多半是硬件看门狗或掉电，不是内核软件问题。</div>
+
+  <h3>决策图：看到日志之后往哪走</h3>
+
+  <div class="fig">
+    <svg viewBox="0 0 780 420" role="img" aria-label="按 dmesg 首行关键词分诊到不同排查路径的决策图">
+      <rect class="box-a" x="290" y="8" width="200" height="34" rx="8"/>
+      <text class="tb" x="390" y="30" text-anchor="middle">dmesg 首行关键词</text>
+      <path class="ln" d="M390 42 L390 58 M100 58 L688 58 M100 58 L100 74 M296 58 L296 74 M492 58 L492 74 M688 58 L688 74"/>
+
+      <rect class="box-r" x="12" y="74" width="176" height="56" rx="8"/>
+      <text class="t" x="100" y="95" text-anchor="middle">Oops / BUG at</text>
+      <text class="t" x="100" y="113" text-anchor="middle">invalid opcode</text>
+      <rect class="box-y" x="208" y="74" width="176" height="56" rx="8"/>
+      <text class="t" x="296" y="95" text-anchor="middle">soft / hard lockup</text>
+      <text class="t" x="296" y="113" text-anchor="middle">rcu stall</text>
+      <rect class="box-p" x="404" y="74" width="176" height="56" rx="8"/>
+      <text class="t" x="492" y="95" text-anchor="middle">task blocked for</text>
+      <text class="t" x="492" y="113" text-anchor="middle">more than N seconds</text>
+      <rect class="box-g" x="600" y="74" width="176" height="56" rx="8"/>
+      <text class="t" x="688" y="95" text-anchor="middle">oom-killer</text>
+      <text class="t" x="688" y="113" text-anchor="middle">Hardware Error / EDAC</text>
+
+      <path class="ln-d" d="M100 130 L100 152 M296 130 L296 152 M492 130 L492 152 M688 130 L688 152"/>
+
+      <rect class="box" x="12" y="152" width="176" height="44" rx="8"/>
+      <text class="tr" x="100" y="171" text-anchor="middle">代码缺陷</text>
+      <text class="ts" x="100" y="188" text-anchor="middle">指针 / 生命周期错了</text>
+      <rect class="box" x="208" y="152" width="176" height="44" rx="8"/>
+      <text class="ty" x="296" y="171" text-anchor="middle">CPU 被占住</text>
+      <text class="ts" x="296" y="188" text-anchor="middle">循环 / 锁 / 关中断</text>
+      <rect class="box" x="404" y="152" width="176" height="44" rx="8"/>
+      <text class="ta" x="492" y="171" text-anchor="middle">依赖方不返回</text>
+      <text class="ts" x="492" y="188" text-anchor="middle">IO 或内核互斥锁</text>
+      <rect class="box" x="600" y="152" width="176" height="44" rx="8"/>
+      <text class="tg" x="688" y="171" text-anchor="middle">容量 / 硬件</text>
+      <text class="ts" x="688" y="188" text-anchor="middle">不是代码问题</text>
+
+      <path class="ln-d" d="M100 196 L100 218 M296 196 L296 218 M492 196 L492 218 M688 196 L688 218"/>
+
+      <rect class="box-a" x="12" y="218" width="176" height="76" rx="8"/>
+      <text class="ts" x="100" y="238" text-anchor="middle">取证：vmcore</text>
+      <text class="tm" x="100" y="256" text-anchor="middle">crash → bt</text>
+      <text class="tm" x="100" y="272" text-anchor="middle">faddr2line RIP</text>
+      <text class="ts" x="100" y="288" text-anchor="middle">§2 · §4</text>
+      <rect class="box-a" x="208" y="218" width="176" height="76" rx="8"/>
+      <text class="ts" x="296" y="238" text-anchor="middle">取证：所有 CPU 栈</text>
+      <text class="tm" x="296" y="256" text-anchor="middle">echo l &gt; sysrq-trigger</text>
+      <text class="tm" x="296" y="272" text-anchor="middle">crash → bt -a</text>
+      <text class="ts" x="296" y="288" text-anchor="middle">§4 · §7</text>
+      <rect class="box-a" x="404" y="218" width="176" height="76" rx="8"/>
+      <text class="ts" x="492" y="238" text-anchor="middle">取证：全部阻塞栈</text>
+      <text class="tm" x="492" y="256" text-anchor="middle">echo w &gt; sysrq-trigger</text>
+      <text class="tm" x="492" y="272" text-anchor="middle">crash → foreach UN bt</text>
+      <text class="ts" x="492" y="288" text-anchor="middle">§5 · §6</text>
+      <rect class="box-a" x="600" y="218" width="176" height="76" rx="8"/>
+      <text class="ts" x="688" y="238" text-anchor="middle">取证：容量与硬件</text>
+      <text class="tm" x="688" y="256" text-anchor="middle">kmem -i / kmem -s</text>
+      <text class="tm" x="688" y="272" text-anchor="middle">ras-mc-ctl / mcelog</text>
+      <text class="ts" x="688" y="288" text-anchor="middle">§5 · §8</text>
+
+      <path class="ln-d" d="M100 294 L100 318 M296 294 L296 318 M492 294 L492 318 M688 294 L688 318"/>
+
+      <rect class="box-g" x="12" y="318" width="176" height="40" rx="8"/>
+      <text class="ts" x="100" y="343" text-anchor="middle">定位到源码行 → 修</text>
+      <rect class="box-g" x="208" y="318" width="176" height="40" rx="8"/>
+      <text class="ts" x="296" y="343" text-anchor="middle">找到不让出的那段代码</text>
+      <rect class="box-g" x="404" y="318" width="176" height="40" rx="8"/>
+      <text class="ts" x="492" y="343" text-anchor="middle">画出等待环 / 找底层设备</text>
+      <rect class="box-g" x="600" y="318" width="176" height="40" rx="8"/>
+      <text class="ts" x="688" y="343" text-anchor="middle">扩容 / 换硬件 / 调限额</text>
+
+      <text class="ts" x="390" y="386" text-anchor="middle">四条路径的取证手段完全不同——分错类就等于从第一步开始白干</text>
+      <text class="ts" x="390" y="404" text-anchor="middle">规则：先看第一条日志（时间最早的），不要看雪崩之后的那一堆</text>
+    </svg>
+    <figcaption>内核异常分诊图：先按首行关键词分四类，再决定取证手段，最后才谈定位</figcaption>
+  </div>
+
+  <h3>要不要自动重启：一组 sysctl 决定你能不能拿到现场</h3>
+  <p>默认配置下，很多发行版<strong>不会</strong>在 Oops 时 panic，也<strong>不会</strong>在 panic 后重启——机器就那么静静地挂在那里，屏幕上一堆看不清的栈。这在服务器上通常是最糟糕的选择：既没有服务，也没有落盘的 vmcore。</p>
+
+  <table>
+    <thead><tr><th>参数</th><th>含义</th><th>生产建议</th></tr></thead>
+    <tbody>
+      <tr><td><code>kernel.panic</code></td><td>panic 后等 N 秒自动重启；<strong><code>0</code> = 永远挂着不重启</strong></td><td>集群节点设 <code>10</code>~<code>30</code>；留几秒让 kdump 落盘和控制台输出刷完</td></tr>
+      <tr><td><code>kernel.panic_on_oops</code></td><td>Oops 直接升级成 panic</td><td><strong>建议开（<code>1</code>）</strong>：Oops 后系统已不可信，与其带病运行不如立刻收现场</td></tr>
+      <tr><td><code>kernel.panic_on_warn</code></td><td>连 WARN 都升级成 panic</td><td>只在<strong>专门抓某个偶发 WARN</strong> 的调试期开，平时开了会天天重启</td></tr>
+      <tr><td><code>kernel.softlockup_panic</code></td><td>soft lockup 时 panic</td><td>物理机可开；<strong>虚拟机慎开</strong>（宿主超卖会误报，见 §7）</td></tr>
+      <tr><td><code>kernel.hardlockup_panic</code> / <code>nmi_watchdog=panic</code></td><td>hard lockup 时 panic</td><td>建议开——hard lockup 基本没有自愈可能</td></tr>
+      <tr><td><code>kernel.hung_task_panic</code></td><td>hung task 时 panic</td><td>默认关。存储抖动一次就 panic 太激进，只在追死锁时临时开</td></tr>
+      <tr><td><code>kernel.panic_on_rcu_stall</code></td><td>RCU stall 时 panic</td><td>默认关；追 stall 根因时临时开，能拿到「卡住那一刻」的现场</td></tr>
+      <tr><td><code>vm.panic_on_oom</code></td><td>OOM 时 panic 而不是杀进程</td><td>几乎不用。OOM 是容量问题，panic 只会把局部故障放大成整机故障</td></tr>
+    </tbody>
+  </table>
+
+<pre><span class="cm"># 查看当前值（临时改用 sysctl -w，持久化写 /etc/sysctl.d/99-crash.conf）</span>
+$ sysctl kernel.panic kernel.panic_on_oops kernel.softlockup_panic
+kernel.panic = 0
+kernel.panic_on_oops = 1
+kernel.softlockup_panic = 0
+
+<span class="cm"># 典型的服务器崩溃取证配置</span>
+$ cat /etc/sysctl.d/99-crash.conf
+kernel.panic = 20            <span class="cm"># panic 后 20 秒重启，别永远挂着</span>
+kernel.panic_on_oops = 1     <span class="cm"># Oops 即 panic，立刻收现场</span>
+kernel.hardlockup_panic = 1
+kernel.sysrq = 1             <span class="cm"># 允许 magic SysRq（见 §6）</span></pre>
+
+  <div class="box star"><strong>面试加分点</strong>：被问「<code>panic_on_oops</code> 该不该开」时，标准答案不是「开」或「不开」，而是<strong>取决于这台机器有没有冗余</strong>。集群里的一个节点、K8s 的一个 worker——立刻 panic 收 vmcore 是对的，反正流量会飘走，而带病运行的节点会返回错误结果污染上游。反过来，单点的工控设备、车载 ECU、机房里唯一那台采集机——panic 意味着业务中断，宁可保住 WARN 后的降级运行，靠外部硬件看门狗兜底。<strong>「拿现场」和「保可用」是真实的取舍，能说清这一层就说明真做过决策而不是背参数。</strong></div>
+
+  <div class="note">这一篇讲的是「已经出事之后怎么办」。事故的组织流程侧（谁来定责、怎么止血、复盘怎么写）在 <a href="incident_playbook.html">故障处理手册</a>；崩溃发生在你自己写的驱动里时，代码侧的规范见 <a href="linux_device_driver.html">Linux 设备驱动</a>。</div>
+</section>
+
+<!-- ================================================================ §2 -->
+<section class="chapter" id="s2">
+  <div class="ch-head">
+    <div class="num">02</div>
+    <div class="t"><h2>读懂一段 Oops</h2><p class="sub">从一屏十六进制到一行源码</p></div>
+  </div>
+
+  <p>Oops 输出看起来像一堵墙，但它的结构是固定的，而且<strong>信息密度极高</strong>——很多问题不需要 vmcore，光靠这一屏就能定位。下面是一段真实形态的 x86_64 Oops（来自一个自己写的字符设备驱动），我们逐行拆。</p>
+
+<pre>BUG: kernel NULL pointer dereference, address: 0000000000000000
+#PF: supervisor write access in kernel mode
+#PF: error_code(0x0002) - not-present page
+PGD 0 P4D 0
+Oops: 0002 [#1] SMP PTI
+CPU: 3 PID: 4211 Comm: cat Tainted: G           OE      6.1.0-18-amd64 #1  Debian
+Hardware name: QEMU Standard PC (Q35 + ICH9, 2009), BIOS 1.16.2 04/01/2014
+RIP: 0010:mydev_write+0x2a/0x60 [mydev]
+Code: 0f 1f 44 00 00 55 48 89 e5 41 54 49 89 fc 48 8b 47 18 48 85 c0 74 08 &lt;c7&gt; 00 2a 00
+RSP: 0018:ffffb4a7c0e93e18 EFLAGS: 00010246
+RAX: 0000000000000000 RBX: ffff98c1c2a3d800 RCX: 0000000000000000
+RDX: 0000000000000004 RSI: 00007ffd3c1a2b40 RDI: ffff98c1c1d05a00
+RBP: ffffb4a7c0e93e30 R08: 0000000000000000 R09: 0000000000000000
+R10: 0000000000000000 R11: 0000000000000000 R12: ffff98c1c1d05a00
+R13: 0000000000000004 R14: 00007ffd3c1a2b40 R15: ffffb4a7c0e93ea8
+FS:  00007f2e9c4b2740(0000) GS:ffff98c2f7d80000(0000) knlGS:0000000000000000
+CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+CR2: 0000000000000000 CR3: 0000000102a3c000 CR4: 00000000000006f0
+Call Trace:
+ &lt;TASK&gt;
+ vfs_write+0xc5/0x400
+ ? __fget_light+0xa5/0x120
+ ksys_write+0x6b/0xf0
+ do_syscall_64+0x5b/0xc0
+ entry_SYSCALL_64_after_hwframe+0x64/0xce
+ &lt;/TASK&gt;
+Modules linked in: mydev(OE) nls_ascii crc32_pclmul ... [last unloaded: mydev]
+CR2: 0000000000000000
+---[ end trace 0000000000000000 ]---</pre>
+
+  <h3>第一段：出了什么事、在哪个地址</h3>
+  <div class="point"><div class="label"><code>address: 0000...0000</code> / <code>CR2</code></div><div>x86 上 <code>CR2</code> 寄存器保存<strong>触发缺页的那个线性地址</strong>，第一行的 <code>address:</code> 就是它。<strong>这是整份 Oops 里最有用的一个数字</strong>：接近 0 的小地址 = 空指针解引用；而且<strong>那个小偏移往往就是结构体成员的偏移</strong>——<code>0x8</code> 表示访问了某结构体第 8 字节处的字段，<code>0x18</code> 表示第 0x18 字节处。配合 <code>pahole</code> 打印该结构体的布局，常常一眼就知道是哪个成员。</div></div>
+  <div class="point"><div class="label"><code>#PF: error_code(0x0002)</code></div><div>缺页错误码的位域：<strong>bit0</strong> = 页是否存在（0=不存在），<strong>bit1</strong> = 读还是写（1=写），<strong>bit2</strong> = 用户态还是内核态（0=内核），<strong>bit3</strong> = 保留位违规，<strong>bit4</strong> = 取指。所以 <code>0x0002</code> = 「内核态、写、页不存在」。现代内核会把它翻译成人话直接打在下一行（<code>supervisor write access in kernel mode</code>），不用自己算，但知道位含义有助于看老内核的日志。</div></div>
+  <div class="point"><div class="label"><code>Oops: 0002 [#1]</code></div><div>前面那个 <code>0002</code> 就是同一个错误码。<strong><code>[#1]</code> 是本次启动以来的第几次 Oops</strong>。如果你看到 <code>[#3]</code>，说明前面还有两次，<strong>去日志里往上翻找 <code>[#1]</code></strong>——第一次才是真凶，后面的通常是第一次留下的烂摊子引发的次生崩溃。<code>SMP PTI</code> 是内核配置标记（多处理器、开启了页表隔离）。</div></div>
+
+  <h3>第二段：RIP —— 全场最关键的一行</h3>
+  <div class="def"><strong><code>RIP: 0010:mydev_write+0x2a/0x60 [mydev]</code></strong> 的读法：<code>0010</code> 是代码段选择子（内核态固定值，没有信息量，忽略）；<strong><code>mydev_write</code> 是出错指令所在的函数</strong>；<strong><code>+0x2a</code> 是出错指令相对函数入口的字节偏移</strong>；<strong><code>/0x60</code> 是这个函数的总字节长度</strong>；<strong><code>[mydev]</code> 表示这个函数来自名为 mydev 的可加载模块</strong>，没有方括号则来自内核本体（vmlinux）。</div>
+
+  <div class="intuition"><code>+0x2a/0x60</code> 这种「偏移/长度」格式不是内核在卖弄，而是<strong>为了对抗 KASLR</strong>。开启地址随机化后，每次启动 <code>mydev_write</code> 的绝对地址都不一样，把绝对地址贴到 bug 报告里对别人毫无用处；<strong>而「函数名 + 函数内偏移」在同一份编译产物里是永远稳定的</strong>。同时 <code>/0x60</code> 这个总长度还是个校验：如果你手上的 <code>.ko</code> 里 <code>mydev_write</code> 长度不是 0x60，说明<strong>你拿错了版本</strong>，别浪费时间往下查。</div>
+
+  <p><code>Code:</code> 那一行是 RIP 附近的<strong>原始机器码字节</strong>，其中<strong>被尖括号包住的那个字节（<code>&lt;c7&gt;</code>）就是出错指令的第一个字节</strong>。当你手头没有匹配的 <code>.ko</code> 时，这行是最后的救命稻草——内核源码树里的 <code>scripts/decodecode</code> 可以把它反汇编出来：</p>
+
+<pre><span class="cm"># 把 Oops 里的 Code: 那一行喂给 decodecode</span>
+$ echo 'Code: 0f 1f 44 00 00 55 48 89 e5 41 54 49 89 fc 48 8b 47 18 48 85 c0 74 08 &lt;c7&gt; 00 2a 00' \
+    | ./scripts/decodecode
+Code:  0f 1f 44 00 00       nopl   0x0(%rax,%rax,1)
+       55                   push   %rbp
+       48 89 e5             mov    %rsp,%rbp
+       48 8b 47 18          mov    0x18(%rdi),%rax   <span class="cm"># 从结构体 +0x18 取出一个指针到 rax</span>
+       48 85 c0             test   %rax,%rax
+       74 08                je     ...               <span class="cm"># 有判空分支，但走的是另一条路</span>
+all rip:*
+       c7 00 2a 00 00 00    movl   $0x2a,(%rax)      <span class="cm"># ★ 出错指令：往 rax 指向的内存写</span></pre>
+
+  <p>结合寄存器转储里的 <code>RAX: 0000000000000000</code>——<strong>结论已经完整了：从某结构体偏移 <code>0x18</code> 处取出的指针是 NULL，代码却直接往它指向的位置写了个值</strong>。剩下的只是去源码里找那个 <code>0x18</code> 是哪个字段。</p>
+
+  <h3>第三段：Call Trace 与那些 <code>?</code></h3>
+  <div class="def"><strong>Call Trace 里的 <code>?</code> 前缀</strong>：表示<strong>这一帧不可靠</strong>。x86_64 内核通常不保留帧指针（<code>-fomit-frame-pointer</code>），栈回溯靠 ORC 元数据推导；推导不出来的部分，内核会退化成「扫描栈内存，凡是看起来像内核代码地址的值都列出来」。这些值可能是<strong>之前某次调用留在栈上的残渣</strong>，跟当前调用链毫无关系。<strong>带 <code>?</code> 的帧仅供参考，不带 <code>?</code> 的才是可信调用链。</strong></div>
+
+  <div class="analogy">带 <code>?</code> 的栈帧像<strong>白板上没擦干净的旧字迹</strong>：这块白板（内核栈）反复被不同的人用过，新写的内容只覆盖了一部分，残留的旧笔画混在里面。有经验的人一眼能分辨哪些是这次会议写的、哪些是上次留下的；没经验的人会把上次的结论当成这次的。</div>
+
+  <p>上面那段栈读下来就是：用户进程 <code>cat</code> 调 <code>write(2)</code> → <code>entry_SYSCALL_64</code> → <code>do_syscall_64</code> → <code>ksys_write</code> → <code>vfs_write</code> → 通过 <code>file_operations</code> 表调到了 <code>mydev_write</code>。<strong>注意 <code>mydev_write</code> 本身不在 Call Trace 里，它在 RIP 那一行</strong>——Call Trace 列的是「谁调用了当前函数」，当前函数在 RIP。这是初学者最常见的误读。</p>
+
+  <h3>第四段：Tainted —— 决定社区理不理你</h3>
+  <div class="def"><strong>Taint（污染）标记</strong>：内核用一串字母记录「这个内核在崩溃之前已经处于什么非标准状态」。它的用途是<strong>快速判断这份报告值不值得信</strong>——如果内核里塞了闭源驱动、或者之前已经崩过一次，那么这次崩溃的现场很可能不是内核自己的问题。<code>Tainted: G           OE</code> 中每个位置对应一个固定的标记位，<code>G</code> 在第一位表示「没有专有模块」，后面的空格表示该位未置位。</div>
+
+  <table>
+    <thead><tr><th>字母</th><th>含义</th><th>对排障的影响</th></tr></thead>
+    <tbody>
+      <tr><td><code>G</code> / <code>P</code></td><td><code>G</code> = 所有已加载模块都声明了 GPL 兼容许可；<code>P</code> = 加载了<strong>专有（proprietary）模块</strong></td><td><strong><code>P</code> 基本等于社区不受理</strong>——闭源模块的代码没人能看，NVIDIA、某些 RAID 卡驱动会置这个位</td></tr>
+      <tr><td><code>O</code></td><td>加载了 <strong>out-of-tree（树外）模块</strong>，即不在内核源码树里的模块</td><td>你自己写的驱动、DKMS 编出来的模块都会置 <code>O</code>。社区看到 <code>O</code> 的第一反应是「先卸掉你的模块再复现一次」</td></tr>
+      <tr><td><code>E</code></td><td>加载了<strong>未签名模块</strong>（unsigned module）</td><td>说明关闭了模块签名校验或用了自签。安全相关，本身不代表 bug</td></tr>
+      <tr><td><code>D</code></td><td>本次启动以来<strong>已经发生过 Oops / BUG</strong>（die）</td><td><strong>极其重要</strong>：看到 <code>D</code> 就意味着眼前这份不是第一现场，往前翻日志找 <code>[#1]</code></td></tr>
+      <tr><td><code>W</code></td><td>之前触发过 <code>WARN_ON()</code></td><td>同上，往前翻，那条 WARN 常常就是根因的早期信号</td></tr>
+      <tr><td><code>F</code> / <code>R</code></td><td>模块被<strong>强制加载</strong>（<code>insmod -f</code>）/ <strong>强制卸载</strong></td><td>强制加载意味着版本魔数不匹配也硬上，任何崩溃都不奇怪</td></tr>
+      <tr><td><code>M</code> / <code>B</code></td><td>发生过<strong>机器检查异常（MCE）</strong> / 检测到<strong>坏页</strong></td><td><strong>硬件信号</strong>。看到这两个先去查内存和 CPU，别追代码（见 §5）</td></tr>
+      <tr><td><code>C</code></td><td>加载了 <strong>staging 驱动</strong>（内核里尚未成熟的孵化区）</td><td>staging 驱动质量本就不保证，优先怀疑它</td></tr>
+      <tr><td><code>L</code></td><td>之前发生过 <strong>soft lockup</strong></td><td>说明系统之前就有 CPU 卡顿史</td></tr>
+      <tr><td><code>K</code></td><td>内核被 <strong>live patch</strong> 过</td><td>运行中的代码和你手上的 vmlinux 不完全一致，符号偏移可能对不上</td></tr>
+    </tbody>
+  </table>
+
+  <div class="warn"><strong>为什么社区看到 <code>O</code> 就不太接 bug？</strong>不是傲慢，是<strong>成本问题</strong>。树外模块可以做任何事：改内核数据结构、用未导出的内部接口、假设了某个已经变了的行为。当 Oops 的 RIP 落在内核本体的某个函数里、而 <code>Tainted</code> 有 <code>O</code> 时，最常见的真相是<strong>你的模块把内核的数据结构写坏了，内核只是在后来的某个时刻踩到了坏数据</strong>。维护者没有你的代码，无从判断。<strong>所以给上游报 bug 之前的标准动作是：卸载所有树外模块（或者干脆用发行版原装内核）复现一次</strong>；能在纯净内核上复现，报告才有价值。</div>
+
+  <h3>从 RIP 定位到源码行</h3>
+  <p>有了 <code>函数名+偏移</code>，剩下的就是把它翻译成文件名和行号。三条路径，按可用性排序：</p>
+
+<pre><span class="cm"># ── 方法 1：faddr2line（内核源码树自带，最推荐）──────────────</span>
+<span class="cm"># 直接把 Oops 里 RIP 后面那一坨原样贴进去，函数长度也会被校验</span>
+$ ./scripts/faddr2line drivers/char/mydev.ko mydev_write+0x2a/0x60
+mydev_write+0x2a/0x60:
+mydev_write at /home/kavin/src/mydev/mydev.c:118
+
+<span class="cm"># 内核本体的函数就用 vmlinux</span>
+$ ./scripts/faddr2line vmlinux vfs_write+0xc5/0x400
+vfs_write+0xc5/0x400:
+vfs_write at fs/read_write.c:589
+
+<span class="cm"># ── 方法 2：gdb 的 list *(func+offset)（不需要内核源码树）─────</span>
+$ gdb -batch -ex 'list *(mydev_write+0x2a)' mydev.ko
+0x2a is in mydev_write (mydev.c:118).
+113         struct mydev_ctx *ctx = filp-&gt;private_data;
+...
+118         *ctx-&gt;cursor = MAGIC;          <span class="cm">// ★ 就是这一行</span>
+
+<span class="cm"># ── 方法 3：objdump 混排源码与汇编（要看上下文时最好用）───────</span>
+$ objdump -dS --disassemble=mydev_write mydev.ko | less
+<span class="cm"># 找到 &lt;mydev_write+0x2a&gt; 那一行，往上看它属于哪条 C 语句</span>
+
+<span class="cm"># ── 附赠：整段栈一次性翻译（把 dmesg 直接管进去）─────────────</span>
+$ dmesg | ./scripts/decode_stacktrace.sh vmlinux /path/to/module/dir</pre>
+
+  <table>
+    <thead><tr><th>方法</th><th>需要什么</th><th>优点</th><th>局限</th></tr></thead>
+    <tbody>
+      <tr><td><code>faddr2line</code></td><td>内核源码树里的脚本 + 带调试信息的目标文件</td><td><strong>能处理内联</strong>，会把内联展开的调用链一起列出来；会校验函数长度</td><td>需要源码树；目标文件必须带 DWARF</td></tr>
+      <tr><td><code>gdb list *(f+off)</code></td><td>只要 gdb + 带调试信息的 <code>vmlinux</code>/<code>.ko</code></td><td>手边最容易凑齐；可以顺手 <code>disassemble</code> 和 <code>ptype</code> 看结构体</td><td>对内联函数的归属判断不如 faddr2line 清楚</td></tr>
+      <tr><td><code>objdump -dS</code></td><td>带调试信息的目标文件</td><td>能看到<strong>整个函数的汇编与 C 的对应</strong>，判断寄存器里装的是哪个变量时必需</td><td>输出长，要自己找偏移</td></tr>
+      <tr><td><code>decode_stacktrace.sh</code></td><td>源码树 + vmlinux + 模块目录</td><td>一次把整段 Call Trace 翻成文件:行号，报 bug 时贴这个</td><td>路径参数容易配错，模块要单独指目录</td></tr>
+    </tbody>
+  </table>
+
+  <div class="danger"><strong>必须是「同一次编译的产物」，这条没有商量余地。</strong>编译器版本、<code>.config</code>、优化等级、甚至 <code>CONFIG_CC_OPTIMIZE_FOR_SIZE</code> 这种开关，任何一项不同都会让函数长度和内部偏移完全变样。用<strong>差一个小版本</strong>的 vmlinux 去 <code>faddr2line</code>，你会得到一个<strong>语法上完全合理、内容完全错误</strong>的行号——这比查不出来危险得多，因为你会信它。<strong>三条自检</strong>：① Oops 里的 <code>/0x60</code> 函数长度和你的目标文件对得上吗？② <code>modinfo mydev.ko</code> 的 <code>vermagic</code> 和崩溃机器的 <code>uname -r</code> 一致吗？③ 发行版内核请老实装 <code>kernel-debuginfo</code>（RHEL 系）或 <code>linux-image-$(uname -r)-dbgsym</code>（Debian/Ubuntu 的 ddebs 源），不要自己编一个「版本号看起来一样」的。</div>
+
+<pre><span class="cm"># 版本一致性自检</span>
+$ modinfo mydev.ko | grep vermagic
+vermagic:       6.1.0-18-amd64 SMP preempt mod_unload modversions
+
+$ uname -r
+6.1.0-18-amd64
+
+<span class="cm"># 函数长度校验：objdump 出来的长度应当等于 Oops 里的 /0x60</span>
+$ objdump -t mydev.ko | grep ' mydev_write$'
+0000000000000000 l     F .text  0000000000000060 mydev_write
+<span class="cm">#                                       ^^^^^^^^ = 0x60 ✅ 对得上</span>
+
+<span class="cm"># 发行版内核装调试符号</span>
+$ sudo dnf debuginfo-install kernel-$(uname -r)           <span class="cm"># RHEL / Fedora 系</span>
+$ sudo apt install linux-image-$(uname -r)-dbgsym         <span class="cm"># Debian / Ubuntu（需先加 ddebs 源）</span></pre>
+
+  <div class="box tip"><strong>一个常被忽略的细节</strong>：<code>Modules linked in:</code> 那一行的末尾有时会出现 <code>[last unloaded: mydev]</code>。这说明<strong>崩溃前不久刚卸载过某个模块</strong>——如果 RIP 落在一个「查不到符号」的地址上，十有八九是<strong>模块卸载后仍有定时器 / 工作队列 / 中断处理函数指向了已经被释放的模块代码段</strong>。这是驱动开发里最经典的一类崩溃，排查方向直接就有了：检查模块 exit 路径有没有 <code>del_timer_sync</code>、<code>cancel_work_sync</code>、<code>free_irq</code>。</div>
+</section>
+<!-- ================================================================ §3 -->
+<section class="chapter" id="s3">
+  <div class="ch-head">
+    <div class="num">03</div>
+    <div class="t"><h2>kdump / kexec 机制</h2><p class="sub">怎么在内核已经死掉的机器上，把内核的尸体拍下来</p></div>
+  </div>
+
+  <p>§2 那段 Oops 是幸运情况：控制台还能打印，日志还能进 <code>journald</code>。真实生产里更常见的是——机器直接重启了，<code>dmesg</code> 里干干净净什么都没有，因为<strong>重启把内存清了，环形缓冲区里的日志一起没了</strong>。要拿到现场，必须在「崩溃」和「重启」之间插进一个步骤。这就是 kdump。</p>
+
+  <div class="def"><strong>kexec</strong>：一个能让<strong>正在运行的内核直接跳进另一个内核</strong>的机制，跳过固件（BIOS/UEFI）和引导加载器的整个自检与初始化流程。本来是为了加快服务器重启（省掉几十秒的 POST）而设计的。<strong>kdump</strong> 则是它的一个特化用法：预先把一个「捕获内核」加载进内存待命，等第一个内核 panic 的时候用 kexec 跳过去，让捕获内核把<strong>第一个内核残留在内存里的一切</strong>写成一个文件。</div>
+
+  <div class="analogy">正常重启像<strong>火灾后先把楼推平再重建</strong>：现场什么都不剩，事后只能靠幸存者回忆（也就是那几行来不及刷出去的日志）。kdump 像<strong>在楼里预留了一间独立的消防指挥室</strong>：这间房日常锁着不让任何人用（预留内存），出事时消防队从这间房直接接管（kexec 跳进捕获内核），全楼断电但<strong>建筑结构原封不动</strong>（第一内核的内存不被清），指挥队从容地把整栋楼扫描一遍拍成档案（vmcore），然后才允许推倒重建。</div>
+
+  <h3>为什么这样能拿到现场</h3>
+  <p>关键在于两点，缺一不可：</p>
+  <div class="point"><div class="label">① 捕获内核跑在一块「别人从来没碰过」的内存里</div><div>开机时通过 <code>crashkernel=</code> 参数<strong>从物理内存里划走一块</strong>，生产内核从此看不见这块内存（<code>free</code> 里的总量会少掉这么多）。捕获内核只在这块内存里活动，<strong>因此它的运行不会覆盖第一内核的任何一个字节</strong>。这也是为什么预留必须提前在启动时做——运行时再想找一块「肯定没人用」的连续物理内存，做不到。</div></div>
+  <div class="point"><div class="label">② kexec 不走固件，内存不被清</div><div>正常重启会经过固件复位流程，很多平台会做内存训练、清零或至少让 DRAM 掉电刷新中断——现场就没了。<strong>kexec 是纯软件跳转</strong>：设置好新内核的入口、页表和参数，然后直接 <code>jmp</code> 过去，DRAM 从头到尾一直在正常刷新。第一内核的每一个数据结构、每一个 <code>task_struct</code>、每一段 <code>printk</code> 环形缓冲，全都完整地躺在那里等着被读。</div></div>
+
+  <div class="fig">
+    <svg viewBox="0 0 780 360" role="img" aria-label="kdump 的两阶段内存布局：正常运行时预留内存闲置，panic 后捕获内核在预留区运行并把第一内核内存写成 vmcore">
+      <text class="tb" x="16" y="22">阶段一 · 正常运行</text>
+      <rect class="box-a" x="16" y="34" width="560" height="46" rx="6"/>
+      <text class="t" x="296" y="55" text-anchor="middle">第一内核（生产内核）+ 所有进程内存</text>
+      <text class="ts" x="296" y="72" text-anchor="middle">这就是你 free 里看到的那部分</text>
+      <rect class="box-y" x="584" y="34" width="180" height="46" rx="6"/>
+      <text class="t" x="674" y="55" text-anchor="middle">crashkernel 预留区</text>
+      <text class="ts" x="674" y="72" text-anchor="middle">锁着 · 生产内核看不见</text>
+      <text class="tm" x="16" y="98">物理内存 0 →</text>
+      <text class="tm" x="764" y="98" text-anchor="end">→ 内存顶端</text>
+      <text class="ts" x="674" y="116" text-anchor="middle">开机时 kdump.service 已把</text>
+      <text class="ts" x="674" y="132" text-anchor="middle">捕获内核 + initramfs 预加载进来</text>
+
+      <path class="ln-a" d="M296 118 L296 150" marker-end="url(#kx)"/>
+      <rect class="box-r" x="176" y="150" width="240" height="30" rx="6"/>
+      <text class="t" x="296" y="170" text-anchor="middle">panic！不走固件，kexec 直接跳转</text>
+
+      <text class="tb" x="16" y="212">阶段二 · 捕获内核接管</text>
+      <rect class="box" x="16" y="224" width="560" height="46" rx="6"/>
+      <text class="ts" x="296" y="245" text-anchor="middle">第一内核的内存 —— 冻结不动，这就是「现场」</text>
+      <text class="tm" x="296" y="262" text-anchor="middle">task_struct · slab · printk ring buffer · 页表 · 全部完好</text>
+      <rect class="box-g" x="584" y="224" width="180" height="46" rx="6"/>
+      <text class="t" x="674" y="245" text-anchor="middle">捕获内核在这里跑</text>
+      <text class="ts" x="674" y="262" text-anchor="middle">单 CPU · 极简驱动</text>
+
+      <path class="ln-g" d="M584 250 C 520 250, 480 250, 420 250" marker-end="url(#kg)"/>
+      <text class="tg" x="300" y="290" text-anchor="middle">通过 /proc/vmcore 读取整个旧内存</text>
+      <path class="ln-g" d="M674 270 L674 300" marker-end="url(#kg)"/>
+      <rect class="box-g" x="560" y="300" width="204" height="34" rx="6"/>
+      <text class="t" x="662" y="322" text-anchor="middle">makedumpfile → vmcore 落盘</text>
+      <text class="ts" x="290" y="322" text-anchor="middle">落盘完成后才真正 reboot</text>
+      <defs>
+        <marker id="kx" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path class="ar-a" d="M0,0 L6,3 L0,6 Z"/></marker>
+        <marker id="kg" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path class="ar-g" d="M0,0 L6,3 L0,6 Z"/></marker>
+      </defs>
+    </svg>
+    <figcaption>kdump 的核心是「预留一块谁都不许碰的内存」+「跳转时不经过固件」——两者共同保证现场完好</figcaption>
+  </div>
+
+  <h3>配置实操</h3>
+  <p>三件事：预留内存、装好服务、验证能落盘。<strong>第三步最容易被跳过，也最容易在真出事时发现根本没生效。</strong></p>
+
+<pre><span class="cm"># ── ① 预留内存：改内核命令行 ─────────────────────────────</span>
+<span class="cm"># 固定大小（最直白）</span>
+crashkernel=512M
+
+<span class="cm"># 按总内存分档（推荐：一份配置适配不同规格的机器）</span>
+<span class="cm"># 语法 起始-结束:大小，可以串多段；"1T-" 表示 1T 以上</span>
+crashkernel=2G-64G:256M,64G-1T:512M,1T-:1G
+
+<span class="cm"># x86_64 大内存机器：预留区可以放到 4G 以上，另外在 4G 以下留一小块给需要低端 DMA 的设备</span>
+crashkernel=1G,high crashkernel=256M,low
+
+<span class="cm"># 改完 GRUB 后必须重启才生效（预留只能在启动早期做）</span>
+$ sudo vi /etc/default/grub          <span class="cm"># 加到 GRUB_CMDLINE_LINUX</span>
+$ sudo grub2-mkconfig -o /boot/grub2/grub.cfg   <span class="cm"># Debian 系用 update-grub</span>
+$ sudo reboot
+
+<span class="cm"># ── ② 验证预留真的生效了 ─────────────────────────────────</span>
+$ cat /proc/cmdline | tr ' ' '\n' | grep crashkernel
+crashkernel=512M
+
+$ cat /sys/kernel/kexec_crash_size      <span class="cm"># 0 表示【没预留成功】，别以为改了 grub 就一定成了</span>
+536870912
+
+$ dmesg | grep -i 'crashkernel\|Reserving'
+[    0.000000] Reserving 512MB of memory at 3072MB for crashkernel</pre>
+
+  <div class="warn"><strong><code>/sys/kernel/kexec_crash_size</code> 为 0 是最常见的「以为配了其实没配」。</strong>典型原因：① 内存碎片化导致内核找不到一块足够大的连续物理区域（尤其在没写 <code>,high</code> 的大内存机上）；② 改了 <code>/etc/default/grub</code> 但没重新生成 grub.cfg；③ 用了云厂商镜像，内核命令行由 metadata 覆盖。<strong>这个值必须非零，并且和你写的数字一致，才算配好了第一步。</strong></div>
+
+<pre><span class="cm"># ── ③ 捕获内核的加载与落盘配置 ──────────────────────────</span>
+$ systemctl enable --now kdump          <span class="cm"># RHEL 系；Debian/Ubuntu 是 kdump-tools</span>
+$ systemctl status kdump
+   Active: active (exited)
+   ... kdump: kexec: loaded kdump kernel
+
+$ cat /sys/kernel/kexec_crash_loaded     <span class="cm"># 必须是 1 —— 捕获内核已经躺在预留区里了</span>
+1
+
+<span class="cm"># /etc/kdump.conf 关键项</span>
+path /var/crash                          <span class="cm"># 本地落盘目录</span>
+core_collector makedumpfile -l --message-level 1 -d 31
+default reboot                           <span class="cm"># 落盘失败时怎么办：reboot / halt / dump_to_rootfs</span>
+
+<span class="cm"># 落到远端 NFS</span>
+nfs 10.0.0.9:/kdump
+core_collector makedumpfile -l --message-level 1 -d 31
+
+<span class="cm"># 落到远端 ssh（要先把捕获内核 initramfs 里的私钥配好）</span>
+ssh kdump@10.0.0.9
+sshkey /root/.ssh/kdump_id_rsa
+core_collector makedumpfile -F -l --message-level 1 -d 31</pre>
+
+  <h3>makedumpfile 的 dump level：为什么几百 GB 能压成几 GB</h3>
+  <p>一台 512 GB 内存的机器，原样 dump 就是 512 GB 的文件——写盘要几十分钟，存储放不下，传输更别想。<strong><code>makedumpfile</code> 的核心工作是「按页类型裁剪」：绝大多数物理页对排查内核崩溃毫无价值，直接扔掉。</strong></p>
+
+  <table>
+    <thead><tr><th>bit</th><th>值</th><th>裁掉的页类型</th><th>丢了会影响什么</th></tr></thead>
+    <tbody>
+      <tr><td>0</td><td><code>1</code></td><td><strong>全零页</strong></td><td>什么都不影响，无脑开</td></tr>
+      <tr><td>1</td><td><code>2</code></td><td><strong>非私有的 page cache</strong>（干净的文件缓存）</td><td>看不到「某个文件当时被缓存的内容」，排查内核崩溃基本用不上</td></tr>
+      <tr><td>2</td><td><code>4</code></td><td><strong>私有的 page cache</strong></td><td>同上</td></tr>
+      <tr><td>3</td><td><code>8</code></td><td><strong>用户进程的数据页</strong></td><td>看不到用户态内存内容与用户栈；<strong>顺带解决了大半的脱敏问题</strong>（见 §8）</td></tr>
+      <tr><td>4</td><td><code>16</code></td><td><strong>空闲页</strong>（在 buddy 空闲链表上的）</td><td>看不到「刚被释放的对象里还残留什么」——追 UAF 时偶尔会想要，但代价太大</td></tr>
+      <tr><td>—</td><td><strong><code>31</code></strong></td><td>以上全部（<code>1+2+4+8+16</code>）</td><td><strong>生产默认值</strong>。保留的是内核代码、内核数据、slab、页表、task 结构——排查内核问题需要的全在这里</td></tr>
+    </tbody>
+  </table>
+
+<pre><span class="cm"># 常用组合：-d 31 裁页 + -l/-c/-p 压缩，通常能把 512G 压到个位数 GB</span>
+$ makedumpfile -l --message-level 1 -d 31 /proc/vmcore /var/crash/vmcore
+
+<span class="cm">#   -d 31   裁掉零页 / page cache / 用户页 / 空闲页</span>
+<span class="cm">#   -c      zlib 压缩（压缩率高，CPU 慢）</span>
+<span class="cm">#   -l      lzo  压缩（速度快，压缩率中等，常用默认）</span>
+<span class="cm">#   -p      snappy 压缩（最快）</span>
+<span class="cm">#   -F      输出到 stdout（配合 ssh 落远端时用）</span>
+<span class="cm">#   -d 1    只裁零页 —— 追 UAF、想看已释放对象残留时用，但文件会大很多</span>
+
+<span class="cm"># 事后还能对已有的 vmcore 再裁一遍（比如为了脱敏后外发）</span>
+$ makedumpfile -d 31 -c vmcore vmcore.stripped
+
+<span class="cm"># 看一个 vmcore 的头部信息（版本、页数、是否压缩）</span>
+$ makedumpfile --dump-dmesg /var/crash/.../vmcore dmesg.txt   <span class="cm"># 只把内核日志抠出来，秒级</span></pre>
+
+  <div class="box tip"><strong><code>makedumpfile --dump-dmesg</code> 是被严重低估的一条命令。</strong>vmcore 有 8 GB、crash 工具还要装匹配的 debuginfo，但你现在只想知道「崩之前最后打印了什么」——这条命令<strong>几秒钟就能把崩溃瞬间的完整内核日志抠成一个文本文件</strong>，不需要任何调试符号。很多事故到这一步就已经破案了（比如日志里明明白白写着某个磁盘 IO error 刷屏），根本用不着开 crash。<strong>拿到 vmcore 的第一件事就该是它。</strong></div>
+
+  <h3>验证：不要等真出事才发现 kdump 没配好</h3>
+
+<pre><span class="cm"># 主动制造一次 panic，全链路验证</span>
+$ sudo sysctl -w kernel.sysrq=1
+$ echo c | sudo tee /proc/sysrq-trigger
+<span class="cm"># 机器立刻 panic → kexec 进捕获内核 → 落盘 → 重启</span>
+<span class="cm"># 整个过程在控制台上可见，大内存机器可能要等几分钟，别急着按电源</span>
+
+<span class="cm"># 重启后检查战利品</span>
+$ ls -lh /var/crash/
+drwxr-xr-x. 2 root root 4.0K Sep  3 10:12 127.0.0.1-2026-09-03-10:11:47
+$ ls -lh /var/crash/127.0.0.1-2026-09-03-10:11:47/
+-rw-------. 1 root root  62K Sep  3 10:12 vmcore-dmesg.txt
+-rw-------. 1 root root 1.1G Sep  3 10:12 vmcore</pre>
+
+  <div class="vs">
+    <div class="bad">
+      <h5>❌ 三种「配了等于没配」</h5>
+<pre><span class="cm"># 1) 预留太小 —— 捕获内核自己 OOM</span>
+<span class="cm">#    症状：panic 后机器直接重启，/var/crash 空空如也，</span>
+<span class="cm">#    控制台上一闪而过 "Out of memory" 或 initramfs 挂载失败</span>
+crashkernel=64M          <span class="cm"># 对带 NVMe/网卡驱动的 initramfs 远远不够</span>
+
+<span class="cm"># 2) 从没验证过</span>
+$ systemctl is-enabled kdump   <span class="cm"># enabled，看着挺好</span>
+$ cat /sys/kernel/kexec_crash_loaded
+0                              <span class="cm"># ← 实际上根本没加载成功</span>
+
+<span class="cm"># 3) 落盘目标在崩溃时不可用</span>
+path /data/crash          <span class="cm"># /data 挂在 iSCSI 上，</span>
+                          <span class="cm"># 而捕获内核的极简 initramfs 里没有 iSCSI 驱动</span></pre>
+    </div>
+    <div class="good">
+      <h5>✅ 上线前的四步验收</h5>
+<pre><span class="cm"># 1) 预留生效且够大</span>
+$ cat /sys/kernel/kexec_crash_size    <span class="cm"># 非 0，且 ≥ 256M（大内存机建议 512M~1G）</span>
+
+<span class="cm"># 2) 捕获内核已装载</span>
+$ cat /sys/kernel/kexec_crash_loaded  <span class="cm"># 必须是 1</span>
+
+<span class="cm"># 3) 真触发一次，确认文件落地</span>
+$ echo c | sudo tee /proc/sysrq-trigger
+
+<span class="cm"># 4) 确认拿到的 vmcore 能被 crash 打开</span>
+$ crash /usr/lib/debug/.../vmlinux /var/crash/.../vmcore
+crash&gt; sys                            <span class="cm"># 能打出 PANIC: 那一行就算通过</span>
+
+<span class="cm"># 加进装机基线 / ansible 的验收项，</span>
+<span class="cm"># 每次内核升级后重跑一遍（升级会重装捕获内核）</span></pre>
+    </div>
+  </div>
+
+  <h3>生产陷阱</h3>
+  <div class="point bad"><div class="label">预留内存不够 → 捕获内核自己挂</div><div>捕获内核要跑一个 initramfs，里面有存储驱动、网络驱动（落 NFS/ssh 时）、<code>makedumpfile</code>。<strong>预留不够时它会在启动过程中 OOM 或 panic，而这次 panic 是没人接的</strong>——机器直接重启，你什么都拿不到，而且现象和「kdump 根本没开」一模一样。经验值：256 MB 是下限，带复杂存储栈或要走网络落盘的建议 512 MB 起，超大内存机器（TB 级）因为 <code>makedumpfile</code> 要维护页位图，需求还会再涨。</div></div>
+  <div class="point bad"><div class="label">Secure Boot 下 kexec 受限</div><div>开启 Secure Boot 后，内核不允许加载未经签名的镜像——<code>kexec_load</code> 这个老系统调用会被直接拒绝（<code>lockdown</code> 机制）。必须改用 <strong><code>kexec_file_load</code></strong>（<code>kexec -s</code>），由内核自己校验镜像签名。发行版的 kdump 服务通常已经处理好了，但<strong>自编内核 + Secure Boot 的组合几乎必然踩坑</strong>：你的内核没有厂商签名，捕获内核加载不上。要么给自己的内核签名并把证书注册进 MOK，要么在这类机器上接受「只能靠串口日志」。</div></div>
+  <div class="point warn"><div class="label">内存太大导致 dump 超时</div><div>几 TB 内存的机器即便裁到 <code>-d 31</code>，vmcore 仍可能有几十 GB，写盘几十分钟。这段时间机器完全不提供服务，而且很多监控/云平台会因为「节点长时间无心跳」<strong>触发自动重装或强制重启，把 dump 打断</strong>。对策：用更快的压缩（<code>-p</code> snappy）、落到本地 NVMe 而不是网络、把自动化平台的失联超时调长，或者在超大内存机上干脆放弃全量 dump，改成只保留 <code>vmcore-dmesg.txt</code>。</div></div>
+  <div class="point warn"><div class="label">预留内存是永久成本</div><div>那 512 MB 从开机起就<strong>不可用</strong>，<code>free -m</code> 里直接少掉。在几百 GB 的机器上无所谓，在 2 GB 内存的嵌入式设备上就是 25%——这类设备通常不上 kdump，改用<strong>持久化的 <code>pstore</code></strong>（把 panic 日志写进 UEFI 变量区、ACPI ERST 或一块专门的 RAM 区），重启后从 <code>/sys/fs/pstore/</code> 读回来。拿不到完整内存镜像，但至少保住了最后那几 KB 的日志。</div></div>
+</section>
+
+<!-- ================================================================ §4 -->
+<section class="chapter" id="s4">
+  <div class="ch-head">
+    <div class="num">04</div>
+    <div class="t"><h2>crash 工具实战</h2><p class="sub">把 vmcore 当成一个「冻结的内核」来 debug</p></div>
+  </div>
+
+  <div class="def"><strong><code>crash</code></strong>：内核崩溃分析的标准工具，本质是一个<strong>把 gdb 包在里面、并且懂内核数据结构的解释器</strong>。它读入 <code>vmcore</code>（内存快照）加上 <code>vmlinux</code>（符号与类型信息），把整个内核的状态还原出来——所有进程、所有 CPU 的栈、slab 分配情况、网络连接、文件表，都能像在活系统上一样查询。<strong>关键区别是它只读、且时间是冻结的</strong>：你看到的永远是崩溃那一瞬间的样子。</div>
+
+  <div class="analogy">crash 像<strong>法医的解剖台</strong>。GDB 是给活人做体检——能让病人抬手、能问「现在哪里疼」（下断点、单步、改变量）。crash 面对的是一具尸体：<strong>什么都问不了，只能看</strong>。但正因为一切都静止了，你可以从容地把每一个器官（进程、锁、内存池）逐一翻查，而且不用担心状态在你眼皮底下变化——这在调试并发问题时反而是巨大的优势。</div>
+
+  <h3>打开一个 vmcore 需要什么</h3>
+  <p>两样东西，缺一不可：<strong>vmcore 本身</strong>，和<strong>版本严格匹配、带调试符号的 vmlinux</strong>。后者就是绝大多数人卡住的地方。</p>
+
+  <table>
+    <thead><tr><th>来源</th><th>怎么拿 vmlinux</th><th>注意</th></tr></thead>
+    <tbody>
+      <tr><td>RHEL / CentOS / Fedora</td><td><code>dnf debuginfo-install kernel-$(uname -r)</code>，装到 <code>/usr/lib/debug/lib/modules/&lt;ver&gt;/vmlinux</code></td><td>debuginfo 源默认不开，要先启用；包很大（数百 MB 到 GB）</td></tr>
+      <tr><td>Debian / Ubuntu</td><td>加 ddebs 源后 <code>apt install linux-image-$(uname -r)-dbgsym</code></td><td>Ubuntu 的 ddebs 需要单独加 apt 源和 key</td></tr>
+      <tr><td>自编内核</td><td>编译产物根目录下那个<strong>未 strip 的 <code>vmlinux</code></strong>（不是 <code>/boot/vmlinuz-*</code>，那是压缩过的引导镜像）</td><td><strong>必须在 CI 里归档</strong>，和二进制版本号绑定，否则改天就找不回来了</td></tr>
+      <tr><td>树外模块</td><td>你自己的 <code>.ko</code>（编译时带 <code>CONFIG_DEBUG_INFO</code>），进 crash 后用 <code>mod -s</code> 加载</td><td>发行版内核的模块符号在 debuginfo 包里，自研模块得自己留档</td></tr>
+    </tbody>
+  </table>
+
+<pre><span class="cm"># 启动 crash：第一个参数是符号表，第二个是内存镜像</span>
+$ crash /usr/lib/debug/lib/modules/6.1.0-18-amd64/vmlinux \
+        /var/crash/127.0.0.1-2026-09-03-10:11:47/vmcore
+
+crash 8.0.2
+...
+      KERNEL: /usr/lib/debug/lib/modules/6.1.0-18-amd64/vmlinux
+    DUMPFILE: /var/crash/.../vmcore  [PARTIAL DUMP]
+        CPUS: 8
+        DATE: Thu Sep  3 10:11:45 CST 2026
+      UPTIME: 12 days, 04:31:09
+LOAD AVERAGE: 3.42, 2.88, 2.51
+       TASKS: 921
+    NODENAME: node-07
+     RELEASE: 6.1.0-18-amd64
+     MACHINE: x86_64  (2394 Mhz)
+      MEMORY: 15.7 GB
+       PANIC: "Oops: 0002 [#1] SMP PTI" (check log for details)
+         PID: 4211
+     COMMAND: "cat"
+        TASK: ffff98c1c2a3d800  [THREAD_INFO: ffff98c1c2a3d800]
+         CPU: 3
+       STATE: TASK_RUNNING (PANIC)
+
+crash&gt;</pre>
+
+  <div class="intuition">这个开机横幅本身就是一份浓缩报告：<strong><code>PANIC:</code> 告诉你死因，<code>PID</code>/<code>COMMAND</code>/<code>CPU</code> 告诉你死在谁身上、哪个核上，<code>UPTIME</code> 告诉你是「开机就崩」还是「跑了 12 天才崩」</strong>（后者更可能是泄漏或极低概率的竞态），<code>LOAD AVERAGE</code> 告诉你崩的时候忙不忙。<strong>先把这几行读完再敲第一条命令</strong>，能避免一半的方向性错误。</div>
+
+  <h3>核心命令：每一条都要知道「它在回答什么问题」</h3>
+
+  <div class="cheatsheet"><table>
+    <thead><tr><th>命令</th><th>回答的问题</th></tr></thead>
+    <tbody>
+      <tr><td><code>sys</code></td><td>系统总览（等于上面那个横幅），<code>sys -c</code> 看内核配置</td></tr>
+      <tr><td><code>log</code></td><td><strong>崩溃瞬间的完整 dmesg</strong>——内核环形缓冲区被原样读出来</td></tr>
+      <tr><td><code>bt</code></td><td>当前（崩溃的那个）任务的调用栈；<code>bt &lt;pid&gt;</code> 看指定任务</td></tr>
+      <tr><td><code>bt -a</code></td><td><strong>每个 CPU 上正在跑的任务的栈</strong>——找真凶的关键</td></tr>
+      <tr><td><code>bt -f</code></td><td>连栈上的原始数据一起打印，手工辨认被 <code>?</code> 掩盖的帧时用</td></tr>
+      <tr><td><code>ps</code></td><td>所有任务；<code>&gt;</code> 标记正在 CPU 上跑的，<code>UN</code> 就是 D 状态</td></tr>
+      <tr><td><code>foreach UN bt</code></td><td><strong>所有不可中断睡眠任务的栈</strong>——查死锁 / IO 卡死的第一条命令</td></tr>
+      <tr><td><code>foreach bt | grep &lt;func&gt;</code></td><td>找出所有卡在同一个函数上的任务，聚集点就是嫌疑点</td></tr>
+      <tr><td><code>kmem -i</code></td><td>内存总览：用了多少、slab 占了多少、free 还剩多少</td></tr>
+      <tr><td><code>kmem -s</code></td><td><strong>所有 slab cache 的占用</strong>——查内核内存泄漏</td></tr>
+      <tr><td><code>kmem &lt;addr&gt;</code></td><td>这个地址属于哪个 slab / 哪个页，对象是活的还是已释放</td></tr>
+      <tr><td><code>struct &lt;type&gt; &lt;addr&gt;</code></td><td>把一段内存<strong>按内核结构体解释并打印</strong></td></tr>
+      <tr><td><code>dis -l &lt;func&gt;</code></td><td>反汇编并<strong>标注源码文件:行号</strong></td></tr>
+      <tr><td><code>mod -s &lt;name&gt; &lt;path.ko&gt;</code></td><td>为某个模块加载调试符号（自研驱动必用）</td></tr>
+      <tr><td><code>files &lt;pid&gt;</code> / <code>net</code></td><td>某进程打开的文件 / 网络设备与连接</td></tr>
+      <tr><td><code>runq</code> / <code>irq</code> / <code>dev</code></td><td>各 CPU 运行队列 / 中断表 / 设备与 IO 统计</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>bt：注意最上面那几帧是「殡仪馆」</h3>
+
+<pre>crash&gt; bt
+PID: 4211   TASK: ffff98c1c2a3d800  CPU: 3   COMMAND: "cat"
+ #0 [ffffb4a7c0e93a90] machine_kexec at ffffffff8a06b1e7
+ #1 [ffffb4a7c0e93ae8] __crash_kexec at ffffffff8a19a34a
+ #2 [ffffb4a7c0e93bb0] crash_kexec at ffffffff8a19b431
+ #3 [ffffb4a7c0e93bc8] oops_end at ffffffff8a02a0ab
+ #4 [ffffb4a7c0e93be8] exc_page_fault at ffffffff8ab0f5ce
+ #5 [ffffb4a7c0e93c10] asm_exc_page_fault at ffffffff8ac00b62
+    [exception RIP: mydev_write+42]                     <span class="cm">&lt;-- ★ 真正的案发点</span>
+    RIP: ffffffffc0a2b02a  RSP: ffffb4a7c0e93e18  RFLAGS: 00010246
+    RAX: 0000000000000000  RBX: ffff98c1c2a3d800  RCX: 0000000000000000
+    ...
+    ORIG_RAX: ffffffffffffffff  CS: 0010  SS: 0018
+ #6 [ffffb4a7c0e93e18] vfs_write at ffffffff8a35c1e5
+ #7 [ffffb4a7c0e93e58] ksys_write at ffffffff8a35c4bb
+ #8 [ffffb4a7c0e93e98] do_syscall_64 at ffffffff8ab02f5b
+ #9 [ffffb4a7c0e93f50] entry_SYSCALL_64_after_hwframe at ffffffff8ac0009b
+    RIP: 00007f2e9c3a1234  RSP: 00007ffd3c1a2a18  RFLAGS: 00000246
+    ...  <span class="cm"># 这一段是【用户态】的寄存器，说明是从 write(2) 陷入的</span></pre>
+
+  <div class="warn"><strong><code>#0</code> 不是案发点。</strong><code>machine_kexec</code> / <code>__crash_kexec</code> / <code>oops_end</code> / <code>exc_page_fault</code> 这几帧是<strong>内核处理崩溃本身的代码</strong>——相当于殡仪馆的流程，不是死因。<strong>真正的现场是 <code>[exception RIP: ...]</code> 那一行</strong>：它标出异常发生瞬间的指令地址和完整寄存器组。它下面的帧（<code>#6</code> 起）才是真实的调用链，上面的帧全部忽略。<code>bt</code> 输出末尾如果还有一组 <code>RIP/RSP</code>，那是<strong>用户态</strong>的上下文，能告诉你这次内核执行是由哪个用户态调用触发的。</div>
+
+  <h3>bt -a：多 CPU 场景下找真凶</h3>
+  <p>lockup、死锁、竞态这类问题，<strong>崩溃的那个 CPU 往往是受害者而不是凶手</strong>。典型场景：CPU 3 自旋等一把锁等到 hard lockup，而真正拿着这把锁不放的是 CPU 5 上那个陷入死循环的任务。<code>bt</code> 只能看到受害者，<code>bt -a</code> 才能看到全场。</p>
+
+<pre>crash&gt; bt -a
+PID: 0      TASK: ffff98c1c0028000  CPU: 0   COMMAND: "swapper/0"
+ #0 [...] native_safe_halt at ...        <span class="cm"># 空闲，无关</span>
+
+PID: 0      TASK: ffff98c1c0068000  CPU: 1   COMMAND: "swapper/1"
+ #0 [...] native_safe_halt at ...        <span class="cm"># 空闲，无关</span>
+
+PID: 4211   TASK: ffff98c1c2a3d800  CPU: 3   COMMAND: "cat"
+ #0 [...] queued_spin_lock_slowpath      <span class="cm"># ★ 在自旋等锁 —— 受害者</span>
+ #1 [...] _raw_spin_lock_irqsave
+ #2 [...] mydev_write [mydev]
+
+PID: 5120   TASK: ffff98c1d3a10000  CPU: 5   COMMAND: "kworker/5:2"
+ #0 [...] mydev_scan_list+0x8c/0xb0 [mydev]   <span class="cm">&lt;-- ★★ 真凶：持锁且不返回</span>
+ #1 [...] mydev_timer_fn [mydev]
+ #2 [...] call_timer_fn
+
+<span class="cm"># 判读要点：</span>
+<span class="cm">#   ① 大量 CPU 卡在 queued_spin_lock_slowpath = 有一把热锁被长期持有</span>
+<span class="cm">#   ② 找那个【不在等锁、却在跑同一个子系统代码】的 CPU —— 它就是持锁方</span>
+<span class="cm">#   ③ 这里 CPU 5 在定时器回调里遍历链表，多半是链表成环导致死循环</span></pre>
+
+  <div class="box star"><strong>面试加分点</strong>：「crash 里怎么找真凶 CPU」的标准回答是<strong>「看谁不在等」</strong>。锁竞争引发的崩溃里，绝大多数 CPU 的栈顶都是 <code>queued_spin_lock_slowpath</code> / <code>osq_lock</code> / <code>rwsem_down_*</code> 这类等待函数——它们全是受害者。<strong>凶手的特征恰恰是「栈顶是正常的业务函数」</strong>：它拿着锁在干一件永远干不完的事（死循环、等一个不会来的硬件应答、在临界区里睡眠）。所以 <code>bt -a</code> 的读法不是从上往下逐个看，而是<strong>先把所有「在等锁」的 CPU 划掉，剩下的那一两个就是答案</strong>。</div>
+
+  <h3>ps：D 状态与 <code>&gt;</code> 标记</h3>
+
+<pre>crash&gt; ps | head -20
+      PID    PPID  CPU       TASK        ST  %MEM     VSZ    RSS  COMM
+        0       0   0  ffff98c1c0028000  RU   0.0       0      0  [swapper/0]
+&gt;       0       0   1  ffff98c1c0068000  RU   0.0       0      0  [swapper/1]
+        1       0   2  ffff98c1c0180000  IN   0.1  168332  12904  systemd
+      412       2   0  ffff98c1c1a08000  UN   0.0       0      0  [jbd2/sda1-8]
+      843       1   4  ffff98c1c2100000  IN   0.4  921344  67108  sshd
+&gt;    4211    3987   3  ffff98c1c2a3d800  RU   0.0    8544    784  cat
+     5120       2   5  ffff98c1d3a10000  RU   0.0       0      0  [kworker/5:2]
+
+<span class="cm"># 状态列：</span>
+<span class="cm">#   RU = TASK_RUNNING（在跑或在运行队列里）</span>
+<span class="cm">#   IN = TASK_INTERRUPTIBLE（可中断睡眠，正常等待，通常无害）</span>
+<span class="cm">#   UN = TASK_UNINTERRUPTIBLE（★ D 状态，不可中断睡眠 —— 重点关注）</span>
+<span class="cm">#   ZO = 僵尸  ST = 停止  DE = 正在退出</span>
+<span class="cm"># 行首的 &gt; 表示【这个任务此刻正占着某个 CPU】</span>
+
+<span class="cm"># 只看 D 状态的任务，并把它们的栈全打出来 —— 查死锁的起手式</span>
+crash&gt; foreach UN bt
+
+<span class="cm"># 看谁卡在同一个函数上（聚集点就是嫌疑点）</span>
+crash&gt; foreach bt | grep -c 'mydev_ioctl'
+37</pre>
+
+  <div class="intuition">「37 个任务同时卡在 <code>mydev_ioctl</code> 上」这个数字本身就是结论——<strong>一个正常工作的驱动不可能让 37 个任务同时停在同一个函数里</strong>。这种「聚集」是排查死锁最快的信号：不需要理解锁的具体逻辑，先看分布，分布异常的地方就是要挖的地方。<code>foreach bt | grep</code> 这个组合是 crash 里性价比最高的一条命令。</div>
+
+  <h3>kmem：查内核内存泄漏</h3>
+
+<pre>crash&gt; kmem -i
+                 PAGES        TOTAL      PERCENTAGE
+    TOTAL MEM  4108231      15.7 GB         ----
+         FREE   142330       556 MB    3% of TOTAL MEM
+         USED  3965901      15.1 GB   96% of TOTAL MEM
+       SHARED    38220     149.3 MB    0% of TOTAL MEM
+      BUFFERS     2033       7.9 MB    0% of TOTAL MEM
+       CACHED   105998     414.1 MB    2% of TOTAL MEM
+         SLAB  2854400      10.9 GB   69% of TOTAL MEM   <span class="cm">&lt;-- ★ 严重异常</span>
+
+<span class="cm"># SLAB 占到 69% 是明确的内核内存泄漏信号（正常个位数百分比）</span>
+<span class="cm"># 下一步：看是哪个 cache 撑爆的</span>
+
+crash&gt; kmem -s | sort -k3 -n -r | head
+CACHE       OBJSIZE  ALLOCATED   TOTAL  SLABS  SSIZE  NAME
+ffff98c1c... 	 256    9812443  9813120 613320    4k  kmalloc-256   <span class="cm">&lt;-- ★</span>
+ffff98c1c...     1024      8213     8320    520    8k  kmalloc-1k
+ffff98c1c...      576      6104     6160    440    8k  inode_cache
+...
+
+<span class="cm"># 980 万个 kmalloc-256 对象 = 约 2.5 GB，且几乎全是 ALLOCATED（没被释放）</span>
+<span class="cm"># 结论：某处反复 kmalloc(≤256) 却不 kfree。</span>
+<span class="cm"># 再配合业务判断：崩溃前 12 天 uptime + 稳定增长 = 典型泄漏曲线</span>
+
+<span class="cm"># 想知道某个地址属于什么</span>
+crash&gt; kmem ffff98c1c1d05a00
+CACHE       OBJSIZE  ALLOCATED   TOTAL  SLABS  SSIZE  NAME
+ffff98c1c...     256    9812443  9813120 613320    4k  kmalloc-256
+  SLAB          MEMORY        NODE  TOTAL  ALLOCATED  FREE
+  ffffe6...     ffff98c1c1d05000  0     16         16     0
+  FREE / [ALLOCATED]
+  [ffff98c1c1d05a00]        <span class="cm"># 方括号 = 当前是【已分配】状态</span></pre>
+
+  <div class="note"><strong><code>kmem -s</code> 只能告诉你「哪个 cache 涨了」，不能告诉你「谁分配的」。</strong>要拿到分配点，需要在<strong>能复现的环境</strong>上开 <code>slub_debug=U</code>（user tracking，记录每个对象的分配/释放调用栈），或者用 <code>/sys/kernel/debug/kmemleak</code>（<code>CONFIG_DEBUG_KMEMLEAK</code>），或者用 bpftrace 在 <code>kmem:kmalloc</code> tracepoint 上按调用栈聚合。<strong>vmcore 是事后现场，它有「结果」但通常没有「过程」</strong>——这是 vmcore 分析的固有边界，也是为什么 §6 那些「不崩溃时的手段」同样重要。</div>
+
+  <h3>完整走查：从 vmcore 定位到驱动空指针</h3>
+  <p>把前面的命令串起来，这是一次真实排查的完整顺序。<strong>关键是每一步都在缩小范围，而不是随机敲命令。</strong></p>
+
+<pre><span class="cm">── 第 0 步：先读横幅 ──────────────────────────────────────</span>
+<span class="cm"># PANIC: "Oops: 0002 [#1] SMP PTI"  PID: 4211  COMMAND: "cat"  CPU: 3</span>
+<span class="cm"># 判断：写操作导致的空指针，第【1】次 Oops（不是次生），触发者是普通用户进程</span>
+
+<span class="cm">── 第 1 步：看崩溃瞬间的内核日志 ──────────────────────────</span>
+crash&gt; log | tail -40
+[1047869.221] BUG: kernel NULL pointer dereference, address: 0000000000000000
+[1047869.221] RIP: 0010:mydev_write+0x2a/0x60 [mydev]
+[1047860.118] mydev: device removed, ctx torn down     <span class="cm">&lt;-- ★ 崩溃前 9 秒的线索！</span>
+
+<span class="cm">── 第 2 步：拿到真正的案发点 ──────────────────────────────</span>
+crash&gt; bt
+ ...
+    [exception RIP: mydev_write+42]
+    RAX: 0000000000000000   RDI: ffff98c1c1d05a00
+ #6 [...] vfs_write at ...
+
+<span class="cm">── 第 3 步：给自研模块加载符号 ────────────────────────────</span>
+crash&gt; mod -s mydev /home/kavin/build/mydev.ko
+     MODULE       NAME     TEXT_BASE   SIZE  OBJECT FILE
+ffffffffc0a2b000  mydev  ffffffffc0a2b000  16384  /home/kavin/build/mydev.ko
+
+<span class="cm">── 第 4 步：反汇编到源码行，确认是哪个字段 ────────────────</span>
+crash&gt; dis -l mydev_write+0x2a
+/home/kavin/src/mydev/mydev.c: 118
+0xffffffffc0a2b02a &lt;mydev_write+42&gt;:  movl $0x2a,(%rax)
+<span class="cm"># 对照 dis -l mydev_write 全文可见：rax 来自 mov 0x18(%rdi),%rax</span>
+
+<span class="cm">── 第 5 步：把那个结构体打出来，验证假设 ──────────────────</span>
+crash&gt; struct mydev_ctx ffff98c1c1d05a00
+struct mydev_ctx {
+  magic = 0xdeadbeef,
+  refcount = 0,                 <span class="cm">&lt;-- ★ 引用计数已经归零</span>
+  cursor = 0x0,                 <span class="cm">&lt;-- ★ 偏移 0x18，正是被写的那个 NULL 指针</span>
+  dev = 0x0,
+}
+
+crash&gt; struct -o mydev_ctx        <span class="cm"># 确认 cursor 的偏移确实是 0x18</span>
+struct mydev_ctx {
+   [0x0] u32 magic;
+   [0x8] atomic_t refcount;
+  [0x18] char *cursor;
+  ...
+}
+
+<span class="cm">── 第 6 步：结论 ──────────────────────────────────────────</span>
+<span class="cm"># 设备热拔出时 remove 回调把 ctx-&gt;cursor 置 NULL 并释放了底层缓冲，</span>
+<span class="cm"># 但没有阻止已经打开的 fd 继续 write —— write 路径缺少</span>
+<span class="cm"># 「检查设备是否还在 + 拿引用计数」的保护。</span>
+<span class="cm"># 修法：write 里先 mutex_lock + 检查 ctx-&gt;dev 非空并 kref_get，</span>
+<span class="cm">#       remove 里等所有引用释放完再拆 ctx。</span></pre>
+
+  <div class="checklist">
+    <h4>crash 走查通用套路</h4>
+    <ul>
+      <li><strong>永远从 <code>log</code> 开始</strong>：崩溃前几秒的日志往往直接点破根因（本例里那条 "device removed"）。</li>
+      <li><strong>先分清受害者和凶手</strong>：<code>bt</code> 只给受害者，<code>bt -a</code> + <code>foreach UN bt</code> 才给全场。</li>
+      <li><strong>自研模块务必 <code>mod -s</code></strong>：不加载符号时 <code>dis</code> 只有裸地址，等于白干。</li>
+      <li><strong>用 <code>struct -o</code> 反查偏移</strong>：Oops 里的 <code>address: 0x18</code> 和结构体偏移对上，假设才算被验证。</li>
+      <li><strong>不要在 vmcore 里找「过程」</strong>：它只有崩溃那一刻的状态。要看过程去 §6 的 ftrace / dynamic_debug。</li>
+      <li><strong>把每一步的输出存下来</strong>：<code>crash</code> 支持 <code>&gt; file</code> 重定向，事后写报告和给上游报 bug 都要用。</li>
+    </ul>
+  </div>
+</section>
+<!-- ================================================================ §5 -->
+<section class="chapter" id="s5">
+  <div class="ch-head">
+    <div class="num">05</div>
+    <div class="t"><h2>常见根因与对应证据</h2><p class="sub">现象 → 证据 → 根因，反过来推是猜</p></div>
+  </div>
+
+  <p>前面四章讲的是「怎么取证」。这一章讲<strong>「取到的证据分别指向什么」</strong>。内核崩溃的根因分布高度集中——真实生产里九成以上落在下面这六类里，而且每一类都有<strong>极其特征化的证据</strong>。认出证据比理解机制更重要：机制可以现查，证据认不出来就只能瞎猜。</p>
+
+  <table>
+    <thead><tr><th>现象</th><th>决定性证据</th><th>根因</th><th>典型场景</th></tr></thead>
+    <tbody>
+      <tr><td>空指针解引用</td><td><code>address</code>/<code>CR2</code> 是<strong>很小的值</strong>（0 到几百）</td><td>指针为 NULL，且访问的偏移就是结构体成员偏移</td><td>初始化顺序错、错误路径忘了判空、设备移除后仍被访问</td></tr>
+      <tr><td>野指针 / UAF</td><td>地址或数据里出现 <strong><code>6b6b6b6b</code></strong> / <strong><code>dead0000...</code></strong> 这类<strong>毒值</strong></td><td>对象已被释放，代码还在用</td><td>引用计数错、异步回调晚于释放、链表节点被 <code>list_del</code> 两次</td></tr>
+      <tr><td>内核栈溢出</td><td><code>BUG: stack guard page was hit</code>；或栈回溯长得离谱 / 完全乱码</td><td>递归、超大局部数组，内核栈只有十几 KB</td><td>递归解析、在栈上放缓冲区、深层文件系统嵌套</td></tr>
+      <tr><td>原子上下文里睡眠</td><td><code>BUG: scheduling while atomic</code> 或 <code>BUG: sleeping function called from invalid context</code></td><td>持自旋锁 / 在中断上下文里调用了可能睡眠的函数</td><td>临界区里 <code>kmalloc(GFP_KERNEL)</code>、<code>copy_to_user</code>、<code>mutex_lock</code></td></tr>
+      <tr><td>锁死 / 卡住</td><td><code>task blocked for more than N seconds</code> + 一堆任务卡在同一函数</td><td>ABBA 死锁、锁没释放、等一个不会来的完成量</td><td>持锁路径出错返回没解锁、中断与进程上下文抢同一把锁</td></tr>
+      <tr><td>硬件 / 固件</td><td><code>mce:</code> / <code>Hardware Error</code> / <code>EDAC</code> / Tainted 含 <code>M</code> 或 <code>B</code></td><td><strong>内存 ECC 错误、CPU 内部错误、固件 bug</strong></td><td>随机地址、随机函数、换台机器不复现</td></tr>
+    </tbody>
+  </table>
+
+  <h3>① 空指针：偏移就是线索</h3>
+  <p>这类最简单，§2 已经完整走过一遍。补充一个技巧：<strong>拿 <code>CR2</code> 的值去反查结构体成员</strong>。</p>
+
+<pre><span class="cm"># address: 0000000000000018 —— 访问了某结构体 +0x18 处的字段</span>
+<span class="cm"># 在 crash 里直接反查偏移布局</span>
+crash&gt; struct -o mydev_ctx
+struct mydev_ctx {
+   [0x0] u32 magic;
+   [0x4] u32 flags;
+   [0x8] atomic_t refcount;
+  [0x10] struct device *dev;
+  [0x18] char *cursor;              <span class="cm">&lt;-- 命中</span>
+  [0x20] struct mutex lock;
+}
+
+<span class="cm"># 内核源码树外也能查：pahole 直接读 DWARF</span>
+$ pahole -C mydev_ctx mydev.ko
+struct mydev_ctx {
+        u32     magic;                   /*     0     4 */
+        ...
+        char *  cursor;                  /*    24     8 */   <span class="cm"># 24 = 0x18</span>
+};</pre>
+
+  <div class="note"><strong>为什么空指针在内核里比在用户态危险得多。</strong>用户态解引用 NULL 只是 SIGSEGV，操作系统兜底。内核态没有兜底：一次空指针写就是一次 Oops，而 Oops 之后<strong>锁和资源的状态是不确定的</strong>（见 §1）。更麻烦的是<strong>写</strong>类型的空指针——如果偏移足够大（比如访问 <code>ptr-&gt;field</code> 而 field 在很深的位置），落到的地址可能已经不是「零页」而是某块<strong>真实存在的内存</strong>，那就不会 Oops，而是<strong>静默地把别人的数据改了</strong>，几分钟后在完全不相干的地方崩掉。这也是为什么内核会保留低地址不可映射（<code>mmap_min_addr</code>）——尽量让空指针早点、响亮地崩。</div>
+
+  <h3>② UAF 与 slab poison：认毒值</h3>
+  <div class="def"><strong>Slab poison（毒化）</strong>：开启调试后，内核在对象被<strong>释放</strong>时用固定字节填满它，在<strong>分配</strong>时用另一个固定字节填未初始化区域。这样一来，一旦有人访问已释放的对象，读到的就是这些扎眼的固定模式而不是随机垃圾——<strong>把「静默的数据损坏」变成「一眼能认出的证据」</strong>。</div>
+
+  <div class="analogy">毒化像<strong>退房后酒店在房间里铺满荧光标记的床单</strong>。正常情况下没人会看见它们；但如果某个客人拿着过期房卡溜回来，他身上会沾满荧光粉——<strong>你不需要看监控，只要看到荧光就知道有人用了不该用的房间</strong>。<code>0x6b</code>（ASCII 的 <code>k</code>，取 "kfree"）就是这层荧光粉。</div>
+
+  <table>
+    <thead><tr><th>看到的值</th><th>含义</th><th>指向的问题</th></tr></thead>
+    <tbody>
+      <tr><td><code>0x6b6b6b6b6b6b6b6b</code>（字节 <code>0x6b</code>，最后一字节常为 <code>0xa5</code>）</td><td><strong>已释放对象的填充</strong>（POISON_FREE / POISON_END）</td><td><strong>use-after-free</strong>：对象已 <code>kfree</code>，代码还在读它的字段</td></tr>
+      <tr><td><code>0x5a5a5a5a5a5a5a5a</code>（字节 <code>0x5a</code>）</td><td><strong>刚分配、尚未初始化</strong>的区域（POISON_INUSE）</td><td>忘了初始化就用；或越界读到了对象的 padding</td></tr>
+      <tr><td><code>0xbb</code> / <code>0xcc</code> 填充的红区</td><td>SLUB 在对象前后加的 <strong>red zone</strong></td><td>红区被改写 = <strong>缓冲区越界</strong>（写越了对象边界）</td></tr>
+      <tr><td><code>0xdead000000000100</code> / <code>0xdead000000000122</code></td><td><code>list_del</code> 之后写进 <code>next</code>/<code>prev</code> 的<strong>链表毒值</strong></td><td><strong>重复 <code>list_del</code></strong>，或使用了已摘链的节点</td></tr>
+      <tr><td><code>0x10</code> 这样的极小非零值</td><td><code>ZERO_SIZE_PTR</code>：<code>kmalloc(0)</code> 的返回值</td><td>长度计算成了 0，却当正常指针用了</td></tr>
+    </tbody>
+  </table>
+
+<pre><span class="cm"># 开启 SLUB 调试（启动参数，或对特定 cache 开以降低开销）</span>
+slub_debug=FZPU                    <span class="cm"># F=一致性检查 Z=红区 P=毒化 U=记录分配/释放调用栈</span>
+slub_debug=FZPU,kmalloc-256        <span class="cm"># 只对 kmalloc-256 开，开销小得多</span>
+
+<span class="cm"># 触发后的典型报告（注意 "Poison overwritten" 和两段调用栈）</span>
+=============================================================================
+BUG kmalloc-256 (Tainted: G    B   OE): Poison overwritten
+-----------------------------------------------------------------------------
+INFO: 0xffff98c1c1d05a18-0xffff98c1c1d05a1f. First byte 0x0 instead of 0x6b
+INFO: Allocated in mydev_open+0x44/0x120 [mydev] age=8213 cpu=2 pid=4180
+INFO: Freed in mydev_release+0x31/0x80 [mydev] age=12 cpu=3 pid=4211
+<span class="cm"># ★ 读法：这块内存在 12 个 jiffies 前被 mydev_release 释放，</span>
+<span class="cm">#         现在有人往里写了 0 —— 释放后仍被使用，两段调用栈直接给出了双方</span></pre>
+
+  <div class="box tip"><code>slub_debug=U</code>（user tracking）是这里最值钱的一个 flag：<strong>它让每个对象都记住「谁分配的、谁释放的」两条调用栈</strong>。没有它，你只知道「有块内存被 UAF 了」；有了它，报告直接把「分配点」和「释放点」摆在你面前，几乎不用再推理。代价是每个对象多占几十字节元数据、分配释放路径变慢。<strong>做法：测试环境常开 <code>FZPU</code>；生产环境只在追某个具体 bug 时对单个 cache 开。</strong></div>
+
+  <h3>KASAN 报告怎么读</h3>
+  <div class="def"><strong>KASAN（Kernel Address Sanitizer）</strong>：编译期插桩的内存错误检测器。它为每 8 字节内核内存维护 1 字节「影子内存」记录可访问状态，编译器在<strong>每一次内存访问前</strong>插入一段检查代码。相比 slub_debug 的「事后发现毒值被改」，<strong>KASAN 能在越界/UAF 发生的那一瞬间就报出来</strong>，栈是精确的。代价是需要重新编译内核（<code>CONFIG_KASAN</code>），内存占用和 CPU 开销都是数倍级别——<strong>只在测试环境用</strong>。</div>
+
+<pre>==================================================================
+BUG: KASAN: slab-use-after-free in mydev_write+0x2a/0x60 [mydev]
+Write of size 4 at addr ffff98c1c1d05a18 by task cat/4211
+
+CPU: 3 PID: 4211 Comm: cat Tainted: G           OE   6.1.0 #1
+Call Trace:
+ dump_stack_lvl+0x48/0x60
+ print_report+0xc4/0x600
+ kasan_report+0xb8/0xf0
+ mydev_write+0x2a/0x60 [mydev]          <span class="cm">&lt;-- ① 谁踩的</span>
+ vfs_write+0xc5/0x400
+ ...
+
+Allocated by task 4180:                 <span class="cm">&lt;-- ② 这块内存是谁分配的</span>
+ kasan_save_stack+0x1c/0x40
+ __kmalloc+0x8b/0x1b0
+ mydev_open+0x44/0x120 [mydev]
+
+Freed by task 4211:                     <span class="cm">&lt;-- ③ 谁释放的（关键！）</span>
+ kasan_save_stack+0x1c/0x40
+ kfree+0x102/0x2c0
+ mydev_release+0x31/0x80 [mydev]
+
+The buggy address belongs to the object at ffff98c1c1d05a00
+ which belongs to the cache kmalloc-256 of size 256
+The buggy address is located 24 bytes inside of
+ freed 256-byte region [ffff98c1c1d05a00, ffff98c1c1d05b00)
+
+Memory state around the buggy address:
+ ffff98c1c1d05900: fb fb fb fb fb fb fb fb fb fb fb fb fb fb fb fb
+&gt;ffff98c1c1d05a00: fb fb fb fb fb fb fb fb fb fb fb fb fb fb fb fb
+                            ^                                      <span class="cm">&lt;-- 出错的那 8 字节</span>
+==================================================================</pre>
+
+  <div class="point good"><div class="label">KASAN 报告的三段式读法</div><div><strong>第一行给「什么类型的错误 + 在哪个函数」</strong>（<code>slab-use-after-free</code> / <code>slab-out-of-bounds</code> / <code>stack-out-of-bounds</code> / <code>global-out-of-bounds</code> / <code>double-free</code>），<strong>三段调用栈分别给「踩的人 / 分配的人 / 释放的人」</strong>。<strong>UAF 类问题看到这三段基本就结案了</strong>——「释放的人」和「踩的人」之间缺一道同步，把它补上就是修复。最下面的影子内存转储里，<code>00</code> 表示这 8 字节完全可访问，非 <code>00</code> 的值编码了不可访问的原因（部分可访问、红区、已释放），<code>^</code> 精确指到出错字节；日常排查通常不需要逐字节解读它。</div></div>
+
+  <div class="vs">
+    <div class="bad">
+      <h5>❌ 引用计数缺失 → UAF</h5>
+<pre><span class="kw">static int</span> <span class="fn">mydev_release</span>(<span class="kw">struct</span> inode *i, <span class="kw">struct</span> file *f)
+{
+    <span class="kw">struct</span> mydev_ctx *ctx = f-&gt;private_data;
+    kfree(ctx-&gt;buf);
+    kfree(ctx);          <span class="cm">// ★ 直接释放</span>
+    <span class="kw">return</span> <span class="num">0</span>;
+}
+
+<span class="cm">// 但这个 ctx 还挂在一个定时器 / 工作队列上：</span>
+<span class="kw">static void</span> <span class="fn">mydev_timer_fn</span>(<span class="kw">struct</span> timer_list *t)
+{
+    <span class="kw">struct</span> mydev_ctx *ctx = from_timer(ctx, t, tmr);
+    ctx-&gt;seq++;          <span class="cm">// ★ 读到 0x6b6b6b6b… 或直接踩坏别人</span>
+}
+<span class="cm">// release 和 timer 之间没有任何同步 ——</span>
+<span class="cm">// 这不是「可能出问题」，是迟早出问题</span></pre>
+    </div>
+    <div class="good">
+      <h5>✅ 引用计数 + 同步取消</h5>
+<pre><span class="kw">static void</span> <span class="fn">ctx_free</span>(<span class="kw">struct</span> kref *k)
+{
+    <span class="kw">struct</span> mydev_ctx *ctx = container_of(k, <span class="kw">struct</span> mydev_ctx, ref);
+    kfree(ctx-&gt;buf);
+    kfree(ctx);
+}
+
+<span class="kw">static int</span> <span class="fn">mydev_release</span>(<span class="kw">struct</span> inode *i, <span class="kw">struct</span> file *f)
+{
+    <span class="kw">struct</span> mydev_ctx *ctx = f-&gt;private_data;
+
+    del_timer_sync(&amp;ctx-&gt;tmr);    <span class="cm">// ★ 同步等待回调跑完</span>
+    cancel_work_sync(&amp;ctx-&gt;work);  <span class="cm">// ★ 工作队列同理</span>
+    kref_put(&amp;ctx-&gt;ref, ctx_free); <span class="cm">// ★ 最后一个引用者才真正释放</span>
+    <span class="kw">return</span> <span class="num">0</span>;
+}
+<span class="cm">// 注意 del_timer_sync 不能在定时器回调自己里调（会死锁），</span>
+<span class="cm">// 也不能在持有回调要拿的锁时调 —— 这是另一个经典坑</span></pre>
+    </div>
+  </div>
+
+  <h3>③ 内核栈溢出：只有十几 KB，不是几 MB</h3>
+  <div class="def"><strong>内核栈</strong>：每个内核线程（以及每个进入内核态的用户线程）都有一个独立的内核栈，<strong>x86_64 上常见大小是 16 KB（4 个 4 KB 页）</strong>，很多 32 位平台是 8 KB。这个值在编译时由 <code>THREAD_SIZE</code> 决定，运行时不可增长——<strong>它和用户态那个默认 8 MB、还能自动扩展的栈完全不是一回事</strong>。</div>
+
+  <div class="intuition">为什么内核栈这么小？因为它是<strong>按线程数量线性乘出来的常驻开销</strong>：一台机器上万个任务，每个 16 KB 就是 160 MB 物理内存，而且这些页<strong>必须常驻、不能换出</strong>（换出的话缺页处理本身又需要栈，会死循环）。同时内核栈需要是<strong>物理连续</strong>的（在 <code>CONFIG_VMAP_STACK</code> 之前），大块连续内存本身就稀缺。<strong>所以「小」不是疏忽，是必须付出的设计代价——代价转嫁给了内核开发者：不许递归，不许在栈上放大数组。</strong></div>
+
+<pre><span class="cm"># 现代内核开启 CONFIG_VMAP_STACK 后，栈末尾有一个不可访问的守护页，</span>
+<span class="cm"># 溢出会立刻被抓住，而不是静默踩坏相邻线程的栈：</span>
+BUG: stack guard page was hit at 00000000f3a92b1c (stack is 000000005a1e...)
+kernel stack overflow (page fault): 0000 [#1] SMP
+CPU: 2 PID: 8123 Comm: parse Tainted: G           OE
+<span class="cm"># 没有 VMAP_STACK 的老内核则表现为：栈回溯完全乱码、</span>
+<span class="cm"># 或者 "Thread overran stack, or stack corrupted"</span>
+
+<span class="cm"># 编译期就能拦住一大半：超过阈值的栈帧会告警</span>
+<span class="cm"># CONFIG_FRAME_WARN 默认在 1~2 KB 量级（随架构不同）</span>
+mydev.c: In function 'mydev_parse':
+mydev.c:212:1: warning: the frame size of 4128 bytes is larger than 2048 bytes
+               [-Wframe-larger-than=]</pre>
+
+  <div class="vs">
+    <div class="bad">
+      <h5>❌ 内核栈上开缓冲区</h5>
+<pre><span class="kw">static int</span> <span class="fn">mydev_parse</span>(<span class="kw">struct</span> file *f)
+{
+    <span class="kw">char</span> buf[<span class="num">4096</span>];        <span class="cm">// ★ 一口气吃掉 1/4 的内核栈</span>
+    <span class="kw">struct</span> big_state st;   <span class="cm">// ★ 又是几百字节</span>
+    ...
+}
+
+<span class="cm">// 更糟的：递归</span>
+<span class="kw">static int</span> <span class="fn">walk</span>(<span class="kw">struct</span> node *n, <span class="kw">int</span> depth)
+{
+    <span class="kw">char</span> tmp[<span class="num">256</span>];
+    <span class="kw">if</span> (n-&gt;child) walk(n-&gt;child, depth + <span class="num">1</span>);
+    <span class="cm">// 深度 50 就爆了，而深度由【外部输入】决定</span>
+    <span class="cm">// = 一个可被远程触发的内核崩溃</span>
+}</pre>
+    </div>
+    <div class="good">
+      <h5>✅ 堆分配 + 显式深度限制</h5>
+<pre><span class="kw">static int</span> <span class="fn">mydev_parse</span>(<span class="kw">struct</span> file *f)
+{
+    <span class="kw">char</span> *buf = kmalloc(<span class="num">4096</span>, GFP_KERNEL);
+    <span class="kw">if</span> (!buf) <span class="kw">return</span> -ENOMEM;
+    ...
+    kfree(buf);
+}
+
+<span class="cm">// 递归改迭代 + 显式栈；实在要递归就硬限深度</span>
+<span class="kw">static int</span> <span class="fn">walk</span>(<span class="kw">struct</span> node *n, <span class="kw">int</span> depth)
+{
+    <span class="kw">if</span> (depth &gt; MAX_DEPTH) <span class="kw">return</span> -ELOOP;  <span class="cm">// ★</span>
+    ...
+}
+<span class="cm">// 经验法则：内核函数的单帧控制在几百字节以内；</span>
+<span class="cm">// 需要 KB 级缓冲一律 kmalloc / per-cpu / 预分配池</span></pre>
+    </div>
+  </div>
+
+  <h3>④ 原子上下文里睡眠</h3>
+  <div class="def"><strong>原子上下文</strong>：不允许被调度出去的执行环境——持有自旋锁期间、关中断期间、软中断/硬中断处理函数里、RCU 读侧临界区里。在这些地方调用任何<strong>可能睡眠</strong>的函数（<code>mutex_lock</code>、<code>msleep</code>、<code>copy_to_user</code>、<code>kmalloc(GFP_KERNEL)</code>）都是严重错误：调度器会试图切走当前任务，而这个任务手里攥着别人正在自旋等待的锁——<strong>轻则性能崩溃，重则整机死锁</strong>。</div>
+
+<pre><span class="cm"># 报告形态一：真的调度出去了</span>
+BUG: scheduling while atomic: worker/2:187/0x00000002
+Modules linked in: mydev(OE) ...
+Call Trace:
+ __schedule+0x...
+ schedule+0x...
+ mutex_lock+0x...            <span class="cm">&lt;-- ★ 在持自旋锁时拿了 mutex</span>
+ mydev_ioctl+0x8c/0x200 [mydev]
+
+<span class="cm"># 报告形态二：CONFIG_DEBUG_ATOMIC_SLEEP 提前抓到（更常见、更早）</span>
+BUG: sleeping function called from invalid context at mm/page_alloc.c:5164
+in_atomic(): 1, irqs_disabled(): 0, non_block: 0, pid: 187, name: worker/2
+                 ^^^^^^^^^^^^^^^  ★ in_atomic() 为 1 = 当前在原子上下文
+preempt_count: 1, expected: 0
+CPU: 2 PID: 187 Comm: worker/2 Tainted: G           OE
+Call Trace:
+ __might_resched+0x...
+ __kmalloc+0x...             <span class="cm">&lt;-- ★ GFP_KERNEL 可能触发回收 → 可能睡眠</span>
+ mydev_alloc_buf+0x2c/0x90 [mydev]</pre>
+
+  <table>
+    <thead><tr><th>你想做的事</th><th>❌ 在原子上下文里不能用</th><th>✅ 替代</th></tr></thead>
+    <tbody>
+      <tr><td>分配内存</td><td><code>kmalloc(n, GFP_KERNEL)</code></td><td><code>GFP_ATOMIC</code>（不回收、可能失败，必须判空），或<strong>进临界区之前先分配好</strong></td></tr>
+      <tr><td>拿互斥锁</td><td><code>mutex_lock</code> / <code>down</code> / <code>down_read</code></td><td>改用 <code>spin_lock</code>；或重构成「临界区外拿 mutex」</td></tr>
+      <tr><td>和用户态交换数据</td><td><code>copy_to_user</code> / <code>copy_from_user</code>（会缺页 → 会睡）</td><td>先拷到内核缓冲，出临界区后再和用户态交互</td></tr>
+      <tr><td>延时等待</td><td><code>msleep</code> / <code>schedule_timeout</code> / <code>wait_event</code></td><td><code>udelay</code>/<code>mdelay</code>（忙等，只适合极短）；或把工作丢给 workqueue</td></tr>
+      <tr><td>做长活</td><td>在中断处理函数里干几毫秒的事</td><td>硬中断只做「确认+记录」，其余交给 <strong>tasklet / workqueue / threaded IRQ</strong></td></tr>
+    </tbody>
+  </table>
+
+  <div class="box tip"><strong>这类 bug 的正确防线是编译/测试期而不是线上。</strong>开发和 CI 的内核务必打开 <code>CONFIG_DEBUG_ATOMIC_SLEEP</code>、<code>CONFIG_PROVE_LOCKING</code>（lockdep）、<code>CONFIG_DEBUG_SPINLOCK</code>。<strong>lockdep 尤其值得强调：它会在你第一次以 A→B 顺序加锁、之后又以 B→A 顺序加锁时立刻报 <code>possible circular locking dependency detected</code>——不需要真的死锁发生。</strong>把一个「一年才复现一次的死锁」变成「第一次跑测试就报错」，这是内核调试里投入产出比最高的一个开关。</div>
+
+  <h3>⑤ 锁死：拿到全部阻塞栈，画出等待环</h3>
+
+<pre><span class="cm"># 活系统上：一条命令把所有 D 状态任务的栈打进 dmesg</span>
+$ echo w | sudo tee /proc/sysrq-trigger
+$ dmesg -T | tail -200
+
+<span class="cm"># 典型输出（每个卡住的任务一段）</span>
+task:jbd2/sda1-8     state:D stack:    0 pid:  412 ppid:     2 flags:0x00004000
+Call Trace:
+ __schedule+0x2d1/0x870
+ schedule+0x5b/0xd0
+ io_schedule+0x46/0x80
+ bit_wait_io+0x11/0x60
+ __wait_on_bit+0x33/0xa0        <span class="cm">&lt;-- 在等一个 IO 完成</span>
+ out_of_line_wait_on_bit+0x90/0xb0
+ jbd2_journal_commit_transaction+0x...
+
+task:mydevd          state:D stack:    0 pid: 4180 ppid:     1
+Call Trace:
+ __schedule+0x2d1/0x870
+ schedule+0x5b/0xd0
+ schedule_preempt_disabled+0x14/0x30
+ __mutex_lock.constprop.0+0x3d6/0x6c0   <span class="cm">&lt;-- 在等一把 mutex</span>
+ mydev_ioctl+0x8c/0x200 [mydev]
+
+<span class="cm"># 判读：</span>
+<span class="cm">#   栈顶是 io_schedule / wait_on_bit  → 在等【设备】，去查存储、去看 dmesg 有没有 IO error</span>
+<span class="cm">#   栈顶是 __mutex_lock / rwsem_down  → 在等【软件锁】，找持锁者，八成是死锁或持锁者自己卡了</span>
+<span class="cm">#   两类混在一起时：先解释 io_schedule 那一支 —— 通常是它先卡，别人再排在它后面</span></pre>
+
+  <div class="intuition">「一堆任务在等锁」时，<strong>要找的不是等的人，是持的人</strong>。而持锁者往往<strong>不在 D 状态</strong>（它没在睡，它在忙或者也在等别的东西），所以只看 <code>echo w</code> 的输出会漏掉它。完整做法是 <code>echo w</code>（阻塞任务）+ <code>echo l</code>（所有 CPU 当前栈）两条一起打，或者在 vmcore 里 <code>foreach UN bt</code> + <code>bt -a</code> 一起看。<strong>把「谁在等谁」画成一张图，环就出来了</strong>——大多数死锁在图画完的那一刻就自明了。</div>
+
+  <h3>⑥ 硬件与固件：不要去追代码</h3>
+  <p>这一类的特征极其鲜明：<strong>崩溃位置随机、栈毫无规律、换一台同型号机器不复现、同一台机器上不同业务都能崩</strong>。软件 bug 几乎总有「稳定的形状」（同一个函数、同一类操作），硬件问题没有形状。</p>
+
+<pre><span class="cm"># 内存 ECC 可纠正错误（CE）—— 还没崩，但这是预警</span>
+EDAC MC0: 1 CE memory read error on CPU_SrcID#0_MC#0_Chan#1_DIMM#0
+          (channel:1 slot:0 page:0x1a2b3c offset:0x40 grain:32 syndrome:0x0)
+
+<span class="cm"># 机器检查异常（MCE）—— 通常伴随 Tainted 里的 M</span>
+mce: [Hardware Error]: Machine check events logged
+mce: [Hardware Error]: CPU 5: Machine Check Exception: 5 Bank 7: be00000000800400
+Kernel panic - not syncing: Fatal machine check
+
+<span class="cm"># 查询工具</span>
+$ ras-mc-ctl --summary            <span class="cm"># rasdaemon，现代发行版首选</span>
+$ ras-mc-ctl --errors
+$ mcelog --client                 <span class="cm"># 老一些的 mcelog 守护进程</span>
+$ journalctl -k | grep -iE 'mce|edac|hardware error|corrected'
+$ ipmitool sel list               <span class="cm"># BMC 的系统事件日志，常有更明确的硬件告警</span>
+$ dmidecode -t memory | grep -A2 'Locator'   <span class="cm"># 把报错的 DIMM 编号对应到物理插槽</span></pre>
+
+  <div class="danger"><strong>看到 <code>Hardware Error</code> / <code>EDAC</code> / Tainted 含 <code>M</code> 或 <code>B</code>，就应当<em>暂停</em>代码侧的排查。</strong>一条 ECC <strong>可纠正</strong>错误（CE）本身不会崩机——它已经被硬件修好了。但<strong>同一根 DIMM 上 CE 频繁出现，是不可纠正错误（UE）的强预警信号</strong>，而 UE 会直接 panic。生产上的正确动作是：把这台机器<strong>标记隔离、迁走业务、报修换内存</strong>，而不是拉着三个人 review 一周代码。反过来说也成立——如果一个「疑难杂症」查了很久毫无头绪，<strong>先去看一眼 <code>ras-mc-ctl --summary</code> 和 BMC 日志</strong>，这个动作只要三十秒，却能省下好几天。</div>
+</section>
+
+<!-- ================================================================ §6 -->
+<section class="chapter" id="s6">
+  <div class="ch-head">
+    <div class="num">06</div>
+    <div class="t"><h2>不崩溃时的内核调试手段</h2><p class="sub">大多数内核问题不会好心地给你一个 vmcore</p></div>
+  </div>
+
+  <p>vmcore 的边界前面说过：<strong>它有结果，没有过程</strong>。而现实中更多的情况是「没崩，但不对」——驱动偶尔丢一帧、某个 ioctl 返回了 <code>-EINVAL</code> 但不知道走的哪个分支、某个路径明明不该被调用却被调用了。这时候你需要的是<strong>观测</strong>，不是尸检。</p>
+
+  <div class="insight-grid">
+    <div class="card"><h4>printk / dmesg</h4><p>最原始也最可靠。代价是要重编模块或重启，而且高频调用会淹没日志、拖慢系统。<strong>适合固定的关键路径。</strong></p></div>
+    <div class="card green"><h4>dynamic_debug</h4><p>把 <code>pr_debug</code> 变成<strong>运行时可按文件/函数/行开关</strong>的日志。不重编、不重启，随开随关。<strong>驱动调试的首选。</strong></p></div>
+    <div class="card violet"><h4>ftrace / bpftrace</h4><p>不改一行代码就能追<strong>任意内核函数</strong>的调用、参数、返回值、耗时。开销可控，能上生产。<strong>探索未知路径时最强。</strong></p></div>
+  </div>
+
+  <h3>printk 的日志级别与 dmesg 的正确用法</h3>
+  <p>内核日志有 8 个级别（0 最紧急，7 最啰嗦）。<strong>级别不只是分类，它直接决定「这条消息会不会打到物理控制台」</strong>——这一点在串口调试时至关重要，因为往串口打日志<strong>是同步的、极慢的</strong>，级别设错能让一台机器慢到不可用。</p>
+
+  <table>
+    <thead><tr><th>级别</th><th>宏</th><th>语义</th><th>什么时候该用</th></tr></thead>
+    <tbody>
+      <tr><td>0</td><td><code>pr_emerg</code></td><td>系统不可用</td><td>panic 前的最后一句</td></tr>
+      <tr><td>1</td><td><code>pr_alert</code></td><td>必须立即处理</td><td>数据结构损坏这类</td></tr>
+      <tr><td>2</td><td><code>pr_crit</code></td><td>严重错误</td><td>硬件失效、关键路径失败</td></tr>
+      <tr><td>3</td><td><code>pr_err</code></td><td>错误</td><td><strong>驱动里报错的默认选择</strong></td></tr>
+      <tr><td>4</td><td><code>pr_warn</code></td><td>警告</td><td>可恢复的异常、降级</td></tr>
+      <tr><td>5</td><td><code>pr_notice</code></td><td>值得注意的正常事件</td><td>设备上下线</td></tr>
+      <tr><td>6</td><td><code>pr_info</code></td><td>一般信息</td><td>模块加载、参数打印</td></tr>
+      <tr><td>7</td><td><code>pr_debug</code></td><td>调试</td><td><strong>默认不输出</strong>，由 dynamic_debug 控制</td></tr>
+    </tbody>
+  </table>
+
+<pre><span class="cm"># /proc/sys/kernel/printk 的四个数字</span>
+$ cat /proc/sys/kernel/printk
+4       4       1       7
+<span class="cm"># ①控制台级别  ②消息默认级别  ③控制台最低可设级别  ④控制台默认级别</span>
+<span class="cm"># ① = 4 表示：级别数字 &lt; 4 的（emerg/alert/crit/err）才打到控制台</span>
+
+<span class="cm"># 临时让控制台显示所有级别（串口调试时慎用，会很慢）</span>
+$ sudo dmesg -n 7          <span class="cm"># 等价于 echo 7 &gt; /proc/sys/kernel/printk</span>
+
+<span class="cm"># dmesg 的四个必备参数</span>
+$ dmesg -T                 <span class="cm"># 把 [12345.678] 换成人类可读时间</span>
+$ dmesg -l err,warn        <span class="cm"># 只看错误和警告，从几万行里筛出十几行</span>
+$ dmesg -w                 <span class="cm"># follow 模式，边跑边看（等价于 tail -f）</span>
+$ dmesg -H                 <span class="cm"># 分页 + 着色 + 相对时间，交互查看最舒服</span>
+
+<span class="cm"># 上一次启动的内核日志（这次重启前发生了什么）</span>
+$ journalctl -k -b -1
+$ journalctl --list-boots  <span class="cm"># 先看有哪些 boot</span></pre>
+
+  <div class="warn"><strong><code>dmesg -T</code> 的时间戳不能全信。</strong>内核环形缓冲里存的是<strong>单调时钟的相对秒数</strong>；<code>-T</code> 是用「当前墙上时间 − 当前单调时间」反推出来的。所以只要机器<strong>挂起过（suspend）、调过系统时钟、或者 NTP 做过大幅校正</strong>，换算出来的绝对时间就是错的，误差可能达到小时级。跨机器对时间线时，用 <code>journalctl -k</code>（journald 记录的是真实墙钟）更可靠；或者干脆用相对时间戳自己算差值。</div>
+
+  <h3>dynamic_debug：不重编内核就能开关 pr_debug</h3>
+  <div class="def"><strong>dynamic_debug</strong>（<code>CONFIG_DYNAMIC_DEBUG</code>）：内核把每一条 <code>pr_debug</code> / <code>dev_dbg</code> 的位置（模块、文件、函数、行号、格式串）都登记在一张表里，运行时可以<strong>按任意维度精确开关</strong>。未开启的调试语句用 static key 实现，<strong>关闭状态下的运行时开销接近零</strong>——所以发行版内核可以放心地把成千上万条 <code>pr_debug</code> 全部编进去。</div>
+
+  <div class="analogy">dynamic_debug 像<strong>整栋楼预先布好了线的射灯</strong>：灯全装好了但都关着，不费电；你想看哪个房间，在总控面板上按一下就亮。传统做法（改代码加 printk 再重编）相当于<strong>每次想照亮一个角落就要重新拉一次电线</strong>——而在内核里「重新拉线」意味着重编模块、卸载重载，很多时候现场根本不允许。</div>
+
+<pre><span class="cm"># 控制文件（需要挂载 debugfs）</span>
+$ sudo mount -t debugfs none /sys/kernel/debug   <span class="cm"># 多数发行版已自动挂好</span>
+$ CTL=/sys/kernel/debug/dynamic_debug/control
+
+<span class="cm"># 看看某模块里都有哪些调试点</span>
+$ sudo grep mydev $CTL
+/home/kavin/src/mydev/mydev.c:118 [mydev]mydev_write =_ "write %zu bytes\012"
+/home/kavin/src/mydev/mydev.c:203 [mydev]mydev_ioctl =_ "ioctl cmd=%x\012"
+<span class="cm">#                                                    ^^ "=_" 表示当前【关闭】</span>
+
+<span class="cm"># ── 四种匹配维度，可以叠加 ──────────────────────────────</span>
+$ echo 'module mydev +p'                  | sudo tee $CTL   <span class="cm"># 整个模块</span>
+$ echo 'file mydev.c +p'                  | sudo tee $CTL   <span class="cm"># 单个文件</span>
+$ echo 'func mydev_ioctl +p'              | sudo tee $CTL   <span class="cm"># 单个函数</span>
+$ echo 'file mydev.c line 200-260 +p'     | sudo tee $CTL   <span class="cm"># 行号范围</span>
+$ echo 'format "ioctl cmd" +p'            | sudo tee $CTL   <span class="cm"># 按格式串内容</span>
+
+<span class="cm"># ── flags：+ 开启，- 关闭，= 覆盖 ───────────────────────</span>
+<span class="cm">#   p  打开这条 pr_debug</span>
+<span class="cm">#   f  额外打印函数名</span>
+<span class="cm">#   l  额外打印行号</span>
+<span class="cm">#   m  额外打印模块名</span>
+<span class="cm">#   t  额外打印线程 id</span>
+$ echo 'module mydev +pflmt' | sudo tee $CTL     <span class="cm"># 全套上下文，定位最方便</span>
+$ echo 'module mydev -p'     | sudo tee $CTL     <span class="cm"># 用完记得关掉</span>
+
+<span class="cm"># ── 开机就要生效（问题发生在模块加载早期时必需）────────</span>
+<span class="cm"># 内核命令行：</span>
+dyndbg="module mydev +p"
+<span class="cm"># 或者作为模块参数：</span>
+$ sudo insmod mydev.ko dyndbg=+pfl
+$ sudo modprobe mydev dyndbg=+pfl</pre>
+
+  <div class="box tip"><strong>为什么这比「加 printk 重编」强得多。</strong>① <strong>粒度</strong>：可以只开某一个函数、某十行，日志量从每秒十万条降到每秒几十条，而 <code>printk</code> 只能全开或全关；② <strong>现场可用</strong>：客户机器上不可能让你重编内核模块，但读写一个 debugfs 文件是可以的；③ <strong>零残留</strong>：调试完关掉即可，不会留下一堆注释掉的 <code>printk</code> 污染代码。<strong>写驱动时的正确姿势是：把所有诊断信息都写成 <code>dev_dbg</code>，而不是「调试时加 printk、提交前删掉」。</strong></div>
+
+  <h3>ftrace：追任意内核函数，不改一行代码</h3>
+
+<pre>$ cd /sys/kernel/tracing        <span class="cm"># 老内核在 /sys/kernel/debug/tracing</span>
+
+<span class="cm"># ── ① function tracer：谁被调用了 ──────────────────────</span>
+$ echo function &gt; current_tracer
+$ echo 'mydev_*' &gt; set_ftrace_filter      <span class="cm"># ★ 一定要过滤，否则日志量爆炸</span>
+$ echo 1 &gt; tracing_on
+$ cat trace_pipe
+            cat-4211  [003] .... 104786.221: mydev_write &lt;-vfs_write
+            cat-4211  [003] .... 104786.221: mydev_get_ctx &lt;-mydev_write
+
+<span class="cm"># ── ② function_graph：调用层级 + 每个函数的耗时 ────────</span>
+$ echo 0 &gt; tracing_on
+$ echo function_graph &gt; current_tracer
+$ echo mydev_ioctl &gt; set_graph_function
+$ echo 1 &gt; tracing_on ; sleep 2 ; echo 0 &gt; tracing_on
+$ cat trace
+ 3)               |  mydev_ioctl [mydev]() {
+ 3)   0.412 us    |    mutex_lock();
+ 3)               |    mydev_do_scan [mydev]() {
+ 3) # 4821.336 us |      msleep();        <span class="cm">&lt;-- ★ 4.8 毫秒，就是它拖慢了 ioctl</span>
+ 3) # 4823.102 us |    }
+ 3)   0.208 us    |    mutex_unlock();
+ 3) # 4824.771 us |  }
+<span class="cm"># 行首的 # 是 ftrace 给「耗时超过阈值」的标记，一眼就能扫到慢的那一层</span>
+
+<span class="cm"># ── ③ 只追某个进程，减少噪声 ───────────────────────────</span>
+$ echo 4211 &gt; set_ftrace_pid
+
+<span class="cm"># ── ④ 用完一定要复原，否则会一直有开销 ─────────────────</span>
+$ echo 0 &gt; tracing_on
+$ echo nop &gt; current_tracer
+$ echo &gt; set_ftrace_filter</pre>
+
+  <div class="note"><strong><code>trace_printk()</code> 是内核里的「printf 但很便宜」。</strong>它把消息写进 ftrace 的环形缓冲区而不是 <code>printk</code> 的日志系统——<strong>不加锁串行化到控制台，不触发磁盘 IO，开销在微秒量级</strong>，所以可以放在中断处理函数、自旋锁临界区这些绝对不能用 <code>printk</code> 的地方。输出从 <code>/sys/kernel/tracing/trace</code> 读。<strong>但它是纯调试设施</strong>：内核在检测到有代码用了 <code>trace_printk</code> 时会在 dmesg 里打一段醒目的警告，提醒你这不该出现在正式代码里。<strong>用它定位问题，提交前删掉。</strong></div>
+
+  <h3>magic SysRq：机器已经半死时的最后手段</h3>
+  <div class="def"><strong>Magic SysRq</strong>：内核在<strong>极高优先级的中断路径</strong>上直接处理的一组按键命令。它绕过用户态、绕过调度器、绕过文件系统——<strong>即使系统已经卡到 SSH 连不上、shell 敲不动键，SysRq 通常仍然有效</strong>。这是「机器还没完全死透」时能抢救出信息的最后一条通道。</div>
+
+  <table>
+    <thead><tr><th>键</th><th>作用</th><th>什么时候用</th></tr></thead>
+    <tbody>
+      <tr><td><code>w</code></td><td><strong>打印所有 D 状态（不可中断睡眠）任务的栈</strong></td><td><strong>排查卡死的第一条命令</strong>，见 §5</td></tr>
+      <tr><td><code>l</code></td><td><strong>通过 NMI 打印所有 CPU 当前的栈</strong></td><td>soft/hard lockup，找「谁在占着 CPU 不放」</td></tr>
+      <tr><td><code>t</code></td><td>打印<strong>所有</strong>任务的栈</td><td>信息量巨大，只在 <code>w</code> 不够时用</td></tr>
+      <tr><td><code>m</code></td><td>打印内存统计</td><td>怀疑 OOM / 内核内存泄漏</td></tr>
+      <tr><td><code>p</code></td><td>打印当前寄存器与标志</td><td>配合 <code>l</code> 定位卡住的指令</td></tr>
+      <tr><td><code>c</code></td><td><strong>主动触发 panic</strong>（进而触发 kdump）</td><td>系统已经废了但还没崩——<strong>主动收现场</strong></td></tr>
+      <tr><td><code>s</code></td><td>把所有已挂载文件系统 sync 到磁盘</td><td>强制重启前必做</td></tr>
+      <tr><td><code>u</code></td><td>把所有文件系统重挂为只读</td><td>强制重启前必做（配合 <code>s</code>）</td></tr>
+      <tr><td><code>b</code></td><td><strong>立即重启</strong>，不 sync 不卸载</td><td>最后一步</td></tr>
+      <tr><td><code>e</code> / <code>i</code></td><td>给除 init 外所有进程发 <code>SIGTERM</code> / <code>SIGKILL</code></td><td>用户态失控但内核还好时，先试试这个</td></tr>
+    </tbody>
+  </table>
+
+<pre><span class="cm"># 启用（bitmask；1 = 全开，0 = 全关，也可按类别按位开）</span>
+$ sudo sysctl -w kernel.sysrq=1
+<span class="cm"># 持久化写 /etc/sysctl.d/。注意：写 /proc/sysrq-trigger 与物理键盘组合键</span>
+<span class="cm"># 在不同内核版本上对这个掩码的检查范围不完全一致，上线前实测一次。</span>
+
+<span class="cm"># 用法一：从 shell 触发（还能登进去的时候）</span>
+$ echo w | sudo tee /proc/sysrq-trigger    <span class="cm"># 所有阻塞任务的栈</span>
+$ echo l | sudo tee /proc/sysrq-trigger    <span class="cm"># 所有 CPU 的栈</span>
+$ dmesg -T | tail -300                     <span class="cm"># 结果都进 dmesg</span>
+
+<span class="cm"># 用法二：从物理键盘 / IPMI 虚拟键盘（shell 已经敲不动了）</span>
+<span class="cm">#   Alt + SysRq(PrtSc) + w</span>
+<span class="cm">#   串口控制台上是：Break 键，然后按对应字母</span>
+
+<span class="cm"># 用法三：救命序列 —— 记住 "Reboot Even If System Utterly Broken" 的首字母倒着念</span>
+<span class="cm">#   R → E → I → S → U → B</span>
+<span class="cm">#   夺回键盘 / 终止进程 / 杀死进程 / 同步磁盘 / 只读重挂 / 重启</span>
+<span class="cm">#   每一步之间等几秒，比直接按电源键安全得多（不会丢数据、不会烂文件系统）</span></pre>
+
+  <div class="box star"><strong>面试加分点</strong>：「系统卡死但还能按键盘，你怎么办？」——绝大多数人回答「重启」。<strong>正确答案是：先 <code>Alt+SysRq+w</code> 和 <code>Alt+SysRq+l</code> 把栈打出来（这就是取证），如果配了 kdump 就 <code>Alt+SysRq+c</code> 主动 panic 拿一份完整 vmcore，实在不行才走 R-E-I-S-U-B 优雅重启。</strong>直接按电源键等于亲手销毁了唯一的现场，下次它还会以同样的方式挂，而你依然什么都不知道。<strong>「重启能解决问题，但解决不了下一次」——这句话的技术含义就在这里。</strong></div>
+
+  <h3>kprobe / bpftrace：观测内核函数的入参与返回值</h3>
+  <p>ftrace 告诉你「谁被调用了、花了多久」，但看不到<strong>参数的值</strong>。要看值就得上 kprobe，而写 kprobe 最省事的方式是 bpftrace。</p>
+
+<pre><span class="cm"># 函数被调用时打印参数（arg0/arg1/... 对应函数形参）</span>
+$ sudo bpftrace -e 'kprobe:vfs_write { printf("%s pid=%d len=%d\n", comm, pid, arg2); }'
+
+<span class="cm"># 追自己模块里的函数（module:function 形式）</span>
+$ sudo bpftrace -e 'kprobe:mydev:mydev_ioctl { printf("cmd=0x%x\n", arg1); }'
+
+<span class="cm"># 返回值 + 只看失败的调用</span>
+$ sudo bpftrace -e '
+  kretprobe:mydev_ioctl /retval &lt; 0/ {
+      printf("%s: ioctl failed ret=%d\n", comm, retval);
+      printf("%s\n", kstack);          <span class="cm">// 顺便把内核栈打出来</span>
+  }'
+
+<span class="cm"># 函数耗时分布（找出偶发的长尾）</span>
+$ sudo bpftrace -e '
+  kprobe:mydev_ioctl { @s[tid] = nsecs; }
+  kretprobe:mydev_ioctl /@s[tid]/ {
+      @us = hist((nsecs - @s[tid]) / 1000); delete(@s[tid]);
+  }'
+@us:
+[16, 32)          8214 |@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@|
+[32, 64)           612 |@@@                                     |
+[4K, 8K)            17 |                                        |   <span class="cm">&lt;-- ★ 长尾在这</span>
+
+<span class="cm"># 按内核栈聚合内存分配，查内核内存泄漏的来源</span>
+$ sudo bpftrace -e 'kprobe:__kmalloc { @[kstack] = count(); }'</pre>
+
+  <div class="note">kprobe 有它的边界：<strong>内联函数、被优化掉的函数、标了 <code>notrace</code> 的函数挂不上钩子</strong>；参数映射依赖调用约定，结构体成员要用 <code>((struct foo *)arg0)-&gt;field</code> 手动解引用，而这需要内核有 BTF 信息（<code>CONFIG_DEBUG_INFO_BTF</code>）。eBPF 在内核观测上的完整体系——map、tracepoint、USDT、生产上的安全性与开销控制——见 <a href="observability_ebpf.html">eBPF 与内核可观测性</a>。</div>
+</section>
+<!-- ================================================================ §7 -->
+<section class="chapter" id="s7">
+  <div class="ch-head">
+    <div class="num">07</div>
+    <div class="t"><h2>检测器原理与调参</h2><p class="sub">这些告警是怎么被发现的，以及为什么虚拟机上总在误报</p></div>
+  </div>
+
+  <p>hung task、soft lockup、hard lockup、RCU stall 这四个告警，本质上都在回答同一个问题：<strong>「某个东西是不是不动了？」</strong>但它们盯的对象不同、判定方式不同、误报模式也不同。<strong>不理解原理就调参数，最常见的结果是把阈值调大到永远不报——问题还在，只是你看不见了。</strong></p>
+
+  <table>
+    <thead><tr><th></th><th>hung task</th><th>soft lockup</th><th>hard lockup</th><th>RCU stall</th></tr></thead>
+    <tbody>
+      <tr><td><strong>盯什么</strong></td><td>处于 D 状态的<strong>任务</strong></td><td>某个 <strong>CPU</strong> 上有任务不让出</td><td>某个 <strong>CPU</strong> 连中断都不响应</td><td>RCU 宽限期迟迟结束不了</td></tr>
+      <tr><td><strong>谁来检测</strong></td><td><code>khungtaskd</code> 内核线程周期扫描</td><td>每 CPU 的 hrtimer + per-CPU watchdog 线程</td><td><strong>NMI</strong>（通常由 PMU 性能计数器产生）</td><td>RCU 核心自己在宽限期里检查</td></tr>
+      <tr><td><strong>判据</strong></td><td>任务在 D 状态且<strong>上下文切换计数没变</strong>超过阈值</td><td>watchdog 线程超过 <code>2×watchdog_thresh</code> 没被调度到</td><td>普通时钟中断计数长时间不增长</td><td>某 CPU 长时间不经过静止态</td></tr>
+      <tr><td><strong>默认阈值</strong></td><td><code>hung_task_timeout_secs</code>，常见默认 <strong>120 秒</strong></td><td><code>watchdog_thresh</code> 常见默认 <strong>10</strong> → 报警约 20 余秒</td><td>同上（共用 <code>watchdog_thresh</code>）</td><td><code>rcu_cpu_stall_timeout</code>，常见默认 <strong>21 秒</strong>（部分配置 60）</td></tr>
+      <tr><td><strong>典型根因</strong></td><td>IO 卡死、内核互斥锁死锁</td><td>内核态死循环、超长临界区、自旋锁竞争</td><td><strong>关中断死循环</strong>、自旋锁死锁</td><td>长时间关抢占/关中断、RCU 读侧临界区里睡眠</td></tr>
+      <tr><td><strong>panic 开关</strong></td><td><code>hung_task_panic</code></td><td><code>softlockup_panic</code></td><td><code>hardlockup_panic</code> / <code>nmi_watchdog=panic</code></td><td><code>panic_on_rcu_stall</code></td></tr>
+    </tbody>
+  </table>
+
+  <h3>hung task detector：为什么只看 D 状态</h3>
+  <p><code>khungtaskd</code> 是一个普通的内核线程，周期性地遍历全部任务，做一件很朴素的事：<strong>「这个任务处在 <code>TASK_UNINTERRUPTIBLE</code>（D）状态，而且它的自愿+非自愿上下文切换总数和我上次看时一模一样——说明它这段时间一次都没被调度过，纯粹在睡。」</strong>连续这样超过阈值，就打印它的栈。</p>
+
+  <div class="def"><strong>为什么 <code>S</code>（<code>TASK_INTERRUPTIBLE</code>，可中断睡眠）不算</strong>：<code>S</code> 状态是<strong>「正常等待」的常态</strong>——一个 <code>sshd</code> 等新连接可以等三个月，一个 <code>epoll_wait</code> 空转的服务器进程一天里 99.99% 的时间都在 <code>S</code>。把 <code>S</code> 纳入检测，等于给每台机器每两分钟刷屏几百条误报。<strong>而 <code>D</code> 状态的语义完全不同：它表示「正在等待一个不可被信号打断的事件」，通常是块设备 IO、页面回写、某些内核互斥锁。这类等待<strong>按设计就应该在毫秒到秒级返回</strong>——等满两分钟只有两种可能：底层设备真的挂了，或者出现了死锁。两种都值得报警。</strong></div>
+
+  <div class="analogy">这就像<strong>公司里区分「在会议室开会」和「在洗手间反锁了两小时」</strong>。前者（S 状态）你不会去敲门——人家本来就该在那待着，待多久都正常。后者（D 状态）你一定会去敲门，因为那个隔间设计上就不该被占用两小时，要么里面的人出事了，要么门锁坏了。<strong>hung task detector 就是那个负责去敲门的人。</strong></div>
+
+<pre><span class="cm"># 相关参数</span>
+$ sysctl -a | grep hung_task
+kernel.hung_task_timeout_secs = 120        <span class="cm"># 判定阈值（0 = 关闭检测）</span>
+kernel.hung_task_check_interval_secs = 0   <span class="cm"># 扫描间隔，0 表示等于 timeout</span>
+kernel.hung_task_warnings = 10             <span class="cm"># ★ 只报 10 次就不报了，报完要手动重置</span>
+kernel.hung_task_panic = 0                 <span class="cm"># 1 = 检测到就 panic（追死锁时临时开）</span>
+kernel.hung_task_all_cpu_backtrace = 0     <span class="cm"># 1 = 顺便把所有 CPU 的栈也打出来</span>
+
+<span class="cm"># ⚠️ hung_task_warnings 是个坑：默认只打印 10 次之后就静默了。</span>
+<span class="cm">#    长时间运行的机器上，你以为「没再报了 = 好了」，其实只是配额用完。</span>
+$ sudo sysctl -w kernel.hung_task_warnings=100     <span class="cm"># 排查期间调大</span>
+
+<span class="cm"># 手工找 D 状态任务（不用等检测器）</span>
+$ ps -eo pid,stat,wchan:32,comm | awk '$2 ~ /^D/'
+   412 D    jbd2_journal_commit_transaction  jbd2/sda1-8
+  4180 D    __mutex_lock.constprop.0         mydevd
+<span class="cm"># wchan 列直接告诉你它睡在哪个内核函数上 —— 常常一眼就够了</span>
+
+<span class="cm"># 单个任务的完整内核栈</span>
+$ sudo cat /proc/412/stack</pre>
+
+  <h3>soft / hard lockup detector：一对互补的看门狗</h3>
+  <p>这两者共用一套基础设施，但检测的层次完全不同。<strong>理解它们的关键是问一句：「报警本身是怎么被打印出来的？」</strong></p>
+
+  <div class="point"><div class="label">soft lockup —— 中断还活着</div><div>每个 CPU 上有一个高精度定时器周期性触发（周期约为 <code>watchdog_thresh/5</code>，默认下是几秒一次），它的工作是检查<strong>该 CPU 上的 watchdog 内核线程有没有被调度到并更新时间戳</strong>。如果超过 <code>2×watchdog_thresh</code>（默认约 20 余秒）还没更新，说明<strong>这个 CPU 一直在跑某段不让出的代码</strong>。<strong>注意定时器中断本身是能进来的</strong>——所以这个 CPU 只是「不调度」，不是「完全失联」，报警可以在中断上下文里正常打印出来。典型元凶：内核态 <code>while</code> 死循环、遍历一个成环的链表、在关抢占的临界区里干太久。</div></div>
+  <div class="point"><div class="label">hard lockup —— 连中断都进不来</div><div>如果连时钟中断都被挡在门外（<code>local_irq_disable()</code> 之后死循环、或者自旋锁死锁在关中断的临界区里），上面那套基于 hrtimer 的机制<strong>整个失效</strong>——定时器根本不会触发。于是内核祭出<strong>NMI</strong>：不可屏蔽中断不受 <code>cli</code> 影响，硬件强行把它送进 CPU。NMI 处理函数检查「这个 CPU 的普通时钟中断计数是不是很久没涨了」，是则判定 hard lockup 并在 NMI 上下文里打栈。x86 上 NMI 通常由 PMU 性能计数器产生；<strong>虚拟机里没有虚拟 PMU 时这套机制会直接不可用</strong>（dmesg 里会有 perf event 创建失败的提示），新一些的内核提供了「CPU 之间互相检查」的 buddy 方案作为替代。</div></div>
+
+<pre>$ sysctl -a | grep -E 'watchdog|lockup'
+kernel.watchdog = 1                  <span class="cm"># 总开关</span>
+kernel.watchdog_thresh = 10          <span class="cm"># ★ 核心阈值：soft lockup 约 2× 它</span>
+kernel.watchdog_cpumask = 0-7        <span class="cm"># 只在这些 CPU 上启用（隔离核可以排除掉）</span>
+kernel.nmi_watchdog = 1              <span class="cm"># hard lockup 检测开关</span>
+kernel.soft_watchdog = 1
+kernel.softlockup_panic = 0
+kernel.softlockup_all_cpu_backtrace = 0   <span class="cm"># ★ 建议开：报警时把所有 CPU 的栈都打出来</span>
+
+<span class="cm"># 排查 lockup 时最有用的两个动作</span>
+$ sudo sysctl -w kernel.softlockup_all_cpu_backtrace=1
+$ sudo sysctl -w kernel.hardlockup_panic=1        <span class="cm"># hard lockup 基本无自愈，直接收现场</span>
+
+<span class="cm"># 隔离核（isolcpus / nohz_full）上跑纯计算的用户态任务时，</span>
+<span class="cm"># 可以把它们从 watchdog 里摘掉，避免无意义的开销和误报</span>
+$ echo 0-3 | sudo tee /proc/sys/kernel/watchdog_cpumask</pre>
+
+  <div class="intuition">记忆锚点：<strong>soft lockup = 「这个 CPU 不肯换人」，hard lockup = 「这个 CPU 连门铃都不应」</strong>。前者还能被中断打断，所以还能打印、还能被 NMI 观察到；后者只剩 NMI 这一条通路。因此排查手段也不同：soft lockup 可以用 <code>echo l &gt; /proc/sysrq-trigger</code> 现场取栈；hard lockup 时那个 CPU 根本处理不了 sysrq，<strong>只能靠 NMI 打出来的那一段，或者靠 kdump</strong>。</div>
+
+  <h3>RCU stall</h3>
+  <div class="def"><strong>RCU 静止态（quiescent state）</strong>：RCU 的核心假设是「只要每个 CPU 都经历过一次上下文切换 / 进入过用户态 / 进过 idle，那么此前所有的 RCU 读侧临界区都已经结束了」。这些时刻就叫静止态。<strong>所有 CPU 都报告过静止态，一个宽限期（grace period）才算结束，被延迟释放的内存才能真正回收。</strong>如果某个 CPU 长时间一次静止态都没有——它在内核态死循环、长时间关抢占、或者关着中断——宽限期就永远结束不了，<strong>待释放的内存不断堆积</strong>，最终可能拖垮整个系统。RCU stall detector 就是来报这件事的。</div>
+
+<pre>rcu: INFO: rcu_preempt detected stalls on CPUs/tasks:
+rcu:     3-...0: (0 ticks this GP) idle=b2c/1/0x4000000000000000 softirq=8214/8214 fqs=2625
+rcu:     (detected by 0, t=5252 jiffies, g=194837, q=1043)
+<span class="cm"># 读法：</span>
+<span class="cm">#   "3-...0"  → 是 CPU 3 卡住了（后面的点表示各项状态标志）</span>
+<span class="cm">#   "0 ticks this GP" → 这个宽限期内 CPU 3 一次时钟 tick 都没处理 —— 强烈暗示它在关中断</span>
+<span class="cm">#   "detected by 0"   → 报告者是 CPU 0（它是受害者，别去查它）</span>
+<span class="cm">#   "t=5252 jiffies"  → 已经卡了约 5252 个 jiffies</span>
+<span class="cm"># 后面通常紧跟 CPU 3 的栈 —— 那才是要看的东西</span>
+
+$ sysctl -a | grep rcu
+kernel.panic_on_rcu_stall = 0
+<span class="cm"># 阈值在 /sys/module/rcupdate/parameters/ 下</span>
+$ cat /sys/module/rcupdate/parameters/rcu_cpu_stall_timeout
+21
+$ cat /sys/module/rcupdate/parameters/rcu_cpu_stall_suppress</pre>
+
+  <div class="warn"><strong>RCU stall 和 soft lockup 经常同时出现，而且指向同一个根因。</strong>一个 CPU 在内核态死循环，既不让出（soft lockup）也不经过静止态（RCU stall），于是两个检测器先后开火。<strong>此时不要把它们当成两个问题去查</strong>——找到那个死循环，两个告警一起消失。判断谁是根因的方法：<strong>看两条日志里点名的 CPU 编号是不是同一个</strong>；是同一个就是一个问题，不是同一个才需要分别看。</div>
+
+  <h3>虚拟机上的误报：这是最常被问、也最容易搞错的一点</h3>
+
+  <div class="analogy">物理机上的 watchdog 像<strong>老板每隔 20 秒来工位看一眼</strong>：人不在就记一笔。虚拟机上的 vCPU 则像<strong>一个被派去别处开会的员工</strong>——他不是在偷懒，是被<strong>更高一层的调度者（宿主机）</strong>整个人调走了 20 秒。可这位老板（guest 内核）看不见宿主机那一层，<strong>它只知道「工位空了 20 秒」，于是照样记一笔 soft lockup</strong>。问题从来不在这个员工身上。</div>
+
+  <div class="point bad"><div class="label">误报的机制</div><div>宿主机 CPU 超卖时，guest 的 vCPU 只是宿主上的一个普通线程，随时可能被抢占几十毫秒甚至几秒。<strong>在 guest 内核看来，「时间凭空跳了过去」和「某个 CPU 卡了这么久」是完全无法区分的两件事。</strong>此外，<strong>存储抖动</strong>（虚拟磁盘后端阻塞）会让整个 vCPU 卡在 IO 上，<strong>热迁移</strong>（live migration）的最后停机阶段更是会让整台 guest 暂停数百毫秒到数秒。</div></div>
+  <div class="point good"><div class="label">内核已有的缓解</div><div>KVM 提供了 <strong>steal time</strong> 和「宿主曾暂停过本 guest」的标志位，guest 内核在报 lockup 之前会检查这个标志，若发现刚被宿主暂停过则<strong>跳过这次报警</strong>。这能挡掉大部分热迁移和明显暂停导致的误报，<strong>但挡不住「持续性的中度超卖」</strong>——每次只被抢 3 秒、连续抢 7 次，标志位不一定被置上，累计却超过了阈值。</div></div>
+  <div class="point"><div class="label">怎么判断是不是误报</div><div><strong>先看 steal time。</strong><code>top</code> / <code>vmstat 1</code> 里的 <code>st</code> 列、<code>/proc/stat</code> 的第 8 个字段，如果明显非零（持续 &gt; 5%~10%），基本可以确定是宿主争抢而不是 guest 内的问题。<strong>再看栈</strong>：真实的 soft lockup 会稳定地卡在<strong>同一个内核函数</strong>上（那个死循环）；误报的栈往往<strong>每次都不一样</strong>，甚至栈顶是 <code>native_safe_halt</code>（本来在 idle）这种荒谬的位置。<strong>「栈没有形状」= 误报</strong>，这和 §5 里判断硬件问题的逻辑是一样的。</div></div>
+
+<pre><span class="cm"># 一眼看穿：st 列就是被宿主偷走的时间</span>
+$ vmstat 1 5
+procs -----------memory---------- ---swap-- -----io---- -system-- ------cpu-----
+ r  b   swpd   free   buff  cache   si   so    bi    bo   in   cs us sy id wa st
+ 2  0      0 512344  18232 892144    0    0     0     8 2104 4821 12  4 61  0 23
+<span class="cm">#                                                                            ^^ 23% 被偷走</span>
+
+<span class="cm"># 虚拟机上的务实配置</span>
+kernel.watchdog_thresh = 30        <span class="cm"># 阈值放宽到 30（soft lockup 约 60 秒才报）</span>
+kernel.softlockup_panic = 0        <span class="cm"># ★ 绝对不要在超卖的虚拟机上开这个</span>
+kernel.hardlockup_panic = 1        <span class="cm"># hard lockup 极少误报，可以保留</span>
+<span class="cm"># 同时把 steal time 纳入监控告警 —— 它才是这类问题的真实指标</span></pre>
+
+  <h3>panic 收现场 vs 仅告警：怎么选</h3>
+
+  <table>
+    <thead><tr><th>场景</th><th>建议</th><th>理由</th></tr></thead>
+    <tbody>
+      <tr><td>集群里的一台无状态 worker（K8s 节点、Web 前端）</td><td><strong>倾向 panic</strong>：<code>panic_on_oops=1</code> + <code>hardlockup_panic=1</code></td><td>有冗余，流量会飘走。带病节点返回错误结果的危害大于短暂少一台机器</td></tr>
+      <tr><td>数据库主节点 / 有状态服务</td><td><strong>谨慎</strong>：先确认有可靠的自动切主，再开 panic</td><td>panic 会触发切主，切主本身有风险；但带着损坏的内核状态继续写数据更危险</td></tr>
+      <tr><td>CPU 超卖的虚拟机 / 云主机</td><td><strong>关 <code>softlockup_panic</code></strong>，保留 hard lockup</td><td>soft lockup 误报率高，开了会变成随机重启</td></tr>
+      <tr><td>单点工控机 / 车载 / 医疗设备</td><td><strong>不 panic</strong>，靠 WARN + 外部硬件看门狗</td><td>停机就是事故。用外部看门狗兜底「真死机」，软件层尽量维持降级运行</td></tr>
+      <tr><td>正在追某个偶发问题的调试期</td><td><strong>全开</strong>：<code>panic_on_warn</code>、<code>hung_task_panic</code>、<code>panic_on_rcu_stall</code></td><td>目标是拿到第一现场。调试期就该激进，但记得事后关掉</td></tr>
+    </tbody>
+  </table>
+
+  <div class="intuition">这个取舍的本质是<strong>「现场的价值」对比「可用性的代价」</strong>。有冗余时，现场几乎是免费的（流量飘走，用户无感），那就该拿。没有冗余时，现场的价格是一次真实的业务中断——这时候更划算的做法是<strong>降低对现场的依赖</strong>：把 dynamic_debug 和 ftrace 常态化埋点、把 pstore 配好（至少保住最后几 KB 日志）、在测试环境用 KASAN 提前发现问题。<strong>「拿不到 vmcore」不等于「查不出来」，只是需要在事前多花功夫。</strong></div>
+</section>
+
+<!-- ================================================================ §8 -->
+<section class="chapter" id="s8">
+  <div class="ch-head">
+    <div class="num">08</div>
+    <div class="t"><h2>生产落地</h2><p class="sub">从「偶尔手工看一次」到「每次重启都可归因」</p></div>
+  </div>
+
+  <p>前面七章讲的是一个人在一台机器上怎么查。规模上去之后问题变了：<strong>一千台机器，上个月有 17 次非计划重启，其中几次是内核崩溃？分别是什么原因？有没有重复的？</strong>——如果这些问题回答不了，那么单机排障技能再强也只是在救火。</p>
+
+  <h3>vmcore 自动收集与归档流水线</h3>
+  <p>kdump 只负责把 vmcore 写到本地磁盘。<strong>剩下的事情必须自动化，因为「机器重启后有人记得去 <code>/var/crash</code> 看一眼」这件事在生产上不会发生。</strong></p>
+
+<pre><span class="cm"># 开机时检查是否有新的 vmcore，有就打包上传并告警</span>
+<span class="cm"># /etc/systemd/system/vmcore-upload.service</span>
+[Unit]
+Description=Upload kdump vmcore if present
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/vmcore-upload.sh
+
+[Install]
+WantedBy=multi-user.target
+
+<span class="cm"># vmcore-upload.sh 至少要收集这些东西 —— 光有 vmcore 是不够的</span>
+<span class="cm">#   vmcore                     内存镜像</span>
+<span class="cm">#   vmcore-dmesg.txt           崩溃瞬间的内核日志（先看这个）</span>
+<span class="cm">#   uname -a / /proc/cmdline   内核版本与启动参数</span>
+<span class="cm">#   包版本清单（rpm -qa / dpkg -l）与自研模块的 build id</span>
+<span class="cm">#   lspci -nnk / dmidecode     硬件与固件版本</span>
+<span class="cm">#   journalctl -k -b -1        上一次启动的完整内核日志</span>
+<span class="cm">#   /sys/kernel/kexec_crash_size / _loaded  证明 kdump 当时是生效的</span>
+
+<span class="cm"># 上传后本地保留策略：至少留一份最近的，磁盘满了先删旧的</span>
+<span class="cm"># 千万别让 /var/crash 把根分区撑满 —— 那会导致下一次崩溃根本落不了盘</span></pre>
+
+  <div class="warn"><strong>最讽刺的失败模式：<code>/var/crash</code> 把磁盘写满，导致后续所有崩溃都没有 vmcore。</strong>一个 vmcore 动辄几个 GB，连续崩三次就能填满一块小系统盘。<strong>必须配保留策略</strong>（<code>/etc/kdump.conf</code> 里可以设，或者用 <code>systemd-tmpfiles</code> / 上传脚本自己管），并且<strong>把 <code>/var/crash</code> 的剩余空间纳入监控</strong>。同理，落 NFS 时要考虑「一百台机器同时崩溃同时往一个 NFS 写几 GB」的场景。</div>
+
+  <h3>体积与脱敏：vmcore 里有什么不能外传的东西</h3>
+  <div class="danger"><strong>vmcore 是一份完整的内存镜像——它包含崩溃那一刻内存里的<em>一切</em>。</strong>用户的明文密码（刚从 HTTP 请求里解出来还没清零的缓冲区）、TLS 会话密钥、数据库连接串、用户的业务数据、page cache 里缓存的文件内容。<strong>把 vmcore 发给硬件厂商、上传到公有云工单系统、或者放进一个全公司可读的对象存储桶，都是实打实的数据泄露。</strong></div>
+
+  <table>
+    <thead><tr><th>措施</th><th>做法</th><th>代价</th></tr></thead>
+    <tbody>
+      <tr><td><strong>裁掉用户页</strong></td><td><code>makedumpfile -d 31</code>（bit 3 就是用户数据页，bit 1/2 是 page cache）</td><td>看不到用户态内存和被缓存的文件内容；<strong>排查内核问题基本不受影响</strong></td></tr>
+      <tr><td><strong>限制访问</strong></td><td>vmcore 目录 <code>0600</code>；归档存储按团队做 ACL；下载留审计日志</td><td>流程成本</td></tr>
+      <tr><td><strong>传输加密</strong></td><td>落远端走 ssh 而不是 NFS 明文；对象存储开服务端加密</td><td>捕获内核里要配密钥，增加 initramfs 复杂度</td></tr>
+      <tr><td><strong>外发前评审</strong></td><td>给厂商/上游之前走一次数据合规审批，能只发 <code>vmcore-dmesg.txt</code> 就别发全量</td><td>响应变慢；但这是必要的</td></tr>
+      <tr><td><strong>能不发就不发</strong></td><td>先自己 <code>crash</code> 分析，把结论 + 脱敏后的栈发过去</td><td>需要本方有分析能力——这正是学这一章的意义</td></tr>
+    </tbody>
+  </table>
+
+  <div class="box tip"><strong><code>-d 31</code> 是一个「性能优化顺便解决了合规问题」的经典例子。</strong>它最初的目的是压缩体积（几百 GB → 几 GB），但因为裁掉的正好是用户数据页和 page cache，<strong>它同时把绝大部分敏感数据挡在了外面</strong>。反过来提醒一件事：如果你为了追某个用户态相关的问题把 dump level 调低（比如 <code>-d 1</code> 只裁零页），<strong>那份 vmcore 的敏感级别就完全不同了</strong>，不能按常规流程流转。</div>
+
+  <h3>调试符号管理：崩溃发生时才找 vmlinux 就晚了</h3>
+  <p>这是自研内核 / 自研驱动团队最常见的翻车点：<strong>三个月前发布的版本崩了，而当时的 <code>vmlinux</code> 谁也找不到了</strong>。vmcore 拿在手里却打不开，等于没有。</p>
+
+  <div class="checklist">
+    <h4>符号管理的四条硬规矩</h4>
+    <ul>
+      <li><strong>CI 必须归档未 strip 的 <code>vmlinux</code> 和所有 <code>.ko</code></strong>，和二进制版本号（或 build id）一一绑定，保留期 ≥ 你的最长支持周期。<code>/boot/vmlinuz-*</code> 是压缩过的引导镜像，<strong>不能拿来给 crash 用</strong>。</li>
+      <li><strong>用 build id 而不是版本号做主键</strong>：<code>readelf -n vmlinux | grep 'Build ID'</code>。版本号会重复（同一个版本重编一次符号就变了），build id 不会。</li>
+      <li><strong>部署 debuginfod</strong>：设置 <code>DEBUGINFOD_URLS</code> 后，<code>gdb</code>、<code>crash</code>、<code>perf</code> 能按 build id <strong>自动</strong>拉取匹配的调试信息，彻底告别「翻遍制品库找符号」。发行版通常也有公共 debuginfod 服务。</li>
+      <li><strong>把符号可用性纳入发布检查项</strong>：发版时顺手验证一次「用归档的 vmlinux 能不能打开一个测试 vmcore」，比事故当天才发现强得多。</li>
+    </ul>
+  </div>
+
+<pre><span class="cm"># build id 是符号与二进制配对的唯一可靠依据</span>
+$ readelf -n vmlinux | grep -A1 'Build ID'
+    Build ID: 3f2a91c0b4e7d81a9c5f2e03b71d4a6c8e09f512
+
+<span class="cm"># 配好 debuginfod 之后，gdb / crash 会自动去拉符号</span>
+$ export DEBUGINFOD_URLS="https://debuginfod.example.com/"
+$ crash /var/crash/.../vmcore          <span class="cm"># 不用手工指定 vmlinux 了</span>
+
+<span class="cm"># 自研模块也要留档，并记下它对应的内核 vermagic</span>
+$ modinfo mydev.ko | grep -E 'vermagic|srcversion'
+vermagic:    6.1.0-18-amd64 SMP preempt mod_unload modversions
+srcversion:  A3F91C0B4E7D81A9C5F2E03</pre>
+
+  <h3>把「机器重启」变成可归因事件</h3>
+  <p>这是整章最有价值的一节。<strong>「这台机器昨晚重启了」不是一个事件，是一个待分类的信号</strong>——它可能是内核 panic、可能是掉电、可能是硬件看门狗、可能是运维手滑、可能是云平台的实例迁移。<strong>五种原因的处理方式完全不同，而区分它们只需要三条命令。</strong></p>
+
+<pre><span class="cm"># ── ① 上一次是怎么停的：正常关机还是崩溃 ────────────────</span>
+$ last -x reboot shutdown | head
+reboot   system boot  6.1.0-18-amd64   Thu Sep  3 10:12   still running
+reboot   system boot  6.1.0-18-amd64   Wed Sep  2 03:41 - 10:11 (1+06:30)
+<span class="cm"># 注意：只有 reboot 没有对应的 shutdown 记录 = 【非正常关机】</span>
+<span class="cm"># 正常 shutdown 会留下 "shutdown system down" 一行</span>
+
+<span class="cm"># ── ② 上一次启动的内核日志里有没有临终遗言 ──────────────</span>
+$ journalctl --list-boots
+ -2 8f3a... Mon 2026-09-01 09:02:11 — Wed 2026-09-02 03:40:55
+ -1 b71d... Wed 2026-09-02 03:41:20 — Thu 2026-09-03 10:11:47
+  0 3f2a... Thu 2026-09-03 10:12:05 — ...
+$ journalctl -k -b -1 | tail -50
+<span class="cm"># 看最后几行：</span>
+<span class="cm">#   有 "Kernel panic - not syncing"    → 内核崩溃，去找 vmcore</span>
+<span class="cm">#   有 "systemd-shutdown: Rebooting"    → 正常重启，去查是谁下的命令</span>
+<span class="cm">#   什么都没有，日志【戛然而止】        → 掉电 / 硬件复位 / 宿主机杀掉了 VM</span>
+
+<span class="cm"># ── ③ kdump 当时到底有没有生效 ──────────────────────────</span>
+$ ls -lt /var/crash/ | head              <span class="cm"># 有没有对应时间点的目录</span>
+$ systemctl status kdump
+$ cat /sys/kernel/kexec_crash_loaded     <span class="cm"># 现在是 1，那当时呢？要看历史监控</span>
+
+<span class="cm"># ── ④ 硬件侧的证据（前三条都指向「无声重启」时看这个）──</span>
+$ ipmitool sel list | tail -20           <span class="cm"># BMC 事件日志：掉电、温度、看门狗超时</span>
+$ ras-mc-ctl --summary                   <span class="cm"># 内存 ECC 统计</span></pre>
+
+  <table>
+    <thead><tr><th>证据组合</th><th>结论</th><th>下一步</th></tr></thead>
+    <tbody>
+      <tr><td><code>last</code> 无 shutdown + 上次日志末尾有 panic + <code>/var/crash</code> 有新目录</td><td><strong>内核崩溃，且现场拿到了</strong></td><td>按 §4 分析 vmcore</td></tr>
+      <tr><td><code>last</code> 无 shutdown + 上次日志末尾有 panic + <strong>没有</strong> vmcore</td><td>内核崩溃，<strong>但 kdump 没生效</strong></td><td>先修 kdump（§3 的四步验收），同时用日志里那段 Oops 按 §2 分析</td></tr>
+      <tr><td><code>last</code> 无 shutdown + 日志<strong>戛然而止</strong>无任何异常</td><td><strong>掉电 / 硬件复位 / hard lockup 且 NMI 也没起来</strong></td><td>查 BMC 事件日志、机房电源、硬件看门狗配置</td></tr>
+      <tr><td>有 shutdown 记录</td><td><strong>正常重启</strong></td><td>查 <code>journalctl -b -1</code> 里是谁发起的（运维脚本？自动更新？云平台？）</td></tr>
+      <tr><td>云上实例，日志末尾正常但重启时间对不上</td><td>宿主机维护 / 实例迁移</td><td>查云厂商的实例事件记录，不是你的问题</td></tr>
+    </tbody>
+  </table>
+
+  <div class="box star"><strong>面试加分点</strong>：被问「线上机器无故重启怎么排查」，从「先看 dmesg」开始答就落了下乘——<strong>重启之后 dmesg 里全是新启动的日志，上一次的早没了</strong>。正确的第一句是：<strong>「先确定这是不是内核问题。<code>last -x</code> 看有没有配对的 shutdown 记录，<code>journalctl -k -b -1</code> 看上一次启动的日志是怎么结束的，<code>/var/crash</code> 看有没有 vmcore。三条命令就能把五种原因分开，分错了后面全白干。」</strong>这一句就说明你真的处理过这类事故。</div>
+
+  <h3>什么时候该升级内核，而不是继续查</h3>
+  <p>自己 bisect 一个内核 bug 的成本很高（每轮编译 + 复现动辄几小时，而很多问题几天才复现一次）。<strong>下面这几种情况，升级的期望收益远高于继续查：</strong></p>
+
+  <div class="point"><div class="label">① 崩溃点在内核通用子系统里，且你的模块是干净的</div><div>RIP 落在 <code>mm/</code>、<code>fs/</code>、<code>net/</code> 里，<code>Tainted</code> 没有 <code>O</code>/<code>P</code>——<strong>这种 bug 大概率已经有人踩过并修了</strong>。把关键函数名 + 报错首行拿去搜内核 git log、stable 分支的补丁列表、发行版的 bug 追踪系统，命中率相当高。</div></div>
+  <div class="point"><div class="label">② 你的内核已经 EOL 或落后很多个稳定版</div><div>stable 分支每周都在合入修复。跑着一年前的内核去查一个内存管理的偶发崩溃，很可能你查的东西半年前就被修了。<strong>先升到当前 stable 的最新点版本再看还复不复现，这个动作的成本远低于一次 bisect。</strong></div></div>
+  <div class="point warn"><div class="label">③ 但不要盲目升级</div><div>升级会引入新的回归，而且<strong>「升级后不复现」不等于「问题解决了」</strong>——也可能只是时序变了把它藏起来了。真正的判据是<strong>找到对应的上游补丁</strong>：能指出「就是这个 commit 修的、原因是 XXX」，才算结案。找不到补丁的「升级后好了」，要在复盘里明确标注为<strong>未定位</strong>。</div></div>
+
+  <h3>给上游报 bug 要附什么</h3>
+  <div class="checklist">
+    <h4>一份会被认真对待的内核 bug 报告</h4>
+    <ul>
+      <li><strong>完整的 dmesg</strong>，从开机第一行开始，不是只截 Oops 那十行——维护者需要看到硬件、固件、启动参数和崩溃前的上下文。</li>
+      <li><strong><code>uname -a</code> 和 <code>/proc/cmdline</code></strong>，以及发行版和内核包的确切版本。</li>
+      <li><strong>用 <code>scripts/decode_stacktrace.sh</code> 处理过的调用栈</strong>（带文件:行号），比裸地址友好一个数量级。</li>
+      <li><strong>Tainted 的解释</strong>：如果有 <code>O</code> 或 <code>P</code>，<strong>必须先在卸掉树外模块的纯净内核上复现一次</strong>，否则报告基本会被搁置。</li>
+      <li><strong>能否在最新 mainline 上复现</strong>——这是维护者最先问的问题，先自己回答掉。</li>
+      <li><strong>复现步骤</strong>，越小越好；能给出一个几十行的复现程序，处理速度会完全不同。</li>
+      <li><strong>硬件信息</strong>：<code>lspci -nnk</code>、<code>dmidecode</code>（尤其是 BIOS 版本，很多问题是固件的）。</li>
+      <li>用 <code>scripts/get_maintainer.pl</code> 找到对应子系统的维护者和邮件列表，<strong>发给正确的人</strong>而不是群发。</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ================================================================ §9 -->
+<section class="chapter" id="s9">
+  <div class="ch-head">
+    <div class="num">09</div>
+    <div class="t"><h2>决策树与 checklist</h2><p class="sub">机器挂了 / 重启了，从零开始怎么查</p></div>
+  </div>
+
+  <p>把前八章压缩成一条可执行的路径。<strong>五个阶段：确认 → 分类 → 取证 → 定位 → 止血。</strong>顺序不能乱——最常见的错误是跳过「确认」直接进「定位」，结果花三天查代码，最后发现是一根内存条坏了。</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 780 470" role="img" aria-label="机器挂掉或重启后的完整排查决策流程：确认是否内核问题、分类、取证、定位、止血">
+      <rect class="box-a" x="270" y="8" width="240" height="32" rx="8"/>
+      <text class="tb" x="390" y="29" text-anchor="middle">机器挂了 / 重启了</text>
+      <path class="ln-a" d="M390 40 L390 58" marker-end="url(#s9a)"/>
+
+      <rect class="box-y" x="230" y="58" width="320" height="52" rx="8"/>
+      <text class="tb" x="390" y="79" text-anchor="middle">① 确认：这是不是内核问题</text>
+      <text class="tm" x="390" y="98" text-anchor="middle">last -x · journalctl -k -b -1 · ls /var/crash · ipmitool sel</text>
+
+      <path class="ln" d="M390 110 L390 126 M150 126 L630 126 M150 126 L150 144 M390 126 L390 144 M630 126 L630 144"/>
+
+      <rect class="box" x="40" y="144" width="220" height="46" rx="8"/>
+      <text class="t" x="150" y="164" text-anchor="middle">日志戛然而止</text>
+      <text class="ts" x="150" y="181" text-anchor="middle">无 panic 无 vmcore</text>
+      <rect class="box-r" x="280" y="144" width="220" height="46" rx="8"/>
+      <text class="t" x="390" y="164" text-anchor="middle">有 panic / Oops</text>
+      <text class="ts" x="390" y="181" text-anchor="middle">这是内核问题</text>
+      <rect class="box" x="520" y="144" width="220" height="46" rx="8"/>
+      <text class="t" x="630" y="164" text-anchor="middle">有 shutdown 记录</text>
+      <text class="ts" x="630" y="181" text-anchor="middle">正常重启</text>
+
+      <rect class="box-g" x="40" y="204" width="220" height="40" rx="8"/>
+      <text class="ts" x="150" y="221" text-anchor="middle">查掉电 / 硬件看门狗</text>
+      <text class="ts" x="150" y="237" text-anchor="middle">BMC 日志 · 电源 · 温度</text>
+      <rect class="box-g" x="520" y="204" width="220" height="40" rx="8"/>
+      <text class="ts" x="630" y="221" text-anchor="middle">查是谁发起的</text>
+      <text class="ts" x="630" y="237" text-anchor="middle">运维脚本 / 云平台事件</text>
+      <path class="ln-d" d="M150 190 L150 204 M630 190 L630 204"/>
+
+      <path class="ln-a" d="M390 190 L390 214" marker-end="url(#s9a)"/>
+      <rect class="box-y" x="230" y="214" width="320" height="52" rx="8"/>
+      <text class="tb" x="390" y="235" text-anchor="middle">② 分类：查首行关键词（§1 分诊图）</text>
+      <text class="tm" x="390" y="254" text-anchor="middle">Oops / lockup / hung task / OOM / Hardware Error</text>
+
+      <path class="ln-a" d="M390 266 L390 290" marker-end="url(#s9a)"/>
+      <rect class="box-p" x="180" y="290" width="420" height="60" rx="8"/>
+      <text class="tb" x="390" y="311" text-anchor="middle">③ 取证：按分类选手段</text>
+      <text class="tm" x="390" y="329" text-anchor="middle">vmcore（§3·§4） · sysrq w / l（§6） · ftrace / dynamic_debug（§6）</text>
+      <text class="ts" x="390" y="345" text-anchor="middle">没有现场就先修取证能力，别硬猜</text>
+
+      <path class="ln-a" d="M390 350 L390 374" marker-end="url(#s9a)"/>
+      <rect class="box-p" x="180" y="374" width="420" height="52" rx="8"/>
+      <text class="tb" x="390" y="395" text-anchor="middle">④ 定位：RIP → 源码行 → 验证假设</text>
+      <text class="tm" x="390" y="413" text-anchor="middle">faddr2line · crash bt -a · struct -o · 毒值与 KASAN（§2·§4·§5）</text>
+
+      <path class="ln-g" d="M390 426 L390 442" marker-end="url(#s9g)"/>
+      <rect class="box-g" x="230" y="442" width="320" height="26" rx="8"/>
+      <text class="t" x="390" y="460" text-anchor="middle">⑤ 止血：隔离 / 回滚 / 升级 / 修复 + 复盘</text>
+      <defs>
+        <marker id="s9a" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path class="ar-a" d="M0,0 L6,3 L0,6 Z"/></marker>
+        <marker id="s9g" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path class="ar-g" d="M0,0 L6,3 L0,6 Z"/></marker>
+      </defs>
+    </svg>
+    <figcaption>五阶段流程：最容易被跳过的是①「确认」，而跳过它的代价通常是几天的无效排查</figcaption>
+  </div>
+
+  <div class="checklist">
+    <h4>① 确认（3 分钟内做完）</h4>
+    <ul>
+      <li><code>last -x reboot shutdown</code> —— 有没有配对的 shutdown？没有就是非正常关机。</li>
+      <li><code>journalctl -k -b -1 | tail -50</code> —— 上一次启动的内核日志是怎么结束的？</li>
+      <li><code>ls -lt /var/crash/</code> —— 有没有对应时间点的 vmcore？</li>
+      <li><code>ipmitool sel list</code> / <code>ras-mc-ctl --summary</code> —— 硬件侧有没有告警？<strong>这一条最容易被跳过，也最容易白省。</strong></li>
+      <li>云主机额外看一眼厂商的实例事件记录，排除宿主机维护。</li>
+    </ul>
+  </div>
+
+  <div class="checklist">
+    <h4>② 分类（对着 §1 那张表）</h4>
+    <ul>
+      <li>在日志里 grep 这几个关键词：<code>Oops</code>、<code>kernel BUG at</code>、<code>WARNING:</code>、<code>soft lockup</code>、<code>hard LOCKUP</code>、<code>blocked for more than</code>、<code>rcu.*stall</code>、<code>oom-killer</code>、<code>Hardware Error</code>。</li>
+      <li><strong>找到时间最早的那一条</strong>，不要看雪崩之后的一堆。看 <code>[#N]</code> 计数器，只信 <code>[#1]</code>。</li>
+      <li>看 <code>Tainted</code>：有 <code>D</code>/<code>W</code> 就往前翻找第一次；有 <code>M</code>/<code>B</code> 立刻转硬件方向；有 <code>O</code>/<code>P</code> 优先怀疑那个模块。</li>
+    </ul>
+  </div>
+
+  <div class="checklist">
+    <h4>③ 取证</h4>
+    <ul>
+      <li>有 vmcore → <code>makedumpfile --dump-dmesg</code> 先秒出日志，再上 <code>crash</code>。</li>
+      <li>没 vmcore 但机器还活着（卡死）→ <code>echo w</code>、<code>echo l</code> 到 <code>/proc/sysrq-trigger</code>；配了 kdump 就 <code>echo c</code> 主动收现场。</li>
+      <li>没 vmcore 且已经重启 → 只能用 <code>journalctl -k -b -1</code> 里那段 Oops，同时<strong>立刻去修 kdump</strong>（§3 四步验收），保证下次能拿到。</li>
+      <li>可复现的问题 → 上 dynamic_debug / ftrace / bpftrace 抓过程；测试环境上 KASAN + lockdep。</li>
+      <li><strong>取证阶段不要开始推理。</strong>先把所有能拿的数据拿全，再统一分析——边取证边猜会让你只去找支持当前猜想的证据。</li>
+    </ul>
+  </div>
+
+  <div class="checklist">
+    <h4>④ 定位</h4>
+    <ul>
+      <li>校验符号版本：函数长度对得上吗？<code>vermagic</code> 一致吗？<strong>版本不对的分析结果是有害的，不是无用的。</strong></li>
+      <li><code>faddr2line</code> / <code>crash dis -l</code> 把 RIP 变成文件:行号。</li>
+      <li>多 CPU 场景先 <code>bt -a</code> + <code>foreach UN bt</code>，<strong>划掉所有在等锁的，剩下的是凶手</strong>。</li>
+      <li>看毒值：<code>6b6b…</code>（UAF）、<code>5a5a…</code>（未初始化）、<code>dead0000…</code>（链表毒值）。</li>
+      <li>用 <code>struct -o</code> 把出错偏移对应到结构体成员，<strong>验证假设而不是停在假设</strong>。</li>
+    </ul>
+  </div>
+
+  <div class="checklist">
+    <h4>⑤ 止血与收尾</h4>
+    <ul>
+      <li>先止血再修根因：隔离故障机 / 回滚上一次变更 / 卸载可疑模块 / 临时调大阈值。</li>
+      <li>找到上游补丁的，评估升级路径；找不到补丁的「升级后好了」，复盘里标注为<strong>未定位</strong>。</li>
+      <li>硬件问题走报修，别让它在集群里飘着继续崩别的业务。</li>
+      <li>复盘必答三题：<strong>下次还会不会发生？下次能不能拿到现场？告警会不会更早响？</strong>——第二题答不上，说明 kdump / 日志留存有缺口，这本身就是一个待办。</li>
+      <li>把这次的判据（比如「<code>mydev</code> 相关的 Oops」）加进监控规则，让下次是告警发现而不是用户发现。流程侧见 <a href="incident_playbook.html">故障处理手册</a>。</li>
+    </ul>
+  </div>
+
+  <div class="intuition">整套流程里最反直觉、也最值钱的一条：<strong>「拿不到现场」本身就是一个必须立刻修复的缺陷，优先级不低于那个崩溃本身。</strong>一次没有 vmcore 的崩溃，你能做的只有猜；而只要修好了取证链路，同一个问题下次复现时你会在半小时内定位它。<strong>很多团队反复被同一个内核问题折磨几个月，根因不是问题太难，而是从来没有一次拿到过完整现场。</strong></div>
+</section>
+<!-- ================================================================ §10 -->
+<section class="chapter" id="s10">
+  <div class="ch-head">
+    <div class="num">10</div>
+    <div class="t"><h2>面试题集（12 道）</h2><p class="sub">按难度分层，先自测再对照</p></div>
+  </div>
+
+  <h3 id="s10-1">10.1 基础（必答）</h3>
+  <p class="qa-hint">点击每道题展开参考答案（先自测，再对照）。</p>
+  <ol class="qa-list">
+    <li><details class="qa">
+      <summary><span class="lvl basic">基础</span>Oops 和 panic 有什么区别？Oops 之后系统还能正常用吗？</summary>
+      <div class="ans">
+        <p><strong>Oops</strong>：内核检测到一个本不该发生的异常（最常见是解引用空指针或非法地址），打印一份现场快照，<strong>杀掉当前进程</strong>，然后返回调度器继续跑。<strong>panic</strong>：内核判定走不下去了，<strong>停机</strong>——按 <code>kernel.panic</code> 的秒数自动重启，为 <code>0</code> 则永远挂着。</p>
+        <p>什么时候 Oops 会变成 panic：① 异常发生在<strong>中断上下文</strong>里（没有「当前进程」可杀，只能停机）；② 被杀的是 <code>init</code>（PID 1）；③ 显式设置了 <code>kernel.panic_on_oops=1</code>。</p>
+        <div class="point bad"><div class="label">「Oops 之后还能用」是危险的错觉</div><div>被杀掉的那个上下文可能<strong>正持有自旋锁、正改内核链表改到一半、刚分配的资源还没登记</strong>。内核没有回滚机制，这些锁永远不会释放、这些资源永远泄漏。结果是：后续访问同一子系统的任务会一个个卡进 D 状态，几分钟后 hung task 刷屏，最终整机雪崩。</div></div>
+        <div class="point good"><div class="label">实践结论</div><div>有冗余的集群节点建议开 <code>panic_on_oops=1</code>——与其带病运行返回错误结果污染上游，不如立刻 panic 收 vmcore 让流量飘走。另外 Oops 输出里的 <code>[#N]</code> 是本次启动的第几次 Oops，<strong>只有 <code>[#1]</code> 是真相</strong>，后面的都是次生灾害。</div></div>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl basic">基础</span><code>RIP: 0010:my_func+0x2a/0x60 [mymod]</code> 这一行怎么读？为什么用偏移而不是绝对地址？</summary>
+      <div class="ans">
+        <ul>
+          <li><code>0010</code>：代码段选择子，内核态的固定值，<strong>没有信息量</strong>。</li>
+          <li><code>my_func</code>：出错指令所在的<strong>函数名</strong>。</li>
+          <li><code>+0x2a</code>：出错指令相对函数入口的<strong>字节偏移</strong>。</li>
+          <li><code>/0x60</code>：这个函数的<strong>总字节长度</strong>。</li>
+          <li><code>[mymod]</code>：函数来自名为 <code>mymod</code> 的<strong>可加载模块</strong>；没有方括号则来自内核本体。</li>
+        </ul>
+        <div class="point deep"><div class="label">为什么用偏移</div><div>开启 <strong>KASLR</strong> 后每次启动内核代码的绝对地址都不同，贴绝对地址到 bug 报告里对别人毫无用处；而「函数名 + 函数内偏移」在同一份编译产物里<strong>永远稳定</strong>。附带好处：<code>/0x60</code> 这个长度是个<strong>免费的版本校验</strong>——如果你手上目标文件里该函数长度不是 0x60，说明拿错了版本，别浪费时间往下查。</div></div>
+        <div class="point good"><div class="label">怎么变成源码行</div><div><code>./scripts/faddr2line mymod.ko my_func+0x2a/0x60</code>（最推荐，能处理内联）；或 <code>gdb -batch -ex 'list *(my_func+0x2a)' mymod.ko</code>；或 <code>objdump -dS</code> 看上下文。<strong>三者都要求是同一次编译的产物</strong>——编译器版本、<code>.config</code>、优化等级任何一项不同，都会给出一个语法合理但内容完全错误的行号。</div></div>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl basic">基础</span>Oops 里的 <code>Tainted:</code> 是什么意思？为什么社区看到 <code>O</code> 就不太愿意接 bug？</summary>
+      <div class="ans">
+        <p><strong>Taint（污染）标记</strong>记录「这个内核在崩溃之前已经处于什么非标准状态」，用一串字母表示。它的作用是<strong>快速判断这份报告值不值得信</strong>。</p>
+        <ul>
+          <li><code>P</code>：加载了<strong>专有（闭源）模块</strong>——社区基本不受理。</li>
+          <li><code>O</code>：加载了 <strong>out-of-tree（树外）模块</strong>，即不在内核源码树里的模块。</li>
+          <li><code>E</code>：加载了<strong>未签名模块</strong>。</li>
+          <li><code>D</code>：本次启动<strong>已经 Oops 过</strong>——看到它就往前翻找 <code>[#1]</code>。</li>
+          <li><code>W</code>：之前触发过 <code>WARN_ON</code>；<code>M</code>/<code>B</code>：发生过 <strong>MCE / 坏页</strong>（硬件信号）；<code>F</code>/<code>R</code>：模块被强制加载/卸载。</li>
+        </ul>
+        <div class="point deep"><div class="label">为什么 O 让人却步</div><div>不是傲慢，是<strong>成本</strong>。树外模块能做任何事：改内核数据结构、用未导出的内部接口、假设了已经变了的行为。当 RIP 落在内核本体某个函数上而 Tainted 有 <code>O</code> 时，<strong>最常见的真相是「你的模块把内核数据写坏了，内核只是在后来某个时刻踩到了坏数据」</strong>。维护者没有你的代码，无从判断。所以报 bug 前的标准动作是：<strong>卸掉所有树外模块（或用发行版原装内核）复现一次</strong>。</div></div>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl basic">基础</span>kdump 为什么能在内核已经死掉的机器上把内存现场保住？</summary>
+      <div class="ans">
+        <p>靠两件事，缺一不可：</p>
+        <div class="point"><div class="label">① 提前预留一块「谁都不许碰」的内存</div><div>开机时通过 <code>crashkernel=</code> 从物理内存里划走一块，<strong>生产内核从此看不见它</strong>（<code>free</code> 里会少掉这么多）。捕获内核只在这块内存里活动，<strong>因此它的运行不会覆盖第一内核的任何一个字节</strong>。预留必须在启动早期做——运行时再想找一块「肯定没人用」的连续物理内存，做不到。</div></div>
+        <div class="point"><div class="label">② kexec 跳转不经过固件</div><div>正常重启会经过固件复位流程，很多平台会做内存训练或让 DRAM 掉电——现场就没了。<strong>kexec 是纯软件跳转</strong>：设好新内核的入口、页表和参数直接跳过去，DRAM 一直在正常刷新。于是第一内核的每一个 <code>task_struct</code>、每一段 slab、整个 printk 环形缓冲，全都完好地躺在那里。</div></div>
+        <p>捕获内核起来后通过 <code>/proc/vmcore</code> 读取旧内存，用 <code>makedumpfile</code> 裁剪压缩后落盘，落盘完成才真正重启。</p>
+        <div class="point warn"><div class="label">配了不等于生效</div><div>必检两个文件：<code>/sys/kernel/kexec_crash_size</code>（预留字节数，<strong>为 0 就是没预留成功</strong>）和 <code>/sys/kernel/kexec_crash_loaded</code>（捕获内核是否已装载，<strong>必须是 1</strong>）。然后 <code>echo c &gt; /proc/sysrq-trigger</code> 真触发一次，确认 <code>/var/crash</code> 里有文件落地。</div></div>
+      </div>
+    </details></li>
+  </ol>
+
+  <h3 id="s10-2">10.2 中级（区分熟练度）</h3>
+  <ol class="qa-list" start="5">
+    <li><details class="qa">
+      <summary><span class="lvl mid">中级</span><code>crashkernel</code> 该预留多大？预留不够会出现什么现象？</summary>
+      <div class="ans">
+        <p>预留区要装下一个完整的捕获内核 + initramfs（含存储驱动、落远端时还要网络驱动）+ <code>makedumpfile</code> 的运行内存。<strong>经验值：256 MB 是下限；带复杂存储栈或走网络落盘的建议 512 MB 起；TB 级内存的机器因为 <code>makedumpfile</code> 要维护页位图，需求还会再涨。</strong></p>
+<pre><span class="cm"># 固定值</span>
+crashkernel=512M
+<span class="cm"># 按总内存分档（一份配置适配不同规格）</span>
+crashkernel=2G-64G:256M,64G-1T:512M,1T-:1G
+<span class="cm"># x86_64 大内存机：主体放 4G 以上，另留一小块低端内存给需要低 DMA 的设备</span>
+crashkernel=1G,high crashkernel=256M,low</pre>
+        <div class="point bad"><div class="label">预留不够的现象非常有迷惑性</div><div>panic 后机器<strong>直接重启，<code>/var/crash</code> 空空如也</strong>——因为捕获内核自己在启动过程中 OOM 或挂了，<strong>而这次崩溃是没人接的</strong>。现象和「kdump 根本没开」一模一样，很容易被误判成 kdump 配错了。控制台上通常能一闪而过地看到 OOM 或 initramfs 挂载失败。</div></div>
+        <div class="point warn"><div class="label">另外两个高频坑</div><div>① <strong>预留失败</strong>：内存碎片化导致找不到连续区域（大内存机不写 <code>,high</code> 时尤其常见）、grub 改了没重新生成、云镜像的命令行被 metadata 覆盖——所以必须查 <code>/sys/kernel/kexec_crash_size</code> 而不是只看 grub 配置。② <strong>落盘目标不可用</strong>：<code>path</code> 指向的目录挂在 iSCSI / 复杂多路径存储上，而捕获内核的极简 initramfs 里没有对应驱动。</div></div>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl mid">中级</span><code>makedumpfile -d 31</code> 里的 31 是什么意思？为什么它能把几百 GB 压到几 GB？</summary>
+      <div class="ans">
+        <p><code>-d</code> 的参数是一个<strong>位掩码</strong>，每一位对应一类「可以扔掉的物理页」：</p>
+        <table>
+          <thead><tr><th>bit</th><th>值</th><th>裁掉</th></tr></thead>
+          <tbody>
+            <tr><td>0</td><td>1</td><td>全零页</td></tr>
+            <tr><td>1</td><td>2</td><td>非私有的 page cache</td></tr>
+            <tr><td>2</td><td>4</td><td>私有的 page cache</td></tr>
+            <tr><td>3</td><td>8</td><td><strong>用户进程数据页</strong></td></tr>
+            <tr><td>4</td><td>16</td><td>空闲页（在 buddy 空闲链表上的）</td></tr>
+          </tbody>
+        </table>
+        <p><code>31 = 1+2+4+8+16</code>，即<strong>五类全裁</strong>。一台 512 GB 的机器里，绝大部分内存是 page cache、用户进程数据和空闲页——这些对排查<strong>内核</strong>崩溃毫无价值。保留下来的是内核代码、内核数据、slab、页表、task 结构，通常只有几个 GB，再叠加压缩（<code>-l</code> lzo / <code>-c</code> zlib / <code>-p</code> snappy）就更小了。</p>
+        <div class="point good"><div class="label">顺带解决了合规问题</div><div>bit 3 裁掉的正好是用户数据页，bit 1/2 裁掉 page cache——<strong>vmcore 里最敏感的东西（明文密码、密钥、用户数据、被缓存的文件内容）大部分就此消失了</strong>。这是「性能优化顺便解决安全问题」的经典案例。反过来说：如果为了追某个用户态相关的问题改用 <code>-d 1</code>，那份 vmcore 的敏感级别完全不同，不能按常规流程流转。</div></div>
+        <div class="point deep"><div class="label">被低估的一条命令</div><div><code>makedumpfile --dump-dmesg vmcore out.txt</code>——<strong>几秒钟就能把崩溃瞬间的完整内核日志抠成文本，不需要任何调试符号</strong>。很多事故到这一步就破案了，根本用不着开 crash。拿到 vmcore 的第一件事就该是它。</div></div>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl mid">中级</span>hung task detector 为什么只检测 D 状态的任务，<code>S</code> 状态不算？</summary>
+      <div class="ans">
+        <p>因为两种睡眠的<strong>语义完全不同</strong>。</p>
+        <p><code>S</code>（<code>TASK_INTERRUPTIBLE</code>，可中断睡眠）是<strong>「正常等待」的常态</strong>：<code>sshd</code> 等新连接可以等三个月，空闲服务器上 99.99% 的进程都在 <code>S</code>。把它纳入检测等于每两分钟刷屏几百条误报。</p>
+        <p><code>D</code>（<code>TASK_UNINTERRUPTIBLE</code>）表示<strong>「正在等待一个不可被信号打断的事件」</strong>，通常是块设备 IO、页回写、某些内核互斥锁。<strong>这类等待按设计就应该在毫秒到秒级返回</strong>——等满两分钟只有两种可能：底层设备真挂了，或者死锁了。两种都值得报警。</p>
+        <div class="point"><div class="label">检测机制</div><div><code>khungtaskd</code> 内核线程周期扫描全部任务，找「处于 D 状态<strong>且自愿+非自愿上下文切换计数与上次扫描时完全相同</strong>」的——说明这段时间它一次都没被调度过。超过 <code>hung_task_timeout_secs</code>（常见默认 120 秒）就打印它的栈。</div></div>
+        <div class="point warn"><div class="label">一个坑：<code>hung_task_warnings</code></div><div>默认只报 <strong>10 次</strong>就不再报了。长时间运行的机器上，「没再报了」很容易被误读成「问题好了」，其实只是配额用完。排查期间记得 <code>sysctl -w kernel.hung_task_warnings=100</code>。</div></div>
+        <div class="point good"><div class="label">不等检测器的手工版</div><div><code>ps -eo pid,stat,wchan:32,comm | awk '$2 ~ /^D/'</code> —— <code>wchan</code> 列直接告诉你它睡在哪个内核函数上，常常一眼就够；再不够就 <code>cat /proc/&lt;pid&gt;/stack</code> 或 <code>echo w &gt; /proc/sysrq-trigger</code>。</div></div>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl mid">中级</span>系统已经卡到 SSH 连不上、shell 敲不动，但键盘还有反应。你会怎么做？</summary>
+      <div class="ans">
+        <p><strong>不要直接按电源键——那等于亲手销毁唯一的现场。</strong>用 magic SysRq，它在极高优先级的中断路径上直接处理，<strong>绕过用户态、调度器和文件系统</strong>，系统半死时通常仍然有效。</p>
+        <ol>
+          <li><strong><code>Alt+SysRq+w</code></strong>：打印所有 D 状态任务的栈——这是<strong>取证的第一条命令</strong>。</li>
+          <li><strong><code>Alt+SysRq+l</code></strong>：通过 NMI 打印所有 CPU 当前的栈——找「谁在占着 CPU 不放」。</li>
+          <li><strong><code>Alt+SysRq+m</code></strong>：内存统计（怀疑 OOM 或内核内存泄漏时）。</li>
+          <li>配了 kdump 就 <strong><code>Alt+SysRq+c</code></strong>：主动 panic，拿一份完整 vmcore。</li>
+          <li>实在不行走 <strong>R-E-I-S-U-B</strong>：夺回键盘 → 终止进程 → 杀死进程 → 同步磁盘 → 只读重挂 → 重启。每步之间等几秒，比断电安全得多（不丢数据、不烂文件系统）。</li>
+        </ol>
+        <p>还能登进去时用 <code>echo w | sudo tee /proc/sysrq-trigger</code>，输出都进 <code>dmesg</code>。需要先启用：<code>sysctl -w kernel.sysrq=1</code>。</p>
+        <div class="point deep"><div class="label">为什么 SysRq 在系统卡死时还能工作</div><div>它不依赖任何用户态进程、不依赖调度器（不需要「调度到某个处理程序」）、也不写文件系统（结果直接进内核环形缓冲）。<strong>唯一的前提是中断还能进来</strong>——所以 soft lockup 时它有效，而彻底 hard lockup 的那个 CPU 是响应不了的（那种情况只能靠 NMI 自动打出来的那段，或者靠 kdump）。</div></div>
+      </div>
+    </details></li>
+  </ol>
+
+  <h3 id="s10-3">10.3 高级（体现深度）</h3>
+  <ol class="qa-list" start="9">
+    <li><details class="qa">
+      <summary><span class="lvl adv">高级</span>拿到一个多核死锁的 vmcore，怎么在一堆 CPU 里找出真凶？</summary>
+      <div class="ans">
+        <p>核心思路一句话：<strong>找「不在等」的那个。</strong></p>
+        <p><code>bt</code> 只能看到崩溃的那个任务，而它<strong>通常是受害者</strong>——比如 CPU 3 自旋等一把锁等到 hard lockup，真正拿着锁不放的是 CPU 5。所以要用 <code>bt -a</code>（每个 CPU 上正在跑的任务）配合 <code>foreach UN bt</code>（所有 D 状态任务）。</p>
+        <div class="point good"><div class="label">判读方法</div><div>受害者的栈顶是<strong>等待函数</strong>：<code>queued_spin_lock_slowpath</code>、<code>osq_lock</code>、<code>__mutex_lock</code>、<code>rwsem_down_*</code>、<code>io_schedule</code>。<strong>凶手的特征恰恰是「栈顶是正常的业务函数」</strong>——它拿着锁在干一件永远干不完的事（死循环、遍历成环的链表、等一个不会来的硬件应答、在临界区里睡眠）。<strong>所以做法是：先把所有「在等锁」的 CPU 划掉，剩下的一两个就是答案。</strong></div></div>
+        <div class="point"><div class="label">辅助手段</div><div><code>foreach bt | grep -c &lt;func&gt;</code> 看聚集——「37 个任务同时卡在 <code>mydev_ioctl</code>」这个数字本身就是结论。<code>ps</code> 里行首的 <code>&gt;</code> 标记正在占 CPU 的任务，<code>UN</code> 就是 D 状态。</div></div>
+        <div class="point warn"><div class="label">别把殡仪馆当案发现场</div><div><code>bt</code> 输出最上面几帧（<code>machine_kexec</code> / <code>__crash_kexec</code> / <code>oops_end</code> / <code>exc_page_fault</code>）是<strong>内核处理崩溃本身的代码</strong>，不是死因。<strong>真正的现场是 <code>[exception RIP: ...]</code> 那一行</strong>及其下面的帧。另外别忘了 <code>mod -s mymod /path/mymod.ko</code> 给自研模块加载符号，否则 <code>dis</code> 只有裸地址。</div></div>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl adv">高级</span>在内核崩溃现场看到 <code>0x6b6b6b6b6b6b6b6b</code>、<code>0x5a5a5a5a</code>、<code>0xdead000000000100</code>，各说明什么？</summary>
+      <div class="ans">
+        <p>这些是<strong>毒值（poison）</strong>——内核在特定时刻用固定字节填充内存，<strong>把「静默的数据损坏」变成「一眼能认出的证据」</strong>。</p>
+        <ul>
+          <li><strong><code>0x6b</code> 反复填充</strong>（最后一字节常为 <code>0xa5</code>）：<strong>已释放对象的填充</strong>。看到它 = <strong>use-after-free</strong>，对象已 <code>kfree</code> 但代码还在用。<code>0x6b</code> 是 ASCII 的 <code>k</code>，取 "kfree"。</li>
+          <li><strong><code>0x5a</code> 反复填充</strong>：<strong>刚分配、尚未初始化</strong>的区域。看到它 = 忘了初始化就用，或越界读到了对象 padding。</li>
+          <li><strong><code>0xbb</code> / <code>0xcc</code> 填充的红区（red zone）</strong>：SLUB 在对象前后加的哨兵。红区被改写 = <strong>缓冲区越界写</strong>。</li>
+          <li><strong><code>0xdead000000000100</code> / <code>0xdead000000000122</code></strong>：<code>list_del</code> 之后写进 <code>next</code>/<code>prev</code> 的<strong>链表毒值</strong>。看到它 = <strong>重复 <code>list_del</code></strong>，或使用了已摘链的节点。</li>
+          <li><strong>极小的非零值如 <code>0x10</code></strong>：<code>ZERO_SIZE_PTR</code>，<code>kmalloc(0)</code> 的返回值——长度算成了 0 却当正常指针用。</li>
+        </ul>
+        <div class="point good"><div class="label">怎么开、怎么用</div><div>启动参数 <code>slub_debug=FZPU</code>（F=一致性检查 Z=红区 P=毒化 <strong>U=记录分配/释放调用栈</strong>），或只对单个 cache 开 <code>slub_debug=FZPU,kmalloc-256</code> 以降低开销。<strong><code>U</code> 是最值钱的一个 flag</strong>：报告会直接给出「Allocated in … / Freed in …」两段调用栈，几乎不用再推理。生产上只在追具体 bug 时对单个 cache 开。</div></div>
+        <div class="point deep"><div class="label">和 KASAN 的分工</div><div>slub_debug 是<strong>事后发现毒值被改</strong>——知道被踩了，但不一定知道是谁在什么时候踩的。<strong>KASAN 是插桩检测，在越界/UAF 发生的那一瞬间就报</strong>，栈是精确的，而且报告直接给「踩的人 / 分配的人 / 释放的人」三段栈。代价是要重编内核、内存和 CPU 开销都是数倍级——<strong>测试环境用 KASAN，生产环境用 slub_debug</strong>。</div></div>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl adv">高级</span>虚拟机上频繁报 soft lockup，怎么判断是真问题还是误报？</summary>
+      <div class="ans">
+        <p><strong>先理解误报的机制。</strong>soft lockup 的判据是「某 CPU 上的 watchdog 线程超过 <code>2×watchdog_thresh</code>（默认约 20 余秒）没被调度到」。但在虚拟机里，vCPU 只是宿主上的一个普通线程——<strong>宿主超卖时它可能被整个抢走几秒到几十秒。在 guest 内核看来，「时间凭空跳过去了」和「某个 CPU 卡了这么久」完全无法区分。</strong>此外热迁移的停机阶段、虚拟磁盘后端阻塞，都会造成同样的效果。</p>
+        <div class="point good"><div class="label">两条判据</div><div><strong>① 看 steal time。</strong><code>vmstat 1</code> 的 <code>st</code> 列、<code>top</code> 里的 <code>st</code>、<code>/proc/stat</code> 第 8 个字段。持续明显非零（&gt; 5%~10%）基本就能确定是宿主争抢。<strong>② 看栈有没有「形状」。</strong>真实的 soft lockup 会稳定地卡在<strong>同一个内核函数</strong>上（那个死循环）；误报的栈每次都不一样，甚至栈顶是 <code>native_safe_halt</code>（本来在 idle）这种荒谬的位置。<strong>「栈没有形状」= 误报</strong>——这和判断硬件问题的逻辑是同一个。</div></div>
+        <div class="point"><div class="label">内核已有的缓解及其局限</div><div>KVM 提供 steal time 和「宿主曾暂停过本 guest」的标志，guest 内核报警前会检查它，若刚被暂停过就跳过这次报警。这能挡掉大部分热迁移和明显暂停导致的误报，<strong>但挡不住持续性的中度超卖</strong>——每次只被抢 3 秒、连抢 7 次，标志不一定被置上，累计却超了阈值。</div></div>
+        <div class="point warn"><div class="label">务实配置</div><div>虚拟机上把 <code>watchdog_thresh</code> 放宽到 30，<strong>并且绝对不要开 <code>softlockup_panic</code></strong>（否则会变成随机重启）；<code>hardlockup_panic</code> 可以保留，它极少误报。<strong>同时把 steal time 纳入监控告警——它才是这类问题的真实指标。</strong>注意反面风险：把阈值调到永远不报，问题还在，只是你看不见了。</div></div>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl adv">高级</span>内核栈为什么只有十几 KB？这对写内核代码有什么约束？</summary>
+      <div class="ans">
+        <p>每个内核线程（以及每个进入内核态的用户线程）都有独立的内核栈，<strong>x86_64 上常见是 16 KB（4 个页）</strong>，不少 32 位平台是 8 KB。大小在编译时由 <code>THREAD_SIZE</code> 决定，<strong>运行时不可增长</strong>——和用户态那个默认 8 MB、还能自动扩展的栈完全不是一回事。</p>
+        <div class="point deep"><div class="label">为什么必须这么小</div><div><strong>① 它是按线程数线性乘出来的常驻开销</strong>：一万个任务 × 16 KB = 160 MB 物理内存。<strong>② 这些页必须常驻、不能换出</strong>——换出的话，缺页处理本身又需要栈，会死循环。<strong>③ 历史上还要求物理连续</strong>（<code>CONFIG_VMAP_STACK</code> 之前），大块连续内存本身就稀缺。所以「小」不是疏忽，是必须付出的设计代价——代价转嫁给了内核开发者。</div></div>
+        <div class="point bad"><div class="label">三条硬约束</div><div><strong>① 不许在栈上放 KB 级缓冲区</strong>：<code>char buf[4096]</code> 一口气吃掉四分之一。要用 <code>kmalloc</code> / per-CPU 缓冲 / 预分配池。<strong>② 不许无界递归</strong>：如果递归深度由外部输入决定（解析嵌套结构、遍历树），那就是一个<strong>可被远程触发的内核崩溃</strong>；必须改迭代或硬限深度。<strong>③ 注意隐式深度</strong>：文件系统嵌套（loop 设备上的 fs 上的 fs）、块设备栈叠（LVM over MD over dm-crypt）会让调用链比你想的深得多。</div></div>
+        <div class="point good"><div class="label">怎么发现</div><div><strong>编译期</strong>：<code>-Wframe-larger-than=</code>（<code>CONFIG_FRAME_WARN</code>，默认阈值在 1~2 KB 量级）会对超标的栈帧告警，这能拦住一大半。<strong>运行期</strong>：开启 <code>CONFIG_VMAP_STACK</code> 后栈末尾有不可访问的守护页，溢出会立刻报 <code>BUG: stack guard page was hit</code>；<strong>没有它的老内核则表现为栈回溯完全乱码或静默踩坏相邻内存</strong>——后者是最难查的一类问题，因为崩溃点和真凶完全无关。</div></div>
+      </div>
+    </details></li>
+  </ol>
+</section>
+
+<div class="footer-nav">
+  <a href="linux_device_driver.html">🔌 Linux 设备驱动</a>
+  <a href="observability_ebpf.html">🔭 eBPF 与内核可观测性</a>
+  <a href="../perf-debug/crash_debugging_guide.html">🧩 用户态崩溃调试</a>
+  <a href="incident_playbook.html">🚨 故障处理手册</a>
+  <a href="linux_system_directory.html">📚 目录</a>
+  <a href="../index.html">🏠 主页</a>
+</div>
+
+</main>
+</div>
+
+<footer>
+  <p>内核崩溃分析 — Oops · panic · lockup · kdump · crash 工具 · KASAN — Kavin Tech Notes · 2026</p>
+</footer>
+
+<script>
+(function(){var b=document.getElementById('progress');if(!b)return;function u(){var h=document.documentElement;b.style.width=(h.scrollTop/(h.scrollHeight-h.clientHeight)*100)+'%'}window.addEventListener('scroll',u,{passive:true});u();})();
+</script>
+<script>
+document.querySelectorAll('aside.toc nav a').forEach(a=>{a.addEventListener('click',e=>{e.preventDefault();const t=document.querySelector(a.getAttribute('href'));if(t)t.scrollIntoView({behavior:'smooth'})})});
+const obs=new IntersectionObserver(es=>{es.forEach(e=>{if(e.isIntersecting){document.querySelectorAll('aside.toc nav a').forEach(a=>a.classList.remove('active'));const l=document.querySelector(`aside.toc nav a[href="#${e.target.id}"]`);if(l)l.classList.add('active')}})},{threshold:.2});
+document.querySelectorAll('section[id]').forEach(s=>obs.observe(s));
+</script>
+
+<script src="../assets/site-theme-toggle.js" defer></script>
+<button class="back-top" id="backTop" onclick="window.scrollTo({top:0,behavior:'smooth'})" aria-label="回到顶部">&#8593;</button>
+<script>
+(function(){
+  var btn = document.getElementById('backTop');
+  if (!btn) return;
+  function tg(){ btn.classList.toggle('show', window.scrollY > 400); }
+  window.addEventListener('scroll', tg, { passive: true });
+  tg();
+})();
+</script>
+</body>
+</html>

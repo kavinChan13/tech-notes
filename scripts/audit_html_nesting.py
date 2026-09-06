@@ -7,7 +7,10 @@ Catches the defects that silently break a page's layout:
   * a tag that is never closed (`<strong>`, `<a>`, `<span>` …) — its styling
     bleeds into the rest of the page;
   * unescaped markup inside `<pre>` / prose (`<algorithm>`, `<unfinished ...>`)
-    which the browser parses as a real tag.
+    which the browser parses as a real tag;
+  * a bare `&` inside `<pre>` — harmless for `&&` or `&ev`, but HTML5 still
+    resolves legacy names like `&copy` / `&reg` without the semicolon, so the
+    next code sample that contains one would silently render as © / ®.
 
 Usage:
     python scripts/audit_html_nesting.py                  # every content dir
@@ -19,6 +22,7 @@ must stay at zero; anything outside it is reported but does not fail the run.
 """
 from __future__ import annotations
 
+import re
 import sys
 from collections import Counter
 from html.parser import HTMLParser
@@ -83,11 +87,34 @@ class NestingParser(HTMLParser):
                 self.problems.append(f"line {line}: <{tag}> never closed")
 
 
+# A bare `&` inside <pre> renders fine today, but it is a trap: HTML5 still
+# resolves a handful of legacy named references *without* the trailing
+# semicolon, so the day someone pastes `&copy` or `&reg` into a code sample it
+# silently turns into © / ®. 86 of these were sitting in 21 files (all `&&`,
+# `&ev`, `R&D`, `2>&1` — harmless by luck, not by design).
+ENTITY = re.compile(r'&(?:[a-zA-Z][a-zA-Z0-9]{1,31}|#\d{1,7}|#[xX][0-9a-fA-F]{1,6});')
+PRE_BLOCK = re.compile(r'<pre\b.*?</pre>', re.S)
+
+
+def bare_ampersands(src: str) -> list[str]:
+    out = []
+    for m in PRE_BLOCK.finditer(src):
+        blk = m.group(0)
+        for a in re.finditer(r'&', blk):
+            if ENTITY.match(blk, a.start()):
+                continue
+            line = src.count("\n", 0, m.start() + a.start()) + 1
+            ctx = " ".join(blk[max(0, a.start() - 20):a.start() + 20].split())
+            out.append(f"line {line}: unescaped & inside <pre> …{ctx}…")
+    return out
+
+
 def audit(path: Path) -> list[str]:
+    src = path.read_text(encoding="utf-8", errors="replace")
     parser = NestingParser()
-    parser.feed(path.read_text(encoding="utf-8", errors="replace"))
+    parser.feed(src)
     parser.close()
-    return parser.problems
+    return parser.problems + bare_ampersands(src)
 
 
 def main(argv: list[str]) -> int:

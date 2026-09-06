@@ -1,0 +1,2311 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Linux 内核网络栈与流量治理 · 收发包路径 / netfilter / netns / tc / XDP / 调优排障</title>
+<meta name="description" content="Linux 内核网络栈完全指南：一个包从网卡 DMA 到 socket 缓冲区的完整路径、NAPI 与软中断、RSS/RPS/RFS/XPS、netfilter 五个 hook 与 conntrack 表满、路由与 rp_filter、netns/veth/bridge 手工搭容器网络、tc qdisc 与 bufferbloat、XDP 与 AF_XDP、accept 队列与 TIME_WAIT 调优、分层丢包定位工作流，含 12 道面试题。">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<style>
+  html { scroll-behavior: smooth; }
+  body { line-height: 1.75; min-height: 100vh; overflow-x: hidden; }
+  main { min-width: 0; }
+  pre { font-family: var(--mono); font-size: .85rem; line-height: 1.6; }
+  code { font-family: var(--mono); }
+  svg text { font-family: var(--sans); }
+  table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: .9rem; }
+  th, td { border: 1px solid var(--border); padding: .55rem .85rem; text-align: left; vertical-align: top; }
+  th { background: var(--bg-card-2); color: var(--accent); }
+  tr:nth-child(even) { background: color-mix(in srgb, var(--text) 3%, transparent); }
+  .analogy::before { content: "🏠 生活类比 · "; color: var(--accent-4); font-weight: 700; font-size: .86rem; }
+  .def > strong:first-child { color: var(--accent); }
+
+  .fig { margin: 22px 0; overflow-x: auto; }
+  .fig svg { max-width: 100%; height: auto; }
+  .fig .box   { fill: var(--bg-card-2); stroke: var(--border-2); stroke-width: 1.2; }
+  .fig .box-a { fill: color-mix(in srgb, var(--accent) 14%, var(--bg-card)); stroke: var(--accent); stroke-width: 1.2; }
+  .fig .box-g { fill: color-mix(in srgb, var(--accent-3) 14%, var(--bg-card)); stroke: var(--accent-3); stroke-width: 1.2; }
+  .fig .box-p { fill: color-mix(in srgb, var(--accent-2) 14%, var(--bg-card)); stroke: var(--accent-2); stroke-width: 1.2; }
+  .fig .box-y { fill: color-mix(in srgb, var(--accent-4) 14%, var(--bg-card)); stroke: var(--accent-4); stroke-width: 1.2; }
+  .fig .box-r { fill: color-mix(in srgb, var(--danger) 14%, var(--bg-card)); stroke: var(--danger); stroke-width: 1.2; }
+  .fig .t   { fill: var(--text); font-size: 12px; }
+  .fig .tb  { fill: var(--text); font-size: 12.5px; font-weight: 700; }
+  .fig .ts  { fill: var(--text-dim); font-size: 10.5px; }
+  .fig .tm  { fill: var(--text-dim); font-size: 10.5px; font-family: var(--mono); }
+  .fig .ta  { fill: var(--accent); font-size: 12px; font-weight: 700; }
+  .fig .tg  { fill: var(--accent-3); font-size: 11px; font-weight: 600; }
+  .fig .ty  { fill: var(--accent-4); font-size: 11px; font-weight: 600; }
+  .fig .tr  { fill: var(--danger); font-size: 11px; font-weight: 600; }
+  .fig .ln  { stroke: var(--border-2); stroke-width: 1.4; fill: none; }
+  .fig .ln-a{ stroke: var(--accent); stroke-width: 1.6; fill: none; }
+  .fig .ln-g{ stroke: var(--accent-3); stroke-width: 1.6; fill: none; }
+  .fig .ln-r{ stroke: var(--danger); stroke-width: 1.6; fill: none; }
+  .fig .ln-d{ stroke: var(--text-mute); stroke-width: 1.2; fill: none; stroke-dasharray: 4 3; }
+  .fig .ar-a{ fill: var(--accent); }
+  .fig .ar-g{ fill: var(--accent-3); }
+  .fig .ar-r{ fill: var(--danger); }
+
+  .vs { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 16px 0; }
+  @media (max-width: 860px) { .vs { grid-template-columns: 1fr; } }
+  .vs > div { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; min-width: 0; }
+  .vs > div > h5 { margin: 0 0 6px; font-size: .88rem; }
+  .vs .bad  { border-color: color-mix(in srgb, var(--danger) 45%, var(--border)); background: color-mix(in srgb, var(--danger) 6%, var(--bg-card)); }
+  .vs .bad  > h5 { color: var(--danger); }
+  .vs .good { border-color: color-mix(in srgb, var(--accent-3) 45%, var(--border)); background: color-mix(in srgb, var(--accent-3) 6%, var(--bg-card)); }
+  .vs .good > h5 { color: var(--accent-3); }
+  .vs pre { margin: 6px 0 0; font-size: .78rem; }
+
+  .intuition { background: color-mix(in srgb, var(--accent) 8%, var(--bg-card)); border-left: 4px solid var(--accent-4); padding: 14px 18px; border-radius: 0 10px 10px 0; margin: 14px 0; font-size: 14px; line-height: 1.7; }
+  .intuition::before { content: "🎯 关键 · "; color: var(--accent-4); font-weight: 700; font-size: 13px; }
+  .tool-card { background: color-mix(in srgb, var(--accent) 8%, var(--bg-card)); border: 1px solid var(--border); border-radius: 10px; padding: 14px 18px; margin: 12px 0; border-left: 3px solid var(--accent); }
+  .tool-card h4 { margin: 0 0 8px; font-size: 14.5px; color: var(--accent); }
+  .tool-card.violet { border-left-color: var(--accent-2); } .tool-card.violet h4 { color: var(--accent-2); }
+  .tool-card.amber  { border-left-color: var(--accent-4); } .tool-card.amber h4  { color: var(--accent-4); }
+  .tool-card.green  { border-left-color: var(--accent-3); } .tool-card.green h4  { color: var(--accent-3); }
+  .tool-card.danger { border-left-color: var(--danger); }   .tool-card.danger h4 { color: var(--danger); }
+  .tool-card ul { margin: 6px 0 0; padding-left: 22px; }
+  .tool-card li { font-size: 13.5px; color: var(--text); line-height: 1.7; margin: 4px 0; }
+  .checklist { background: color-mix(in srgb, var(--green) 8%, var(--bg-card)); border: 1px solid color-mix(in srgb, var(--green) 30%, transparent); border-left: 4px solid var(--green); border-radius: 0 12px 12px 0; padding: 16px 20px; margin: 14px 0; }
+  .checklist h4 { color: var(--accent-3); margin: 0 0 10px; font-size: 14px; letter-spacing: .5px; }
+  .checklist ul { margin: 0; padding-left: 22px; }
+  .checklist li { font-size: 13.5px; color: var(--text); line-height: 1.7; margin: 6px 0; }
+  .insight-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin: 16px 0; }
+  .insight-grid .card { background: color-mix(in srgb, var(--accent) 8%, var(--bg-card)); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; min-width: 0; }
+  .insight-grid .card h4 { margin: 0 0 8px; font-size: 14px; color: var(--accent-4); }
+  .insight-grid .card.green  { border-left: 3px solid var(--accent-3); } .insight-grid .card.green h4  { color: var(--accent-3); }
+  .insight-grid .card.violet { border-left: 3px solid var(--accent-2); } .insight-grid .card.violet h4 { color: var(--accent-2); }
+  .insight-grid .card p { font-size: 13px; color: var(--text); line-height: 1.65; margin: 0; }
+  @media (max-width: 760px) { .insight-grid { grid-template-columns: 1fr; } }
+  .cheatsheet { border: 1px solid var(--border); border-radius: 10px; margin: 18px 0; overflow: hidden; overflow-x: auto; }
+  .cheatsheet table { width: 100%; border-collapse: collapse; font-size: 13px; margin: 0; }
+  .cheatsheet thead th { background: color-mix(in srgb, var(--accent) 13%, var(--bg-card)); color: var(--accent); text-align: left; padding: 10px 14px; border-bottom: 2px solid var(--border); font-family: var(--mono); font-size: 11.5px; letter-spacing: .5px; }
+  .cheatsheet tbody td { padding: 10px 14px; border-bottom: 1px dashed var(--border); color: var(--text); vertical-align: top; }
+  .cheatsheet tbody tr:nth-child(even) { background: color-mix(in srgb, var(--accent) 5%, var(--bg-card)); }
+</style>
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="tn-shell-overlay has-topnav">
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="linux_system_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 110 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="progress" id="progress"></div>
+<div class="layout">
+  <aside class="toc">
+    <h2>内核网络栈与流量治理</h2>
+    <nav>
+      <ol>
+        <li><a href="#s1">收包与发包的完整路径</a></li>
+        <li><a href="#s2">网卡与驱动层</a></li>
+        <li><a href="#s3">netfilter 与 conntrack</a></li>
+        <li><a href="#s4">路由与邻居</a></li>
+        <li><a href="#s5">网络命名空间与虚拟设备</a></li>
+        <li><a href="#s6">流量控制 tc</a></li>
+        <li><a href="#s7">XDP 与 eBPF 数据面</a></li>
+        <li><a href="#s8">协议栈调优</a></li>
+        <li><a href="#s9">丢包定位工作流</a></li>
+        <li><a href="#s10">面试题集（12 道）</a>
+          <ol>
+            <li><a href="#s10-1">10.1 基础</a></li>
+            <li><a href="#s10-2">10.2 中级</a></li>
+            <li><a href="#s10-3">10.3 高级</a></li>
+          </ol>
+        </li>
+      </ol>
+    </nav>
+  </aside>
+
+<main>
+
+  <header class="hero">
+    <div class="badge">Linux System · Kernel Network · 2026</div>
+    <h1>Linux 内核网络栈与流量治理</h1>
+    <p class="sub">
+      本目录的 <a href="networking_guide.html">网络编程指南</a> 讲的是<strong>用户态 socket 那一侧</strong>（TCP/UDP API、粘包、高并发服务器模型），<a href="async_networking_guide.html">异步网络编程</a> 讲事件循环与异步框架。<br>
+      这一篇补的是<strong>中间那段黑箱</strong>：一个包从网卡 DMA 进来，经过硬中断、NAPI 软中断、GRO、netfilter、路由、协议栈，最后落进 <code>sk_receive_queue</code> 被 <code>recv()</code> 取走的完整旅程；以及运维 / SRE 视角的<strong>流量治理与丢包定位</strong>——它在哪一层死的，用哪个计数器证明。
+    </p>
+    <div class="meta-row">
+      <span class="pill red">核心难度 ★★★★★</span>
+      <span class="pill cyan">面试高频 · SRE 必备</span>
+      <span class="pill green">阅读时长 ~110 min</span>
+      <span class="pill amber">前置 网络编程 · 进程调度</span>
+    </div>
+    <div class="meta">
+      <span>sk_buff · NAPI · GRO</span>
+      <span>netfilter · conntrack</span>
+      <span>netns · veth · bridge</span>
+      <span>tc · fq_codel · XDP</span>
+      <span>分层丢包定位</span>
+    </div>
+  </header>
+
+<!-- ================================================================ §1 -->
+<section class="chapter" id="s1">
+  <div class="ch-head">
+    <div class="num">01</div>
+    <div class="t"><h2>收包与发包的完整路径</h2><p class="sub">从网卡 DMA 到 socket 缓冲区</p></div>
+  </div>
+
+  <p>绝大多数后端工程师对网络的认知止步于 <code>socket() / bind() / listen() / accept() / read()</code>。这套 API 之下，一个以太网帧要经过<strong>硬件、中断、软中断、协议栈、socket 队列</strong>五个截然不同的执行环境才能到达你的 <code>read()</code>。搞不清这条路径，排障时就只能猜——「丢包了」这三个字，在这条路径上至少有八个含义完全不同的位置。</p>
+
+  <div class="analogy">收包路径像<strong>机场到你家的国际快递</strong>。货机落地（网卡收到帧），包裹先卸到<strong>货站的固定格口</strong>（RX ring buffer，格口数量有限，装满了后面的货只能扔）；货站给分拣中心<strong>打一个电话</strong>说「有货了」（硬中断），但不会每来一件货打一次电话——那样接线员会被打崩，所以是「打一次电话，然后分拣员自己过来一次搬走一批」（NAPI 轮询）。分拣员把同一个收件人的十个小包<strong>合并成一个大箱</strong>（GRO）省得后面重复走流程，再依次过海关（netfilter）、查地址簿决定是本市派送还是转运（路由），最后放进你家<strong>楼下的快递柜</strong>（<code>sk_receive_queue</code>）。你什么时候下楼取（<code>recv()</code>）是你的事——但快递柜满了，后来的包裹就退回了。</div>
+
+  <div class="def"><strong><code>struct sk_buff</code>（skb）</strong>：内核里表示「一个网络包」的核心数据结构。它<strong>不是数据本身</strong>，而是一份描述数据在哪里、各层协议头偏移多少、归属哪个 socket 和设备的<strong>元信息</strong>。整条协议栈传递的都是 <code>struct sk_buff *</code> 这一个指针，真实的字节尽量原地不动——这是内核网络栈能跑到几十 Gbps 的前提。</div>
+
+  <div class="fig">
+    <svg viewBox="0 0 960 400" role="img" aria-label="Linux 内核收包与发包的完整路径：收包从网卡 DMA 写 RX ring、硬中断、软中断 net_rx_action、驱动 poll 构造 sk_buff、GRO 聚合、netif_receive_skb、ip_rcv、路由、ip_local_deliver、tcp_v4_rcv、sk_receive_queue 到 recv 拷贝；发包从 send、sk_write_queue、tcp_write_xmit、ip_queue_xmit、POSTROUTING、dev_queue_xmit、qdisc、驱动 xmit、TSO 卸载到 TX 完成中断">
+      <text class="tb" x="26" y="26">① 收包路径 RX（网卡 → 用户态）</text>
+
+      <rect class="box-g" x="26"  y="40" width="138" height="48" rx="7"/>
+      <text class="t"  x="95"  y="60" text-anchor="middle">网卡收帧 · DMA</text>
+      <text class="ts" x="95"  y="76" text-anchor="middle">写 RX Ring 描述符</text>
+      <path class="ln-a" d="M166 64 h12"/><polygon class="ar-a" points="180,64 174,60.5 174,67.5"/>
+
+      <rect class="box-a" x="180" y="40" width="138" height="48" rx="7"/>
+      <text class="t"  x="249" y="60" text-anchor="middle">硬中断 hardirq</text>
+      <text class="ts" x="249" y="76" text-anchor="middle">关中断 → napi_schedule()</text>
+      <path class="ln-a" d="M320 64 h12"/><polygon class="ar-a" points="334,64 328,60.5 328,67.5"/>
+
+      <rect class="box-a" x="334" y="40" width="138" height="48" rx="7"/>
+      <text class="t"  x="403" y="60" text-anchor="middle">NET_RX_SOFTIRQ</text>
+      <text class="ts" x="403" y="76" text-anchor="middle">net_rx_action() 轮询</text>
+      <path class="ln-a" d="M474 64 h12"/><polygon class="ar-a" points="488,64 482,60.5 482,67.5"/>
+
+      <rect class="box-a" x="488" y="40" width="138" height="48" rx="7"/>
+      <text class="t"  x="557" y="60" text-anchor="middle">驱动 poll()</text>
+      <text class="ts" x="557" y="76" text-anchor="middle">构造 sk_buff（不拷数据）</text>
+      <path class="ln-a" d="M628 64 h12"/><polygon class="ar-a" points="642,64 636,60.5 636,67.5"/>
+
+      <rect class="box-y" x="642" y="40" width="138" height="48" rx="7"/>
+      <text class="t"  x="711" y="60" text-anchor="middle">GRO 聚合</text>
+      <text class="ts" x="711" y="76" text-anchor="middle">同流小包合成大 skb</text>
+      <path class="ln-a" d="M782 64 h12"/><polygon class="ar-a" points="796,64 790,60.5 790,67.5"/>
+
+      <rect class="box-y" x="796" y="40" width="138" height="48" rx="7"/>
+      <text class="t"  x="865" y="60" text-anchor="middle">netif_receive_skb</text>
+      <text class="ts" x="865" y="76" text-anchor="middle">AF_PACKET tap · tc ingress</text>
+
+      <path class="ln-a" d="M865 90 v26"/><polygon class="ar-a" points="865,130 861.5,118 868.5,118"/>
+
+      <rect class="box-p" x="796" y="130" width="138" height="48" rx="7"/>
+      <text class="t"  x="865" y="150" text-anchor="middle">ip_rcv()</text>
+      <text class="ts" x="865" y="166" text-anchor="middle">PREROUTING · conntrack</text>
+      <path class="ln-a" d="M794 154 h-12"/><polygon class="ar-a" points="780,154 786,150.5 786,157.5"/>
+
+      <rect class="box-p" x="642" y="130" width="138" height="48" rx="7"/>
+      <text class="t"  x="711" y="150" text-anchor="middle">路由判定</text>
+      <text class="ts" x="711" y="166" text-anchor="middle">本机上送 / 转发出去</text>
+      <path class="ln-a" d="M640 154 h-12"/><polygon class="ar-a" points="626,154 632,150.5 632,157.5"/>
+
+      <rect class="box-p" x="488" y="130" width="138" height="48" rx="7"/>
+      <text class="t"  x="557" y="150" text-anchor="middle">ip_local_deliver</text>
+      <text class="ts" x="557" y="166" text-anchor="middle">LOCAL_IN hook</text>
+      <path class="ln-a" d="M486 154 h-12"/><polygon class="ar-a" points="472,154 478,150.5 478,157.5"/>
+
+      <rect class="box-a" x="334" y="130" width="138" height="48" rx="7"/>
+      <text class="t"  x="403" y="150" text-anchor="middle">tcp_v4_rcv()</text>
+      <text class="ts" x="403" y="166" text-anchor="middle">四元组查 socket</text>
+      <path class="ln-a" d="M332 154 h-12"/><polygon class="ar-a" points="318,154 324,150.5 324,157.5"/>
+
+      <rect class="box-a" x="180" y="130" width="138" height="48" rx="7"/>
+      <text class="t"  x="249" y="150" text-anchor="middle">sk_receive_queue</text>
+      <text class="ts" x="249" y="166" text-anchor="middle">占 rcvbuf 配额</text>
+      <path class="ln-a" d="M178 154 h-12"/><polygon class="ar-a" points="164,154 170,150.5 170,157.5"/>
+
+      <rect class="box-g" x="26"  y="130" width="138" height="48" rx="7"/>
+      <text class="t"  x="95"  y="150" text-anchor="middle">recv() / epoll</text>
+      <text class="ts" x="95"  y="166" text-anchor="middle">拷贝到用户态缓冲区</text>
+
+      <line class="ln-d" x1="26" y1="200" x2="934" y2="200"/>
+      <text class="tb" x="26" y="228">② 发包路径 TX（用户态 → 网卡）</text>
+
+      <rect class="box-g" x="26"  y="242" width="138" height="48" rx="7"/>
+      <text class="t"  x="95"  y="262" text-anchor="middle">send() / write()</text>
+      <text class="ts" x="95"  y="278" text-anchor="middle">tcp_sendmsg 拷入内核</text>
+      <path class="ln-g" d="M166 266 h12"/><polygon class="ar-g" points="180,266 174,262.5 174,269.5"/>
+
+      <rect class="box-a" x="180" y="242" width="138" height="48" rx="7"/>
+      <text class="t"  x="249" y="262" text-anchor="middle">sk_write_queue</text>
+      <text class="ts" x="249" y="278" text-anchor="middle">占 wmem · TSQ 限流</text>
+      <path class="ln-g" d="M320 266 h12"/><polygon class="ar-g" points="334,266 328,262.5 328,269.5"/>
+
+      <rect class="box-a" x="334" y="242" width="138" height="48" rx="7"/>
+      <text class="t"  x="403" y="262" text-anchor="middle">tcp_write_xmit</text>
+      <text class="ts" x="403" y="278" text-anchor="middle">cwnd / Nagle / pacing</text>
+      <path class="ln-g" d="M474 266 h12"/><polygon class="ar-g" points="488,266 482,262.5 482,269.5"/>
+
+      <rect class="box-p" x="488" y="242" width="138" height="48" rx="7"/>
+      <text class="t"  x="557" y="262" text-anchor="middle">ip_queue_xmit</text>
+      <text class="ts" x="557" y="278" text-anchor="middle">LOCAL_OUT · 路由</text>
+      <path class="ln-g" d="M628 266 h12"/><polygon class="ar-g" points="642,266 636,262.5 636,269.5"/>
+
+      <rect class="box-p" x="642" y="242" width="138" height="48" rx="7"/>
+      <text class="t"  x="711" y="262" text-anchor="middle">POSTROUTING</text>
+      <text class="ts" x="711" y="278" text-anchor="middle">SNAT / MASQUERADE</text>
+      <path class="ln-g" d="M782 266 h12"/><polygon class="ar-g" points="796,266 790,262.5 790,269.5"/>
+
+      <rect class="box-y" x="796" y="242" width="138" height="48" rx="7"/>
+      <text class="t"  x="865" y="262" text-anchor="middle">dev_queue_xmit</text>
+      <text class="ts" x="865" y="278" text-anchor="middle">选 TX 队列（XPS）</text>
+
+      <path class="ln-g" d="M865 292 v26"/><polygon class="ar-g" points="865,332 861.5,320 868.5,320"/>
+
+      <rect class="box-y" x="796" y="332" width="138" height="48" rx="7"/>
+      <text class="t"  x="865" y="352" text-anchor="middle">qdisc 排队</text>
+      <text class="ts" x="865" y="368" text-anchor="middle">tc / fq_codel / htb</text>
+      <path class="ln-g" d="M794 356 h-12"/><polygon class="ar-g" points="780,356 786,352.5 786,359.5"/>
+
+      <rect class="box-y" x="642" y="332" width="138" height="48" rx="7"/>
+      <text class="t"  x="711" y="352" text-anchor="middle">dev_hard_start_xmit</text>
+      <text class="ts" x="711" y="368" text-anchor="middle">出向 tcpdump tap 在此</text>
+      <path class="ln-g" d="M640 356 h-12"/><polygon class="ar-g" points="626,356 632,352.5 632,359.5"/>
+
+      <rect class="box-a" x="488" y="332" width="138" height="48" rx="7"/>
+      <text class="t"  x="557" y="352" text-anchor="middle">ndo_start_xmit</text>
+      <text class="ts" x="557" y="368" text-anchor="middle">驱动写 TX Ring</text>
+      <path class="ln-g" d="M486 356 h-12"/><polygon class="ar-g" points="472,356 478,352.5 478,359.5"/>
+
+      <rect class="box-g" x="334" y="332" width="138" height="48" rx="7"/>
+      <text class="t"  x="403" y="352" text-anchor="middle">网卡 DMA 取走</text>
+      <text class="ts" x="403" y="368" text-anchor="middle">TSO 分段 + 校验和卸载</text>
+      <path class="ln-g" d="M332 356 h-12"/><polygon class="ar-g" points="318,356 324,352.5 324,359.5"/>
+
+      <rect class="box" x="180" y="332" width="138" height="48" rx="7"/>
+      <text class="t"  x="249" y="352" text-anchor="middle">TX 完成中断</text>
+      <text class="ts" x="249" y="368" text-anchor="middle">NET_TX_SOFTIRQ 释放 skb</text>
+    </svg>
+    <figcaption>收包与发包的完整路径。上半部分左→右再右→左，是一个包从网线到 <code>recv()</code> 的十二个阶段；下半部分是对称的发送侧。注意两个 tcpdump 抓包点的位置——它们决定了你「抓到」和「抓不到」意味着什么，§9 会用到。</figcaption>
+  </div>
+
+  <h3>1.1 收包：五种执行上下文的接力</h3>
+
+  <p>这条路径最容易被忽略的一点是：<strong>它不在一个执行上下文里跑完</strong>。硬件 DMA 完全不占 CPU；硬中断是关中断的临界区，必须极短；软中断可以被抢占但优先级高于普通进程；<code>recv()</code> 那一段才是你的线程。跨上下文意味着<strong>每一段都有自己的排队点和自己的丢弃计数器</strong>。</p>
+
+  <table>
+    <thead><tr><th>阶段</th><th>执行上下文</th><th>关键函数</th><th>出问题看哪个计数器</th></tr></thead>
+    <tbody>
+      <tr><td>网卡写 RX Ring</td><td>硬件 DMA（不占 CPU）</td><td>—</td><td><code>ethtool -S</code>：<code>rx_missed_errors</code> / <code>rx_no_buffer_count</code></td></tr>
+      <tr><td>硬中断通知</td><td>hardirq（本 CPU 关中断）</td><td>驱动 ISR → <code>napi_schedule()</code></td><td><code>/proc/interrupts</code> 各 CPU 是否均匀</td></tr>
+      <tr><td>软中断轮询</td><td>softirq / <code>ksoftirqd/N</code></td><td><code>net_rx_action()</code> → 驱动 <code>poll()</code></td><td><code>/proc/net/softnet_stat</code> 第 3 列 <code>time_squeeze</code></td></tr>
+      <tr><td>构造 skb + GRO</td><td>softirq</td><td><code>napi_gro_receive()</code></td><td><code>ethtool -k</code> 的 gro 开关；抓包出现超大包</td></tr>
+      <tr><td>通用接收入口</td><td>softirq</td><td><code>netif_receive_skb()</code></td><td>tc ingress 的 <code>tc -s filter show</code></td></tr>
+      <tr><td>IP 层</td><td>softirq</td><td><code>ip_rcv()</code> → PREROUTING → 路由</td><td><code>nstat</code> 的 <code>IpInAddrErrors</code> / <code>IpInHdrErrors</code></td></tr>
+      <tr><td>传输层查 socket</td><td>softirq</td><td><code>tcp_v4_rcv()</code> / <code>udp_rcv()</code></td><td><code>TcpInErrors</code>、<code>TcpExtListenDrops</code>、<code>UdpNoPorts</code></td></tr>
+      <tr><td>入队 socket</td><td>softirq，或落到 backlog</td><td><code>sk_receive_queue</code> / <code>sk_backlog</code></td><td><code>TcpExtTCPRcvQDrop</code>、<code>TcpExtTCPBacklogDrop</code>、<code>UdpRcvbufErrors</code></td></tr>
+      <tr><td>用户读取</td><td>用户进程上下文</td><td><code>tcp_recvmsg()</code> 拷贝出去</td><td><code>ss -tn</code> 的 <code>Recv-Q</code> 是否长期堆积</td></tr>
+    </tbody>
+  </table>
+
+  <p>逐段说清楚：</p>
+
+  <p><strong>① 网卡 → RX Ring。</strong> 驱动在初始化时预先分配一批接收缓冲区，把它们的物理地址填进网卡的<strong>接收描述符环</strong>（RX ring / RX queue）。网卡收到帧后直接 DMA 写进这些内存，然后把对应描述符标记为「已用」。这一步<strong>完全不需要 CPU 参与</strong>——正因如此，如果 CPU 来不及回收并补充新的描述符，环里没有空位，网卡只能<strong>在硬件层面丢掉后续的包</strong>，这是 <code>rx_missed_errors</code> 的典型来源。</p>
+
+  <p><strong>② 硬中断。</strong> 网卡拉中断线，CPU 跳进驱动的中断处理函数。现代驱动在这里<strong>几乎什么都不干</strong>：关掉这个队列的中断、调用 <code>napi_schedule()</code> 把该队列的 NAPI 结构挂到本 CPU 的轮询链表上、触发 <code>NET_RX_SOFTIRQ</code>，然后立刻返回。硬中断期间本 CPU 是关中断的，多待一微秒，整机的中断延迟就多一微秒。</p>
+
+  <p><strong>③ 软中断轮询。</strong> 硬中断返回前会检查是否有待处理的软中断，有就在 <code>irq_exit()</code> 里直接跑 <code>net_rx_action()</code>；如果软中断跑得太久（超过 <code>netdev_budget</code> 个包或 <code>netdev_budget_usecs</code> 微秒），剩下的活会推给 <code>ksoftirqd/N</code> 这个内核线程，同时给 <code>time_squeeze</code> 计数加一。这就是为什么<strong>大流量机器上 <code>ksoftirqd</code> 吃满一个核</strong>是常见现象——它是溢出通道，不是异常本身。</p>
+
+  <p><strong>④ 构造 skb。</strong> 驱动的 <code>poll()</code> 从 ring 里取出已完成的描述符，为每个包分配一个 <code>sk_buff</code>，把 DMA 缓冲区的页<strong>挂进 skb 的分页数组</strong>（而不是把字节拷进来）。大部分现代驱动用「页池 + frag」模式：一个 4KB 页切成几份给多个小包用，避免频繁的页分配。</p>
+
+  <p><strong>⑤ GRO。</strong> <code>napi_gro_receive()</code> 会尝试把<strong>同一条流</strong>的连续小包合并成一个大 skb：TCP 序号连续、TCP 选项一致、IP ID 规律，就把新包的数据页追加到已有 skb 的 <code>frags[]</code> 里，只更新长度和 <code>gso_segs</code>。一次 poll 结束时统一 flush。合并之后，后面的 IP 层、TCP 层、netfilter、socket 唤醒全都<strong>只走一遍</strong>——这是内核栈能扛住 10G 线速小包的主要手段之一，代价是<strong>你抓包看到的不是线上真实的包</strong>（§9 会详述）。</p>
+
+  <p><strong>⑥⑦⑧ 协议栈。</strong> <code>netif_receive_skb()</code> 是通用入口：先喂给 AF_PACKET 的抓包 tap（tcpdump 在这儿），再过 tc ingress，然后按 <code>skb-&gt;protocol</code> 分发到 <code>ip_rcv()</code>。IP 层过 PREROUTING（conntrack、DNAT），做路由判定：目的是本机就走 <code>ip_local_deliver()</code> 过 LOCAL_IN，否则走 <code>ip_forward()</code> 过 FORWARD。传输层 <code>tcp_v4_rcv()</code> 用四元组在哈希表里查 socket。</p>
+
+  <p><strong>⑨ 入队。</strong> 找到 socket 后有个关键分支：如果此刻<strong>有用户进程正持有这个 socket 的锁</strong>（正在 <code>recvmsg</code> 或 <code>sendmsg</code> 中），软中断不能去动接收队列，只能把 skb 塞进 <code>sk_backlog</code>，等用户进程释放锁时由它自己处理；否则直接 <code>tcp_v4_do_rcv()</code> 走到 <code>sk_receive_queue</code> 并唤醒等待者。backlog 也有上限（受 <code>sk_rcvbuf</code> 约束），溢出计入 <code>TcpExtTCPBacklogDrop</code>。</p>
+
+  <div class="intuition">这一分支解释了一个很多人踩过的现象：<strong>应用越慢，丢包越多，而且丢的位置会变</strong>。应用读得慢 → <code>sk_receive_queue</code> 堆积 → 触及 <code>sk_rcvbuf</code> 上限 → 新包在软中断里被丢（<code>TCPRcvQDrop</code>）；同时应用长时间持锁 → 软中断只能走 backlog → backlog 也满 → <code>TCPBacklogDrop</code>。两个计数器指向的都是「应用侧慢」，但很多人只盯着网卡计数器，怎么调 ring size 都没用。</div>
+
+  <h3>1.2 sk_buff：为什么整条路径尽量不拷贝</h3>
+
+  <p>一个 1500 字节的包，如果每层协议都拷贝一次，10Gbps 线速下就是每秒几 GB 的额外内存带宽——这是内核网络栈设计的头号约束。skb 的做法是：<strong>数据只在「网卡 DMA 进来」和「拷给用户态」两端各碰一次，中间全靠指针腾挪。</strong></p>
+
+<pre><span class="cm">/* 简化版：只保留和路径理解相关的字段 */</span>
+<span class="kw">struct</span> sk_buff {
+    <span class="kw">struct</span> sk_buff      *next, *prev;   <span class="cm">// 链入 sk_receive_queue / qdisc 队列</span>
+    <span class="kw">struct</span> sock         *sk;            <span class="cm">// 归属 socket；转发包为 NULL</span>
+    <span class="kw">struct</span> net_device   *dev;           <span class="cm">// 收进来 / 要发出去的设备</span>
+    <span class="kw">char</span>                 cb[<span class="num">48</span>];        <span class="cm">// 每层私有控制块，如 TCP_SKB_CB(skb)</span>
+    <span class="kw">unsigned int</span>         len;           <span class="cm">// 线性区 + 分页区 总长度</span>
+    <span class="kw">unsigned int</span>         data_len;      <span class="cm">// 其中位于分页区的长度</span>
+    __u16                 mac_header;    <span class="cm">// 各层头相对 head 的偏移量</span>
+    __u16                 network_header;
+    __u16                 transport_header;
+    <span class="kw">unsigned char</span>       *head, *data, *tail, *end;
+    <span class="cm">/* ... 还有 100 多个字段：csum、hash、queue_mapping、tstamp ... */</span>
+};</pre>
+
+  <p><code>head/data/tail/end</code> 这四个指针是理解 skb 的钥匙：</p>
+
+<pre>head ──► ┌────────────────────┐
+         │      headroom      │  ◄─ 预留空间。skb_push() 往前长：
+data ──► ├────────────────────┤     加 TCP 头 → 加 IP 头 → 加以太网头
+         │                    │     全部原地写进 headroom，不用重新分配
+         │    线性数据区       │     长度 = len - data_len
+tail ──► ├────────────────────┤
+         │      tailroom      │
+end  ──► ├────────────────────┤
+         │  skb_shared_info   │  ◄─ nr_frags / frags[]：指向真实数据页
+         └────────────────────┘     frag_list、gso_size、gso_segs、dataref</pre>
+
+  <div class="insight-grid">
+    <div class="card"><h4>headroom 的意义</h4><p>发送时协议头是<strong>由内到外</strong>依次加的。预留 headroom（<code>NET_SKB_PAD</code>，通常 64 字节起）意味着每加一层头只是 <code>data -= n</code>，不需要 realloc + memcpy。VXLAN、IPsec 这类会再加外层头的场景，headroom 不够就会触发 <code>pskb_expand_head()</code>——一次真实拷贝，是隧道场景的隐性开销。</p></div>
+    <div class="card green"><h4>frags：数据在页里</h4><p>大包的负载不在线性区，而在 <code>skb_shared_info.frags[]</code> 指向的页里。GRO 合并只是把新包的页追加进数组；<code>sendfile()</code> / <code>splice()</code> 直接把 page cache 的页挂上去，全程零拷贝。这也是为什么 <code>skb-&gt;len</code> 和你能直接读到的线性长度经常对不上。</p></div>
+    <div class="card violet"><h4>clone 与 copy</h4><p><code>skb_clone()</code> 只复制元信息，两个 skb 共享同一份数据（<code>dataref</code> 加一）——tcpdump 抓包、多个 AF_PACKET 监听者、TCP 重传队列都靠它。真要改数据才调 <code>skb_copy()</code> / <code>pskb_copy()</code>。<strong>写共享 skb 前必须先 <code>skb_cow()</code></strong>，这是写内核网络代码最常见的 bug 来源。</p></div>
+  </div>
+
+  <h3>1.3 发包：对称，但不完全对称</h3>
+
+  <p>发送侧看起来是收包的镜像，但有三个关键差异，都会在生产中咬人。</p>
+
+  <p><strong>差异一：发送有一次不可避免的拷贝。</strong> <code>send()</code> 传进来的是用户态缓冲区，内核必须把它拷进 skb——因为 TCP 要保留副本用于重传，而用户可能在 <code>send()</code> 返回后立刻改写 buffer。想跳过这次拷贝要用 <code>MSG_ZEROCOPY</code>（页被 pin 住，完成通知走错误队列 <code>MSG_ERRQUEUE</code>），或者 <code>sendfile()</code> / <code>splice()</code> 这类源头本就在内核页缓存里的路径。</p>
+
+  <p><strong>差异二：多了一层 qdisc 排队。</strong> 收包没有「排队规则」，发包有。<code>dev_queue_xmit()</code> 先选一条 TX 队列（有 XPS 就按 CPU 选，否则按 skb hash），再把 skb 交给该队列的 qdisc。qdisc 可能立刻发（<code>noqueue</code>）、可能排队等调度（<code>fq_codel</code>、<code>htb</code>）、也可能<strong>直接丢</strong>（队列满）。这一层是 §6 的主题，也是唯一一个「内核主动丢你自己的包」的地方。</p>
+
+  <p><strong>差异三：TSO 让「一个 skb」不等于「一个包」。</strong> 开启 TSO（TCP Segmentation Offload）后，内核可以构造一个最大 64KB 的巨型 skb 交给网卡，由网卡硬件按 MSS 切成几十个真实的以太网帧、逐个填 TCP 头和校验和。内核少走几十遍协议栈，CPU 省一大截。网卡不支持时，内核在 <code>dev_hard_start_xmit()</code> 之前用软件做同样的事，叫 GSO。</p>
+
+  <table>
+    <thead><tr><th>卸载特性</th><th>方向</th><th>做什么</th><th>查看 / 开关</th><th>排障时的影响</th></tr></thead>
+    <tbody>
+      <tr><td><strong>GRO</strong>（Generic Receive Offload）</td><td>收</td><td>内核软件把同流小包合并成大 skb</td><td><code>ethtool -k eth0 | grep gro</code></td><td>抓到的包比线上真实包大很多</td></tr>
+      <tr><td><strong>LRO</strong>（Large Receive Offload）</td><td>收</td><td>网卡硬件做合并，不校验各字段</td><td><code>ethtool -K eth0 lro off</code></td><td><strong>转发场景必须关</strong>：合并后无法还原原包</td></tr>
+      <tr><td><strong>TSO</strong></td><td>发</td><td>网卡按 MSS 切分大 skb</td><td><code>ethtool -k eth0 | grep tcp-seg</code></td><td>抓包看到 &gt; MTU 的巨帧</td></tr>
+      <tr><td><strong>GSO</strong></td><td>发</td><td>TSO 的软件兜底，在驱动前才分段</td><td><code>ethtool -K eth0 gso off</code></td><td>同上，且 qdisc 里排的是未分段的大包</td></tr>
+      <tr><td><strong>校验和卸载</strong></td><td>收 / 发</td><td>硬件算 IP/TCP/UDP 校验和</td><td><code>ethtool -K eth0 tx-checksumming off</code></td><td>出向抓包全是 <code>incorrect cksum</code>，是<strong>假告警</strong></td></tr>
+      <tr><td><strong>RX/TX 时间戳</strong></td><td>收 / 发</td><td>硬件打时间戳（PTP / SO_TIMESTAMPING）</td><td><code>ethtool -T eth0</code></td><td>做延迟测量时区分软/硬时间戳精度</td></tr>
+    </tbody>
+  </table>
+
+  <div class="box star"><strong>面试加分点</strong>：被问「一个包从网卡到应用经历了什么」，能背出函数名只是及格。真正拉开差距的是<strong>说清每一段的执行上下文和排队点</strong>——「硬中断只做 <code>napi_schedule</code>，真正的活在 <code>NET_RX_SOFTIRQ</code> 里做；软中断超预算会转交 <code>ksoftirqd</code> 并累加 <code>time_squeeze</code>；找到 socket 后如果用户进程正持锁，包会先进 backlog 而不是接收队列」。这三句话直接对应三个不同的丢包计数器，说明你排过真实的问题，而不是背过一张图。</div>
+
+  <div class="note">这一章讲的是「内核里那一段」。socket API 的用法、粘包与半包处理、Reactor / Proactor 服务器模型请看 <a href="networking_guide.html">网络编程指南</a>；epoll 与协程化的异步框架看 <a href="async_networking_guide.html">异步网络编程</a>；文件描述符本身的机制看 <a href="filedescriptor_deepdive.html">文件描述符深入</a>。三者不重复，正好接成一条完整链路。</div>
+</section>
+
+<!-- ================================================================ §2 -->
+<section class="chapter" id="s2">
+  <div class="ch-head">
+    <div class="num">02</div>
+    <div class="t"><h2>网卡与驱动层</h2><p class="sub">ring buffer、中断合并、多队列与 RSS/RPS/RFS/XPS</p></div>
+  </div>
+
+  <p>这一层的问题有个共同特征：<strong>应用层完全无感，只表现为「偶尔丢包」「延迟毛刺」「某个核 si 打满」</strong>。而且它的计数器和内核栈的计数器分别在两个地方，不知道去哪看就永远查不出来。</p>
+
+  <h3>2.1 RX ring 满了会怎样：两个容易混淆的计数器</h3>
+
+  <div class="def"><strong>RX ring buffer</strong>：网卡与驱动约定的<strong>描述符环形数组</strong>，每个描述符指向一块预分配的内存。它的大小（<code>ethtool -g</code> 里的 RX 值）不是「能缓存多少字节」，而是「<strong>CPU 来不及处理时，能积压多少个包</strong>」。它是一个吸收突发的水桶，不是提升吞吐的手段。</div>
+
+  <table>
+    <thead><tr><th>计数器</th><th>来源</th><th>含义</th><th>该怎么办</th></tr></thead>
+    <tbody>
+      <tr><td><code>rx_missed_errors</code></td><td>网卡硬件计数器（<code>ethtool -S</code>）</td><td>网卡收到了帧，但<strong>没有可用的 RX 描述符</strong>或内部 FIFO 溢出，硬件直接丢弃</td><td>加大 ring（<code>ethtool -G</code>）、开多队列、检查软中断是否被饿死</td></tr>
+      <tr><td><code>rx_fifo_errors</code></td><td>网卡硬件</td><td>PCIe 带宽或内部 FIFO 跟不上，帧还没 DMA 出去就被覆盖</td><td>多半是 PCIe 插槽位宽 / NUMA 跨节点问题</td></tr>
+      <tr><td><code>rx_dropped</code>（<code>/proc/net/dev</code>）</td><td><strong>内核软件侧</strong></td><td>包已经进了内核，但被软件丢弃：未知协议、netns 无对应设备、VLAN 不匹配、backlog 满等</td><td>看具体原因，跟 ring size <strong>无关</strong></td></tr>
+      <tr><td><code>rx_errors</code></td><td>网卡硬件</td><td>CRC 错、长度错、对齐错的总和</td><td>物理层问题：网线、光模块、协商速率</td></tr>
+      <tr><td><code>rx_over_errors</code> / 驱动私有的<br><code>rx_no_buffer_count</code></td><td>驱动私有</td><td>不同驱动叫法不同，语义接近「没缓冲区」</td><td><strong>以驱动自己的 <code>ethtool -S</code> 为准</strong></td></tr>
+    </tbody>
+  </table>
+
+  <div class="box danger"><strong>最常见的误判</strong>：看到 <code>ip -s link</code> 里 <code>RX: dropped</code> 有值，就去加大 ring buffer。这两者往往<strong>没有关系</strong>——<code>ip -s link</code> 的 dropped 来自内核 <code>rtnl_link_stats64.rx_dropped</code>（软件丢弃），而 ring 满导致的丢弃通常记在 <code>rx_missed_errors</code> 里，甚至只出现在驱动私有的 <code>ethtool -S</code> 计数中。<strong>永远先跑 <code>ethtool -S</code> 看驱动的原生计数</strong>，那才是硬件视角的真相。</div>
+
+<pre><span class="cm"># 1. 先看内核视角的粗粒度统计</span>
+$ ip -s link show eth0
+2: eth0: &lt;BROADCAST,MULTICAST,UP,LOWER_UP&gt; mtu 1500 qdisc mq state UP mode DEFAULT group default qlen 1000
+    link/ether 3c:ec:ef:11:22:33 brd ff:ff:ff:ff:ff:ff
+    RX:  bytes packets errors dropped  missed   mcast
+    481203928471 3120847362      0    1842       0  120384
+    TX:  bytes packets errors dropped carrier collsns
+    390218374619 2841029384      0       0       0       0
+
+<span class="cm"># 2. 再看驱动私有的硬件计数（真正有信息量的一步）</span>
+$ ethtool -S eth0 | grep -Ei 'drop|err|discard|miss|no_buf|fifo'
+     rx_missed_errors: 0
+     rx_no_dma_resources: 0
+     rx_queue_0_drops: 0
+     rx_queue_3_drops: 8471          <span class="cm">&lt;-- 只有队列 3 在丢，说明分布不均</span>
+     tx_queue_0_drops: 0
+
+<span class="cm"># 3. 看 ring 有多大、还能开多大</span>
+$ ethtool -g eth0
+Ring parameters for eth0:
+Pre-set maximums:
+RX:             4096
+TX:             4096
+Current hardware settings:
+RX:             512               <span class="cm">&lt;-- 只用了上限的 1/8</span>
+TX:             512
+
+<span class="cm"># 调大（会重置网卡，瞬断几十到几百毫秒，别在业务高峰做）</span>
+$ ethtool -G eth0 rx 2048 tx 2048</pre>
+
+  <div class="intuition">上面第 2 步的输出里，<code>rx_queue_3_drops</code> 单独有值而其它队列为 0，是一个非常典型的信号：<strong>不是整机处理能力不够，而是流量哈希不均</strong>。常见原因是少数几条大象流（比如一条 10Gbps 的备份流）被 RSS 哈希到同一个队列，或者上层是隧道封装（VXLAN / GRE）导致网卡只能按外层四元组哈希，所有流量落到同一个队列。这时候加大 ring 只能推迟问题，正确做法是让网卡能看懂内层（开启隧道感知的 RSS）或者上 RPS 做软件二次分散。</div>
+
+  <h3>2.2 中断合并：用延迟换 CPU</h3>
+
+  <p>网卡每收到一个包就中断一次，10Gbps 小包场景下就是每秒上千万次中断——CPU 全部时间都在做上下文保存与恢复。<strong>中断合并（interrupt coalescing）</strong>让网卡「攒够 N 个包或等够 T 微秒再中断一次」。</p>
+
+<pre>$ ethtool -c eth0
+Coalesce parameters for eth0:
+Adaptive RX: on  TX: on          <span class="cm"># 网卡按负载自适应调整</span>
+rx-usecs: 50                     <span class="cm"># 收到第一个包后最多等 50us 再中断</span>
+rx-frames: 0                     <span class="cm"># 0 = 不按包数触发</span>
+rx-usecs-irq: 0
+tx-usecs: 50
+tx-frames: 0
+
+<span class="cm"># 低延迟场景：关掉自适应，把等待时间压到最小</span>
+$ ethtool -C eth0 adaptive-rx off adaptive-tx off rx-usecs 8 tx-usecs 8
+<span class="cm"># 吞吐 / 省 CPU 场景：反过来放大</span>
+$ ethtool -C eth0 rx-usecs 200 rx-frames 64</pre>
+
+  <div class="vs">
+    <div class="bad"><h5>❌ 无脑「优化」：把 rx-usecs 调到 0</h5>
+      <p>以为「零等待 = 最低延迟」。实际结果是中断风暴：软中断把 CPU 吃满，<code>ksoftirqd</code> 抢占了业务线程，<strong>p99 延迟反而暴涨</strong>，同时 ring 因为 poll 被调度器推迟而溢出。低延迟不等于零合并。</p></div>
+    <div class="good"><h5>✅ 按业务性质分档</h5>
+      <p>金融行情 / RPC 短包：<code>rx-usecs 8~20</code> + 关自适应 + 中断绑核到与业务线程<strong>同 NUMA、不同物理核</strong>。批量传输 / 存储复制：<code>rx-usecs 100~300</code>，用 CPU 换吞吐。改之前先量基线，改之后同时看延迟直方图和 <code>si</code> 占比，只看一个必然误判。</p></div>
+  </div>
+
+  <h3>2.3 NAPI：中断与轮询的混合体</h3>
+
+  <div class="def"><strong>NAPI</strong>（New API）：Linux 的网络收包框架。<strong>空闲时用中断</strong>（省 CPU），<strong>一忙就切轮询</strong>（省中断）。驱动在硬中断里关掉本队列中断并调度 NAPI；软中断里循环 <code>poll()</code> 取包，直到取空或用完预算；取空了才重新打开中断。相当于「门铃响一次，我就一直守在门口收货，直到没货了才回去等下一次门铃」。</div>
+
+  <p>NAPI 有两级预算，都在 <code>sysctl</code> 里：</p>
+
+  <table>
+    <thead><tr><th>参数</th><th>典型默认值</th><th>含义</th><th>什么时候动它</th></tr></thead>
+    <tbody>
+      <tr><td>每 NAPI 实例的 <code>weight</code></td><td>64</td><td>一次 <code>poll()</code> 最多处理多少包，由驱动注册时指定</td><td>基本不动，驱动写死</td></tr>
+      <tr><td><code>net.core.netdev_budget</code></td><td>300</td><td>一轮 <code>net_rx_action()</code> 所有队列合计最多处理多少包</td><td><code>time_squeeze</code> 持续增长时可提到 600~1000</td></tr>
+      <tr><td><code>net.core.netdev_budget_usecs</code></td><td>2000（2ms）</td><td>一轮 <code>net_rx_action()</code> 最多跑多久</td><td>与上一条配套，通常一起调</td></tr>
+      <tr><td><code>net.core.netdev_max_backlog</code></td><td>1000</td><td><strong>per-CPU backlog 队列</strong>的长度，RPS 和非 NAPI 设备用</td><td>开了 RPS 且 softnet 第 2 列在涨时才调</td></tr>
+      <tr><td><code>net.core.dev_weight</code></td><td>64</td><td>backlog 队列每轮处理的包数</td><td>很少动</td></tr>
+    </tbody>
+  </table>
+
+  <h3>2.4 <code>/proc/net/softnet_stat</code>：最被低估的一个文件</h3>
+
+  <p>它每 CPU 一行，全部是<strong>十六进制</strong>，没有表头。绝大多数排障文章只会说「看第二列」，但不说清第二列到底统计什么，导致误判满天飞。</p>
+
+<pre>$ cat /proc/net/softnet_stat
+2e8f3a91 00000000 00000c41 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000
+1f4a2b07 00000000 000004e2 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000
+0a1b3c4d 00000193 00000021 00000000 00000000 00000000 00000000 00000000 00000000 0009f2a1 00000000
+   ^col1     ^col2    ^col3                                                          ^col10
+
+<span class="cm"># 用十进制看更方便（每行对应一个 CPU，行号 = CPU 号）</span>
+$ awk '{printf "cpu%-3d processed=%-12d dropped=%-8d squeeze=%-8d rps=%d\n", \
+        NR-1, strtonum("0x"$1), strtonum("0x"$2), strtonum("0x"$3), strtonum("0x"$10)}' \
+      /proc/net/softnet_stat
+cpu0   processed=780854929  dropped=0        squeeze=3137     rps=0
+cpu1   processed=525352199  dropped=0        squeeze=1250     rps=0
+cpu2   processed=169157197  dropped=403      squeeze=33       rps=652449</pre>
+
+  <table>
+    <thead><tr><th>列</th><th>字段</th><th>含义</th><th>不为零意味着什么</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td><code>processed</code></td><td>本 CPU 处理过的包数</td><td>看各 CPU 是否均衡；只有一两个 CPU 有值 = 中断没打散</td></tr>
+      <tr><td><strong>2</strong></td><td><code>dropped</code></td><td><strong>per-CPU backlog 队列满而丢弃的包</strong></td><td>只有走 backlog 的路径才会计数（RPS、veth、loopback、非 NAPI 驱动）。<strong>物理网卡走 NAPI 直通，ring 满不会记在这里</strong>——这是最大的误区</td></tr>
+      <tr><td><strong>3</strong></td><td><code>time_squeeze</code></td><td>一轮 <code>net_rx_action()</code> 用完预算但还有包没取完的次数</td><td>持续快速增长 = 软中断处理能力不足，考虑加 <code>netdev_budget</code>、开更多队列、检查是否有人在 softirq 里干重活</td></tr>
+      <tr><td>4–8</td><td>历史遗留</td><td>早期字段，现代内核恒为 0</td><td>忽略</td></tr>
+      <tr><td>9</td><td><code>cpu_collision</code></td><td>发送时争抢设备锁的次数（旧统计）</td><td>基本恒为 0</td></tr>
+      <tr><td>10</td><td><code>received_rps</code></td><td>本 CPU 被别的 CPU 通过 RPS/IPI 唤醒处理包的次数</td><td>非零 = RPS 生效中</td></tr>
+      <tr><td>11</td><td><code>flow_limit_count</code></td><td>触发 flow limit（单流限流）的次数</td><td>非零 = 有大象流在挤占 backlog</td></tr>
+    </tbody>
+  </table>
+
+  <div class="box danger"><strong>关于第 2 列的关键澄清</strong>：它统计的是 <code>enqueue_to_backlog()</code> 因队列满而丢包。物理网卡在 NAPI 路径上<strong>不经过 backlog</strong>，所以「网卡 ring 溢出」不会让这一列变化。它会变化的典型场景是：开了 RPS 之后目标 CPU 处理不过来；容器环境里 veth 一侧转发压力大；或者 loopback 上跑了海量流量。<strong>看到第 2 列为 0 就断言「内核没丢包」是错的</strong>——内核丢包点有十几个，这里只是其中一个。</div>
+
+  <h3>2.5 多队列与 RSS：让多个核一起收包</h3>
+
+  <div class="def"><strong>RSS</strong>（Receive Side Scaling）：网卡<strong>硬件</strong>对每个包的四元组（或二元组）做 Toeplitz 哈希，按哈希值把包投递到 N 个 RX 队列中的一个，每个队列有独立的中断向量，可以绑到不同 CPU。<strong>同一条流永远落到同一个队列</strong>——这保证了单流的包序，也意味着单流的吞吐上限就是单核的处理能力。</div>
+
+<pre><span class="cm"># 看 / 改队列数（Combined 表示收发共用队列对）</span>
+$ ethtool -l eth0
+Channel parameters for eth0:
+Pre-set maximums:
+Combined:       63
+Current hardware settings:
+Combined:       16
+$ ethtool -L eth0 combined 16
+
+<span class="cm"># 看哈希用了哪些字段。sdfn = src IP, dst IP, src port, dst port</span>
+$ ethtool -n eth0 rx-flow-hash tcp4
+TCP over IPV4 flows use these fields for computing Hash flow key:
+IP SA
+IP DA
+L4 bytes 0 &amp; 1 [TCP/UDP src port]
+L4 bytes 2 &amp; 3 [TCP/UDP dst port]
+
+<span class="cm"># UDP 默认经常只哈希 IP（不含端口），导致 UDP 大流量全落一个队列</span>
+$ ethtool -N eth0 rx-flow-hash udp4 sdfn
+
+<span class="cm"># 中断分布：每个队列一个 MSI-X 向量</span>
+$ grep eth0 /proc/interrupts | head -4
+ 145:  128374  0  0  0  IR-PCI-MSI 1572864-edge  eth0-TxRx-0
+ 146:  0  119283  0  0  IR-PCI-MSI 1572865-edge  eth0-TxRx-1
+ 147:  0  0  132049  0  IR-PCI-MSI 1572866-edge  eth0-TxRx-2
+
+<span class="cm"># 手工把队列 0 的中断绑到 CPU2（掩码是位图，4 = 0b0100）</span>
+$ echo 4 &gt; /proc/irq/145/smp_affinity
+<span class="cm"># 或者用 CPU 列表形式，更不容易数错</span>
+$ echo 2 &gt; /proc/irq/145/smp_affinity_list</pre>
+
+  <div class="box danger"><strong>irqbalance 与手工绑核会打架。</strong> <code>irqbalance</code> 守护进程会周期性重写 <code>smp_affinity</code>，把你手工设的值覆盖掉，而且它对网卡中断的策略未必符合你的 NUMA 布局。低延迟场景的标准做法：<code>systemctl stop irqbalance &amp;&amp; systemctl disable irqbalance</code>，然后用驱动自带的 <code>set_irq_affinity.sh</code> 或自己写脚本一次性绑定，并<strong>确保绑到网卡所在 NUMA 节点的 CPU</strong>（<code>cat /sys/class/net/eth0/device/numa_node</code>）。跨 NUMA 收包会让每个 skb 的访问都走 QPI/UPI，实测能吃掉 20% 以上的吞吐——细节见 <a href="numa_memory_advanced.html">NUMA 与内存进阶</a>。</div>
+
+  <h3>2.6 RPS / RFS / XPS：软件侧的三块补丁</h3>
+
+  <p>RSS 需要硬件支持且队列数有限。当硬件不够用时，内核提供了三个纯软件机制，各自解决不同问题——<strong>它们不是「三选一」，而是分别对应三个不同的痛点</strong>。</p>
+
+  <table>
+    <thead><tr><th>机制</th><th>全称 / 层次</th><th>解决什么问题</th><th>怎么配</th><th>代价</th></tr></thead>
+    <tbody>
+      <tr><td><strong>RSS</strong></td><td>硬件多队列</td><td>让多个 CPU 并行收包，从中断层面就分开</td><td><code>ethtool -L</code> + 绑 IRQ</td><td>需要网卡支持；队列数有上限</td></tr>
+      <tr><td><strong>RPS</strong></td><td>Receive Packet Steering（软件 RSS）</td><td>网卡只有一个队列（虚拟机 virtio、老网卡）时，在软中断里按哈希把包<strong>分发给其它 CPU 的 backlog</strong></td><td><code>echo fe &gt; /sys/class/net/eth0/queues/rx-0/rps_cpus</code></td><td>每次分发一次 IPI 核间中断 + 一次跨核缓存搬运</td></tr>
+      <tr><td><strong>RFS</strong></td><td>Receive Flow Steering</td><td>RPS 是按哈希盲分，可能把包送到和应用不同的核上，导致 socket 数据结构跨核弹跳。RFS <strong>把包送到「上次调用 recvmsg 的那个 CPU」</strong></td><td><code>sysctl net.core.rps_sock_flow_entries=32768</code> + 每队列 <code>rps_flow_cnt</code></td><td>需要维护流表；应用频繁迁核时效果反而变差</td></tr>
+      <tr><td><strong>aRFS</strong></td><td>Accelerated RFS</td><td>把 RFS 的流表<strong>下推到网卡</strong>，让硬件直接投递到正确队列，省掉软件分发</td><td>需要网卡支持 <code>ntuple</code>：<code>ethtool -K eth0 ntuple on</code></td><td>硬件流表容量有限</td></tr>
+      <tr><td><strong>XPS</strong></td><td>Transmit Packet Steering</td><td><strong>发送侧</strong>：让某个 CPU 发出的包固定走某条 TX 队列，避免多核争抢同一个 qdisc 锁、避免 TX 完成中断跑到别的核上</td><td><code>echo 1 &gt; /sys/class/net/eth0/queues/tx-0/xps_cpus</code></td><td>配错会让某条队列过载</td></tr>
+    </tbody>
+  </table>
+
+<pre><span class="cm"># RPS：让 rx-0 队列的包分散到 CPU 1~7（掩码 0xfe）</span>
+$ echo fe &gt; /sys/class/net/eth0/queues/rx-0/rps_cpus
+
+<span class="cm"># RFS：全局流表 + 每队列流表。经验值：rps_flow_cnt ≈ rps_sock_flow_entries / 队列数</span>
+$ sysctl -w net.core.rps_sock_flow_entries=32768
+$ echo 2048 &gt; /sys/class/net/eth0/queues/rx-0/rps_flow_cnt
+
+<span class="cm"># XPS：CPU0 发的包走 tx-0，CPU1 走 tx-1 ...</span>
+$ echo 1 &gt; /sys/class/net/eth0/queues/tx-0/xps_cpus
+$ echo 2 &gt; /sys/class/net/eth0/queues/tx-1/xps_cpus
+
+<span class="cm"># 验证 RPS 生效：softnet_stat 第 10 列（received_rps）开始增长</span>
+$ awk '{print NR-1, strtonum("0x"$10)}' /proc/net/softnet_stat</pre>
+
+  <div class="intuition"><strong>什么时候该开 RPS？</strong> 判据很简单：跑 <code>mpstat -P ALL 1</code>，如果<strong>只有一两个 CPU 的 <code>%soft</code> 接近 100% 而其它核闲着</strong>，且 <code>ethtool -l</code> 显示队列数已经开满或硬件只有 1 个队列，那就开 RPS。反过来，如果 16 个队列的软中断已经均匀分布在 16 个核上，再开 RPS 只会增加一次 IPI 和一次跨核 cache miss，<strong>纯粹是负优化</strong>。云上的虚拟机（尤其是老一代 virtio-net 单队列实例）是 RPS 最典型的受益场景。</div>
+
+  <div class="checklist">
+    <h4>网卡层排障 checklist</h4>
+    <ul>
+      <li><code>ethtool -S eth0</code> 看驱动原生计数——<strong>永远第一步</strong>，比 <code>ip -s link</code> 信息量大一个数量级。</li>
+      <li>各 <code>rx_queue_N_drops</code> 是否均匀？只有一两个队列在丢 = 哈希不均，不是容量不够。</li>
+      <li><code>ethtool -g</code> 看 ring 是否还有上调空间；<code>ethtool -c</code> 看合并参数是否被人改过。</li>
+      <li><code>grep ethX /proc/interrupts</code> 看中断是否集中在少数 CPU；确认 <code>irqbalance</code> 状态。</li>
+      <li><code>cat /sys/class/net/eth0/device/numa_node</code> + <code>numactl -H</code>，确认中断 CPU 与网卡同 NUMA。</li>
+      <li><code>mpstat -P ALL 1</code> 看 <code>%soft</code> 分布；<code>/proc/net/softnet_stat</code> 第 3 列看 <code>time_squeeze</code>。</li>
+      <li>虚拟化环境额外确认：宿主机侧的 vhost 线程是否被限流、是否开了 multiqueue virtio。</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ================================================================ §3 -->
+<section class="chapter" id="s3">
+  <div class="ch-head">
+    <div class="num">03</div>
+    <div class="t"><h2>netfilter 与 conntrack</h2><p class="sub">五个 hook、表与链的优先级、连接跟踪表打满</p></div>
+  </div>
+
+  <p>netfilter 是内核网络栈里<strong>唯一一个「可以任意插手每个包」的框架</strong>：防火墙、NAT、负载均衡（IPVS）、容器网络（Docker、kube-proxy 的 iptables 模式）全都建在它上面。它的能力有多强，踩坑的花样就有多多——生产环境里最难查的一类网络故障，往往就藏在某条没人记得是谁加的规则里，或者藏在 conntrack 表里。</p>
+
+  <h3>3.1 五个 hook 点与包的走向</h3>
+
+  <div class="def"><strong>netfilter hook</strong>：内核在 IP 层的五个固定位置埋下的回调点。每个 hook 上挂着一串按<strong>优先级数字从小到大</strong>排序的处理函数，iptables 的每张「表」其实就是注册在某几个 hook 上、拥有特定优先级的一组回调。<strong>「表」决定优先级，「链」决定挂在哪个 hook 上。</strong></div>
+
+  <div class="fig">
+    <svg viewBox="0 0 900 380" role="img" aria-label="netfilter 五个 hook 点与包的走向：入向包经 PREROUTING 后做路由判定，目的为本机则走 INPUT 上送本地进程，否则走 FORWARD 再到 POSTROUTING 出网卡；本地进程发出的包经 OUTPUT、路由判定、POSTROUTING 出网卡">
+      <rect class="box-g" x="345" y="26" width="180" height="46" rx="8"/>
+      <text class="t"  x="435" y="46" text-anchor="middle">本地进程 · socket</text>
+      <text class="ts" x="435" y="62" text-anchor="middle">tcp_v4_rcv / tcp_sendmsg</text>
+
+      <rect class="box-a" x="250" y="112" width="160" height="52" rx="8"/>
+      <text class="t"  x="330" y="132" text-anchor="middle">INPUT</text>
+      <text class="tm" x="330" y="148" text-anchor="middle">mangle → filter</text>
+
+      <rect class="box-a" x="470" y="112" width="160" height="52" rx="8"/>
+      <text class="t"  x="550" y="132" text-anchor="middle">OUTPUT</text>
+      <text class="tm" x="550" y="148" text-anchor="middle">raw→mangle→nat→filter</text>
+
+      <rect class="box-p" x="90"  y="198" width="150" height="52" rx="8"/>
+      <text class="t"  x="165" y="218" text-anchor="middle">PREROUTING</text>
+      <text class="tm" x="165" y="234" text-anchor="middle">raw→ct→mangle→DNAT</text>
+
+      <rect class="box-y" x="270" y="198" width="120" height="52" rx="8"/>
+      <text class="t"  x="330" y="218" text-anchor="middle">路由判定</text>
+      <text class="ts" x="330" y="234" text-anchor="middle">本机？转发？</text>
+
+      <rect class="box-y" x="490" y="198" width="120" height="52" rx="8"/>
+      <text class="t"  x="550" y="218" text-anchor="middle">路由判定</text>
+      <text class="ts" x="550" y="234" text-anchor="middle">选出接口 / 网关</text>
+
+      <rect class="box-a" x="270" y="284" width="150" height="52" rx="8"/>
+      <text class="t"  x="345" y="304" text-anchor="middle">FORWARD</text>
+      <text class="tm" x="345" y="320" text-anchor="middle">mangle → filter</text>
+
+      <rect class="box-p" x="520" y="284" width="160" height="52" rx="8"/>
+      <text class="t"  x="600" y="304" text-anchor="middle">POSTROUTING</text>
+      <text class="tm" x="600" y="320" text-anchor="middle">mangle → SNAT</text>
+
+      <path class="ln-a" d="M14 224 h62"/><polygon class="ar-a" points="90,224 82,220 82,228"/>
+      <text class="ts" x="14" y="212">网卡 ingress</text>
+      <path class="ln-a" d="M240 224 h16"/><polygon class="ar-a" points="270,224 262,220 262,228"/>
+      <path class="ln-a" d="M330 198 v-20"/><polygon class="ar-a" points="330,164 326,176 334,176"/>
+      <path class="ln-a" d="M330 112 v-58 h11"/><polygon class="ar-a" points="345,54 333,50 333,58"/>
+      <path class="ln-g" d="M525 49 h25 v49"/><polygon class="ar-g" points="550,112 546,100 554,100"/>
+      <path class="ln-g" d="M550 164 v20"/><polygon class="ar-g" points="550,198 546,186 554,186"/>
+      <path class="ln-g" d="M550 250 v20"/><polygon class="ar-g" points="550,284 546,272 554,272"/>
+      <path class="ln-a" d="M330 250 v20"/><polygon class="ar-a" points="330,284 326,272 334,272"/>
+      <path class="ln-a" d="M420 310 h86"/><polygon class="ar-a" points="520,310 512,306 512,314"/>
+      <path class="ln-g" d="M680 310 h76"/><polygon class="ar-g" points="770,310 762,306 762,314"/>
+      <text class="ts" x="700" y="298">网卡 egress</text>
+
+      <text class="ts" x="14" y="352">优先级（越小越先）：raw −300 · conntrack −200 · mangle −150 · nat(DNAT) −100 · filter 0 · security 50 · nat(SNAT) 100</text>
+      <text class="ts" x="14" y="370">转发路径 = PREROUTING → 路由 → FORWARD → POSTROUTING，<tspan class="tr">不经过 INPUT/OUTPUT</tspan>——容器网络排障时最容易搞错的一点</text>
+    </svg>
+    <figcaption>netfilter 的五个 hook 与三条通路。左半是入向（本机接收 / 转发），右半是本机发出。注意<strong>转发的包既不过 INPUT 也不过 OUTPUT</strong>——在网关或容器宿主机上写 <code>iptables -A INPUT -j DROP</code> 拦不住转发流量，反之在 FORWARD 链上加规则也管不到本机自身的连接。</figcaption>
+  </div>
+
+  <table>
+    <thead><tr><th>表</th><th>优先级</th><th>挂在哪些 hook</th><th>典型用途</th><th>注意</th></tr></thead>
+    <tbody>
+      <tr><td><code>raw</code></td><td>−300（最早）</td><td>PREROUTING, OUTPUT</td><td>在 conntrack 之前动手：<code>-j NOTRACK</code>、<code>-j TRACE</code></td><td><strong>唯一能绕开连接跟踪的地方</strong></td></tr>
+      <tr><td>（conntrack）</td><td>−200</td><td>PREROUTING, OUTPUT</td><td>建立 / 查找连接跟踪条目</td><td>不是一张表，是内核模块自己注册的 hook</td></tr>
+      <tr><td><code>mangle</code></td><td>−150</td><td>全部五个</td><td>改 TOS/DSCP、TTL、打 fwmark（配合策略路由）</td><td>打 mark 是策略路由和 IPVS 的常用手段</td></tr>
+      <tr><td><code>nat</code>（DNAT 侧）</td><td>−100</td><td>PREROUTING, OUTPUT</td><td>DNAT、REDIRECT</td><td><strong>只有连接的第一个包会走 nat 表</strong>，后续包由 conntrack 自动套用</td></tr>
+      <tr><td><code>filter</code></td><td>0</td><td>INPUT, FORWARD, OUTPUT</td><td>ACCEPT / DROP / REJECT</td><td>不写 <code>-t</code> 时的默认表</td></tr>
+      <tr><td><code>security</code></td><td>50</td><td>INPUT, FORWARD, OUTPUT</td><td>SELinux 等 MAC 标记</td><td>很少直接用</td></tr>
+      <tr><td><code>nat</code>（SNAT 侧）</td><td>100</td><td>INPUT, POSTROUTING</td><td>SNAT、MASQUERADE</td><td>MASQUERADE = 出接口 IP 变了自动跟随的 SNAT</td></tr>
+    </tbody>
+  </table>
+
+  <div class="box star"><strong>「只有第一个包走 nat 表」这一条是理解 NAT 行为的钥匙。</strong> 一条连接的首包在 PREROUTING/OUTPUT 的 nat 链上被打上转换规则，结果记进 conntrack 条目；此后同一连接的所有包（包括反向的回包）都由 conntrack 在 <code>nf_nat_ipv4_fn</code> 里直接套用已记录的转换，<strong>不再遍历 nat 规则</strong>。两个推论：① 改了 NAT 规则，已建立的连接不会跟着变，必须 <code>conntrack -D</code> 清掉旧条目才生效——这是「改了规则不生效」的头号原因；② nat 表的规则数量对 pps 的影响远小于 filter 表，因为绝大多数包根本不走它。</div>
+
+  <h3>3.2 iptables 的性能天花板与 nftables</h3>
+
+  <p>iptables 的规则是<strong>线性链表</strong>：每个包在每条链上从第一条规则挨个匹配到命中为止。规则少的时候没人在意，但 kube-proxy 的 iptables 模式会为每个 Service 每个 Endpoint 生成若干条规则——几千个 Service 就是几万条规则，单个包要过几万次比较，同时<strong>规则更新是全量替换</strong>（<code>iptables-restore</code> 要拿一个大锁重建整张表），Service 一多，更新一次要几秒甚至几十秒。</p>
+
+  <table>
+    <thead><tr><th>维度</th><th>iptables（legacy）</th><th>nftables</th></tr></thead>
+    <tbody>
+      <tr><td>匹配模型</td><td>线性遍历规则链，每种 match 一个内核模块</td><td>字节码 + 内核虚拟机（<code>nf_tables</code>），一次解析多字段</td></tr>
+      <tr><td>集合查找</td><td>要靠 <code>ipset</code> 这个独立子系统</td><td>原生 <code>set</code> / <code>map</code>，支持<strong>拼接</strong>（如「IP+端口」联合查表），O(1)~O(log n)</td></tr>
+      <tr><td>协议族</td><td><code>iptables</code>/<code>ip6tables</code>/<code>arptables</code>/<code>ebtables</code> 四套独立工具</td><td>统一一套语法，<code>inet</code> 族一条规则同时管 v4/v6</td></tr>
+      <tr><td>规则更新</td><td>全量 dump-modify-restore，非原子</td><td><strong>事务式原子提交</strong>（<code>nft -f</code>），要么全成功要么全回滚</td></tr>
+      <tr><td>计数器</td><td>每条规则强制带计数器</td><td>可选，不需要就不付开销</td></tr>
+      <tr><td>兼容</td><td>—</td><td><code>iptables-nft</code> 用旧语法写、底层落到 nftables</td></tr>
+    </tbody>
+  </table>
+
+<pre><span class="cm"># 判断当前系统用的是哪一套后端</span>
+$ iptables --version
+iptables v1.8.7 (nf_tables)          <span class="cm"># 括号里是 nf_tables 或 legacy</span>
+
+<span class="cm"># nftables 的等价写法：一张表 + 一条链 + 一个集合</span>
+$ nft add table inet myfw
+$ nft 'add chain inet myfw input { type filter hook input priority 0; policy drop; }'
+$ nft 'add set inet myfw allowed_v4 { type ipv4_addr; flags interval; }'
+$ nft 'add element inet myfw allowed_v4 { 10.0.0.0/8, 192.168.0.0/16 }'
+$ nft 'add rule inet myfw input ct state established,related accept'
+$ nft 'add rule inet myfw input ip saddr @allowed_v4 tcp dport 22 accept'
+$ nft 'add rule inet myfw input iif lo accept'
+
+<span class="cm"># 原子替换整套规则：中间不存在「旧的删了新的还没生效」的空窗</span>
+$ nft -f /etc/nftables/ruleset.nft
+
+<span class="cm"># 看规则被命中的次数（排障必备，先加 counter）</span>
+$ nft list ruleset -a</pre>
+
+  <div class="note">大规模场景下的第三条路是<strong>绕开 netfilter</strong>：kube-proxy 的 IPVS 模式用内核的哈希表做转发（规则数从 O(Service×Endpoint) 降到 O(1) 查表），Cilium 则直接用 eBPF 在 tc/XDP 层实现 Service 转发，完全不进 iptables。这条线索见 §7 与 <a href="../architect/cloud_native_kubernetes.html">云原生与 Kubernetes</a>。</div>
+
+  <h3>3.3 连接跟踪：状态机与它的代价</h3>
+
+  <div class="def"><strong>conntrack</strong>（连接跟踪）：内核为每一条「流」维护一个条目，记录五元组、双向的转换关系、状态和超时时间。它是<strong>有状态防火墙和 NAT 的基础</strong>——没有它，就无法表达「只允许我主动发起的连接的回包进来」。代价是：每条流占一个哈希表条目（约 300 字节量级）和一次哈希查找，<strong>而且它是全局共享的有限资源</strong>。</div>
+
+  <p>conntrack 的状态和 TCP 自身的状态<strong>不是一回事</strong>，面试里经常被混淆：</p>
+
+  <table>
+    <thead><tr><th>conntrack 状态</th><th>含义</th><th>典型规则用法</th></tr></thead>
+    <tbody>
+      <tr><td><code>NEW</code></td><td>该方向第一个包，尚未看到回包</td><td><code>-m conntrack --ctstate NEW -j ACCEPT</code> 放行主动连接</td></tr>
+      <tr><td><code>ESTABLISHED</code></td><td>双向都见过包了</td><td>有状态防火墙的第一条规则永远是放行它</td></tr>
+      <tr><td><code>RELATED</code></td><td>与已有连接关联的新连接（FTP 数据通道、ICMP 差错报文）</td><td>需要对应的 helper 模块识别</td></tr>
+      <tr><td><code>INVALID</code></td><td>无法归入任何连接（乱序到达的 RST、超时后姗姗来迟的包）</td><td>通常直接 DROP；<strong>但在非对称路由下会误杀正常流量</strong></td></tr>
+      <tr><td><code>UNTRACKED</code></td><td>被 <code>raw</code> 表 <code>-j NOTRACK</code> 显式排除跟踪</td><td>高 pps 的 DNS / 日志上报流量</td></tr>
+    </tbody>
+  </table>
+
+  <p>此外 TCP 连接在 conntrack 内部还有自己的一套子状态机（<code>SYN_SENT</code> / <code>SYN_RECV</code> / <code>ESTABLISHED</code> / <code>FIN_WAIT</code> / <code>CLOSE_WAIT</code> / <code>LAST_ACK</code> / <code>TIME_WAIT</code> / <code>CLOSE</code>），每个子状态有独立的超时时间。<strong>其中 <code>nf_conntrack_tcp_timeout_established</code> 默认是 432000 秒（5 天）</strong>——这个值大得离谱，是很多表满事故的根源。</p>
+
+  <h3>3.4 conntrack 表打满：现象、定位与止血</h3>
+
+<pre><span class="cm"># 现象一：dmesg / journalctl 里刷这一行</span>
+$ dmesg -T | tail -3
+[Thu Sep  3 14:02:11 2026] nf_conntrack: nf_conntrack: table full, dropping packet
+[Thu Sep  3 14:02:11 2026] nf_conntrack: nf_conntrack: table full, dropping packet
+
+<span class="cm"># 现象二：当前条目数已经贴着上限</span>
+$ sysctl net.netfilter.nf_conntrack_count net.netfilter.nf_conntrack_max
+net.netfilter.nf_conntrack_count = 262143
+net.netfilter.nf_conntrack_max = 262144        <span class="cm">&lt;-- 满了</span>
+
+<span class="cm"># 现象三：per-CPU 统计里 drop / early_drop / insert_failed 在涨</span>
+$ conntrack -S
+cpu=0  found=8213 invalid=124 insert=0 insert_failed=0 drop=0 early_drop=0 error=0 search_restart=91
+cpu=1  found=9012 invalid=88  insert=0 insert_failed=17 drop=204 early_drop=61 error=0 search_restart=77
+
+<span class="cm"># 谁占了这么多条目？按协议 / 状态 / 目的分组数一数</span>
+$ conntrack -L 2&gt;/dev/null | awk '{print $1, $2}' | sort | uniq -c | sort -rn | head
+ 198432 tcp 6
+  41203 udp 17
+$ conntrack -L 2&gt;/dev/null | grep -oP 'dport=\d+' | sort | uniq -c | sort -rn | head -5
+ 176011 dport=53                       <span class="cm">&lt;-- DNS 查询把表撑满了</span></pre>
+
+  <table>
+    <thead><tr><th><code>conntrack -S</code> 字段</th><th>含义</th><th>非零说明什么</th></tr></thead>
+    <tbody>
+      <tr><td><code>insert_failed</code></td><td>插入新条目失败</td><td>典型是 <strong>NAT 端口分配冲突</strong>（多个连接想用同一个转换后的源端口）或表满</td></tr>
+      <tr><td><code>drop</code></td><td>因为无法建条目而丢包</td><td>表满的直接证据</td></tr>
+      <tr><td><code>early_drop</code></td><td>表满时，强行踢掉一个尚未 ESTABLISHED 的旧条目腾位置</td><td>已经在拆东墙补西墙了</td></tr>
+      <tr><td><code>invalid</code></td><td>被判为 INVALID 的包数</td><td>大量出现要怀疑非对称路由或 conntrack 超时过短</td></tr>
+      <tr><td><code>search_restart</code></td><td>查找过程中哈希桶被并发修改，重来一次</td><td>少量正常；暴涨说明桶太少、冲突严重</td></tr>
+      <tr><td><code>chaintoolong</code></td><td>哈希桶链过长（较新内核）</td><td>提高 <code>nf_conntrack_buckets</code></td></tr>
+    </tbody>
+  </table>
+
+  <div class="vs">
+    <div class="bad"><h5>❌ 唯一的处理动作是把 max 调大</h5>
+<pre>sysctl -w net.netfilter.nf_conntrack_max=4194304</pre>
+      <p>能救一时，但每个条目要占内核内存，几百万条就是 GB 级；哈希桶没跟着调大的话冲突链会变长，查找变慢；<strong>而且根本没回答「为什么有这么多连接」</strong>。往往一周后又满了，只能继续往上翻倍。</p></div>
+    <div class="good"><h5>✅ 先分类，再对症</h5>
+      <p><strong>① 短连接海量（DNS / 探针）</strong> → <code>raw</code> 表 NOTRACK 直接不跟踪；<br>
+      <strong>② TCP established 超时 5 天堆积</strong> → 调 <code>nf_conntrack_tcp_timeout_established</code> 到 1200~3600 秒；<br>
+      <strong>③ 桶数不匹配</strong> → <code>nf_conntrack_buckets</code> 设为 <code>max/4</code>~<code>max/2</code>；<br>
+      <strong>④ 真的就是连接多</strong> → 再调 max，并同步评估内存占用。</p></div>
+  </div>
+
+<pre><span class="cm"># 方案 ①：对高频短连接直接关闭跟踪（DNS 是最典型的例子）</span>
+<span class="cm"># 注意：NOTRACK 的流量将无法被 --ctstate 匹配，也无法做 NAT，两个方向都要写</span>
+$ iptables -t raw -A PREROUTING -p udp --dport 53 -j NOTRACK
+$ iptables -t raw -A OUTPUT     -p udp --sport 53 -j NOTRACK
+<span class="cm"># nftables 写法</span>
+$ nft 'add rule inet myfw prerouting udp dport 53 notrack'
+
+<span class="cm"># 方案 ②：把 established 超时从 5 天砍到 20 分钟</span>
+$ sysctl -w net.netfilter.nf_conntrack_tcp_timeout_established=1200
+<span class="cm"># 其它几个常被忽略但很关键的超时</span>
+$ sysctl -a 2&gt;/dev/null | grep nf_conntrack.*timeout | head -8
+net.netfilter.nf_conntrack_tcp_timeout_time_wait = 120
+net.netfilter.nf_conntrack_tcp_timeout_close_wait = 60
+net.netfilter.nf_conntrack_tcp_timeout_fin_wait = 120
+net.netfilter.nf_conntrack_udp_timeout = 30
+net.netfilter.nf_conntrack_udp_timeout_stream = 120
+net.netfilter.nf_conntrack_icmp_timeout = 30
+
+<span class="cm"># 方案 ③：桶数（改这个需要在模块加载时或通过 sysfs 设置）</span>
+$ sysctl -w net.netfilter.nf_conntrack_buckets=1048576
+
+<span class="cm"># 应急止血：清掉某一类条目（会导致相关连接中断，慎用）</span>
+$ conntrack -D -p udp --dport 53</pre>
+
+  <div class="box danger"><strong>把 <code>tcp_timeout_established</code> 调得太短也会出事。</strong> 想象一条空闲的长连接（数据库连接池、gRPC 长连接、SSH 会话）：conntrack 条目超时被删除后，服务端某一刻发来数据，这个包在网关上会被判为 <code>INVALID</code>（没有对应条目、又不是 SYN），直接被丢掉——客户端表现为<strong>「连接看着是通的，但突然就卡住不动了」</strong>，而且只在空闲一段时间后出现。调短超时时间必须<strong>同时确保应用侧的 TCP keepalive 间隔小于这个值</strong>，或者应用层有自己的心跳。这是「conntrack 超时」与「keepalive 间隔」必须成对考虑的原因。</div>
+
+  <h3>3.5 NAT 端口耗尽</h3>
+
+  <p>SNAT / MASQUERADE 要给每条出向连接分配一个「源 IP + 源端口」的组合，使回包能被唯一还原。一个源 IP 大约只有 <strong>2.8 万到 6 万个可用端口</strong>（受 <code>net.ipv4.ip_local_port_range</code> 约束）。当大量容器共用一个宿主机 IP 访问<strong>同一个目的 IP:Port</strong>（比如所有 Pod 都连同一个 Redis 或同一个外部 API）时，可用组合会被迅速耗尽。</p>
+
+<pre><span class="cm"># 看端口范围（默认在多数发行版上是 32768-60999，约 2.8 万个）</span>
+$ sysctl net.ipv4.ip_local_port_range
+net.ipv4.ip_local_port_range = 32768	60999
+
+<span class="cm"># 症状：conntrack -S 的 insert_failed 快速增长，同时应用侧报连接超时</span>
+$ watch -n1 "conntrack -S | awk -F'insert_failed=' '{s+=\$2} END{print s}'"
+
+<span class="cm"># 统计到同一个目的地的 NAT 连接数</span>
+$ conntrack -L 2&gt;/dev/null | grep 'dst=10.20.30.40' | grep 'dport=6379' | wc -l
+28316                                <span class="cm">&lt;-- 已经贴着端口上限了</span></pre>
+
+  <div class="checklist">
+    <h4>NAT 端口耗尽的四种解法（按优先级）</h4>
+    <ul>
+      <li><strong>减少连接数</strong>：客户端上连接池复用，别每次请求新建连接。这是根治，其它都是缓解。</li>
+      <li><strong>扩大源 IP 池</strong>：<code>-j SNAT --to-source 10.0.0.10-10.0.0.20</code>，N 个 IP 就是 N 倍的端口空间。云上对应 NAT 网关多绑几个弹性 IP。</li>
+      <li><strong>放宽端口范围</strong>：<code>sysctl -w net.ipv4.ip_local_port_range="10240 65535"</code>，注意不要与监听端口冲突（配合 <code>ip_local_reserved_ports</code>）。</li>
+      <li><strong>绕开 NAT</strong>：容器直接用可路由 IP（underlay / IPvlan L3 / 云 VPC CNI），从根上不需要 SNAT。</li>
+    </ul>
+  </div>
+
+  <div class="intuition">还有一个只在 MASQUERADE 下出现、极难复现的老问题：<strong>并发 SNAT 的插入竞争</strong>。两个 CPU 上的两条连接同时选中了同一个转换后的端口，其中一条在最后的 confirm 阶段失败（<code>insert_failed</code>++），表现为<strong>偶发的、约万分之一概率的 SYN 丢失，客户端要等一个 SYN 重传（1 秒）才恢复</strong>。在 p99 敏感的服务上这一秒非常刺眼。缓解手段是给 MASQUERADE 加 <code>--random-fully</code>（让端口选择用完全随机而非顺序探测，显著降低碰撞率）：<code>iptables -t nat -A POSTROUTING -j MASQUERADE --random-fully</code>。</div>
+</section>
+
+<!-- ================================================================ §4 -->
+<section class="chapter" id="s4">
+  <div class="ch-head">
+    <div class="num">04</div>
+    <div class="t"><h2>路由与邻居</h2><p class="sub">FIB 查找、策略路由、rp_filter 三档、ARP 表老化</p></div>
+  </div>
+
+  <p>路由决定包<strong>往哪个接口发、下一跳是谁</strong>；邻居子系统（ARP / NDP）解决「知道了下一跳的 IP，可它的 MAC 是多少」。这两层平时透明得让人忘了它们存在，一旦机器有多张网卡、或者进了容器 / VPN / 双栈环境，它们就是故障率最高的地方。</p>
+
+  <h3>4.1 路由查找：三张表、一棵 trie</h3>
+
+  <div class="def"><strong>FIB</strong>（Forwarding Information Base）：内核里真正用于查找的转发表，按<strong>最长前缀匹配</strong>组织成压缩前缀树（<code>fib_trie</code>）。早期内核在 FIB 之前还有一层「路由缓存」（routing cache），因为容易被哈希碰撞攻击且在多核上争抢严重，<strong>已在 Linux 3.6 移除</strong>；现在每个包直接查 trie，配合 per-CPU 的 <code>dst_entry</code> 引用来摊薄开销。</div>
+
+  <p>系统默认有三张路由表，按 <code>ip rule</code> 的优先级依次查询：</p>
+
+<pre>$ ip rule show
+0:	from all lookup local              <span class="cm"># 本机地址与广播，内核自动维护，别手动改</span>
+32766:	from all lookup main               <span class="cm"># 平时 ip route add 进的就是这张</span>
+32767:	from all lookup default            <span class="cm"># 通常是空的</span>
+
+$ ip route show table main
+default via 192.168.1.1 dev eth0 proto dhcp metric 100
+10.244.0.0/24 dev cni0 proto kernel scope link src 10.244.0.1
+172.17.0.0/16 dev docker0 proto kernel scope link src 172.17.0.1 linkdown
+192.168.1.0/24 dev eth0 proto kernel scope link src 192.168.1.23 metric 100
+
+<span class="cm"># local 表里是「发给我自己」的条目：本机 IP 是 local，网段广播是 broadcast</span>
+$ ip route show table local | head -4
+local 10.244.0.1 dev cni0 proto kernel scope host src 10.244.0.1
+broadcast 10.244.0.255 dev cni0 proto kernel scope link src 10.244.0.1
+local 127.0.0.0/8 dev lo proto kernel scope host src 127.0.0.1
+local 192.168.1.23 dev eth0 proto kernel scope host src 192.168.1.23</pre>
+
+  <p>排障时最有用的一条命令不是 <code>ip route show</code>（那只是给你看规则），而是 <code>ip route get</code>——它让内核<strong>真的跑一遍查找逻辑</strong>并告诉你结果，包括源地址选择、走哪张表、命中哪条规则。</p>
+
+<pre><span class="cm"># 最基本：去 8.8.8.8 走哪</span>
+$ ip route get 8.8.8.8
+8.8.8.8 via 192.168.1.1 dev eth0 src 192.168.1.23 uid 1000
+    cache
+
+<span class="cm"># 指定源地址查（诊断多网卡回包问题的关键用法）</span>
+$ ip route get 8.8.8.8 from 10.0.0.5
+8.8.8.8 from 10.0.0.5 via 192.168.1.1 dev eth0 uid 1000
+    cache
+
+<span class="cm"># 模拟「从 eth1 收到一个源 1.2.3.4 目的 192.168.1.23 的包」，内核会怎么判</span>
+<span class="cm"># 加了 iif 才会走「入向」逻辑，包括 rp_filter 检查</span>
+$ ip route get 192.168.1.23 from 1.2.3.4 iif eth1
+RTNETLINK answers: Invalid cross-device link        <span class="cm">&lt;-- 被 rp_filter 拒了</span>
+
+<span class="cm"># 查某条流走哪张策略表（带 fwmark）</span>
+$ ip route get 10.20.30.40 mark 0x64</pre>
+
+  <h3>4.2 策略路由：源地址、mark 与多张表</h3>
+
+  <p>普通路由只看<strong>目的地址</strong>。策略路由（policy routing）让内核可以按<strong>源地址、入接口、fwmark、TOS</strong>等条件选择不同的路由表。这是多线路出口、VPN 分流、容器多网卡场景的标准工具。</p>
+
+<pre><span class="cm"># 场景：机器有两条上行（eth0 走电信，eth1 走联通），要求</span>
+<span class="cm">#       从 eth1 的 IP 发出的流量必须从 eth1 回，不能被默认路由抢走</span>
+
+<span class="cm"># 1) 给第二条线路建一张独立的表（编号 100，名字可选，写进 rt_tables 更可读）</span>
+$ echo "100 unicom" &gt;&gt; /etc/iproute2/rt_tables
+$ ip route add 10.10.0.0/24 dev eth1 src 10.10.0.7 table unicom
+$ ip route add default via 10.10.0.1 dev eth1 table unicom
+
+<span class="cm"># 2) 加规则：源地址是 eth1 的 IP 就查这张表（优先级 200，早于 main 的 32766）</span>
+$ ip rule add from 10.10.0.7 lookup unicom priority 200
+
+<span class="cm"># 3) 验证</span>
+$ ip rule show
+0:	from all lookup local
+200:	from 10.10.0.7 lookup unicom
+32766:	from all lookup main
+32767:	from all lookup default
+$ ip route get 8.8.8.8 from 10.10.0.7
+8.8.8.8 from 10.10.0.7 via 10.10.0.1 dev eth1 uid 0
+
+<span class="cm"># 另一种常见玩法：用 iptables 打 mark，再按 mark 分流</span>
+$ iptables -t mangle -A OUTPUT -p tcp --dport 443 -j MARK --set-mark 100
+$ ip rule add fwmark 100 lookup unicom priority 210</pre>
+
+  <div class="box danger"><strong>「两张网卡，ping 得通但 TCP 连不上」的经典成因。</strong> 服务器有 eth0（192.168.1.23）和 eth1（10.10.0.7），客户端访问 10.10.0.7。请求从 eth1 进来没问题，但回包时内核查 <code>main</code> 表，发现默认路由在 eth0，于是<strong>从 eth0 发出一个源 IP 为 10.10.0.7 的包</strong>。这个包在上游交换机或对端的 rp_filter 那里被判为伪造源地址而丢弃。ICMP 有时能通（因为可能走了别的路径或被特殊处理），TCP 三次握手却完不成——非常迷惑。解法就是上面的策略路由：<strong>按源地址把回包钉回它进来的那张网卡</strong>。</div>
+
+  <h3>4.3 rp_filter：三个取值，一条容易被忽略的合并规则</h3>
+
+  <div class="def"><strong>反向路径过滤</strong>（Reverse Path Filtering，RFC 3704）：收到一个包时，内核用它的<strong>源地址</strong>反查路由表——「如果我要给这个源地址发包，会从哪个接口出去？」如果答案不是这个包进来的接口，就认为源地址被伪造，丢弃。它是防 IP 欺骗的基础手段，也是<strong>非对称路由环境下最常见的「莫名其妙丢包」元凶</strong>。</div>
+
+  <table>
+    <thead><tr><th>取值</th><th>名称</th><th>行为</th><th>适用场景</th></tr></thead>
+    <tbody>
+      <tr><td><code>0</code></td><td>关闭</td><td>不做任何反向路径检查</td><td>路由器、需要非对称路由的多线出口、某些 VPN / anycast 场景</td></tr>
+      <tr><td><code>1</code></td><td><strong>严格模式</strong></td><td>反查结果<strong>必须正好是收包接口</strong>，否则丢弃</td><td>单出口的普通服务器；安全性最高</td></tr>
+      <tr><td><code>2</code></td><td><strong>松散模式</strong></td><td>只要源地址在<strong>任意一个</strong>接口上可达就放行，不要求接口一致</td><td>多网卡 / 非对称路由但仍想挡掉完全不可路由的伪造源地址</td></tr>
+    </tbody>
+  </table>
+
+  <div class="box danger"><strong>最容易踩的一条：<code>all</code> 与接口值取的是「较严格的那个」。</strong> 内核实际生效的值是 <code>net.ipv4.conf.all.rp_filter</code> 与 <code>net.ipv4.conf.&lt;iface&gt;.rp_filter</code> 两者的<strong>最大值</strong>。所以只把 <code>eth1.rp_filter</code> 设成 0，而 <code>all.rp_filter</code> 还是 1，结果依然是严格模式——「我明明关了啊」就是这么来的。<strong>要真正关闭必须两个都改</strong>，而且 <code>all</code> 的改动不会自动同步到已存在的接口上，新建接口则继承 <code>default</code> 的值。</div>
+
+<pre><span class="cm"># 查看全部相关取值（一次看清，别只看 all）</span>
+$ sysctl -a 2&gt;/dev/null | grep '\.rp_filter'
+net.ipv4.conf.all.rp_filter = 1
+net.ipv4.conf.default.rp_filter = 1
+net.ipv4.conf.eth0.rp_filter = 1
+net.ipv4.conf.eth1.rp_filter = 0        <span class="cm"># 单独关了也没用，因为 all=1</span>
+net.ipv4.conf.lo.rp_filter = 0
+
+<span class="cm"># 正确的「对 eth1 放开松散模式」写法：all 降到 2，eth1 设 2，其它接口保持 1</span>
+$ sysctl -w net.ipv4.conf.all.rp_filter=2
+$ sysctl -w net.ipv4.conf.eth1.rp_filter=2
+$ sysctl -w net.ipv4.conf.eth0.rp_filter=1
+
+<span class="cm"># 被 rp_filter 丢掉的包有专门的计数器（需要 log_martians 才有日志，但计数一直有）</span>
+$ nstat -az | grep -i -E 'IPReversePathFilter|InAddrErrors'
+TcpExtIPReversePathFilter       10482              0.0
+
+<span class="cm"># 想看具体是哪些包被丢，临时开 martian 日志（会很吵，查完记得关）</span>
+$ sysctl -w net.ipv4.conf.all.log_martians=1
+$ dmesg -T | grep martian | tail -2
+[Thu Sep  3 15:11:02 2026] IPv4: martian source 10.10.0.7 from 203.0.113.9, on dev eth0</pre>
+
+  <div class="intuition"><code>TcpExtIPReversePathFilter</code> 这个计数器名字里带 <code>Tcp</code>，其实统计的是 IP 层所有被 rp_filter 丢弃的包（不限 TCP）。<strong>排查「部分客户端连不上、部分正常」时，第一件事就是 <code>nstat -az | grep -i reverse</code>——如果它在涨，方向立刻就定了</strong>，能省下几小时的抓包。这个计数器几乎没人主动看，但它的诊断价值极高。</div>
+
+  <p>与 rp_filter 同一族、经常一起出问题的还有 <code>arp_ignore</code> 和 <code>arp_announce</code>：当多张网卡在<strong>同一个二层网段</strong>时，Linux 默认会用任意一张网卡回应对所有本机 IP 的 ARP 请求（所谓 ARP flux），导致 MAC 学习混乱。LVS 的 DR 模式必须在真实服务器上设 <code>arp_ignore=1</code>（只回应目标 IP 配置在本接口上的 ARP 请求）和 <code>arp_announce=2</code>（发 ARP 请求时使用最合适的本地地址），否则 VIP 会被真实服务器抢答。</p>
+
+  <h3>4.4 邻居表：ARP 缓存与 gc_thresh</h3>
+
+  <div class="analogy">邻居表就像<strong>小区门口的门牌-住户对照本</strong>。你要给「3 栋 502」送东西，得先知道那家人叫什么（IP → MAC）。对照本容量有限，久不联系的条目会被划掉（老化）。小区住户特别多的时候（大二层网络、几千台机器同网段），对照本被塞爆，快递员每次都得重新去问一遍——这就是 <code>neighbour table overflow</code> 的现场。</div>
+
+<pre>$ ip -s neigh show dev eth0 | head -5
+192.168.1.1  lladdr 3c:ec:ef:aa:bb:cc ref 12 used 3/3/1 probes 0 REACHABLE
+192.168.1.45 lladdr 00:16:3e:11:22:33 ref 1  used 91/91/85 probes 1 STALE
+192.168.1.88                                 used 0/0/0    probes 4 FAILED
+
+$ ip -s neigh show | wc -l
+1013
+
+$ sysctl -a 2&gt;/dev/null | grep 'gc_thresh'
+net.ipv4.neigh.default.gc_thresh1 = 128     <span class="cm"># 少于这个数完全不回收</span>
+net.ipv4.neigh.default.gc_thresh2 = 512     <span class="cm"># 超过 5 秒后开始强制回收</span>
+net.ipv4.neigh.default.gc_thresh3 = 1024    <span class="cm"># 硬上限，超过就直接失败</span>
+
+<span class="cm"># 表满的报错</span>
+$ dmesg -T | grep -i neighbour | tail -2
+[Thu Sep  3 15:33:41 2026] neighbour: arp_cache: neighbor table overflow!
+
+<span class="cm"># 大二层 / 大规模容器环境的常规做法：整体上调一个量级</span>
+$ sysctl -w net.ipv4.neigh.default.gc_thresh1=4096
+$ sysctl -w net.ipv4.neigh.default.gc_thresh2=8192
+$ sysctl -w net.ipv4.neigh.default.gc_thresh3=16384</pre>
+
+  <table>
+    <thead><tr><th>邻居状态</th><th>含义</th><th>下一步</th></tr></thead>
+    <tbody>
+      <tr><td><code>INCOMPLETE</code></td><td>已发出 ARP 请求，还没收到应答</td><td>包被暂存，超时未答则丢弃并转 FAILED</td></tr>
+      <tr><td><code>REACHABLE</code></td><td>最近确认过可达</td><td>可达时间到期后转 STALE</td></tr>
+      <tr><td><code>STALE</code></td><td>条目还在，但久未确认</td><td>下次要用时转 DELAY，仍可先按旧 MAC 发包</td></tr>
+      <tr><td><code>DELAY</code> / <code>PROBE</code></td><td>正在后台重新探测</td><td>探测成功回 REACHABLE，失败转 FAILED</td></tr>
+      <tr><td><code>FAILED</code></td><td>探测失败</td><td>会被回收；发往该地址的包直接失败</td></tr>
+      <tr><td><code>PERMANENT</code></td><td>手工静态添加（<code>ip neigh add ... nud permanent</code>）</td><td>永不老化，也永不自动纠错</td></tr>
+      <tr><td><code>NOARP</code></td><td>该设备不需要 ARP（如点对点隧道、lo）</td><td>—</td></tr>
+    </tbody>
+  </table>
+
+  <div class="note">邻居表满在<strong>Kubernetes 大集群</strong>里格外常见：几千个 Pod 全在一个大二层网段，加上 Service 的虚拟 IP，条目数轻松破万，而 <code>gc_thresh3</code> 默认才 1024。症状是<strong>集群里随机的、间歇性的 Pod 间连接失败</strong>，抓包看不到任何 TCP 层异常（因为包根本没发出去），只有 <code>dmesg</code> 里那一行 overflow。这是「先看 dmesg」这条老规矩至今仍然有效的原因之一。</div>
+</section>
+
+<!-- ================================================================ §5 -->
+<section class="chapter" id="s5">
+  <div class="ch-head">
+    <div class="num">05</div>
+    <div class="t"><h2>网络命名空间与虚拟设备</h2><p class="sub">netns / veth / bridge / macvlan / ipvlan / tun-tap</p></div>
+  </div>
+
+  <p>容器网络听起来很复杂，其实只是几个内核原语的组合。把这几个原语单独拆开理解一遍，再看 Docker、CNI、Service Mesh 的网络方案，会发现它们都是同一套积木的不同搭法。</p>
+
+  <h3>5.1 netns：一整套独立的网络栈</h3>
+
+  <div class="def"><strong>network namespace</strong>：内核把「网络」相关的<strong>全部</strong>全局状态做了一次复制隔离。每个 netns 有<strong>独立的</strong>：网络接口列表、IP 地址、路由表与 <code>ip rule</code>、ARP/邻居表、netfilter 规则与 conntrack 表、<code>/proc/net</code> 下的全部统计、以及<strong>端口号空间</strong>。因此两个 netns 里可以各自有一个进程监听 80 端口，互不冲突。</div>
+
+  <div class="analogy">netns 像<strong>同一栋写字楼里的两家公司</strong>：共用大楼的电力和电梯（同一个内核、同一份 CPU 和内存），但各自有独立的前台、内部分机号、门禁名单和收发室。A 公司的 8080 分机和 B 公司的 8080 分机是两个完全不同的号码；要互相联系，得走大楼的走廊（veth pair）或者总机（bridge）。</div>
+
+<pre><span class="cm"># netns 的本质是 /proc/PID/ns/net 这个 inode；ip netns 只是给它做了个持久化挂载点</span>
+$ ls -l /proc/self/ns/net
+lrwxrwxrwx 1 root root 0 Sep  3 16:02 /proc/self/ns/net -&gt; 'net:[4026531840]'
+
+$ ip netns add demo
+$ ls -l /var/run/netns/demo            <span class="cm"># bind mount，进程退出后 netns 也不消失</span>
+$ ip netns exec demo ip link show      <span class="cm"># 新 netns 里只有一个 down 的 lo</span>
+1: lo: &lt;LOOPBACK&gt; mtu 65536 qdisc noop state DOWN mode DEFAULT group default qlen 1000
+    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+
+<span class="cm"># 容器的 netns 通常没有做 ip netns 的挂载点，要用 nsenter 按 PID 进去</span>
+$ pid=$(docker inspect -f '{{.State.Pid}}' mycontainer)
+$ nsenter -t $pid -n ss -lntp           <span class="cm"># 在容器的网络栈里跑宿主机的工具</span>
+$ nsenter -t $pid -n tcpdump -i eth0 -nn -c 20
+<span class="cm"># 这一招在容器里没有 ss/tcpdump（镜像很小）时是救命的</span></pre>
+
+  <h3>5.2 五种虚拟设备的模型与取舍</h3>
+
+  <table>
+    <thead><tr><th>设备</th><th>工作层</th><th>模型</th><th>典型用途</th><th>关键限制</th></tr></thead>
+    <tbody>
+      <tr><td><strong>veth pair</strong></td><td>L2</td><td>一根「虚拟网线」，两端各是一个网卡；从一端发出的帧<strong>立刻出现在另一端的接收路径上</strong></td><td>连接 netns 与宿主机，Docker/CNI 的默认做法</td><td>必须成对；对端要再走一遍协议栈，pps 高时开销明显</td></tr>
+      <tr><td><strong>bridge</strong></td><td>L2</td><td>内核里的软件交换机，做 MAC 学习和转发（FDB 表）</td><td>把多个 veth 汇聚成一个「虚拟局域网」</td><td>广播域内成员多时 FDB 查找与泛洪有成本</td></tr>
+      <tr><td><strong>macvlan</strong></td><td>L2</td><td>在一张物理网卡上虚拟出<strong>多个独立 MAC</strong> 的子接口，直接挂在物理网络上</td><td>容器需要真实二层地址（老应用、需要 DHCP）</td><td><strong>子接口默认无法与父接口所在宿主机通信</strong>；交换机可能限制单口 MAC 数</td></tr>
+      <tr><td><strong>ipvlan</strong></td><td>L2 / L3</td><td>子接口<strong>共用父接口的 MAC</strong>，靠 IP 区分</td><td>交换机对 MAC 数量有限制、或云厂商禁止混杂模式时</td><td>L3 模式下不做 ARP，需要上游有对应路由</td></tr>
+      <tr><td><strong>tun / tap</strong></td><td>tun=L3 / tap=L2</td><td>一端是内核网卡，另一端是<strong>用户态的一个文件描述符</strong>，用户程序 <code>read()</code> 就拿到包</td><td>VPN（OpenVPN/WireGuard 用户态实现）、QEMU 虚拟机网卡</td><td>每个包一次用户态往返，吞吐远低于内核路径</td></tr>
+    </tbody>
+  </table>
+
+  <div class="intuition"><strong>怎么选？</strong> 需要「容器有自己的 IP 且能被外部直接访问」→ macvlan / ipvlan；需要「容器之间互通、对外统一出口 NAT」→ veth + bridge（最通用，也是 Docker 默认）；需要「用户态程序自己处理每个包」→ tun/tap；追求极致 pps → 用 eBPF 直接在 veth 上做 <code>redirect</code>，绕开 bridge（Cilium 的做法）。判断依据是<strong>「外部网络需不需要知道容器的存在」</strong>：需要就用 macvlan/ipvlan 或 underlay 路由，不需要就用 bridge + NAT。</div>
+
+  <h3>5.3 手工搭一套「容器网络」</h3>
+
+  <p>下面这段脚本做的事情，<strong>和 Docker 的 bridge 模式在内核层面完全一样</strong>。跑一遍，容器网络就不再是黑箱了。</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 880 300" role="img" aria-label="手工搭建容器网络的拓扑：netns ns1 内的 ceth0 通过 veth pair 连到宿主机的 veth0，veth0 挂在网桥 br0 上，br0 作为网关，宿主机开启 ip_forward 并用 iptables MASQUERADE 把 172.18.0.0/24 的源地址换成 eth0 的地址后发往外网">
+      <rect class="ln-d" x="14" y="30" width="852" height="230" rx="12" fill="none"/>
+      <text class="ts" x="26" y="24">宿主机 root netns</text>
+
+      <rect class="box-g" x="34" y="70" width="180" height="120" rx="10"/>
+      <text class="tb" x="124" y="94" text-anchor="middle">netns: ns1</text>
+      <text class="ts" x="124" y="114" text-anchor="middle">「容器」的网络栈</text>
+      <rect class="box-a" x="54" y="128" width="140" height="42" rx="7"/>
+      <text class="t"  x="124" y="146" text-anchor="middle">ceth0</text>
+      <text class="tm" x="124" y="162" text-anchor="middle">172.18.0.2/24</text>
+
+      <path class="ln-a" d="M214 149 h72"/>
+      <text class="ta" x="250" y="140" text-anchor="middle">veth pair</text>
+      <text class="ts" x="250" y="168" text-anchor="middle">一根虚拟网线</text>
+
+      <rect class="box-a" x="286" y="128" width="130" height="42" rx="7"/>
+      <text class="t"  x="351" y="146" text-anchor="middle">veth0</text>
+      <text class="ts" x="351" y="162" text-anchor="middle">master br0</text>
+
+      <path class="ln" d="M416 149 h40"/><polygon class="ar-a" points="470,149 460,145 460,153"/>
+
+      <rect class="box-y" x="470" y="112" width="150" height="74" rx="10"/>
+      <text class="tb" x="545" y="136" text-anchor="middle">br0（网桥）</text>
+      <text class="tm" x="545" y="154" text-anchor="middle">172.18.0.1/24</text>
+      <text class="ts" x="545" y="172" text-anchor="middle">容器的默认网关</text>
+
+      <path class="ln" d="M620 149 h36"/><polygon class="ar-a" points="670,149 660,145 660,153"/>
+
+      <rect class="box-r" x="670" y="112" width="170" height="74" rx="10"/>
+      <text class="tb" x="755" y="132" text-anchor="middle">ip_forward=1</text>
+      <text class="t"  x="755" y="150" text-anchor="middle">iptables MASQUERADE</text>
+      <text class="ts" x="755" y="168" text-anchor="middle">src 改成 eth0 的地址</text>
+
+      <path class="ln-g" d="M755 190 v34"/><polygon class="ar-g" points="755,238 751,226 759,226"/>
+      <text class="tg" x="775" y="214">→ eth0 → 外网</text>
+
+      <text class="ts" x="34" y="232">① 容器发包：默认路由 → br0 → 宿主机路由判定「不是我的」→ FORWARD 链</text>
+      <text class="ts" x="34" y="250">② 出去前经 POSTROUTING 做 SNAT；回包由 conntrack 自动还原目的地址，原路送回 ns1</text>
+    </svg>
+    <figcaption>用 netns + veth + bridge + MASQUERADE 手工搭出的容器网络。Docker 的 <code>docker0</code>、Kubernetes 的 <code>cni0</code> 都是这张图里的 <code>br0</code>；每启动一个容器就多一对 veth 挂上来。</figcaption>
+  </div>
+
+<pre><span class="cm">#!/bin/bash</span>
+<span class="cm"># 手工搭一个「容器网络」，能从 ns1 里 ping 通外网。需要 root。</span>
+<span class="cm"># 把 eth0 换成你机器上真实的上行网卡名（ip route get 8.8.8.8 能看到）</span>
+set -e
+UPLINK=eth0
+SUBNET=172.18.0.0/24
+GW=172.18.0.1
+IP=172.18.0.2
+
+<span class="cm"># ① 建一个网络命名空间，它就是「容器」的网络视角</span>
+ip netns add ns1
+
+<span class="cm"># ② 建一对 veth。veth0 留在宿主机，ceth0 塞进 ns1</span>
+<span class="cm">#    veth 的两端是一根线的两头：从 ceth0 发出的帧直接进 veth0 的接收路径</span>
+ip link add veth0 type veth peer name ceth0
+ip link set ceth0 netns ns1
+
+<span class="cm"># ③ 建网桥，把宿主机侧的 veth0 插上去。网桥就是一台软件交换机</span>
+<span class="cm">#    给网桥自己配一个 IP，它同时充当容器网段的网关</span>
+ip link add br0 type bridge
+ip link set veth0 master br0
+ip addr add ${GW}/24 dev br0
+ip link set br0   up
+ip link set veth0 up
+
+<span class="cm"># ④ 配置容器侧：地址、启用 lo、把默认路由指向网桥</span>
+ip netns exec ns1 ip addr add ${IP}/24 dev ceth0
+ip netns exec ns1 ip link set ceth0 up
+ip netns exec ns1 ip link set lo    up
+ip netns exec ns1 ip route add default via ${GW}
+
+<span class="cm"># ⑤ 打开转发。没有这一步，宿主机收到「不是发给自己」的包会直接丢弃</span>
+<span class="cm">#    注意：容器网段流量走的是 FORWARD 链，不是 INPUT（见 §3 的 hook 图）</span>
+sysctl -qw net.ipv4.ip_forward=1
+
+<span class="cm"># ⑥ 出向做 SNAT。容器的 172.18.0.2 在公网上不可路由，</span>
+<span class="cm">#    必须换成宿主机上行网卡的地址；回包由 conntrack 自动还原</span>
+<span class="cm">#    "! -o br0" 是为了不把「容器之间互访」的流量也 NAT 掉</span>
+iptables -t nat -A POSTROUTING -s ${SUBNET} ! -o br0 -j MASQUERADE
+
+<span class="cm"># ⑦ 很多发行版 FORWARD 默认策略是 DROP，显式放行两个方向</span>
+iptables -A FORWARD -i br0 -o ${UPLINK} -j ACCEPT
+iptables -A FORWARD -i ${UPLINK} -o br0 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+
+<span class="cm"># ⑧ 验证</span>
+ip netns exec ns1 ping -c 3 ${GW}          <span class="cm"># 通网关：验证 veth + bridge</span>
+ip netns exec ns1 ping -c 3 8.8.8.8        <span class="cm"># 通外网：验证 forward + NAT</span>
+ip netns exec ns1 ip route get 8.8.8.8</pre>
+
+<pre><span class="cm"># 观察这套东西真的在工作</span>
+$ bridge link show                          <span class="cm"># 谁插在网桥上</span>
+5: veth0@if4: &lt;BROADCAST,MULTICAST,UP,LOWER_UP&gt; master br0 state forwarding priority 32 cost 2
+
+$ bridge fdb show br br0 | head -3          <span class="cm"># 网桥学到的 MAC 表</span>
+33:33:00:00:00:01 dev br0 self permanent
+ba:1f:2c:3d:4e:5f dev veth0 master br0      <span class="cm">&lt;-- 容器的 MAC，动态学到的</span>
+
+$ conntrack -L 2&gt;/dev/null | grep 172.18.0.2 | head -1
+icmp 1 29 src=172.18.0.2 dst=8.8.8.8 type=8 code=0 id=12
+    src=8.8.8.8 dst=192.168.1.23 type=0 code=0 id=12 mark=0 use=1
+<span class="cm">     ^ 上行是 172.18.0.2→8.8.8.8，下行期望 8.8.8.8→192.168.1.23（宿主机 IP）</span>
+<span class="cm">       这一对「期望的反向元组」就是 NAT 还原的依据</span>
+
+<span class="cm"># 清理</span>
+$ ip netns del ns1 &amp;&amp; ip link del br0
+$ iptables -t nat -D POSTROUTING -s 172.18.0.0/24 ! -o br0 -j MASQUERADE</pre>
+
+  <div class="box star"><strong>一个能拉开差距的细节：veth 的对端也要走一遍协议栈。</strong> 从 <code>ceth0</code> 发出的帧不是「直接出现在 br0 上」，而是进入 <code>veth0</code> 的<strong>接收路径</strong>——也就是说它会再经历一次 <code>netif_receive_skb</code>、一次 GRO 判定、一次 netfilter。这解释了两件事：① 容器网络的 pps 开销天然比裸机高（每个包过两遍栈）；② 在宿主机上 <code>tcpdump -i veth0</code> 能抓到容器的全部流量，是容器抓包的标准姿势。也正因为开销明显，Cilium 之类的方案会用 eBPF 的 <code>bpf_redirect_peer()</code> 把包<strong>直接投送到对端 netns</strong>，跳过中间那段。</div>
+
+  <div class="box danger"><strong><code>br_netfilter</code> 的坑。</strong> 加载 <code>br_netfilter</code> 模块并打开 <code>net.bridge.bridge-nf-call-iptables=1</code> 后，<strong>二层桥接的流量也会被送进 iptables 的三层链</strong>。Kubernetes 明确要求打开它（否则 Service 的 iptables 规则对同节点 Pod 间流量不生效），但副作用是：同一网桥内两个容器互访这种纯二层流量，也要过一遍 FORWARD 链和 conntrack，既增加开销，也可能被一条本意只针对三层的规则误伤。<strong>看到「同节点 Pod 互通、跨节点不通」或者反过来的诡异现象，先确认这个开关的状态。</strong></div>
+
+  <div class="note">netns 只是六七种命名空间之一，它和 pid / mnt / uts / ipc / user / cgroup 命名空间共同构成了容器。命名空间与 cgroup 的完整机制、以及容器运行时如何把它们拼起来，见 <a href="cgroup_namespace_containers.html">cgroup、namespace 与容器原理</a>。</div>
+</section>
+
+<!-- ================================================================ §6 -->
+<section class="chapter" id="s6">
+  <div class="ch-head">
+    <div class="num">06</div>
+    <div class="t"><h2>流量控制 tc</h2><p class="sub">qdisc 分类、bufferbloat 与 fq_codel、netem 与 htb</p></div>
+  </div>
+
+  <p><code>tc</code>（traffic control）是内核里被严重低估的一个子系统。大多数人只知道它能限速，其实它同时是<strong>延迟治理工具</strong>（fq_codel 治 bufferbloat）、<strong>故障注入工具</strong>（netem 造延迟丢包）和<strong>eBPF 挂载点</strong>（clsact，见 §7）。而且它有个特点：<strong>默认配置在很多机器上就是错的</strong>，只是没人去看。</p>
+
+  <h3>6.1 qdisc 是什么，它在路径的哪一段</h3>
+
+  <div class="def"><strong>qdisc</strong>（queueing discipline，排队规则）：挂在网络设备发送方向上的<strong>调度器</strong>。<code>dev_queue_xmit()</code> 把 skb 交给 qdisc，qdisc 决定「下一个发哪个包、什么时候发、要不要丢」。它是内核里<strong>唯一会主动丢弃你自己发出的包</strong>的地方——发送缓冲区满了 <code>send()</code> 会阻塞或返回 <code>EAGAIN</code>，而 qdisc 队列满了是<strong>静悄悄地丢</strong>。</div>
+
+  <div class="analogy">qdisc 像<strong>高速公路收费站</strong>。车（包）到了收费站不是立刻放行，而是按某种规则排队：先到先得（pfifo）、按车道分优先级（prio）、每条车道轮流放一辆（fq_codel）、每小时最多放 N 辆（tbf/htb）。收费站的<strong>停车场大小</strong>就是队列深度：太小，车流一波动就把车赶走（丢包）；太大，最后一辆车要在场里等半小时——车没丢，但迟到了。<strong>bufferbloat 说的就是「停车场造得太大」这件事。</strong></div>
+
+  <table>
+    <thead><tr><th>类别</th><th>qdisc</th><th>做什么</th><th>什么时候用</th></tr></thead>
+    <tbody>
+      <tr><td rowspan="5"><strong>无类</strong><br>（classless，不能再往下挂子队列）</td><td><code>pfifo_fast</code></td><td>三个 FIFO band，按 IP TOS 字段的 priomap 分级，严格优先级出队</td><td>老内核的默认值；实际上等于没有任何拥塞管理</td></tr>
+      <tr><td><code>fq_codel</code></td><td>按流哈希分成上千个子队列 + 每队列跑 CoDel 主动队列管理</td><td><strong>通用默认的最佳选择</strong>，同时治 bufferbloat 和大象流欺压老鼠流</td></tr>
+      <tr><td><code>fq</code></td><td>公平排队 + <strong>精确发包节奏（pacing）</strong></td><td>BBR 拥塞控制的标配；高带宽长肥管道</td></tr>
+      <tr><td><code>sfq</code></td><td>随机公平排队，fq_codel 的前辈</td><td>基本被 fq_codel 取代</td></tr>
+      <tr><td><code>tbf</code> / <code>netem</code></td><td>令牌桶限速 / 网络损伤模拟</td><td>单一限速；故障演练</td></tr>
+      <tr><td rowspan="3"><strong>有类</strong><br>（classful，可挂子 qdisc 形成树）</td><td><code>htb</code></td><td>分层令牌桶：给每类流量设 <code>rate</code>（保证带宽）和 <code>ceil</code>（借用上限），空闲带宽可被兄弟节点借用</td><td>多业务共享一条链路时做带宽划分</td></tr>
+      <tr><td><code>hfsc</code></td><td>同时对<strong>带宽和延迟</strong>做曲线约束，理论上比 htb 严谨</td><td>需要延迟保证的场景；配置复杂度明显更高</td></tr>
+      <tr><td><code>prio</code> / <code>drr</code></td><td>严格优先级 / 赤字轮询</td><td>做流量分级的骨架，叶子上再挂具体 qdisc</td></tr>
+      <tr><td><strong>特殊</strong></td><td><code>mq</code> / <code>mqprio</code></td><td>多队列网卡的<strong>根 qdisc</strong>，为每条硬件 TX 队列各挂一个子 qdisc</td><td>多队列网卡上自动生效，不是你配的</td></tr>
+    </tbody>
+  </table>
+
+  <div class="box danger"><strong>在多队列网卡上，<code>tc qdisc show dev eth0</code> 显示 <code>mq</code> 是正常的，别以为没配置生效。</strong> <code>mq</code> 本身不做调度，它只是把 skb 按硬件队列分派给各自的子 qdisc。想看真正干活的那层，要看子 handle（<code>tc -s qdisc show dev eth0</code> 会把每个子队列都列出来）。同理，<strong>在 <code>mq</code> 的根上直接 <code>tc qdisc replace root htb</code> 会把多队列并行度废掉</strong>——所有流量被塞回单个软件队列，一把锁串行化，高 pps 下反而成为瓶颈。要限速就挂在每个子队列上，或者用支持多队列的方案。</div>
+
+  <h3>6.2 bufferbloat：包没丢，但延迟涨了十倍</h3>
+
+  <div class="def"><strong>bufferbloat</strong>（缓冲区膨胀）：网络设备为了「不丢包」而配置过大的缓冲区，结果拥塞时数据包不是被丢弃，而是<strong>在队列里排很久</strong>。TCP 靠丢包感知拥塞，队列不丢包它就一直加速，直到把整个大队列填满并维持在满的状态（<strong>standing queue</strong>）。后果是：带宽跑满了，但<strong>每一个包的排队延迟都变成了几百毫秒甚至几秒</strong>——同一条链路上的 SSH 敲一个字符要等一秒，视频会议卡成 PPT。</div>
+
+  <p>典型症状：<strong>「一开始下载，别的什么都用不了了」</strong>。而 <code>ping</code> 在空闲时 20ms，一有大流量就变成 800ms——这个「有负载时延迟暴涨」的差值就是 bufferbloat 的量化指标。</p>
+
+  <p><strong>CoDel</strong>（Controlled Delay）的解法很聪明：它不看队列<strong>有多长</strong>（长度会随带宽变化，没有普适阈值），而是看每个包在队列里<strong>待了多久</strong>（sojourn time）。如果在一个 <code>interval</code>（默认 100ms）的观察窗口内，队列的最小驻留时间<strong>始终</strong>超过 <code>target</code>（默认 5ms），就判定这是一个 standing queue，开始丢弃队首的包，并且丢弃频率随持续时间递增，直到延迟回落。<strong>「最小驻留时间」这个指标的妙处在于：突发流量会让队列瞬间变长但很快排空，最小值就不会超标；只有真正持续的排队才会被惩罚。</strong></p>
+
+  <p><strong>fq_codel</strong> = 公平排队 + CoDel。它先用五元组哈希把流分到 1024 个子队列（<code>flows</code> 参数），每个子队列独立跑 CoDel，然后用赤字轮询在队列间调度，并且<strong>给「新流」优先权</strong>。效果是：一条大象流填满自己的子队列并被 CoDel 惩罚，而一个刚发起的 DNS 查询或 SSH 按键落在自己的空队列里，几乎零排队就被发出去。</p>
+
+  <div class="vs">
+    <div class="bad"><h5>❌ 默认 pfifo_fast + 巨大的 txqueuelen</h5>
+<pre>$ tc qdisc show dev eth0
+qdisc pfifo_fast 0: root refcnt 2 bands 3
+$ ip link show eth0 | grep qlen
+   ... qlen 10000</pre>
+      <p>一条大流量就能把 10000 个包的队列填满并维持住。1Gbps 下 10000 个 1500 字节的包 ≈ <strong>120ms 的排队延迟</strong>，而且是持续的。所有其它流量都要排在后面。</p></div>
+    <div class="good"><h5>✅ fq_codel 作为默认 qdisc</h5>
+<pre>$ sysctl -w net.core.default_qdisc=fq_codel
+$ tc qdisc replace dev eth0 root fq_codel
+$ tc -s qdisc show dev eth0
+qdisc fq_codel 8003: root refcnt 9 limit 10240p
+  flows 1024 quantum 1514 target 5ms
+  interval 100ms memory_limit 32Mb ecn</pre>
+      <p>大流量依然跑满带宽，但队列被 CoDel 压在 5ms 附近，小流量走自己的子队列几乎不排队。<strong>这是「同时要吞吐和低延迟」唯一不需要人工调参的方案。</strong></p></div>
+  </div>
+
+  <div class="intuition">现代主流发行版（systemd 会设 <code>net.core.default_qdisc=fq_codel</code>）上这已经是默认值了，但<strong>两种情况下你会退回 pfifo_fast</strong>：一是老内核 / 老发行版；二是有人为了「限速」在根上手工 replace 成了别的 qdisc 却没在叶子挂 fq_codel。<strong>做延迟优化时，第一件事就是 <code>tc qdisc show</code> 看一眼当前到底是什么。</strong> 如果用 BBR，应该配 <code>fq</code>（BBR 依赖精确 pacing）而不是 <code>fq_codel</code>。</div>
+
+  <h3>6.3 读懂 <code>tc -s qdisc show</code></h3>
+
+<pre>$ tc -s qdisc show dev eth0
+qdisc htb 1: root refcnt 9 r2q 10 default 0x30 direct_packets_stat 0 direct_qlen 1000
+ Sent 88472913847 bytes 71203847 pkt (dropped 1204, overlimits 8471029 requeues 33)
+ backlog 148920b 98p requeues 33
+qdisc fq_codel 30: parent 1:30 limit 10240p flows 1024 quantum 1514 target 5ms interval 100ms
+ Sent 41029384710 bytes 33019283 pkt (dropped 1204, overlimits 0 requeues 0)
+ backlog 0b 0p requeues 0
+  maxpacket 1514 drop_overlimit 0 new_flow_count 88213 ecn_mark 0
+  new_flows_len 0 old_flows_len 3</pre>
+
+  <table>
+    <thead><tr><th>字段</th><th>含义</th><th>怎么判读</th></tr></thead>
+    <tbody>
+      <tr><td><code>Sent … bytes … pkt</code></td><td>累计通过该 qdisc 的流量</td><td>做差分算出实际 pps / bps，与业务预期对比</td></tr>
+      <tr><td><strong><code>dropped</code></strong></td><td>该 qdisc 丢弃的包数</td><td><strong>不为零且在增长 = 内核在你的发送路径上丢包。</strong> 对 fq_codel 是「主动管理」，对 pfifo/htb 通常是队列溢出，性质完全不同</td></tr>
+      <tr><td><strong><code>overlimits</code></strong></td><td>因为超过速率约束而<strong>被延迟发送</strong>的次数</td><td>对 htb/tbf 这<strong>不是错误</strong>，恰恰说明限速在生效。持续为 0 说明流量根本没到限速阈值</td></tr>
+      <tr><td><code>requeues</code></td><td>取出后驱动没收下、又放回队列的次数</td><td>大量出现说明网卡 TX ring 经常满，多半是下游拥塞或驱动有问题</td></tr>
+      <tr><td><strong><code>backlog Nb Np</code></strong></td><td><strong>当前</strong>队列里积压的字节数和包数（瞬时值）</td><td>最有价值的实时指标。持续非零 = 正在排队 = 延迟正在被制造。用 <code>watch -n1</code> 观察它的波动</td></tr>
+      <tr><td><code>new_flow_count</code></td><td>fq_codel 识别出的新流数量</td><td>短连接为主的服务这个值会很大</td></tr>
+      <tr><td><code>ecn_mark</code></td><td>被打上 ECN 拥塞标记而非丢弃的包数</td><td>启用 ECN 后代替一部分丢包，端到端都支持才有意义</td></tr>
+      <tr><td><code>drop_overlimit</code></td><td>因为超过 <code>limit</code>（总包数上限）而丢</td><td>与 CoDel 的主动丢弃区分开：这是<strong>被动溢出</strong>，说明 limit 设小了</td></tr>
+    </tbody>
+  </table>
+
+  <h3>6.4 netem：主动制造故障</h3>
+
+  <p>混沌工程在网络侧的入口。<strong>netem 只作用于出向</strong>，要模拟入向损伤需要借助 <code>ifb</code>（Intermediate Functional Block）设备把入向流量重定向出来。</p>
+
+<pre><span class="cm"># 延迟：固定 100ms，抖动 ±20ms，正态分布，相邻包 25% 的相关性</span>
+$ tc qdisc add dev eth0 root netem delay 100ms 20ms 25% distribution normal
+
+<span class="cm"># 丢包：1%；带相关性的丢包更接近真实链路（突发丢包而非均匀丢）</span>
+$ tc qdisc change dev eth0 root netem loss 1% 25%
+
+<span class="cm"># 乱序：25% 的包立即发送（相当于插队），其余延迟 10ms</span>
+$ tc qdisc change dev eth0 root netem delay 10ms reorder 25% 50%
+
+<span class="cm"># 重复 / 损坏（触发校验和错误，测对端的健壮性）</span>
+$ tc qdisc change dev eth0 root netem duplicate 1% corrupt 0.1%
+
+<span class="cm"># 限速 + 延迟组合：模拟一条 10Mbps、单向 50ms 的广域网链路</span>
+$ tc qdisc add dev eth0 root netem rate 10mbit delay 50ms
+
+<span class="cm"># 只对特定目标注入（生产演练必须这么做，否则会把自己的管理通道也打断）</span>
+$ tc qdisc add dev eth0 root handle 1: prio
+$ tc qdisc add dev eth0 parent 1:3 handle 30: netem delay 200ms loss 5%
+$ tc filter add dev eth0 protocol ip parent 1:0 prio 3 u32 \
+      match ip dst 10.20.30.40/32 flowid 1:3
+
+<span class="cm"># 拆掉（演练结束务必执行；也可以用 timeout 兜底）</span>
+$ tc qdisc del dev eth0 root
+
+<span class="cm"># 模拟入向损伤：把 ingress 流量镜像到 ifb0，在 ifb0 上做 netem</span>
+$ modprobe ifb &amp;&amp; ip link set ifb0 up
+$ tc qdisc add dev eth0 handle ffff: ingress
+$ tc filter add dev eth0 parent ffff: protocol ip u32 match u32 0 0 \
+      action mirred egress redirect dev ifb0
+$ tc qdisc add dev ifb0 root netem delay 80ms loss 2%</pre>
+
+  <div class="box danger"><strong>在远程机器上跑 netem 之前，先准备好退路。</strong> 一条 <code>tc qdisc add dev eth0 root netem loss 50%</code> 足以让你的 SSH 会话断掉，而断掉之后你就再也进不去删除它了。标准做法：用 <code>at</code> 或 <code>systemd-run --on-active</code> 预先安排一个「N 分钟后自动 <code>tc qdisc del</code>」的定时任务，或者把演练命令写成 <code>timeout 300 bash -c '...'</code> 的形式。这条纪律和「改防火墙前先加自动回滚」是同一类。</div>
+
+  <h3>6.5 限速：tbf 与 htb</h3>
+
+<pre><span class="cm"># 最简单的整机出向限速：令牌桶，100Mbit，突发 32KB，最大排队延迟 400ms</span>
+$ tc qdisc add dev eth0 root tbf rate 100mbit burst 32kbit latency 400ms
+
+<span class="cm"># htb：给三类业务分带宽，总带宽 1Gbps</span>
+<span class="cm">#   1:10 关键业务  保证 400M，最多可借到 1G</span>
+<span class="cm">#   1:20 普通业务  保证 400M，最多 800M</span>
+<span class="cm">#   1:30 批量任务  保证 200M，最多 600M（default，未匹配的都进这里）</span>
+$ tc qdisc add dev eth0 root handle 1: htb default 30
+$ tc class add dev eth0 parent 1:  classid 1:1  htb rate 1000mbit ceil 1000mbit
+$ tc class add dev eth0 parent 1:1 classid 1:10 htb rate 400mbit ceil 1000mbit prio 0
+$ tc class add dev eth0 parent 1:1 classid 1:20 htb rate 400mbit ceil 800mbit  prio 1
+$ tc class add dev eth0 parent 1:1 classid 1:30 htb rate 200mbit ceil 600mbit  prio 2
+
+<span class="cm"># 每个叶子挂 fq_codel，这样类内部也不会有 bufferbloat（很多教程漏掉这一步）</span>
+$ tc qdisc add dev eth0 parent 1:10 handle 10: fq_codel
+$ tc qdisc add dev eth0 parent 1:20 handle 20: fq_codel
+$ tc qdisc add dev eth0 parent 1:30 handle 30: fq_codel
+
+<span class="cm"># 分类：按目的端口、按 cgroup、按 iptables 打的 fwmark 都可以</span>
+$ tc filter add dev eth0 protocol ip parent 1:0 prio 1 u32 \
+      match ip dport 443 0xffff flowid 1:10
+$ tc filter add dev eth0 protocol ip parent 1:0 prio 2 handle 100 fw flowid 1:20
+
+<span class="cm"># 看每个类的实时速率与积压</span>
+$ tc -s class show dev eth0
+class htb 1:10 parent 1:1 prio 0 rate 400Mbit ceil 1Gbit burst 1600b cburst 1600b
+ Sent 4102938471 bytes 3301928 pkt (dropped 0, overlimits 0 requeues 0)
+ backlog 0b 0p requeues 0
+ lended: 3301928 borrowed: 84120 giants: 0
+ tokens: 1893 ctokens: 1893</pre>
+
+  <table>
+    <thead><tr><th>htb 概念</th><th>含义</th><th>调错了会怎样</th></tr></thead>
+    <tbody>
+      <tr><td><code>rate</code></td><td>该类的<strong>保证</strong>带宽，任何时候都能拿到</td><td>所有子类 rate 之和超过父类 rate → 保证形同虚设</td></tr>
+      <tr><td><code>ceil</code></td><td>该类的<strong>上限</strong>，空闲时可借用兄弟的带宽借到这个数</td><td><code>ceil == rate</code> = 完全隔离、不共享；<code>ceil</code> 太大 = 隔离失效</td></tr>
+      <tr><td><code>burst</code> / <code>cburst</code></td><td>令牌桶深度：允许瞬时超速多少字节</td><td>太小会限不住高速率（令牌补充粒度不够），tc 通常会警告</td></tr>
+      <tr><td><code>quantum</code></td><td>一次轮到该类时可以发多少字节，影响类间公平性</td><td>由 <code>r2q</code> 推导，太小会 <code>quantum is too small</code> 报警</td></tr>
+      <tr><td><code>lended</code> / <code>borrowed</code></td><td>借出 / 借入的包数</td><td>观察带宽共享是否真的在发生</td></tr>
+      <tr><td><code>giants</code></td><td>超过 MTU 的包数</td><td>非零多半是 TSO/GSO 的大 skb 进了 qdisc，会让限速精度变差</td></tr>
+    </tbody>
+  </table>
+
+  <div class="note"><strong>限速与 TSO 的相互干扰</strong>：开了 TSO/GSO 之后，进 qdisc 的是一个最大 64KB 的巨型 skb。htb 按「包」调度，一个 64KB 的包一次就发出去了，导致短时间尺度上速率剧烈抖动，限速曲线不平滑。要求精确限速时可以关掉 TSO/GSO（代价是 CPU 上升），或者改用支持 <code>tc</code> 层分段的方案。这也是为什么用 <code>fq</code> 做 pacing 通常比用 htb 限速更平滑——<code>fq</code> 是按时间给每个包排发送时刻的。</div>
+</section>
+
+<!-- ================================================================ §7 -->
+<section class="chapter" id="s7">
+  <div class="ch-head">
+    <div class="num">07</div>
+    <div class="t"><h2>XDP 与 eBPF 数据面</h2><p class="sub">三种运行模式、AF_XDP、tc-bpf 与内核旁路的取舍</p></div>
+  </div>
+
+  <p>前面六章讲的都是「内核给你什么，你怎么配」。XDP 和 tc-bpf 换了一个思路：<strong>把你自己的代码塞进内核的收发路径里</strong>，在包还没被加工成 skb 之前就做出决策。这是过去十年 Linux 网络栈最大的一次能力扩张。</p>
+
+  <h3>7.1 XDP 在路径上的位置决定了它的价值</h3>
+
+  <div class="def"><strong>XDP</strong>（eXpress Data Path）：在<strong>驱动的收包函数里</strong>、<strong>分配 sk_buff 之前</strong>执行的 eBPF 程序。它拿到的是一块裸内存（<code>xdp_md</code> 里的 <code>data</code> / <code>data_end</code> 指针），返回一个动作码决定这个包的命运。因为跳过了 skb 分配、GRO、netfilter、路由的全部开销，单核可以做到千万级 pps 的丢弃或转发。</div>
+
+  <div class="fig">
+    <svg viewBox="0 0 900 210" role="img" aria-label="XDP 与 tc-bpf 在收包路径上的位置：XDP 在驱动 poll 内、sk_buff 分配之前；tc ingress（clsact）在 netif_receive_skb 之后、协议栈之前；netfilter PREROUTING 更靠后；socket 层最后">
+      <rect class="box-g" x="20"  y="60" width="120" height="50" rx="8"/>
+      <text class="t"  x="80"  y="80" text-anchor="middle">网卡 DMA</text>
+      <text class="ts" x="80"  y="96" text-anchor="middle">RX Ring</text>
+      <path class="ln-a" d="M142 85 h16"/><polygon class="ar-a" points="172,85 162,81 162,89"/>
+
+      <rect class="box-r" x="172" y="60" width="130" height="50" rx="8"/>
+      <text class="t"  x="237" y="80" text-anchor="middle">XDP</text>
+      <text class="ts" x="237" y="96" text-anchor="middle">还没有 sk_buff</text>
+      <path class="ln-a" d="M304 85 h16"/><polygon class="ar-a" points="334,85 324,81 324,89"/>
+
+      <rect class="box" x="334" y="60" width="130" height="50" rx="8"/>
+      <text class="t"  x="399" y="80" text-anchor="middle">分配 skb + GRO</text>
+      <text class="ts" x="399" y="96" text-anchor="middle">开销从这里开始</text>
+      <path class="ln-a" d="M466 85 h16"/><polygon class="ar-a" points="496,85 486,81 486,89"/>
+
+      <rect class="box-y" x="496" y="60" width="130" height="50" rx="8"/>
+      <text class="t"  x="561" y="80" text-anchor="middle">tc ingress</text>
+      <text class="ts" x="561" y="96" text-anchor="middle">clsact · 能读 skb</text>
+      <path class="ln-a" d="M628 85 h16"/><polygon class="ar-a" points="658,85 648,81 648,89"/>
+
+      <rect class="box-p" x="658" y="60" width="110" height="50" rx="8"/>
+      <text class="t"  x="713" y="80" text-anchor="middle">netfilter</text>
+      <text class="ts" x="713" y="96" text-anchor="middle">PREROUTING</text>
+      <path class="ln-a" d="M770 85 h10"/><polygon class="ar-a" points="792,85 782,81 782,89"/>
+
+      <rect class="box-a" x="792" y="60" width="92" height="50" rx="8"/>
+      <text class="t"  x="838" y="80" text-anchor="middle">协议栈</text>
+      <text class="ts" x="838" y="96" text-anchor="middle">socket</text>
+
+      <text class="tr" x="172" y="140">↑ 单核千万级 pps</text>
+      <text class="ts" x="172" y="158">代价：看不到 skb 元数据，</text>
+      <text class="ts" x="172" y="174">不能用 conntrack，不能分片重组</text>
+      <text class="ty" x="496" y="140">↑ 百万级 pps</text>
+      <text class="ts" x="496" y="158">能读 skb-&gt;mark / priority，</text>
+      <text class="ts" x="496" y="174">能挂 egress，功能完整得多</text>
+    </svg>
+    <figcaption>XDP 与 tc-bpf 在收包路径上的位置。越靠前性能越高、可用信息越少——这是一条严格的取舍曲线，选哪个取决于你要做的判断需要多少上下文。</figcaption>
+  </div>
+
+  <table>
+    <thead><tr><th>运行模式</th><th>在哪执行</th><th>性能</th><th>要求</th><th>用途</th></tr></thead>
+    <tbody>
+      <tr><td><strong>native</strong>（driver 模式）</td><td>驱动的 <code>poll()</code> 里，skb 分配之前</td><td>最高，单核可达千万 pps 级别</td><td>驱动实现了 XDP 支持（主流万兆网卡驱动大多支持）</td><td>生产环境的默认选择</td></tr>
+      <tr><td><strong>offload</strong></td><td><strong>网卡固件里</strong>，包根本不进主机</td><td>不占主机 CPU</td><td>少数 SmartNIC（历史上 Netronome NFP 系列）</td><td>超大规模 DDoS 清洗；硬件生态很窄</td></tr>
+      <tr><td><strong>generic</strong>（skb 模式）</td><td><code>netif_receive_skb</code> 附近，<strong>skb 已经分配好了</strong></td><td>最低，比 tc-bpf 还慢</td><td>任何设备都能用</td><td><strong>只用于开发调试</strong>，别在生产上用它跑高性能路径</td></tr>
+    </tbody>
+  </table>
+
+  <div class="box danger"><strong>「我上了 XDP 但性能没提升」的头号原因是它默默跑在了 generic 模式。</strong> <code>ip link set dev eth0 xdp obj prog.o</code> 会优先尝试 native，失败则报错；而 <code>xdpgeneric</code> 是显式的。加载后一定要用 <code>ip link show dev eth0</code> 确认显示的是 <code>xdp</code> 而不是 <code>xdpgeneric</code>。另外注意：<strong>虚拟机里的 virtio-net、以及 veth，都支持 XDP，但语义和物理网卡不完全一样</strong>（比如 veth 上的 XDP_TX 是发回对端）。</div>
+
+  <h3>7.2 XDP 的动作码</h3>
+
+  <table>
+    <thead><tr><th>返回值</th><th>含义</th><th>典型场景</th></tr></thead>
+    <tbody>
+      <tr><td><code>XDP_PASS</code></td><td>交给正常内核栈继续处理</td><td>默认放行</td></tr>
+      <tr><td><code>XDP_DROP</code></td><td><strong>就地丢弃</strong>，连 skb 都不分配</td><td>DDoS 清洗、ACL。这是 XDP 最经典也最有性价比的用法</td></tr>
+      <tr><td><code>XDP_TX</code></td><td>改完包从<strong>同一张网卡</strong>原路发回去</td><td>L4 负载均衡的 DSR 回程、ICMP 应答、ARP 应答</td></tr>
+      <tr><td><code>XDP_REDIRECT</code></td><td>转发到<strong>另一个设备</strong>，或投递到 <code>AF_XDP</code> socket、CPUMAP</td><td>软件路由器、把包甩给用户态处理</td></tr>
+      <tr><td><code>XDP_ABORTED</code></td><td>出错丢弃，并触发 <code>xdp:xdp_exception</code> tracepoint</td><td>程序内部错误路径；<strong>生产上应该监控这个 tracepoint</strong></td></tr>
+    </tbody>
+  </table>
+
+<pre><span class="pp">#include</span> <span class="str">&lt;linux/bpf.h&gt;</span>
+<span class="pp">#include</span> <span class="str">&lt;linux/if_ether.h&gt;</span>
+<span class="pp">#include</span> <span class="str">&lt;linux/ip.h&gt;</span>
+<span class="pp">#include</span> <span class="str">&lt;linux/udp.h&gt;</span>
+<span class="pp">#include</span> <span class="str">&lt;bpf/bpf_helpers.h&gt;</span>
+
+<span class="cm">/* 一个 per-CPU 数组做统计：[0]=通过 [1]=丢弃。用 per-CPU 避免多核原子争抢 */</span>
+<span class="kw">struct</span> {
+    __uint(type,        BPF_MAP_TYPE_PERCPU_ARRAY);
+    __uint(max_entries, <span class="num">2</span>);
+    __type(key,   __u32);
+    __type(value, __u64);
+} stats SEC(<span class="str">".maps"</span>);
+
+<span class="kw">static</span> __always_inline <span class="kw">void</span> <span class="fn">bump</span>(__u32 idx) {
+    __u64 *v = bpf_map_lookup_elem(&amp;stats, &amp;idx);
+    <span class="kw">if</span> (v) (*v)++;
+}
+
+SEC(<span class="str">"xdp"</span>)
+<span class="kw">int</span> <span class="fn">xdp_drop_dns_flood</span>(<span class="kw">struct</span> xdp_md *ctx)
+{
+    <span class="kw">void</span> *data     = (<span class="kw">void</span> *)(<span class="kw">long</span>)ctx-&gt;data;
+    <span class="kw">void</span> *data_end = (<span class="kw">void</span> *)(<span class="kw">long</span>)ctx-&gt;data_end;
+
+    <span class="cm">/* 每一次解引用前都必须做边界检查，否则 verifier 直接拒绝加载。</span>
+<span class="cm">       这不是防御式编程的建议，是硬性要求——内核不信任你的算术。 */</span>
+    <span class="kw">struct</span> ethhdr *eth = data;
+    <span class="kw">if</span> ((<span class="kw">void</span> *)(eth + <span class="num">1</span>) &gt; data_end)
+        <span class="kw">return</span> XDP_PASS;
+    <span class="kw">if</span> (eth-&gt;h_proto != bpf_htons(ETH_P_IP))
+        <span class="kw">return</span> XDP_PASS;
+
+    <span class="kw">struct</span> iphdr *ip = (<span class="kw">void</span> *)(eth + <span class="num">1</span>);
+    <span class="kw">if</span> ((<span class="kw">void</span> *)(ip + <span class="num">1</span>) &gt; data_end)
+        <span class="kw">return</span> XDP_PASS;
+    <span class="kw">if</span> (ip-&gt;protocol != IPPROTO_UDP)
+        <span class="kw">return</span> XDP_PASS;
+
+    <span class="cm">/* IP 头是变长的（ihl 以 4 字节为单位），不能假定 20 字节 */</span>
+    <span class="kw">if</span> (ip-&gt;ihl &lt; <span class="num">5</span>)
+        <span class="kw">return</span> XDP_PASS;
+    <span class="kw">struct</span> udphdr *udp = (<span class="kw">void</span> *)ip + ip-&gt;ihl * <span class="num">4</span>;
+    <span class="kw">if</span> ((<span class="kw">void</span> *)(udp + <span class="num">1</span>) &gt; data_end)
+        <span class="kw">return</span> XDP_PASS;
+
+    <span class="cm">/* 丢掉打向本机 53 端口的 UDP：本机不是 DNS 服务器，这些都是反射攻击 */</span>
+    <span class="kw">if</span> (udp-&gt;dest == bpf_htons(<span class="num">53</span>)) {
+        bump(<span class="num">1</span>);
+        <span class="kw">return</span> XDP_DROP;          <span class="cm">/* 到此为止：不分配 skb，不进协议栈 */</span>
+    }
+
+    bump(<span class="num">0</span>);
+    <span class="kw">return</span> XDP_PASS;
+}
+
+<span class="kw">char</span> _license[] SEC(<span class="str">"license"</span>) = <span class="str">"GPL"</span>;</pre>
+
+<pre><span class="cm"># 编译（需要 clang + libbpf 头文件）</span>
+$ clang -O2 -g -target bpf -c xdp_drop.c -o xdp_drop.o
+
+<span class="cm"># 加载到网卡（native 模式；加不上会明确报错，不会静默降级）</span>
+$ ip link set dev eth0 xdp obj xdp_drop.o sec xdp
+
+<span class="cm"># 确认真的是 native 而不是 generic</span>
+$ ip link show dev eth0
+2: eth0: &lt;BROADCAST,MULTICAST,UP,LOWER_UP&gt; mtu 1500 xdp/id:47 qdisc mq state UP
+<span class="cm">                                               ^^^ 这里是 xdp 不是 xdpgeneric，对了</span>
+
+<span class="cm"># 查看程序与 map</span>
+$ bpftool prog show | grep -A2 xdp_drop
+47: xdp  name xdp_drop_dns_flood  tag 3a1f...  gpl
+	loaded_at 2026-09-03T17:02:11+0800  uid 0
+	xlated 512B  jited 331B  memlock 4096B  map_ids 12
+$ bpftool map dump id 12
+
+<span class="cm"># 监控 XDP_ABORTED（有的话说明程序里走了异常分支）</span>
+$ perf trace -e xdp:xdp_exception
+
+<span class="cm"># 卸载</span>
+$ ip link set dev eth0 xdp off</pre>
+
+  <h3>7.3 AF_XDP：把包直接甩给用户态</h3>
+
+  <div class="def"><strong>AF_XDP</strong>：一种新的 socket 地址族。用户态程序分配一块共享内存（<strong>UMEM</strong>），通过四个无锁环（<code>FILL</code> / <code>COMPLETION</code> / <code>RX</code> / <code>TX</code>）与内核交换<strong>描述符</strong>而不是数据。XDP 程序用 <code>XDP_REDIRECT</code> 把包投进 <code>XSKMAP</code>，驱动支持零拷贝时，网卡直接 DMA 到 UMEM——<strong>包从网线到用户态内存，全程零拷贝、无系统调用</strong>。</div>
+
+  <table>
+    <thead><tr><th>环</th><th>方向</th><th>放什么</th></tr></thead>
+    <tbody>
+      <tr><td><code>FILL</code></td><td>用户 → 内核</td><td>「这些 UMEM 块是空的，你可以往里收包」</td></tr>
+      <tr><td><code>RX</code></td><td>内核 → 用户</td><td>「这些块里有收到的包，偏移和长度在这」</td></tr>
+      <tr><td><code>TX</code></td><td>用户 → 内核</td><td>「请把这些块里的数据发出去」</td></tr>
+      <tr><td><code>COMPLETION</code></td><td>内核 → 用户</td><td>「这些块已经发完了，你可以回收复用」</td></tr>
+    </tbody>
+  </table>
+
+  <p>AF_XDP 的定位很清晰：<strong>它是 DPDK 与内核栈之间的中间选项</strong>。你拿到接近 DPDK 的收包性能，但网卡还是标准内核驱动（不用 <code>vfio-pci</code> 绑定、不用独占网卡）；不需要它的流量（管理、SSH、监控）继续走内核栈走得好好的。</p>
+
+  <h3>7.4 tc-bpf（clsact）：功能完整的那一半</h3>
+
+<pre><span class="cm"># clsact 是一个特殊 qdisc，同时提供 ingress 和 egress 两个挂载点，且不做排队</span>
+$ tc qdisc add dev eth0 clsact
+
+<span class="cm"># da = direct-action，程序直接返回 TC_ACT_* 而不需要再走一层 action</span>
+$ tc filter add dev eth0 ingress bpf da obj tc_prog.o sec classifier
+$ tc filter add dev eth0 egress  bpf da obj tc_prog.o sec classifier
+
+$ tc filter show dev eth0 ingress
+filter protocol all pref 49152 bpf chain 0
+filter protocol all pref 49152 bpf chain 0 handle 0x1 tc_prog.o:[classifier] direct-action
+        id 61 tag 9c1e... jited</pre>
+
+  <table>
+    <thead><tr><th>维度</th><th>XDP</th><th>tc-bpf（clsact）</th></tr></thead>
+    <tbody>
+      <tr><td>位置</td><td>驱动内，skb 之前</td><td><code>netif_receive_skb</code> 之后（ingress）/ qdisc 之前（egress）</td></tr>
+      <tr><td>上下文</td><td><code>struct xdp_md</code>——只有裸包和几个字段</td><td><code>struct __sk_buff</code>——有 <code>mark</code>、<code>priority</code>、<code>cb</code>、<code>ifindex</code>、<code>tstamp</code> 等全部元数据</td></tr>
+      <tr><td>方向</td><td><strong>只有入向</strong></td><td>入向 + <strong>出向</strong></td></tr>
+      <tr><td>性能</td><td>最高</td><td>低一个档次，但仍远快于 iptables</td></tr>
+      <tr><td>能否改包长度</td><td>可以但受限（<code>bpf_xdp_adjust_head/tail</code>，headroom 有限）</td><td>更灵活（<code>bpf_skb_adjust_room</code>，可做隧道封装）</td></tr>
+      <tr><td>典型用途</td><td>DDoS 丢弃、L4 负载均衡首跳、快速转发</td><td>Service 转发、策略执行、可观测性、出向整形</td></tr>
+    </tbody>
+  </table>
+
+  <div class="intuition"><strong>Cilium 的分工是这个取舍的最佳注解</strong>：XDP 层只做「必须极快」的事——DDoS 丢包、NodePort 的首跳负载均衡；真正的 Service 转发、NetworkPolicy、可观测性全在 tc-bpf 层，因为那里能读到 skb 的完整上下文，也能挂 egress。<strong>不要把所有逻辑都往 XDP 塞</strong>，在 XDP 里手写一遍连接跟踪的成本远高于它省下的那点开销。</div>
+
+  <h3>7.5 什么时候值得放弃内核栈</h3>
+
+  <table>
+    <thead><tr><th>方案</th><th>性能量级（单核，64B 小包）</th><th>你要付出什么</th><th>适用</th></tr></thead>
+    <tbody>
+      <tr><td>普通内核栈 + socket</td><td>百万 pps 量级</td><td>什么都不用付</td><td>99% 的业务</td></tr>
+      <tr><td>tc-bpf</td><td>数百万 pps</td><td>写 eBPF、过 verifier</td><td>Service 转发、策略、可观测</td></tr>
+      <tr><td>XDP native</td><td>千万 pps 量级（丢弃/转发）</td><td>受限的编程模型，调试困难</td><td>DDoS 清洗、L4 LB、软件路由</td></tr>
+      <tr><td>AF_XDP</td><td>接近线速</td><td>自己处理协议，但网卡仍归内核管</td><td>需要用户态处理但不想独占网卡</td></tr>
+      <tr><td>DPDK / 内核旁路</td><td>线速</td><td><strong>网卡被独占、CPU 核 100% 空转轮询、自带一套 TCP/IP 栈、失去所有内核工具（tcpdump、ss、iptables 全部失效）、运维体系要重建</strong></td><td>专用网元：NFV、防火墙、交换机、行情网关</td></tr>
+    </tbody>
+  </table>
+
+  <div class="box star"><strong>面试常问「XDP 和 DPDK 怎么选」，答案不在性能数字上，在运维成本上。</strong> DPDK 是「把网卡从内核手里抢过来」——从此这块网卡上没有 <code>ip addr</code>、没有 <code>tcpdump</code>、没有 <code>ss</code>，所有协议处理你自己实现，一个核永远 100% 占用。它适合<strong>整台机器就是为了转发而存在</strong>的场景。XDP 是「在内核路径上插一段快速通道」——你想处理的包极快地处理掉，剩下的照常走内核栈，全部现有工具继续可用，还能随时热加载卸载。<strong>只要这台机器上还跑着需要正常网络栈的业务，就应该选 XDP。</strong></div>
+
+  <div class="note">eBPF 的完整体系（verifier、map 类型、CO-RE、bpftrace / bcc 的使用、可观测性程序的写法）见 <a href="observability_ebpf.html">eBPF 与可观测性</a>。本章只覆盖它在<strong>数据面转发</strong>上的那一小块。</div>
+</section>
+
+<!-- ================================================================ §8 -->
+<section class="chapter" id="s8">
+  <div class="ch-head">
+    <div class="num">08</div>
+    <div class="t"><h2>协议栈调优</h2><p class="sub">两个 backlog 队列、TIME_WAIT、缓冲区自动调优、BBR</p></div>
+  </div>
+
+  <div class="box danger"><strong>先说结论，再讲细节：不要抄网上的 sysctl 大礼包。</strong> 那些「Linux 网络优化必备 30 条」的清单里，通常有三分之一在现代内核上已是默认值（改了等于没改）、三分之一在你的场景下没有意义（比如给一台内网 RPC 服务器调 BBR）、还有几条是<strong>有害的</strong>（<code>tcp_tw_recycle</code>、盲目 <code>SO_RCVBUF</code>、把 <code>tcp_mem</code> 拉到天上）。每一个参数都应该能回答三个问题：<strong>什么症状让我要改它？改完我看哪个指标验证？它的副作用是什么？</strong> 答不上来就别改。</div>
+
+  <h3>8.1 两个队列：SYN queue 与 accept queue</h3>
+
+  <p><code>listen()</code> 之后，内核为这个监听 socket 维护<strong>两个</strong>队列，很多人只知道一个。</p>
+
+  <table>
+    <thead><tr><th></th><th>SYN queue（半连接队列）</th><th>accept queue（全连接队列）</th></tr></thead>
+    <tbody>
+      <tr><td>装什么</td><td>收到 SYN、回了 SYN+ACK、还在等对方 ACK 的连接（<code>SYN_RECV</code>）</td><td>三次握手已完成、等着应用调 <code>accept()</code> 取走的连接（<code>ESTABLISHED</code>）</td></tr>
+      <tr><td>大小由谁决定</td><td><code>net.ipv4.tcp_max_syn_backlog</code></td><td><strong><code>min(listen() 的 backlog 参数, net.core.somaxconn)</code></strong></td></tr>
+      <tr><td>满了会怎样</td><td>丢弃新 SYN（若开了 syncookies 则改用 cookie 不占队列）</td><td>默认<strong>静默丢弃对方的 ACK</strong>，客户端会重传 ACK 直到超时</td></tr>
+      <tr><td>怎么观测</td><td><code>nstat</code> 的 <code>TcpExtTCPReqQFullDrop</code> / <code>TcpExtTCPReqQFullDoCookies</code></td><td><code>ss -lnt</code> 的 <code>Recv-Q</code>；<code>nstat</code> 的 <code>TcpExtListenOverflows</code>、<code>TcpExtListenDrops</code></td></tr>
+      <tr><td>根因</td><td>SYN flood 攻击，或握手速率超过处理能力</td><td><strong>应用 <code>accept()</code> 太慢</strong>——线程都卡在业务逻辑里，没人来取连接</td></tr>
+    </tbody>
+  </table>
+
+<pre><span class="cm"># ss -lnt 对 LISTEN 状态的 socket 有特殊语义，这是最容易记错的一点：</span>
+<span class="cm">#   Recv-Q = accept 队列里【当前】排了多少个连接</span>
+<span class="cm">#   Send-Q = accept 队列的【上限】</span>
+$ ss -lnt
+State   Recv-Q  Send-Q  Local Address:Port   Peer Address:Port
+LISTEN  0       4096          0.0.0.0:22          0.0.0.0:*
+LISTEN  128     128           0.0.0.0:8080        0.0.0.0:*
+<span class="cm">        ^^^ 满了！上限 128，当前也是 128，说明应用完全没在 accept</span>
+
+<span class="cm"># 溢出计数（这两个是排查「客户端偶发连接超时」的第一现场）</span>
+$ nstat -az | grep -E 'ListenOverflows|ListenDrops|TCPReqQFull'
+TcpExtListenOverflows           28471              0.0
+TcpExtListenDrops               28471              0.0
+TcpExtTCPReqQFullDoCookies      0                  0.0
+
+<span class="cm"># netstat 的等价说法（措辞不一样，含义相同）</span>
+$ netstat -s | grep -iE 'listen|overflow'
+    28471 times the listen queue of a socket overflowed
+    28471 SYNs to LISTEN sockets dropped
+
+<span class="cm"># 用 eBPF 实时看是哪个进程在溢出（比翻计数器直观）</span>
+$ bpftrace -e 'kprobe:tcp_v4_syn_recv_sock { @[comm] = count(); }'</pre>
+
+  <div class="box danger"><strong>把 <code>somaxconn</code> 调大，未必有用。</strong> accept 队列的实际大小是 <code>min(listen(fd, backlog) 里的 backlog, somaxconn)</code>。如果应用写死了 <code>listen(fd, 128)</code>，你把 <code>somaxconn</code> 调到 65535 也没有任何效果——上面 <code>ss -lnt</code> 那行 <code>Send-Q 128</code> 就是证据。<strong>两边都要改</strong>：Nginx 是 <code>listen 80 backlog=8192;</code>，Java 是 <code>new ServerSocket(port, backlog)</code>，Go 的 <code>net.Listen</code> 直接取 <code>somaxconn</code>。顺带一提，<code>net.core.somaxconn</code> 的默认值在 <strong>Linux 5.4 之前是 128</strong>，之后提高到 4096——老内核上这是个真实瓶颈。</div>
+
+  <div class="vs">
+    <div class="bad"><h5>❌ 一看到溢出就调大队列</h5>
+      <p>队列变大只是<strong>让排队的连接更多、等得更久</strong>。如果应用每秒只能 accept 1000 个而进来 5000 个，队列从 128 加到 8192 只是把「立刻失败」变成「等 8 秒后失败」，用户体验反而更差，而且内存里挂着一堆已完成握手的连接。</p></div>
+    <div class="good"><h5>✅ 队列是缓冲，不是产能</h5>
+      <p>队列只该用来吸收<strong>突发</strong>。持续溢出说明产能不足，要看的是：accept 线程是不是在做本该异步的事？<code>accept()</code> 后有没有阻塞的 DNS 反查 / 鉴权调用？要不要上 <code>SO_REUSEPORT</code> 多进程分担？先把 accept 循环做成「只接连接、立刻交给工作线程」，再谈队列大小。</p></div>
+    </div>
+
+  <p>还有一个相关开关：<code>net.ipv4.tcp_abort_on_overflow</code>。默认 0 = accept 队列满时<strong>静默丢弃客户端的 ACK</strong>，客户端以为连上了（它已经收到 SYN+ACK），会重传 ACK 并可能直接发数据，几秒后才超时——表现为「连上了但没响应」。设成 1 则立刻回 RST，客户端<strong>马上</strong>收到 <code>Connection reset</code>。<strong>快速失败对客户端有重试逻辑的场景更友好</strong>，但会把偶发的瞬时突发也变成硬失败，需要按业务权衡。</p>
+
+  <h3>8.2 TIME_WAIT：被误解最深的状态</h3>
+
+  <div class="def"><strong>TIME_WAIT</strong>：<strong>主动关闭</strong>连接的那一端，在发出最后一个 ACK 后进入的状态，持续 <strong>2×MSL</strong>（Linux 里写死为 60 秒，<code>TCP_TIMEWAIT_LEN</code>，<strong>没有 sysctl 可以改</strong>）。它存在的两个理由缺一不可：① 保证最后那个 ACK 丢失时，对方重传的 FIN 还能被正确响应，否则对方会收到 RST；② 让网络中该连接的迟到报文自然消亡，防止被<strong>相同四元组</strong>的新连接错误接收。</div>
+
+  <div class="analogy">TIME_WAIT 像<strong>退租后押金的观察期</strong>。你搬走了，但房东要留 60 天：万一还有你的快递寄到这个地址，得有人签收退回；也防止下一位租客收到本该给你的信。<strong>觉得「几万个 TIME_WAIT 是资源泄漏」的人，是把观察期当成了占用。</strong> 事实上一个 TIME_WAIT 只占一个很小的 <code>tcp_timewait_sock</code>（远小于完整 socket），几万个也就几 MB 内存。</div>
+
+  <table>
+    <thead><tr><th>常见说法</th><th>真相</th></tr></thead>
+    <tbody>
+      <tr><td>「TIME_WAIT 太多会把内存吃光」</td><td>每个约几百字节，10 万个不到 100MB。<code>tcp_max_tw_buckets</code> 是硬上限，超了会直接销毁并打印告警，不会 OOM</td></tr>
+      <tr><td>「服务端 TIME_WAIT 多说明有问题」</td><td>说明<strong>是服务端在主动关闭</strong>。HTTP 短连接、服务端主动 close 就是这样。真要减少，应该改成长连接 / keep-alive，而不是调内核参数</td></tr>
+      <tr><td>「TIME_WAIT 导致端口耗尽」</td><td>只对<strong>主动发起连接的一方</strong>成立（客户端 / 做反向代理的网关）。服务端监听固定端口，TIME_WAIT 不占用新端口</td></tr>
+      <tr><td>「开 <code>tcp_tw_recycle</code> 就好了」</td><td><strong>这个参数已在 Linux 4.12 被移除</strong>。它按「对端 IP」维度记录 PAWS 时间戳，在客户端处于 NAT 之后时会把时间戳更小的那些客户端的 SYN 全部丢掉——症状是「同一个出口 IP 后面的部分用户随机连不上」，是历史上最著名的坑之一</td></tr>
+    </tbody>
+  </table>
+
+<pre><span class="cm"># 数一数（TIME_WAIT 不是 socket，用 ss -tan 统计）</span>
+$ ss -tan | awk 'NR&gt;1 {print $1}' | sort | uniq -c | sort -rn
+  38217 TIME-WAIT
+   4102 ESTAB
+     33 LISTEN
+
+$ sysctl net.ipv4.tcp_max_tw_buckets
+net.ipv4.tcp_max_tw_buckets = 262144
+<span class="cm"># 超上限时 dmesg 会打印：TCP: time wait bucket table overflow</span>
+
+<span class="cm"># tcp_tw_reuse：允许【主动发起新连接】时复用 TIME_WAIT 里的四元组</span>
+<span class="cm">#   前提是 tcp_timestamps=1，且新连接的时间戳比旧连接的最后一个包更大</span>
+<span class="cm">#   0=关  1=全局开  2=仅对回环地址开（较新内核提供了这个取值，也是常见默认）</span>
+$ sysctl net.ipv4.tcp_tw_reuse net.ipv4.tcp_timestamps
+net.ipv4.tcp_tw_reuse = 2
+net.ipv4.tcp_timestamps = 1
+
+<span class="cm"># 只有在「本机作为客户端/代理，大量主动发起短连接」且确认端口不够时才开全局</span>
+$ sysctl -w net.ipv4.tcp_tw_reuse=1
+
+<span class="cm"># tcp_tw_recycle 已经不存在了，写了也不会生效（只会得到一个 unknown key 错误）</span>
+$ sysctl -w net.ipv4.tcp_tw_recycle=1
+sysctl: cannot stat /proc/sys/net/ipv4/tcp_tw_recycle: No such file or directory</pre>
+
+  <div class="intuition"><strong>真正需要处理 TIME_WAIT 的只有一种情况</strong>：本机作为客户端或反向代理，向<strong>同一个目的 IP:Port</strong> 发起海量短连接，导致 <code>ip_local_port_range</code> 里的端口在 60 秒内被 TIME_WAIT 占满，新连接报 <code>Cannot assign requested address</code>（EADDRNOTAVAIL）。此时的正确顺序是：<strong>① 改成长连接 / 连接池（根治）→ ② 扩大 <code>ip_local_port_range</code> → ③ 开 <code>tcp_tw_reuse=1</code> → ④ 增加目的地址（多个后端 IP，因为四元组只要有一个不同就不冲突）</strong>。绝不要动 <code>tcp_max_tw_buckets</code> 去「压制」数量——那只会让连接被强行销毁，丢掉 TIME_WAIT 本来要提供的保护。</div>
+
+  <h3>8.3 缓冲区：自动调优，以及怎么把它关坏</h3>
+
+  <p>Linux 的 TCP 接收缓冲区默认是<strong>自动调优</strong>的：内核根据测得的带宽时延积动态在 <code>tcp_rmem</code> 的 min 和 max 之间伸缩，既不浪费内存又能填满长肥管道。</p>
+
+<pre>$ sysctl net.ipv4.tcp_rmem net.ipv4.tcp_wmem net.ipv4.tcp_moderate_rcvbuf
+net.ipv4.tcp_rmem = 4096	131072	6291456      <span class="cm"># min  default  max</span>
+net.ipv4.tcp_wmem = 4096	16384	4194304
+net.ipv4.tcp_moderate_rcvbuf = 1                  <span class="cm"># 1 = 开启接收缓冲自动调优</span>
+
+<span class="cm"># core 里的 rmem_max/wmem_max 是【应用显式 setsockopt 时】的上限</span>
+$ sysctl net.core.rmem_max net.core.wmem_max
+net.core.rmem_max = 212992
+net.core.wmem_max = 212992
+
+<span class="cm"># tcp_mem 是【整个系统所有 TCP socket】的内存页数水位：low pressure high</span>
+<span class="cm"># 超过 pressure 内核会开始压缩各 socket 的缓冲区，nstat 里能看到 TCPMemoryPressures</span>
+$ sysctl net.ipv4.tcp_mem
+net.ipv4.tcp_mem = 381024	508034	762048   <span class="cm"># 单位是内存页（4KB），不是字节</span>
+
+<span class="cm"># 看单条连接实际用了多少（-m 显示内存明细）</span>
+$ ss -tm state established '( dport = :443 )' | head -4
+ESTAB 0 0  192.168.1.23:52134  93.184.216.34:443
+	 skmem:(r0,rb131072,t0,tb46080,f0,w0,o0,bl0,d0)
+<span class="cm">                ^^ rb = 接收缓冲区当前大小  tb = 发送缓冲区  d = drop 计数</span></pre>
+
+  <div class="vs">
+    <div class="bad"><h5>❌ 应用里显式 setsockopt(SO_RCVBUF)</h5>
+<pre>int sz = 256 * 1024;
+setsockopt(fd, SOL_SOCKET, SO_RCVBUF,
+           &amp;sz, sizeof(sz));</pre>
+      <p><strong>一旦显式设置，内核就永久关闭这个 socket 的自动调优</strong>，缓冲区被钉死在你给的值上。长肥管道下 256KB 可能远远不够（100ms RTT × 1Gbps 需要约 12MB），吞吐直接被窗口卡死；而短 RTT 内网连接又白占内存。另外内核会把你给的值<strong>翻倍</strong>作为记账值（预留给 skb 开销），<code>getsockopt</code> 读回来是 512KB，容易让人以为设错了。</p></div>
+    <div class="good"><h5>✅ 让内核自己调，只调上限</h5>
+<pre><span class="cm"># 高带宽长距离链路：把自动调优的上限抬高</span>
+sysctl -w net.ipv4.tcp_rmem="4096 131072 33554432"
+sysctl -w net.ipv4.tcp_wmem="4096 16384 33554432"
+<span class="cm"># 应用侧：什么都不做</span></pre>
+      <p>自动调优会在需要时长到上限，不需要时保持很小。<strong>只有在应用明确知道自己的流量特征、而且默认策略确实不合适时</strong>（比如需要限制单连接内存占用的多租户场景），才该显式设置。</p></div>
+  </div>
+
+  <h3>8.4 拥塞控制：cubic 与 BBR 的边界</h3>
+
+  <table>
+    <thead><tr><th></th><th>cubic（默认）</th><th>BBR</th></tr></thead>
+    <tbody>
+      <tr><td>拥塞信号</td><td><strong>丢包</strong>。丢包即降窗</td><td><strong>模型</strong>：持续测量瓶颈带宽（BtlBw）与最小 RTT（RTprop），按二者乘积定发送速率</td></tr>
+      <tr><td>擅长</td><td>常规网络；与其它 cubic 流公平共存；行为可预测</td><td><strong>有随机丢包的长距离链路</strong>（跨国、卫星、劣质无线）——丢包不再意味着降速</td></tr>
+      <tr><td>不擅长</td><td>长肥管道上随机丢包会严重压低吞吐；深队列下会把缓冲区填满（加剧 bufferbloat）</td><td>与 cubic 共享<strong>浅缓冲区</strong>链路时可能抢占过多带宽（公平性争议）；ACK 聚合严重的链路上带宽估计会偏高</td></tr>
+      <tr><td>对队列的影响</td><td>倾向于填满瓶颈队列</td><td>主动把在途数据量控制在 BDP 附近，<strong>队列更浅、延迟更低</strong></td></tr>
+      <tr><td>配套</td><td>无特殊要求</td><td><strong>建议配 <code>fq</code> qdisc</strong>：BBR 依赖精确 pacing</td></tr>
+    </tbody>
+  </table>
+
+<pre>$ sysctl net.ipv4.tcp_available_congestion_control net.ipv4.tcp_congestion_control
+net.ipv4.tcp_available_congestion_control = reno cubic bbr
+net.ipv4.tcp_congestion_control = cubic
+
+<span class="cm"># 切到 BBR（同时把 qdisc 换成 fq，两者要配套）</span>
+$ sysctl -w net.core.default_qdisc=fq
+$ sysctl -w net.ipv4.tcp_congestion_control=bbr
+$ tc qdisc replace dev eth0 root fq
+
+<span class="cm"># 单条连接也可以单独指定，不必全局切换（灰度验证的正确姿势）</span>
+<span class="cm">#   setsockopt(fd, IPPROTO_TCP, TCP_CONGESTION, "bbr", 3);</span>
+
+<span class="cm"># 观察效果：ss -ti 里能看到当前算法、cwnd、pacing_rate、重传</span>
+$ ss -ti state established '( dport = :443 )' | head -6
+ESTAB 0 0 192.168.1.23:52140 93.184.216.34:443
+	 bbr wscale:8,7 rto:236 rtt:34.2/1.5 mss:1448 pmtu:1500
+	 cwnd:57 ssthresh:44 bytes_sent:19238471 bytes_retrans:2104
+	 bbr:(bw:942.1Mbps,mrtt:33.9,pacing_gain:1,cwnd_gain:2)
+	 send 19.3Mbps pacing_rate 1004Mbps delivery_rate 903Mbps
+	 busy:8213ms retrans:0/17 rcv_rtt:35 rcv_space:14480</pre>
+
+  <div class="intuition"><strong>什么时候该换 BBR？</strong> 判据是「<strong>链路上是否存在与拥塞无关的丢包</strong>」。跨洲传输、CDN 回源、移动网络、有丢包的公网出口——这些场景下 cubic 会被随机丢包反复打压，BBR 常能带来数倍吞吐提升。反过来，<strong>内网机房之间、RTT 亚毫秒、丢包率接近 0 的环境，换 BBR 基本没有收益</strong>，还引入了新的行为模式和排查复杂度。把 BBR 当成万灵药全局打开，是典型的「抄大礼包」行为。灰度做法：先用 <code>setsockopt(TCP_CONGESTION)</code> 对部分连接开，对比 <code>ss -ti</code> 里的 <code>delivery_rate</code> 与 <code>retrans</code>。</div>
+
+  <h3>8.5 SO_REUSEPORT：多进程共享监听端口</h3>
+
+  <p>传统的多进程服务器有两种做法，都有问题：父进程 <code>listen()</code> 后 fork，所有子进程在同一个 fd 上 <code>accept()</code>（<strong>惊群</strong>：一个连接到来唤醒所有进程，只有一个成功）；或者用 epoll 监听同一个 listen fd（<strong>epoll 惊群</strong>，需要 <code>EPOLLEXCLUSIVE</code> 缓解）。</p>
+
+  <p><code>SO_REUSEPORT</code> 让<strong>多个 socket 绑定同一个「IP:Port」</strong>，内核在收到 SYN 时按四元组哈希<strong>直接选中其中一个</strong>，只唤醒那一个进程。每个 socket 有自己独立的 accept 队列。</p>
+
+<pre><span class="kw">int</span> fd = socket(AF_INET, SOCK_STREAM, <span class="num">0</span>);
+<span class="kw">int</span> on = <span class="num">1</span>;
+<span class="cm">/* 必须在 bind() 之前设置；每一个想共享端口的 socket 都要设 */</span>
+setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &amp;on, <span class="kw">sizeof</span>(on));
+bind(fd, (<span class="kw">struct</span> sockaddr *)&amp;addr, <span class="kw">sizeof</span>(addr));
+listen(fd, <span class="num">8192</span>);
+<span class="cm">/* 每个工作进程/线程独立走一遍上面四步，各自有独立的 accept 队列 */</span></pre>
+
+<pre><span class="cm"># 效果：同一个端口出现多行 LISTEN，各自的 Recv-Q/Send-Q 独立</span>
+$ ss -lnt '( sport = :8080 )'
+State  Recv-Q Send-Q Local Address:Port
+LISTEN 0      8192         0.0.0.0:8080
+LISTEN 0      8192         0.0.0.0:8080
+LISTEN 3      8192         0.0.0.0:8080
+LISTEN 0      8192         0.0.0.0:8080</pre>
+
+  <div class="box danger"><strong>SO_REUSEPORT 的两个真实陷阱。</strong> ① <strong>优雅重启时会丢连接</strong>：某个进程关闭它的 listen socket 时，已经哈希到它、还在它 accept 队列里的连接会被<strong>直接 RST</strong>，同时整个组重新哈希，可能让正在握手的 SYN 找不到归宿。Nginx 的做法是在关闭前先停止 accept 并把队列排干，自己实现时要注意这一点（较新内核提供了 <code>SO_REUSEPORT</code> 组的迁移能力来缓解，但不要依赖它作为唯一保障）。② <strong>负载可能不均</strong>：内核按四元组哈希分配<strong>连接</strong>而非请求，如果连接是长连接且生命周期差异巨大（一个连接推 1GB、另一个推 1KB），进程间负载会严重倾斜。短连接场景下才接近均匀。</div>
+
+  <h3>8.6 参数速查：什么症状才该改</h3>
+
+  <div class="cheatsheet">
+  <table>
+    <thead><tr><th>参数</th><th>常见默认</th><th>什么症状下才该改</th><th>副作用</th></tr></thead>
+    <tbody>
+      <tr><td><code>net.core.somaxconn</code></td><td>4096（5.4 前 128）</td><td><code>ss -lnt</code> 的 Recv-Q 顶到 Send-Q，<code>ListenOverflows</code> 在涨</td><td>光改它无效，应用的 <code>listen()</code> backlog 要同步改</td></tr>
+      <tr><td><code>net.ipv4.tcp_max_syn_backlog</code></td><td>随内存而定（常见 128~2048）</td><td><code>TCPReqQFullDrop</code> 在涨，或遭遇 SYN flood</td><td>占内存；syncookies 已能兜底大部分场景</td></tr>
+      <tr><td><code>net.ipv4.tcp_syncookies</code></td><td>1</td><td>保持 1 即可</td><td>启用 cookie 的连接不支持窗口缩放等选项，吞吐略降；仅在队列满时触发</td></tr>
+      <tr><td><code>net.ipv4.tcp_abort_on_overflow</code></td><td>0</td><td>希望 accept 队列满时<strong>快速失败</strong>而不是让客户端傻等</td><td>瞬时突发也会被 RST，客户端必须有重试</td></tr>
+      <tr><td><code>net.ipv4.tcp_tw_reuse</code></td><td>2（仅回环）</td><td>本机主动发起海量短连接，报 <code>EADDRNOTAVAIL</code></td><td>依赖 <code>tcp_timestamps=1</code>；只影响出向连接</td></tr>
+      <tr><td><code>net.ipv4.ip_local_port_range</code></td><td>32768 60999</td><td>同上，端口不够用</td><td>不要覆盖你自己的监听端口，配合 <code>ip_local_reserved_ports</code></td></tr>
+      <tr><td><code>net.ipv4.tcp_rmem</code> / <code>tcp_wmem</code> 的 max</td><td>约 6MB / 4MB</td><td>长肥管道（高 BDP）下单连接吞吐上不去，<code>ss -ti</code> 显示 <code>rwnd_limited</code> 占比高</td><td>并发连接极多时总内存上升，注意 <code>tcp_mem</code> 水位</td></tr>
+      <tr><td><code>net.core.rmem_max</code> / <code>wmem_max</code></td><td>约 208KB</td><td>应用<strong>确实需要</strong>显式 <code>setsockopt</code> 大缓冲</td><td>会关掉该 socket 的自动调优，请优先不设</td></tr>
+      <tr><td><code>net.core.netdev_max_backlog</code></td><td>1000</td><td><code>/proc/net/softnet_stat</code> 第 2 列在涨（且确实走 backlog 路径）</td><td>队列变长 = 延迟变长；不解决处理能力问题</td></tr>
+      <tr><td><code>net.core.netdev_budget</code></td><td>300</td><td>第 3 列 <code>time_squeeze</code> 持续增长</td><td>软中断单次占用 CPU 更久，可能影响其它任务的调度延迟</td></tr>
+      <tr><td><code>net.ipv4.tcp_congestion_control</code></td><td>cubic</td><td>链路存在与拥塞无关的随机丢包（跨洲 / 移动网络）</td><td>与 cubic 共存时的公平性；需配 <code>fq</code></td></tr>
+      <tr><td><code>net.core.default_qdisc</code></td><td>fq_codel</td><td>确认当前是 <code>pfifo_fast</code> 且有 bufferbloat 症状；或要上 BBR（改 <code>fq</code>）</td><td>几乎没有；这是少数「无脑改就对了」的参数</td></tr>
+      <tr><td><code>net.ipv4.tcp_slow_start_after_idle</code></td><td>1</td><td>长连接空闲后重新发送时速度骤降（HTTP/2、gRPC 常见）</td><td>设 0 后空闲很久的连接会以旧 cwnd 猛发，可能瞬时打爆已变差的链路</td></tr>
+      <tr><td><code>net.netfilter.nf_conntrack_max</code></td><td>随内存而定</td><td><code>dmesg</code> 报 table full（见 §3）</td><td>内存占用；<strong>先查为什么连接这么多</strong></td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="checklist">
+    <h4>改 sysctl 的纪律</h4>
+    <ul>
+      <li><strong>先有症状与计数器，再有参数。</strong> 说不出「我要改它是因为 X 计数器在涨」，就不要改。</li>
+      <li><strong>一次只改一个</strong>，改完记录前后的关键指标（p99 延迟、吞吐、相关计数器速率），否则无法归因。</li>
+      <li>用 <code>sysctl -w</code> 临时验证，确认有效后再写进 <code>/etc/sysctl.d/</code>；<strong>临时值重启即丢，这是特性不是缺陷</strong>。</li>
+      <li>容器环境注意：一部分 sysctl 是 <strong>netns 隔离</strong>的（<code>net.ipv4.*</code> 大多是），在宿主机上改不影响容器内；另一些是全局的。</li>
+      <li>把改动和理由写进变更记录。半年后没人记得为什么 <code>tcp_rmem</code> 是这个值，就没人敢改回去。</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ================================================================ §9 -->
+<section class="chapter" id="s9">
+  <div class="ch-head">
+    <div class="num">09</div>
+    <div class="t"><h2>丢包定位工作流</h2><p class="sub">分层地图、逐层工具、抓包位置的选择</p></div>
+  </div>
+
+  <p>「丢包」不是一个诊断结论，它是一个<strong>现象类别</strong>。前面八章的每一层都能丢包，而且每一层的丢包都有专属的计数器。这一章把它们串成一套可执行的流程：<strong>从现象出发，用计数器缩小到某一层，再用工具定位到具体原因</strong>。</p>
+
+  <h3>9.1 先分流：三种现象对应不同的路径</h3>
+
+  <table>
+    <thead><tr><th>现象</th><th>最可能的层</th><th>第一批要跑的命令</th></tr></thead>
+    <tbody>
+      <tr><td><strong>连接被拒</strong>（<code>Connection refused</code>）</td><td>没人监听，或防火墙 REJECT</td><td><code>ss -lntp</code> 确认在听；<code>iptables -L -n -v --line-numbers</code> 看 REJECT 规则命中数</td></tr>
+      <tr><td><strong>连接超时</strong>（SYN 无响应）</td><td>路由 / 防火墙 DROP / accept 队列 / rp_filter</td><td><code>nstat -az | grep -E 'ListenOverflows|ListenDrops|ReversePathFilter'</code>；服务端 <code>tcpdump</code> 看 SYN 到没到</td></tr>
+      <tr><td><strong>连上后偶发卡顿 / 重传</strong></td><td>网卡 ring / softirq / qdisc / 中间链路</td><td><code>ethtool -S</code>、<code>/proc/net/softnet_stat</code>、<code>tc -s qdisc show</code>、<code>ss -ti</code> 看 <code>retrans</code></td></tr>
+      <tr><td><strong>吞吐上不去但不丢包</strong></td><td>窗口 / 缓冲区 / 拥塞控制</td><td><code>ss -ti</code> 看 <code>rwnd_limited</code> / <code>sndbuf_limited</code> / <code>cwnd</code></td></tr>
+      <tr><td><strong>延迟高但带宽跑满</strong></td><td>bufferbloat（本机 qdisc 或中间设备）</td><td><code>tc -s qdisc show</code> 看 <code>backlog</code>；空载 vs 满载对比 ping</td></tr>
+      <tr><td><strong>UDP 大量丢失</strong></td><td>接收缓冲区 / 应用读得慢</td><td><code>nstat -az | grep -i udp</code>；<code>ss -unm</code> 看 <code>Recv-Q</code> 与 <code>d</code>（drop）</td></tr>
+      <tr><td><strong>容器内不通、宿主机通</strong></td><td>netns / veth / bridge / FORWARD 链</td><td><code>nsenter -t PID -n ss -s</code>；宿主机 <code>tcpdump -i vethXXX</code></td></tr>
+    </tbody>
+  </table>
+
+  <h3>9.2 分层丢包点地图</h3>
+
+  <div class="fig">
+    <svg viewBox="0 0 900 480" role="img" aria-label="分层丢包点地图：从上到下依次是网卡硬件与 RX ring、XDP、软中断与 backlog、netfilter 与 conntrack、路由与 rp_filter、协议栈与 socket 查找、accept 队列、socket 接收缓冲区、应用未读取，每一层标注对应的观测命令与计数器">
+      <text class="tb" x="20" y="22">收包方向 ↓　每一层都能丢，每一层都有自己的证据</text>
+
+      <rect class="box-r" x="20" y="36" width="470" height="44" rx="8"/>
+      <text class="t"  x="36" y="55">① 网卡硬件 / RX Ring 满</text>
+      <text class="ts" x="36" y="71">帧根本没进内核，CPU 完全不知情</text>
+      <text class="tm" x="506" y="55">ethtool -S | grep miss|no_buf|drop</text>
+      <text class="tm" x="506" y="71">rx_missed_errors · rx_queue_N_drops</text>
+
+      <rect class="box-y" x="20" y="88" width="470" height="44" rx="8"/>
+      <text class="t"  x="36" y="107">② XDP 程序丢弃</text>
+      <text class="ts" x="36" y="123">你自己装的程序，最容易被忘记</text>
+      <text class="tm" x="506" y="107">ip link show dev eth0（看有无 xdp）</text>
+      <text class="tm" x="506" y="123">bpftool prog/map dump · xdp_exception</text>
+
+      <rect class="box-y" x="20" y="140" width="470" height="44" rx="8"/>
+      <text class="t"  x="36" y="159">③ 软中断预算 / per-CPU backlog</text>
+      <text class="ts" x="36" y="175">RPS、veth、loopback 才走 backlog</text>
+      <text class="tm" x="506" y="159">/proc/net/softnet_stat 第 2 / 3 列</text>
+      <text class="tm" x="506" y="175">mpstat -P ALL 1 看 %soft 分布</text>
+
+      <rect class="box-p" x="20" y="192" width="470" height="44" rx="8"/>
+      <text class="t"  x="36" y="211">④ netfilter DROP / conntrack 表满</text>
+      <text class="ts" x="36" y="227">规则命中数是最直接的证据</text>
+      <text class="tm" x="506" y="211">iptables -L -n -v · nft list ruleset -a</text>
+      <text class="tm" x="506" y="227">conntrack -S · dmesg 的 table full</text>
+
+      <rect class="box-p" x="20" y="244" width="470" height="44" rx="8"/>
+      <text class="t"  x="36" y="263">⑤ 路由不可达 / rp_filter</text>
+      <text class="ts" x="36" y="279">多网卡、容器、VPN 场景高发</text>
+      <text class="tm" x="506" y="263">nstat -az | grep ReversePathFilter</text>
+      <text class="tm" x="506" y="279">ip route get … from … iif …</text>
+
+      <rect class="box-a" x="20" y="296" width="470" height="44" rx="8"/>
+      <text class="t"  x="36" y="315">⑥ 协议栈校验 / 找不到 socket</text>
+      <text class="ts" x="36" y="331">端口没监听、校验和错、序号异常</text>
+      <text class="tm" x="506" y="315">nstat: TcpInErrors · TcpExtTCPCsumErrors</text>
+      <text class="tm" x="506" y="331">UdpNoPorts · IpInAddrErrors</text>
+
+      <rect class="box-a" x="20" y="348" width="470" height="44" rx="8"/>
+      <text class="t"  x="36" y="367">⑦ accept 队列溢出</text>
+      <text class="ts" x="36" y="383">握手完成了，但应用没来取</text>
+      <text class="tm" x="506" y="367">ss -lnt 的 Recv-Q / Send-Q</text>
+      <text class="tm" x="506" y="383">nstat: ListenOverflows · ListenDrops</text>
+
+      <rect class="box-g" x="20" y="400" width="470" height="44" rx="8"/>
+      <text class="t"  x="36" y="419">⑧ socket 接收缓冲区满</text>
+      <text class="ts" x="36" y="435">应用读得比对端发得慢</text>
+      <text class="tm" x="506" y="419">nstat: TCPRcvQDrop · TCPBacklogDrop</text>
+      <text class="tm" x="506" y="435">UdpRcvbufErrors · ss -tm 的 d= 字段</text>
+
+      <rect class="box" x="20" y="452" width="470" height="24" rx="6"/>
+      <text class="t"  x="36" y="469">⑨ 应用层丢弃（业务队列满、超时被主动关闭）</text>
+      <text class="tm" x="506" y="469">ss -tn 的 Recv-Q 持续非零 + 应用自身指标</text>
+    </svg>
+    <figcaption>分层丢包点地图。排障的顺序不是从上往下逐个试，而是<strong>先用 <code>nstat -az</code> 和 <code>ethtool -S</code> 各扫一遍，看哪一层的计数器在动</strong>，然后直奔那一层。左列是丢包点，右列是它唯一的证据。</figcaption>
+  </div>
+
+  <h3>9.3 逐层工具与判读</h3>
+
+  <div class="tool-card">
+    <h4><code>ip -s link</code> / <code>ethtool -S</code> —— 硬件与驱动视角</h4>
+    <ul>
+      <li><strong>看什么</strong>：<code>ethtool -S</code> 里所有含 <code>drop</code> / <code>err</code> / <code>miss</code> / <code>no_buf</code> / <code>discard</code> 的项。</li>
+      <li><strong>什么算异常</strong>：这些计数器<strong>在两次采样之间增长</strong>就是异常。绝对值大而不增长，可能是开机以来的历史累积，没有诊断价值——<strong>永远看速率，不看绝对值</strong>。</li>
+      <li><strong>常见误判</strong>：把 <code>ip -s link</code> 的 <code>dropped</code> 当成 ring 溢出（详见 §2.1）；把 <code>rx_errors</code>（物理层 CRC 错）当成容量问题——那是网线或光模块的事。</li>
+    </ul>
+  </div>
+
+  <div class="tool-card amber">
+    <h4><code>/proc/net/softnet_stat</code> —— 软中断视角</h4>
+    <ul>
+      <li><strong>看什么</strong>：第 2 列 <code>dropped</code>（backlog 溢出）、第 3 列 <code>time_squeeze</code>（软中断超预算）。</li>
+      <li><strong>什么算异常</strong>：<code>time_squeeze</code> 每秒增长几十次以上；某个 CPU 的 <code>processed</code> 远高于其它 CPU（中断没打散）。</li>
+      <li><strong>常见误判</strong>：第 2 列为 0 就断定「内核没丢包」。它只覆盖 backlog 这一个丢包点。</li>
+    </ul>
+  </div>
+
+  <div class="tool-card violet">
+    <h4><code>nstat -az</code> —— 协议栈全景计数器（最被低估的工具）</h4>
+    <ul>
+      <li><strong>用法</strong>：<code>nstat</code> 默认打印「距上次调用的增量」并更新历史文件——这正是排障要的。<code>-a</code> 打印绝对值不更新历史，<code>-z</code> 连零值也打印（方便 grep 出你关心的名字）。</li>
+      <li><strong>推荐姿势</strong>：<code>nstat -n; sleep 10; nstat</code>——先清零，等 10 秒，看这 10 秒里<strong>哪些计数器动了</strong>。这一招常常在 30 秒内就把问题定位到某一层。</li>
+    </ul>
+  </div>
+
+<pre><span class="cm"># 最有价值的十秒：先清零，等一会，看谁在涨</span>
+$ nstat -n; sleep 10; nstat
+#kernel
+IpInReceives                    1204831            0.0
+TcpInSegs                       1183920            0.0
+TcpRetransSegs                  8471               0.0     <span class="cm">&lt;-- 重传率 0.7%，偏高</span>
+TcpExtListenOverflows           412                0.0     <span class="cm">&lt;-- accept 队列在溢出！</span>
+TcpExtListenDrops               412                0.0
+TcpExtTCPBacklogDrop            0                  0.0
+TcpExtTCPRcvQDrop               0                  0.0
+TcpExtTCPTimeouts               1203               0.0
+TcpExtTCPLostRetransmit         14                 0.0
+UdpRcvbufErrors                 0                  0.0</pre>
+
+  <table>
+    <thead><tr><th>计数器</th><th>含义</th><th>什么值算异常</th></tr></thead>
+    <tbody>
+      <tr><td><code>TcpRetransSegs</code> / <code>TcpOutSegs</code></td><td>重传率</td><td>内网 &gt; 0.05%、公网 &gt; 1% 就该查了</td></tr>
+      <tr><td><code>TcpExtListenOverflows</code></td><td>accept 队列溢出</td><td><strong>任何非零都是问题</strong>（§8.1）</td></tr>
+      <tr><td><code>TcpExtTCPBacklogDrop</code></td><td>socket 被用户进程锁住时 backlog 满</td><td>非零 = 应用在 socket 上持锁太久</td></tr>
+      <tr><td><code>TcpExtTCPRcvQDrop</code></td><td>接收队列满导致丢弃</td><td>非零 = 应用读得太慢或 rcvbuf 太小</td></tr>
+      <tr><td><code>TcpExtPruneCalled</code> / <code>RcvPruned</code></td><td>内存压力下裁剪乱序队列</td><td>非零 = 内存吃紧，看 <code>tcp_mem</code></td></tr>
+      <tr><td><code>TcpExtTCPOFOQueue</code></td><td>进入乱序队列的包数</td><td>持续大量 = 链路乱序或丢包严重</td></tr>
+      <tr><td><code>TcpExtTCPTimeouts</code></td><td>RTO 超时次数</td><td>相对连接数比例高 = 严重丢包（不只是快重传能救的那种）</td></tr>
+      <tr><td><code>TcpExtTCPLostRetransmit</code></td><td>连重传包也丢了</td><td>非零 = 链路质量很差</td></tr>
+      <tr><td><code>UdpRcvbufErrors</code> / <code>UdpInErrors</code></td><td>UDP 接收缓冲区溢出 / 其它错误</td><td>UDP 服务丢包的<strong>首要嫌疑</strong></td></tr>
+      <tr><td><code>UdpNoPorts</code></td><td>目的端口无人监听</td><td>大量出现 = 客户端配错了端口，或扫描</td></tr>
+      <tr><td><code>TcpExtIPReversePathFilter</code></td><td>被 rp_filter 丢弃</td><td>非零直接跳到 §4.3</td></tr>
+      <tr><td><code>TcpExtTCPSynRetrans</code></td><td>SYN 重传</td><td>高 = 对端不可达 / accept 队列满 / 中间丢包</td></tr>
+    </tbody>
+  </table>
+
+  <div class="tool-card green">
+    <h4><code>ss -ti</code> —— 单条连接的显微镜</h4>
+    <ul>
+      <li><strong>看什么</strong>：<code>rtt:34.2/1.5</code>（均值/抖动）、<code>cwnd</code>、<code>retrans:0/17</code>（当前/累计）、<code>rwnd_limited</code>、<code>sndbuf_limited</code>、<code>delivery_rate</code>、<code>busy</code>。</li>
+      <li><strong>怎么判</strong>：<code>rwnd_limited</code> 占比高 = <strong>对端接收窗口不够</strong>（对端应用读得慢或 rcvbuf 小）；<code>sndbuf_limited</code> 高 = <strong>本端发送缓冲区不够</strong>；两者都低但 <code>cwnd</code> 小 = <strong>拥塞控制在压制</strong>，去看丢包。这三种「上不去」的原因完全不同，<code>ss -ti</code> 能一眼分开。</li>
+      <li><strong>常见误判</strong>：只看 <code>rtt</code> 就下结论。<code>rtt</code> 高可能是物理距离，也可能是排队——对比空闲时的 <code>ping</code> 才有意义。</li>
+    </ul>
+  </div>
+
+<pre>$ ss -tin state established '( dport = :6379 )' | head -8
+ESTAB 0 0 10.0.1.23:41290 10.0.2.44:6379
+	 cubic wscale:7,7 rto:204 rtt:3.812/0.44 ato:40 mss:1448 pmtu:1500
+	 rcvmss:1448 advmss:1448 cwnd:10 bytes_sent:88471203 bytes_acked:88470100
+	 bytes_received:1029384710 segs_out:71029 segs_in:120384 data_segs_out:70012
+	 send 30.4Mbps lastsnd:4 lastrcv:4 lastack:4 pacing_rate 60.8Mbps
+	 delivery_rate 24.1Mbps  busy:88213ms rwnd_limited:61204ms(69.4%)
+	 retrans:0/128 rcv_rtt:4.1 rcv_space:14480 minrtt:2.9
+<span class="cm">                              ^^^ 69.4% 的时间卡在对端窗口上 —— 问题在服务端，不在网络</span></pre>
+
+  <h3>9.4 抓包：位置的选择，以及 GRO/TSO 这个坑</h3>
+
+  <div class="box danger"><strong>抓到的包不等于线上的包。</strong> tcpdump 的入向 tap 在 <code>netif_receive_skb</code> 里，<strong>GRO 已经合并过了</strong>——线上是 20 个 1448 字节的 TCP 段，你抓到的是 1 个 28960 字节的「包」。出向 tap 在 <code>dev_hard_start_xmit</code> 里，<strong>TSO 还没分段、校验和还没算</strong>——你抓到一个 64KB 的巨帧，而且 tcpdump 会报 <code>cksum incorrect</code>。这两件事导致的误判非常经典：「抓包看到 MTU 是 65160，是不是 MTU 配错了？」不是，是 TSO；「校验和全错，网卡坏了？」不是，是校验和卸载。</div>
+
+<pre><span class="cm"># 排查涉及分段、MSS、校验和、乱序时，临时关掉卸载再抓</span>
+$ ethtool -k eth0 | grep -E 'generic-receive|tcp-segmentation|generic-segmentation|large-receive'
+tcp-segmentation-offload: on
+generic-segmentation-offload: on
+generic-receive-offload: on
+large-receive-offload: off
+
+$ ethtool -K eth0 gro off gso off tso off lro off   <span class="cm"># 会瞬断，且 CPU 上升</span>
+$ tcpdump -i eth0 -nn -s 96 -c 2000 -w /tmp/cap.pcap 'host 10.0.2.44 and port 6379'
+$ ethtool -K eth0 gro on gso on tso on              <span class="cm"># 查完立刻恢复</span>
+
+<span class="cm"># 抓包时的实用参数</span>
+<span class="cm">#   -s 96   只抓头部，减少落盘量（看不了 payload，但看协议行为足够）</span>
+<span class="cm">#   -B 8192 加大内核缓冲，避免 tcpdump 自己丢包</span>
+<span class="cm">#   -W/-C   环形文件，长时间蹲守偶发问题</span>
+$ tcpdump -i eth0 -nn -s 96 -B 8192 -W 10 -C 100 -w /tmp/ring.pcap 'tcp port 8080'
+
+<span class="cm"># 抓完必看最后一行：kernel dropped 不为 0 说明 tcpdump 自己漏了包</span>
+2000 packets captured
+2143 packets received by filter
+143 packets dropped by kernel        <span class="cm">&lt;-- 你的抓包本身不完整，结论要打折</span></pre>
+
+  <table>
+    <thead><tr><th>抓包位置</th><th>能看到</th><th>看不到</th><th>诊断价值</th></tr></thead>
+    <tbody>
+      <tr><td>物理网卡 <code>eth0</code></td><td>经过 GRO 的入向包；经过 NAT 的出向包</td><td>被网卡 ring / XDP 丢掉的包</td><td>确认「包到底有没有到这台机器」</td></tr>
+      <tr><td>容器侧 <code>vethXXX</code>（宿主机上）</td><td>该容器的全部收发流量</td><td>—</td><td>容器网络排障的标准位置</td></tr>
+      <tr><td>网桥 <code>br0</code> / <code>docker0</code></td><td>桥上转发的流量</td><td>被 br_netfilter 规则丢掉的</td><td>看容器之间的互访</td></tr>
+      <tr><td>回环 <code>lo</code></td><td>本机进程间的 TCP/UDP</td><td>—</td><td>确认「是不是根本没发出去」</td></tr>
+      <tr><td><code>-i any</code></td><td>所有接口</td><td>—</td><td>不知道走哪个接口时先用它定位，再换成具体接口精抓</td></tr>
+    </tbody>
+  </table>
+
+  <div class="intuition"><strong>用抓包位置做二分法，是最快的定位手段。</strong> 客户端说「请求超时」，那就在服务端网卡上抓：<strong>能抓到 SYN</strong> → 包到了，问题在本机内核或应用（去查 §9.2 地图的第 4 层往下）；<strong>抓不到 SYN</strong> → 包压根没到，问题在网络路径、安全组、或对端根本没发（去客户端抓）。这一步只要一分钟，却能砍掉一半的排查范围。注意 tcpdump 的 tap 在 netfilter <strong>之前</strong>，所以<strong>被 iptables DROP 的包，tcpdump 照样能抓到</strong>——「抓到了 SYN 但应用没反应」的头号嫌疑就是防火墙。</div>
+
+  <h3>9.5 精确定位内核在哪一行丢的包</h3>
+
+  <p>当计数器只能告诉你「协议栈丢了」但不知道具体在哪时，用内核的丢包追踪。<code>skb:kfree_skb</code> 这个 tracepoint 会在<strong>每一次内核丢弃 skb</strong> 时触发，带上调用位置。</p>
+
+<pre><span class="cm"># 方式一：dropwatch（老牌工具，基于 NET_DM netlink）</span>
+$ dropwatch -l kas
+Initializing kallsyms db
+dropwatch&gt; start
+Enabling monitoring...
+Waiting for activation ack....
+Kernel monitoring activated.
+2 drops at tcp_v4_do_rcv+8f (0xffffffffa7b12a3f)
+17 drops at nf_hook_slow+a6 (0xffffffffa7ae8916)     <span class="cm">&lt;-- netfilter 在丢</span>
+4 drops at __udp_queue_rcv_skb+3d
+
+<span class="cm"># 方式二：perf（不用装额外工具，最容易在生产上拿到）</span>
+$ perf trace -e skb:kfree_skb --call-graph dwarf -a sleep 5
+<span class="cm"># 或者只统计调用栈的分布</span>
+$ perf record -e skb:kfree_skb -g -a -- sleep 10 &amp;&amp; perf report --stdio
+
+<span class="cm"># 方式三：bpftrace（最灵活，能直接按内核栈聚合）</span>
+$ bpftrace -e 'tracepoint:skb:kfree_skb { @[kstack(6)] = count(); }'
+^C
+@[
+    kfree_skb_reason+1
+    tcp_v4_rcv+87
+    ip_protocol_deliver_rcu+45
+    ip_local_deliver_finish+119
+    ip_local_deliver+232
+]: 8471
+
+<span class="cm"># 较新内核（5.17+）给 kfree_skb 加了 reason 字段，可读性大幅提升</span>
+$ bpftrace -e 'tracepoint:skb:kfree_skb { @[args-&gt;reason] = count(); }'</pre>
+
+  <div class="note"><code>skb:kfree_skb</code> 会捕获<strong>所有</strong>丢弃，包括大量正常路径上的释放（比如 TCP 正常消费完的包在某些路径也走这里），所以要按调用栈聚合看分布，而不是逐条看。它也<strong>看不到网卡硬件丢的包</strong>（那些包根本没有 skb），所以硬件层还是得靠 <code>ethtool -S</code>。eBPF 追踪的完整方法论见 <a href="observability_ebpf.html">eBPF 与可观测性</a>。</div>
+
+  <div class="checklist">
+    <h4>丢包排障的十分钟流程</h4>
+    <ul>
+      <li><strong>0 分钟</strong>：<code>dmesg -T | tail -50</code>。conntrack table full、neighbour table overflow、TCP time wait bucket overflow 这类问题，一行日志就结案了。</li>
+      <li><strong>1 分钟</strong>：<code>nstat -n; sleep 10; nstat</code>。看哪一类计数器在涨，直接把范围缩到某一层。</li>
+      <li><strong>3 分钟</strong>：<code>ethtool -S eth0</code> 采样两次做差；<code>awk</code> 看 <code>softnet_stat</code> 的 2、3 列。排除硬件与软中断层。</li>
+      <li><strong>5 分钟</strong>：<code>ss -lnt</code>（accept 队列）+ <code>ss -ti</code> 抽查几条连接（窗口 / 重传）+ <code>tc -s qdisc show</code>（发送侧排队）。</li>
+      <li><strong>7 分钟</strong>：<code>iptables -L -n -v</code> 看 DROP 规则的包计数是否在涨；<code>conntrack -S</code>。</li>
+      <li><strong>10 分钟</strong>：还没定位就上 <code>tcpdump</code> 做二分（服务端抓不抓得到 SYN），或 <code>bpftrace</code> 追 <code>kfree_skb</code> 栈。</li>
+      <li>全程记住：<strong>看速率不看绝对值</strong>，<strong>一次只改一个变量</strong>，<strong>改动前留好回滚路径</strong>。</li>
+    </ul>
+  </div>
+
+  <div class="note">这套流程属于事中定位。事前的告警阈值设定、事后的复盘与预案，见 <a href="incident_playbook.html">线上故障处置手册</a>；延迟毛刺与低延迟系统的专项方法见 <a href="../perf-debug/low_latency_guide.html">低延迟指南</a>。</div>
+</section>
+
+<!-- ================================================================ §10 -->
+<section class="chapter" id="s10">
+  <div class="ch-head">
+    <div class="num">10</div>
+    <div class="t"><h2>面试题集（12 道）</h2><p class="sub">收包路径 · conntrack · 虚拟网络 · 调优 · 排障</p></div>
+  </div>
+
+  <h3 id="s10-1">10.1 基础（必答）</h3>
+  <p class="qa-hint">点击每道题展开参考答案（先自测，再对照）。</p>
+  <ol class="qa-list">
+    <li><details class="qa">
+      <summary><span class="lvl basic">基础</span>描述一个 TCP 数据包从网卡到达应用 <code>recv()</code> 的完整路径，并说明每一段在什么执行上下文里跑。</summary>
+      <div class="ans">
+        <p>分五个执行上下文接力：</p>
+        <ul>
+          <li><strong>硬件 DMA</strong>：网卡把帧直接写进驱动预分配的 RX ring 缓冲区，不占 CPU。</li>
+          <li><strong>硬中断（hardirq）</strong>：驱动的中断处理函数只做三件事——关掉本队列中断、<code>napi_schedule()</code> 把 NAPI 结构挂上本 CPU 轮询链表、触发 <code>NET_RX_SOFTIRQ</code>，然后立刻返回。这段是关中断的，必须极短。</li>
+          <li><strong>软中断（softirq / ksoftirqd）</strong>：<code>net_rx_action()</code> 调用驱动的 <code>poll()</code>，为每个包构造 <code>sk_buff</code>（数据页直接挂进 frags，不拷贝），经 <code>napi_gro_receive()</code> 做 GRO 聚合，再进 <code>netif_receive_skb()</code>——这里会先喂 AF_PACKET tap（tcpdump）、过 tc ingress，然后按协议分发到 <code>ip_rcv()</code>。</li>
+          <li><strong>仍在软中断</strong>：IP 层过 netfilter PREROUTING（含 conntrack、DNAT），做路由判定；目的是本机则 <code>ip_local_deliver()</code> 过 LOCAL_IN，交给 <code>tcp_v4_rcv()</code> 用四元组查 socket。</li>
+          <li><strong>入队分支</strong>：若此刻没有用户进程持有该 socket 的锁，直接放进 <code>sk_receive_queue</code> 并唤醒等待者；若有进程正持锁，则放进 <code>sk_backlog</code>，由该进程释放锁时处理。</li>
+          <li><strong>用户上下文</strong>：<code>recv()</code> → <code>tcp_recvmsg()</code> 把数据拷到用户缓冲区。</li>
+        </ul>
+        <p>发送侧对称但有三点不同：<strong>必须有一次用户态到内核的拷贝</strong>（TCP 要留副本重传）；<strong>多一层 qdisc 排队</strong>（唯一会主动丢弃自己发出的包的地方）；<strong>TSO 让一个 skb 对应多个真实的线上帧</strong>。</p>
+      </div>
+    </details></li>
+
+    <li><details class="qa">
+      <summary><span class="lvl basic">基础</span>NAPI 是什么？它为什么能避免中断风暴？<code>ksoftirqd</code> 吃满一个核是不是故障？</summary>
+      <div class="ans">
+        <p><strong>NAPI 是「中断 + 轮询」的混合收包框架。</strong> 空闲时靠中断唤醒（省 CPU），一旦收到第一个包就<strong>关掉该队列的中断</strong>、切换到轮询模式批量取包，取空之后才重新打开中断。类比是「门铃响一次，我就守在门口一直收货，直到没货了才回屋等下一次门铃」。</p>
+        <p>它避免中断风暴的关键在于：<strong>大流量下中断被主动关闭</strong>，一次中断可以摊薄到成百上千个包上，中断频率不再随 pps 线性增长。</p>
+        <p>两级预算限制单次轮询的时长：每个 NAPI 实例的 <code>weight</code>（通常 64）、以及一轮 <code>net_rx_action()</code> 的 <code>net.core.netdev_budget</code>（默认 300 包）和 <code>netdev_budget_usecs</code>（默认 2000μs）。</p>
+        <p><strong><code>ksoftirqd</code> 占满一个核不一定是故障</strong>：当软中断在中断返回路径上跑超了预算，剩余工作会被推给 <code>ksoftirqd/N</code> 内核线程，同时 <code>/proc/net/softnet_stat</code> 第 3 列 <code>time_squeeze</code> 加一。这是设计好的溢出通道，作用是防止软中断无限期霸占 CPU 饿死普通进程。真正要判断的是：<strong>它是否伴随丢包</strong>（<code>rx_missed_errors</code> / softnet 第 2 列增长）、以及<strong>软中断负载是否只集中在一两个核上</strong>（那说明中断没打散，该看 RSS / RPS / <code>smp_affinity</code>）。</p>
+      </div>
+    </details></li>
+
+    <li><details class="qa">
+      <summary><span class="lvl basic">基础</span>TIME_WAIT 为什么必须存在？服务器上几万个 TIME_WAIT 需要处理吗？</summary>
+      <div class="ans">
+        <p>TIME_WAIT 是<strong>主动关闭方</strong>在发出最后一个 ACK 后进入的状态，持续 2×MSL（Linux 固定 60 秒，<code>TCP_TIMEWAIT_LEN</code>，<strong>没有 sysctl 能改</strong>）。两个理由缺一不可：</p>
+        <ul>
+          <li><strong>保证最后的 ACK 可靠送达</strong>：如果这个 ACK 丢了，对方会重传 FIN，本端还在 TIME_WAIT 才能正确回应；否则对方收到的是 RST，会认为连接异常终止。</li>
+          <li><strong>让旧连接的迟到报文消亡</strong>：防止延迟到达的报文被<strong>相同四元组</strong>的新连接误收。</li>
+        </ul>
+        <p><strong>大多数情况不需要处理。</strong> 每个 TIME_WAIT 只占一个精简的 <code>tcp_timewait_sock</code>（几百字节量级），10 万个也就几十 MB。服务端 TIME_WAIT 多，只说明<strong>是服务端在主动关闭</strong>（典型是 HTTP 短连接），根治办法是改用 keep-alive 长连接，而不是调内核参数。</p>
+        <p><strong>唯一真正需要处理的场景</strong>：本机作为客户端或反向代理，向同一个目的 IP:Port 发起海量短连接，端口在 60 秒内被占满，新连接报 <code>EADDRNOTAVAIL</code>。处理顺序是：连接池复用 → 扩大 <code>ip_local_port_range</code> → 开 <code>tcp_tw_reuse=1</code>（依赖 <code>tcp_timestamps=1</code>，只影响主动发起的连接） → 增加目的地址。</p>
+        <p><strong>绝对不要用 <code>tcp_tw_recycle</code></strong>：它按对端 IP 维度做 PAWS 时间戳校验，在客户端处于 NAT 之后时会误丢部分客户端的 SYN，症状是「同一出口 IP 后面的部分用户随机连不上」。它<strong>已在 Linux 4.12 被移除</strong>，今天写这个参数只会得到「No such file or directory」。</p>
+      </div>
+    </details></li>
+
+    <li><details class="qa">
+      <summary><span class="lvl basic">基础</span>客户端偶发连接超时，服务端 CPU 和内存都很闲。怎么判断是不是 accept 队列溢出？</summary>
+      <div class="ans">
+        <p><strong>三条命令定性：</strong></p>
+        <pre>ss -lnt                                        # LISTEN 行：Recv-Q=当前排队数，Send-Q=队列上限
+nstat -az | grep -E 'ListenOverflows|ListenDrops'
+netstat -s | grep -i 'listen queue'            # "times the listen queue of a socket overflowed"</pre>
+        <p><code>ss -lnt</code> 对 LISTEN 状态的 socket 有<strong>特殊语义</strong>：<code>Recv-Q</code> 是 accept 队列<strong>当前</strong>排了多少已完成握手的连接，<code>Send-Q</code> 是它的<strong>上限</strong>。两者相等就是满了。<code>ListenOverflows</code> 只要非零就是问题。</p>
+        <p><strong>为什么表现为「超时」而不是「拒绝」</strong>：默认 <code>tcp_abort_on_overflow=0</code>，队列满时内核<strong>静默丢弃客户端的 ACK</strong>。客户端已经收到 SYN+ACK，认为连接建立了，会重传 ACK 甚至直接发数据，几秒后才超时。设成 1 会立刻回 RST（快速失败），但瞬时突发也会被硬拒。</p>
+        <p><strong>修复要点</strong>：accept 队列大小是 <code>min(listen() 的 backlog 参数, net.core.somaxconn)</code>，<strong>两边都要改才有效</strong>——只调 <code>somaxconn</code> 而应用写死 <code>listen(fd,128)</code> 是没用的。但更重要的判断是：<strong>队列是缓冲，不是产能</strong>。持续溢出说明 <code>accept()</code> 速度跟不上，要看 accept 循环里是不是混进了阻塞操作，或者上 <code>SO_REUSEPORT</code> 多进程分担。</p>
+      </div>
+    </details></li>
+  </ol>
+
+  <h3 id="s10-2">10.2 中级（区分熟练度）</h3>
+  <ol class="qa-list" start="5">
+    <li><details class="qa">
+      <summary><span class="lvl mid">中级</span>线上网关 <code>dmesg</code> 刷 <code>nf_conntrack: table full, dropping packet</code>，你怎么定位和处理？</summary>
+      <div class="ans">
+        <p><strong>定位三步：</strong></p>
+        <pre>sysctl net.netfilter.nf_conntrack_count net.netfilter.nf_conntrack_max   # 确认贴顶
+conntrack -S              # 看 drop / early_drop / insert_failed 是否在涨
+conntrack -L | grep -oP 'dport=\d+' | sort | uniq -c | sort -rn | head   # 谁占的</pre>
+        <p><strong>按占用者分类对症，而不是一律调大 max：</strong></p>
+        <ul>
+          <li><strong>海量短连接（DNS、探针、日志上报）</strong> → <code>raw</code> 表 <code>-j NOTRACK</code> 直接不跟踪。注意 NOTRACK 的流量无法被 <code>--ctstate</code> 匹配也无法做 NAT，且<strong>两个方向都要写规则</strong>。</li>
+          <li><strong>ESTABLISHED 条目堆积</strong> → <code>nf_conntrack_tcp_timeout_established</code> 默认是 <strong>432000 秒（5 天）</strong>，这是最常见的元凶，可调到 1200~3600。</li>
+          <li><strong>哈希冲突严重</strong>（<code>search_restart</code> / <code>chaintoolong</code> 在涨） → 调 <code>nf_conntrack_buckets</code>，通常设为 <code>max/4</code>~<code>max/2</code>。</li>
+          <li><strong>确实就是连接多</strong> → 再调 <code>nf_conntrack_max</code>，并评估内存（每条约几百字节）。</li>
+        </ul>
+        <p><strong>调短超时的副作用必须一起说</strong>：空闲长连接（连接池、gRPC、SSH）的 conntrack 条目被提前删除后，服务端后续发来的数据包在网关上会被判为 <code>INVALID</code> 而丢弃，症状是「连接看着通，空闲一段时间后突然卡死」。所以调短超时必须<strong>确保应用侧 keepalive 间隔小于这个值</strong>。</p>
+        <p>加分项：提到 <code>insert_failed</code> 增长往往不是表满而是 <strong>NAT 端口分配竞争</strong>，可以用 <code>MASQUERADE --random-fully</code> 显著降低碰撞率——这个偶发万分之一的 SYN 丢失会造成 1 秒的 SYN 重传，在 p99 敏感的服务上很刺眼。</p>
+      </div>
+    </details></li>
+
+    <li><details class="qa">
+      <summary><span class="lvl mid">中级</span><code>rp_filter</code> 的三个取值分别是什么语义？为什么有人「明明关了却还是被丢包」？</summary>
+      <div class="ans">
+        <p>反向路径过滤：收包时用<strong>源地址</strong>反查路由表，看「我要回这个源地址会从哪个接口出去」。</p>
+        <ul>
+          <li><code>0</code> = <strong>关闭</strong>，不检查。适用于路由器、多线非对称路由、anycast。</li>
+          <li><code>1</code> = <strong>严格模式</strong>（RFC 3704 strict），反查出的接口<strong>必须正好是收包接口</strong>，否则丢弃。单出口服务器的推荐值。</li>
+          <li><code>2</code> = <strong>松散模式</strong>，只要源地址<strong>在任意接口上可达</strong>就放行。多网卡但仍想挡掉完全不可路由的伪造源地址时用它。</li>
+        </ul>
+        <p><strong>「关了还被丢」的原因</strong>：实际生效值是 <code>net.ipv4.conf.all.rp_filter</code> 与 <code>net.ipv4.conf.&lt;iface&gt;.rp_filter</code> 的<strong>最大值</strong>。只把某个接口设成 0 而 <code>all</code> 还是 1，结果依然是严格模式。<strong>必须两个都改</strong>；另外 <code>all</code> 的改动不会自动同步到已存在的接口，新建接口继承的是 <code>default</code>。</p>
+        <p><strong>怎么证明是它干的</strong>：<code>nstat -az | grep -i ReversePathFilter</code>，<code>TcpExtIPReversePathFilter</code> 在涨就实锤了（这个计数器名字带 Tcp，实际统计 IP 层所有被 rp_filter 丢的包）。想看具体包可以临时 <code>sysctl -w net.ipv4.conf.all.log_martians=1</code>，<code>dmesg</code> 里会打印 <code>martian source</code>。</p>
+        <p><strong>更根本的解法通常是策略路由</strong>：双网卡回包走错网卡是根因，用 <code>ip rule add from &lt;本接口IP&gt; lookup &lt;独立表&gt;</code> 把回包钉回它进来的那张网卡，比关掉 rp_filter 更安全。</p>
+      </div>
+    </details></li>
+
+    <li><details class="qa">
+      <summary><span class="lvl mid">中级</span>不用 Docker，用 <code>ip</code> 命令手工搭一套容器网络并能访问外网，需要哪几步？每一步解决什么问题？</summary>
+      <div class="ans">
+        <p>七步，每一步对应一个必须解决的问题：</p>
+        <pre>ip netns add ns1                                    # ① 独立的网络栈（接口/路由/iptables/端口空间全独立）
+ip link add veth0 type veth peer name ceth0         # ② 一根「虚拟网线」把两个 netns 连起来
+ip link set ceth0 netns ns1
+ip link add br0 type bridge                         # ③ 软件交换机，让多个容器能互通
+ip link set veth0 master br0
+ip addr add 172.18.0.1/24 dev br0                   #    网桥自己带 IP，同时当容器的网关
+ip link set br0 up; ip link set veth0 up
+ip netns exec ns1 ip addr add 172.18.0.2/24 dev ceth0   # ④ 容器侧配地址
+ip netns exec ns1 ip link set ceth0 up
+ip netns exec ns1 ip link set lo up
+ip netns exec ns1 ip route add default via 172.18.0.1   #    默认路由指向网桥
+sysctl -w net.ipv4.ip_forward=1                     # ⑤ 允许转发，否则「不是给我的包」直接丢
+iptables -t nat -A POSTROUTING -s 172.18.0.0/24 ! -o br0 -j MASQUERADE   # ⑥ 私网地址换成宿主机地址
+iptables -A FORWARD -i br0 -j ACCEPT                # ⑦ 很多发行版 FORWARD 默认 DROP</pre>
+        <p><strong>关键理解点：</strong></p>
+        <ul>
+          <li><strong>veth 的对端要走一遍完整的接收路径</strong>——从 <code>ceth0</code> 发出的帧进入 <code>veth0</code> 的 RX 路径，会再过一次 <code>netif_receive_skb</code>、GRO、netfilter。这既是容器网络 pps 开销高的原因，也是「在宿主机上 <code>tcpdump -i vethXXX</code> 能抓到容器全部流量」的原理。</li>
+          <li><strong>容器流量走 FORWARD 链，不走 INPUT/OUTPUT</strong>。在宿主机上写 INPUT 规则拦不住容器流量。</li>
+          <li><strong>回包靠 conntrack 还原</strong>：SNAT 只在首包时决策，结果记进 conntrack，反向包自动还原目的地址。</li>
+          <li><code>! -o br0</code> 是为了不把容器之间的互访也 NAT 掉。</li>
+        </ul>
+        <p>这套东西就是 Docker bridge 模式（<code>docker0</code>）和 Kubernetes 大多数 CNI（<code>cni0</code>）在内核层面做的事。加分项：提到 <code>br_netfilter</code> 与 <code>bridge-nf-call-iptables</code>——打开后二层桥接流量也会进 iptables 三层链，k8s 要求打开，但会让同网桥内的 Pod 互访也过一遍 conntrack。</p>
+      </div>
+    </details></li>
+
+    <li><details class="qa">
+      <summary><span class="lvl mid">中级</span>抓包看到 TCP 段有 65160 字节、而且校验和全是 <code>incorrect</code>，是网卡坏了还是 MTU 配错了？</summary>
+      <div class="ans">
+        <p><strong>两个都不是，是卸载（offload）特性造成的观测偏差。</strong></p>
+        <ul>
+          <li><strong>出向的巨帧</strong>：出向 tcpdump 的 tap 在 <code>dev_hard_start_xmit()</code> 里，也就是<strong>在驱动之前、TSO 分段之前</strong>。内核交给网卡的是一个最多 64KB 的巨型 skb，网卡才会按 MSS 切成几十个真实的以太网帧。所以你抓到的「一个包」在线上其实是几十个包。</li>
+          <li><strong>校验和错误</strong>：开了 TX checksum offload 时，内核只填了伪首部，真正的校验和由网卡计算。抓包点在网卡之前，自然看到的是「错的」。这是<strong>假告警</strong>。</li>
+          <li><strong>入向对应的是 GRO</strong>：入向 tap 在 <code>netif_receive_skb()</code> 里，GRO 已经把同流的多个小包合并了，所以抓到的入向包也可能远大于 MTU。</li>
+        </ul>
+        <p><strong>怎么确认与规避：</strong></p>
+        <pre>ethtool -k eth0 | grep -E 'segmentation|receive-offload|checksum'
+ethtool -K eth0 gro off gso off tso off lro off   # 会瞬断、CPU 上升，只在抓包窗口内做
+tcpdump -i eth0 -nn -s 96 -c 2000 -w /tmp/cap.pcap ...
+ethtool -K eth0 gro on gso on tso on              # 立刻恢复</pre>
+        <p><strong>什么时候必须关掉再抓</strong>：排查 MSS/MTU 协商、分段行为、乱序、重传时序、以及真实的校验和错误时。排查连通性、防火墙、握手行为时完全不用关。</p>
+        <p>另外两个相关的坑：<strong>LRO 在转发场景必须关掉</strong>（硬件合并后无法还原成原包，转发出去就是错的，GRO 因为保留了足够信息可以重新分段所以没这个问题）；<strong>抓包结束一定要看 <code>packets dropped by kernel</code></strong>，不为零说明 tcpdump 自己漏了包，基于这份 pcap 得出的「丢包」结论要打折。</p>
+      </div>
+    </details></li>
+  </ol>
+
+  <h3 id="s10-3">10.3 高级（体现深度）</h3>
+  <ol class="qa-list" start="9">
+    <li><details class="qa">
+      <summary><span class="lvl adv">高级</span>什么是 bufferbloat？CoDel 凭什么能治它，而单纯「把队列改小」不行？</summary>
+      <div class="ans">
+        <p><strong>bufferbloat</strong>：设备为了「不丢包」配了过大的缓冲区，拥塞时包不是被丢弃而是长时间排队。TCP 靠丢包感知拥塞，队列不丢包它就持续加速，最终把大队列<strong>填满并稳定维持在满状态</strong>（standing queue）。结果是带宽跑满、但每个包的排队延迟涨到几百毫秒——「一下载东西，SSH 就卡得敲不了字」。</p>
+        <p><strong>为什么不能简单把队列改小</strong>：队列该多大取决于带宽和 RTT（BDP），而这两者是动态变化的——同一个值在 100Mbps 短 RTT 下太大、在 1Gbps 长 RTT 下又太小。<strong>不存在一个普适的队列长度</strong>。改小了还会伤害突发吞吐：正常的流量突发会被直接丢弃。</p>
+        <p><strong>CoDel 的洞见是换了度量维度</strong>：不看队列<strong>有多长</strong>（长度没有普适阈值），而看每个包在队列里<strong>待了多久</strong>（sojourn time）。规则是：在一个 <code>interval</code>（100ms）的观察窗口内，如果队列的<strong>最小</strong>驻留时间<strong>始终</strong>超过 <code>target</code>（5ms），判定为 standing queue，开始丢弃队首包，且丢弃频率随持续时间递增，直到延迟回落。</p>
+        <p><strong>用「最小值」是精髓</strong>：突发流量会让队列瞬间变长但很快排空，最小驻留时间不会超标，所以突发不被惩罚；只有<strong>持续的、排不空的</strong>队列才会触发。这就区分开了「好队列」（吸收突发）和「坏队列」（制造延迟）。</p>
+        <p><strong>fq_codel = 公平排队 + CoDel</strong>：先按五元组哈希把流分到 1024 个子队列，每个独立跑 CoDel，用赤字轮询调度并给新流优先权。效果是大象流被 CoDel 压住，而一个刚发起的 DNS 查询落在自己的空队列里几乎零排队。</p>
+        <p><strong>实操</strong>：<code>sysctl net.core.default_qdisc=fq_codel</code>（现代发行版已是默认，但被人手工 replace 过就会退回 pfifo_fast，做延迟优化第一件事是 <code>tc qdisc show</code> 确认）。判读 <code>tc -s qdisc show</code> 时重点看 <strong><code>backlog</code>（瞬时积压，持续非零 = 正在制造延迟）</strong>，注意 <code>overlimits</code> 对 htb/tbf 表示「限速在生效」而<strong>不是错误</strong>。用 BBR 时要配 <code>fq</code> 而不是 <code>fq_codel</code>（BBR 依赖精确 pacing）。</p>
+      </div>
+    </details></li>
+
+    <li><details class="qa">
+      <summary><span class="lvl adv">高级</span>XDP 和 DPDK 都能做高性能包处理，怎么选？为什么说这道题的答案不在性能数字上？</summary>
+      <div class="ans">
+        <p><strong>核心差异是「是否放弃内核栈」，而不是快多少。</strong></p>
+        <table>
+          <thead><tr><th></th><th>XDP</th><th>DPDK</th></tr></thead>
+          <tbody>
+            <tr><td>网卡归属</td><td>仍归内核驱动管</td><td><strong>被独占</strong>（vfio-pci 绑定），内核看不见它</td></tr>
+            <tr><td>CPU</td><td>按需处理，空闲不占</td><td>轮询模式，核<strong>永远 100% 空转</strong></td></tr>
+            <tr><td>协议栈</td><td>处理不了的包 <code>XDP_PASS</code> 交给内核栈</td><td>没有内核栈，TCP/IP 全要自己实现或引入用户态栈</td></tr>
+            <tr><td>运维工具</td><td><code>ip</code> / <code>ss</code> / <code>tcpdump</code> / <code>iptables</code> <strong>全部继续可用</strong></td><td><strong>全部失效</strong>，可观测性要重建</td></tr>
+            <tr><td>部署</td><td>热加载 / 卸载，不中断</td><td>改配置基本要重启进程</td></tr>
+          </tbody>
+        </table>
+        <p><strong>判据</strong>：只要这台机器上还跑着<strong>需要正常网络栈的业务</strong>（哪怕只是 SSH 和监控 agent），就应该选 XDP——它是「在内核路径上插一段快速通道」。只有当<strong>整台机器的存在意义就是转发</strong>（NFV 网元、专用防火墙、行情网关、软件交换机）时，DPDK 独占网卡的代价才划算。</p>
+        <p><strong>中间选项是 AF_XDP</strong>：XDP 程序用 <code>XDP_REDIRECT</code> 把包投进 XSKMAP，用户态通过 UMEM 共享内存和四个环（FILL / RX / TX / COMPLETION）收发，零拷贝、无系统调用，但网卡仍是标准内核驱动，不需要它的流量继续走内核栈。</p>
+        <p><strong>关于 XDP 本身的两个深度点</strong>：① 三种模式里只有 <strong>native</strong> 有意义，<code>generic</code>（skb 模式）在 skb 分配之后才跑，比 tc-bpf 还慢，只用于调试——很多「上了 XDP 没提速」的案例就是跑在了 generic 上，要用 <code>ip link show</code> 确认显示的是 <code>xdp</code> 而不是 <code>xdpgeneric</code>。② <strong>不要把所有逻辑都塞进 XDP</strong>：XDP 只有裸包，没有 skb 元数据、没有 conntrack、不能挂 egress。Cilium 的分工很有代表性——XDP 只做 DDoS 丢包和 NodePort 首跳，Service 转发、NetworkPolicy、可观测性全在 tc-bpf（clsact）层，因为那里能读到 <code>__sk_buff</code> 的完整上下文。</p>
+      </div>
+    </details></li>
+
+    <li><details class="qa">
+      <summary><span class="lvl adv">高级</span>有人建议「全公司统一切 BBR，吞吐能翻倍」。你怎么评估这个提议？</summary>
+      <div class="ans">
+        <p><strong>先问一个问题：这些链路上存在与拥塞无关的丢包吗？</strong> 这是 BBR 是否有收益的唯一判据。</p>
+        <p><strong>原理层面的差异</strong>：cubic 把<strong>丢包</strong>当拥塞信号，丢一个包就降窗；BBR 是<strong>模型驱动</strong>的，持续测量瓶颈带宽（BtlBw）和最小 RTT（RTprop），按二者的乘积决定在途数据量，<strong>丢包不再直接触发降速</strong>。</p>
+        <p><strong>有收益的场景</strong>：跨洲传输、CDN 回源、移动 / 无线网络、质量不稳定的公网出口——这些链路的丢包很大比例来自误码或中间设备的随机丢弃而非真拥塞，cubic 会被反复打压到远低于可用带宽，BBR 常能带来数倍提升。另外 BBR 把在途数据控制在 BDP 附近，<strong>队列更浅，延迟明显更低</strong>，对 bufferbloat 严重的链路是双重收益。</p>
+        <p><strong>没收益甚至有风险的场景</strong>：<strong>机房内网</strong>（RTT 亚毫秒、丢包率近 0）换 BBR 基本没有提升，只是引入了新的行为模式和排查复杂度。已知的风险点包括：与 cubic 共享<strong>浅缓冲区</strong>链路时可能占用超过公平份额（公平性一直有争议）；<strong>ACK 聚合</strong>严重的链路（部分无线、部分虚拟化环境）上带宽估计会偏高。</p>
+        <p><strong>所以对这个提议的回答是</strong>：不接受「全公司统一切」。正确做法是——</p>
+        <ul>
+          <li>先<strong>分类链路</strong>：内网 / 公网出口 / 跨地域，分别量当前的重传率（<code>nstat</code> 的 <code>TcpRetransSegs</code>/<code>TcpOutSegs</code>）和 <code>ss -ti</code> 的 <code>delivery_rate</code>。</li>
+          <li><strong>灰度</strong>：用 <code>setsockopt(fd, IPPROTO_TCP, TCP_CONGESTION, "bbr", 3)</code> 对部分连接开，而不是全局 sysctl。同一台机器上可以对比。</li>
+          <li><strong>配套</strong>：BBR 依赖精确 pacing，qdisc 应该配 <code>fq</code>（<code>net.core.default_qdisc=fq</code>），不是 <code>fq_codel</code>。</li>
+          <li><strong>验证指标</strong>：不只看吞吐，还要看 p99 延迟和重传率；只看一个必然误判。</li>
+        </ul>
+        <p>这道题真正考的是<strong>「不抄 sysctl 大礼包」的判断力</strong>：每个参数都要能回答「什么症状让我改它 / 改完看什么验证 / 副作用是什么」。</p>
+      </div>
+    </details></li>
+
+    <li><details class="qa">
+      <summary><span class="lvl adv">高级</span>线上服务报「偶发丢包」，给你一台机器和十分钟，你的排查顺序是什么？说出每一步的判据。</summary>
+      <div class="ans">
+        <p><strong>核心原则：「丢包」不是结论而是现象类别，内核路径上至少有九个丢包点，每一层都有专属计数器。策略是先用两三条命令把范围缩到某一层，再深入。全程看<u>速率</u>不看绝对值。</strong></p>
+        <ul>
+          <li><strong>0 分钟 —— <code>dmesg -T | tail -50</code></strong>。<code>nf_conntrack: table full</code>、<code>neighbour table overflow</code>、<code>TCP: time wait bucket table overflow</code> 这类问题一行日志就结案，不看白不看。</li>
+          <li><strong>1 分钟 —— <code>nstat -n; sleep 10; nstat</code></strong>。先清零再看这 10 秒里哪些计数器动了，这是<strong>性价比最高的一步</strong>。重点：<code>ListenOverflows</code>（accept 队列）、<code>TCPBacklogDrop</code> / <code>TCPRcvQDrop</code>（socket 层）、<code>UdpRcvbufErrors</code>、<code>IPReversePathFilter</code>、<code>TcpRetransSegs</code>/<code>TcpOutSegs</code> 算重传率（内网 &gt; 0.05%、公网 &gt; 1% 就该查）。</li>
+          <li><strong>3 分钟 —— 硬件与软中断层</strong>。<code>ethtool -S eth0</code> 采样两次做差，看 <code>rx_missed_errors</code>、各 <code>rx_queue_N_drops</code>（<strong>只有一两个队列在丢 = 哈希不均，不是容量不够</strong>）；<code>/proc/net/softnet_stat</code> 看第 3 列 <code>time_squeeze</code>；<code>mpstat -P ALL 1</code> 看 <code>%soft</code> 是否集中在个别核。</li>
+          <li><strong>5 分钟 —— 连接与队列</strong>。<code>ss -lnt</code> 看 accept 队列；<code>ss -ti</code> 抽查连接，用 <code>rwnd_limited</code>（对端读得慢）/ <code>sndbuf_limited</code>（本端缓冲不够）/ <code>cwnd</code> 小（拥塞控制在压）三个信号区分「吞吐上不去」的三种完全不同的原因；<code>tc -s qdisc show</code> 看发送侧 <code>backlog</code> 和 <code>dropped</code>。</li>
+          <li><strong>7 分钟 —— netfilter</strong>。<code>iptables -L -n -v</code> 看 DROP 规则的<strong>包计数是否在涨</strong>（这是最直接的证据）；<code>conntrack -S</code>。</li>
+          <li><strong>10 分钟 —— 抓包做二分或追内核栈</strong>。在服务端网卡抓：<strong>能抓到 SYN</strong> = 包到了机器，问题在本机（继续往协议栈里查，注意 tcpdump 的 tap 在 netfilter <u>之前</u>，所以被 iptables DROP 的包照样能抓到——「抓到 SYN 但应用没反应」头号嫌疑就是防火墙）；<strong>抓不到 SYN</strong> = 包没到，去查网络路径 / 安全组 / 客户端。还定位不了就 <code>bpftrace -e 'tracepoint:skb:kfree_skb { @[kstack(6)] = count(); }'</code> 按内核栈聚合看内核在哪一行丢的（5.17+ 还能直接读 <code>args-&gt;reason</code>）。</li>
+        </ul>
+        <p><strong>几个能体现经验的细节</strong>：① <code>softnet_stat</code> 第 2 列只统计 per-CPU backlog 溢出，<strong>物理网卡走 NAPI 不经过 backlog</strong>，所以它为 0 不代表内核没丢包；② <code>ip -s link</code> 的 <code>dropped</code> 是软件侧丢弃，和 ring 大小无关，别看到它就去 <code>ethtool -G</code>；③ 抓包前想清楚要不要关 GRO/TSO；④ 抓完看 <code>packets dropped by kernel</code>，不为零则这份 pcap 本身不完整。</p>
+      </div>
+    </details></li>
+  </ol>
+</section>
+
+<div class="footer-nav">
+  <a href="networking_guide.html">🌐 网络编程指南</a>
+  <a href="async_networking_guide.html">⚡ 异步网络编程</a>
+  <a href="cgroup_namespace_containers.html">📦 cgroup 与容器</a>
+  <a href="observability_ebpf.html">🔍 eBPF 可观测性</a>
+  <a href="incident_playbook.html">🚨 故障处置手册</a>
+  <a href="linux_system_directory.html">📚 目录</a>
+  <a href="../index.html">🏠 主页</a>
+</div>
+
+</main>
+</div>
+
+<footer>
+  <p>Linux 内核网络栈与流量治理 — 收发包路径 · NAPI · netfilter/conntrack · netns/veth · tc · XDP · 调优排障 — Kavin Tech Notes · 2026</p>
+</footer>
+
+<script>
+(function(){var b=document.getElementById('progress');if(!b)return;function u(){var h=document.documentElement;b.style.width=(h.scrollTop/(h.scrollHeight-h.clientHeight)*100)+'%'}window.addEventListener('scroll',u,{passive:true});u();})();
+</script>
+<script>
+document.querySelectorAll('aside.toc nav a').forEach(a=>{a.addEventListener('click',e=>{e.preventDefault();const t=document.querySelector(a.getAttribute('href'));if(t)t.scrollIntoView({behavior:'smooth'})})});
+const obs=new IntersectionObserver(es=>{es.forEach(e=>{if(e.isIntersecting){document.querySelectorAll('aside.toc nav a').forEach(a=>a.classList.remove('active'));const l=document.querySelector(`aside.toc nav a[href="#${e.target.id}"]`);if(l)l.classList.add('active')}})},{threshold:.2});
+document.querySelectorAll('section[id]').forEach(s=>obs.observe(s));
+</script>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

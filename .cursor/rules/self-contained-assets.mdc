@@ -37,8 +37,77 @@ mermaid 有 3.3 MB。曾经 28 个页面把它当普通 `<script src>` 放在 `<
   - 初始化是**页面底部的内联脚本**（直接调 `mermaid.initialize()` / `new Chart()`）→
     把库标签移到**紧挨着那段内联脚本之前**。这里**不能加 `defer`**：内联脚本不会被延迟，
     会先执行并撞上 `mermaid is not defined`。
-  - 初始化**等 `DOMContentLoaded`**（如 `em-templates/shared.js`，且有 `typeof mermaid` 保护）→
+  - 初始化**等 `DOMContentLoaded`**（如 `assets/mermaid-theme.js`）→
     放 body 末尾并加 **`defer`**，下载与解析并行，最快。
+
+## 🚨 mermaid 的配色必须走 `assets/mermaid-theme.js`
+
+mermaid 的颜色是 **`initialize()` 时烘进 SVG 属性**的，之后再改 CSS 变量完全没用。
+所以页面里写死一套配色，就等于把图钉死在一种主题上：`io_linux_kernel_guide.html`
+写了 `theme:'dark'`，`software_management_guide.html` 写了一整套深色 `themeVariables`，
+两者在**浅色模式下都是深底浅字**；反过来 `em-templates/shared.js` 写死 paper 浅色，
+让 21 个模板页在**深色模式下露出一块白纸**。
+
+统一做法（有图的页面，`mermaid.min.js` 之后立刻引入，两个都带 `defer`）：
+
+```html
+<script src="../assets/vendor/mermaid.min.js" defer></script>
+<script src="../assets/mermaid-theme.js" defer></script>
+```
+
+页面要调 `flowchart`/`sequence`/`gantt` 参数，就在引入**之前**设
+`window.TN_MERMAID_CONFIG`，会被合并进去。
+
+- ❌ 页面里**不要**再调 `mermaid.initialize()`——两处初始化互相覆盖，谁最后跑谁生效。
+- ❌ `startOnLoad: true` 也不要写，共享脚本用 `mermaid.run()` 自己控制时机。
+
+### 🚨 切主题不能重新渲染
+
+第一版是「监听 `data-theme` 变化 → 全部重画」。功能对，但代价大到不能用：
+`io_linux_kernel_guide.html` 有 23 张图，实测**首屏 13.6 秒、每次切主题 4.4 秒**，
+比别的页面慢一个数量级，用户一眼就能看出来。
+
+现在的做法是**只渲染一次**，然后把 SVG 里烘死的颜色替换成 CSS 变量
+（`fill:#f1f5f9` → `fill:var(--mmc-3)`），两套值由脚本注入的 `<style>` 按
+`data-theme` 给。此后切主题是纯 CSS 的事：**4417 ms → 68 ms**。
+
+配套的是**滚到视口附近才渲染**（`IntersectionObserver`，`rootMargin: 800px`），
+首屏只画看得见的那张：**13.6 s → 3.9 s**。
+
+两条推论：
+
+- 颜色映射表 = `LIGHT` 与 `DARK` 两个 `themeVariables` 按键配对 + `SRC`（图元级配色）。
+  **两个字典的键必须一一对应**，漏一个那个颜色就永远停在浅色值上。
+- 任何测量 mermaid 图的脚本都要**先滚一遍页面**再采样，否则只看得到首屏那一张。
+  `check_diagram_contrast.mjs` 已经这么做了。
+
+### 图元级配色：源码一律写浅色
+
+`style X fill:#…` / `classDef … fill:#…` 是 `themeVariables` 管不到的，而 mermaid 的
+**解析器不接受 `fill:var(--x)`**（直接 Parse error），CSS 变量这条路走不通。
+唯一可行的是渲染前改写源码文本，这件事由 `mermaid-theme.js` 的 `LIGHT_TO_DARK` 做。
+
+- ✅ **mermaid 源码里一律写浅色值**（`#dbeafe` `#d1fae5` `#fef3c7` `#fee2e2` …，
+  文字 `#111827`），深色由脚本映射回去。
+- ❌ 不要在源码里写 `fill:#1a2234` 这类深色，也不要写 `color:#fff`——
+  浅色模式下就是白字白底。
+- 新增配色**成对**加进 `LIGHT_TO_DARK`，不要在页面里另发明一组。映射是**单向**的
+  （浅→深），所以同一个 hex 不能同时出现在两侧。
+
+### 自检必须真渲染
+
+静态 grep 只能抓到 `theme:'dark'` 这一种写法，看不见 `themeVariables` 里逐项写死的
+深色，更看不见最终 SVG 上到底是什么颜色。用：
+
+```bash
+node scripts/check_diagram_contrast.mjs <page.html> ...   # 或 --all
+```
+
+它在浅/深两种模式下真渲染，取每张图面积最大的填充色算相对亮度：
+浅色模式下不该出现 < 0.25 的大块，深色模式下不该出现 > 0.75 的。
+和 `check_mobile_layout.mjs` 一样需要 Playwright，**不在 CI 里**，属于提交前手动跑的那一档。
+⚠️ `--all` 要跑 494 个页面 × 2 种主题，很慢；平时只传**含 `class="mermaid"` 的那些页面**
+（当前 26 个）就够了。
 - **按需**：页面里没有 `<pre class="mermaid">` 就不要引 mermaid，没有 `<canvas>` 就不要引 chart.js。
 
 `audit_page_shell.py` 会同时校验这两条：`<head>` 里的非 defer 库标签、以及"引了但没用"。

@@ -5,8 +5,8 @@
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>容器底层原理 · namespace / cgroup v2 / OverlayFS / runc / OCI — Tech Notes</title>
-<meta name="description" content="容器底层原理：容器 vs 虚拟机 · 6 种 namespace · cgroup v2 资源控制 · OverlayFS 联合挂载 · OCI/runc 启动流程 · 容器网络 · 安全（cap/seccomp）。对位读者：用 Docker/K8s 但想搞懂「容器到底是什么」的后端/平台工程师">
+<title>容器底层原理 · namespace / cgroup v2 / OverlayFS / runc / 容器网络 / 排障 — Tech Notes</title>
+<meta name="description" content="容器底层原理：容器 vs 虚拟机的本质差别 · 8 种 namespace 与 unshare/nsenter 实操 · cgroup v2 统一层级与 cpu.stat/memory.events 判读 · OverlayFS 联合挂载与写放大 · OCI/runc 启动六步 · veth+bridge 手工搭容器网络 · 三个生产事故与 12 道面试题">
 <link rel="stylesheet" href="../assets/guide-theme.css">
 <style>
 .intuition{background:color-mix(in srgb,var(--accent) 8%,var(--bg-card));border-left:4px solid var(--accent-4);padding:14px 18px;border-radius:0 10px 10px 0;margin:14px 0;font-size:14px;line-height:1.7}
@@ -20,13 +20,13 @@
 .tool-card ul{margin:6px 0 0;padding-left:22px}.tool-card li{font-size:13.5px;color:var(--text);line-height:1.7;margin:4px 0}
 .tool-card li strong{color:var(--text)}
 .tool-card code{background:color-mix(in srgb,var(--accent) 14%,var(--bg-card));color:var(--accent-4);padding:1px 5px;border-radius:3px;font-size:12px;font-family:"JetBrains Mono",monospace}
-.cheatsheet{border:1px solid var(--border);border-radius:10px;margin:18px 0;overflow:hidden}
+.cheatsheet{border:1px solid var(--border);border-radius:10px;margin:18px 0;overflow:hidden;overflow-x:auto}
 .cheatsheet table{width:100%;border-collapse:collapse;font-size:13px;margin:0}
 .cheatsheet thead th{background:color-mix(in srgb,var(--accent) 13%,var(--bg-card));color:var(--accent);text-align:left;padding:10px 14px;border-bottom:2px solid var(--border);font-family:"JetBrains Mono",monospace;font-size:11.5px;text-transform:uppercase;letter-spacing:1px}
 .cheatsheet tbody td{padding:10px 14px;border-bottom:1px dashed var(--border);color:var(--text);vertical-align:top}
 .cheatsheet tbody tr:nth-child(even){background:color-mix(in srgb,var(--accent) 5%,var(--bg-card))}
 .cheatsheet tbody td code{background:color-mix(in srgb,var(--accent) 14%,var(--bg-card));color:var(--accent-4);padding:1px 6px;border-radius:3px;font-size:11.5px;font-family:"JetBrains Mono",monospace}
-.checklist{background:color-mix(in srgb,var(--green) 8%,var(--bg-card));border:1px solid color-mix(in srgb,var(--green) 30%,transparent);border-left:4px solid #34d399;border-radius:0 12px 12px 0;padding:16px 20px;margin:14px 0}
+.checklist{background:color-mix(in srgb,var(--green) 8%,var(--bg-card));border:1px solid color-mix(in srgb,var(--green) 30%,transparent);border-left:4px solid var(--green);border-radius:0 12px 12px 0;padding:16px 20px;margin:14px 0}
 .checklist h4{color:var(--accent-3);margin:0 0 10px;font-size:14px;text-transform:uppercase;letter-spacing:1px}
 .checklist ul{margin:0;padding-left:22px}.checklist li{font-size:13.5px;color:var(--text);line-height:1.7;margin:6px 0}
 .checklist li code{background:color-mix(in srgb,var(--accent) 14%,var(--bg-card));color:var(--accent-4);padding:1px 5px;border-radius:3px;font-size:12px;font-family:"JetBrains Mono",monospace}
@@ -37,12 +37,28 @@
 .insight-grid .card.violet{border-left:3px solid var(--accent-2)}.insight-grid .card.violet h4{color:var(--accent-2)}
 .insight-grid .card p{font-size:13px;color:var(--text);line-height:1.65;margin:0}
 @media(max-width:760px){.insight-grid{grid-template-columns:1fr}}
-.analogy{position:relative;margin:20px 0;padding:18px 20px 18px 58px;border-radius:12px;background:linear-gradient(135deg,rgba(251,191,36,.09),rgba(167,139,250,.07));border:1px solid rgba(251,191,36,.28)}
+.analogy{position:relative;margin:20px 0;padding:18px 20px 18px 58px;border-radius:12px;background:color-mix(in srgb,var(--accent-4) 10%,var(--bg-card));border:1px solid color-mix(in srgb,var(--accent-4) 30%,var(--border))}
 .analogy::before{content:"🎯";position:absolute;left:16px;top:16px;font-size:24px}
 .analogy .at{font-weight:700;color:var(--accent-4);font-size:14px;margin-bottom:6px}
 .analogy p{margin:6px 0;font-size:14px;line-height:1.75}
 .analogy .map{margin-top:10px;font-size:13px;color:var(--text-dim)}
 .analogy .map b{color:var(--accent)}
+.case{background:var(--bg-card);border:1px solid var(--border-2);border-radius:12px;padding:16px 20px;margin:16px 0}
+.case h4{margin:0 0 4px;font-size:15px;color:var(--accent-2)}
+.case .sym{font-size:13px;color:var(--text-dim);margin-bottom:10px}
+.vs{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:16px 0}
+@media(max-width:860px){.vs{grid-template-columns:1fr}}
+.vs>div{border:1px solid var(--border);border-radius:10px;padding:12px 14px}
+.vs>div>h5{margin:0 0 6px;font-size:.88rem}
+.vs .bad{border-color:color-mix(in srgb,var(--danger) 45%,var(--border));background:color-mix(in srgb,var(--danger) 6%,var(--bg-card))}
+.vs .bad>h5{color:var(--danger)}
+.vs .good{border-color:color-mix(in srgb,var(--green) 45%,var(--border));background:color-mix(in srgb,var(--green) 6%,var(--bg-card))}
+.vs .good>h5{color:var(--accent-3)}
+.vs pre{margin:6px 0 0;font-size:.78rem}
+.fig{margin:22px 0;overflow-x:auto}
+.fig svg{max-width:100%;height:auto}
+pre{font-family:var(--mono);font-size:.85rem;line-height:1.6}
+code{font-family:var(--mono)}
 </style>
 <link rel="stylesheet" href="../assets/site-tokens.css">
 <link rel="stylesheet" href="../assets/article.css">
@@ -57,7 +73,7 @@
       <a class="tn-home" href="../index.html">← 主页</a>
       <a href="linux_system_directory.html">目录</a>
       <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
-      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 38 min</span>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 55 min</span>
       <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
     </div>
   </div>
@@ -74,7 +90,14 @@
     <li><a href="#ch5">容器如何启动（OCI/runc）</a></li>
     <li><a href="#ch6">容器网络</a></li>
     <li><a href="#ch7">容器安全</a></li>
-    <li><a href="#ch8">checklist</a></li>
+    <li><a href="#ch8">三个生产事故 + checklist</a></li>
+    <li><a href="#ch9">面试题（12 道）</a>
+      <ol>
+        <li><a href="#ch9-1">9.1 基础</a></li>
+        <li><a href="#ch9-2">9.2 中级</a></li>
+        <li><a href="#ch9-3">9.3 高级</a></li>
+      </ol>
+    </li>
   </ol></nav></aside>
 
   <main>
@@ -82,181 +105,1449 @@
       <div class="badge">N09 · Container Internals</div>
       <h1>容器底层原理<br>namespace / cgroup v2 / OverlayFS / runc</h1>
       <p class="sub">
-        8 章 · 容器 vs 虚拟机 · 6 种 namespace · cgroup v2 资源控制 · OverlayFS 联合挂载 · OCI/runc 启动流程 · 容器网络 · 安全（cap/seccomp）。<br>
+        9 章 · 容器 vs 虚拟机 · 8 种 namespace · cgroup v2 资源控制与判读 · OverlayFS 联合挂载 · OCI/runc 启动流程 · 手工搭建容器网络 · 安全边界 · 三个生产事故。<br>
         <strong>对位读者</strong>：用 Docker/K8s 但想搞懂「容器到底是什么」的后端/平台工程师。结论先行：<strong>容器 = 被 namespace 隔离 + cgroup 限制 + 特殊根文件系统的<u>普通进程</u></strong>。<br>
-        <strong>关系</strong>：CPU/内存限制底层见 <a href="./process_scheduling.html">进程调度</a> 与 <a href="./numa_memory_advanced.html">cgroup memory</a>。
+        <strong>关系</strong>：CPU 配额与限流见 <a href="./process_scheduling.html">进程调度</a>，内存 cgroup 与 OOM 见 <a href="./numa_memory_advanced.html">NUMA 与高级内存</a>，安全模型的完整版见 <a href="./linux_security_model.html">Linux 安全模型</a>。
       </p>
       <div class="meta-row">
         <span class="pill red">核心难度 ★★★★☆</span>
         <span class="pill cyan">云原生基石</span>
-        <span class="pill green">阅读时长 ~38 min</span>
+        <span class="pill green">阅读时长 ~55 min</span>
         <span class="pill amber">前置 进程 / 文件系统</span>
       </div>
     </header>
 
     <section class="chapter" id="ch1">
-      <div class="ch-head"><div class="num">01</div><div class="t"><h2>容器不是虚拟机</h2><div class="sub">没有 Guest OS，只有被"框住"的进程</div></div></div>
-      <p>最大的误解：以为容器是「轻量虚拟机」。<strong>虚拟机</strong>虚拟的是<strong>硬件</strong>，每个 VM 跑一整套自己的内核 + OS，靠 Hypervisor 隔离，重但隔离强。<strong>容器</strong>不虚拟硬件，所有容器<strong>共享宿主机的同一个内核</strong>，只是被内核的隔离机制「框」起来，让进程<strong>以为</strong>自己独占整个系统。容器本质就是一个受限的普通进程。</p>
+      <div class="ch-head"><div class="num">01</div><div class="t"><h2>容器不是虚拟机</h2><div class="sub">没有 Guest OS，只有被「框住」的进程</div></div></div>
+      <p>最大的误解是把容器当「轻量虚拟机」。<strong>虚拟机</strong>虚拟的是<strong>硬件</strong>：每个 VM 跑一整套自己的内核与 OS，靠 Hypervisor 隔离。<strong>容器</strong>不虚拟硬件，所有容器<strong>共享宿主机的同一个内核</strong>，只是被内核的隔离机制「框」起来。</p>
+      <p>这不是比喻，是可以当场验证的事实：容器里那个「PID 1」的 nginx，在宿主的 <code>ps</code> 里就明晃晃地躺着（父进程是 <code>containerd-shim</code>），宿主上 <code>ls /proc/&lt;pid&gt;/root/etc/nginx/</code> 能直接翻它的文件系统。<strong>容器就是宿主上的一个普通进程</strong>——这一句是后面八章的全部前提。</p>
+
       <div class="insight-grid">
-        <div class="card violet"><h4>🖥 虚拟机</h4><p>虚拟硬件 + 独立内核/OS；隔离强、开销大、启动秒级~分钟级。</p></div>
-        <div class="card green"><h4>📦 容器</h4><p>共享宿主内核；隔离靠 namespace+cgroup；轻量、毫秒启动、密度高。</p></div>
-        <div class="card"><h4>⚖️ 取舍</h4><p>容器省资源、快，但共享内核 → 内核漏洞可能逃逸；强隔离场景用轻量 VM（Kata/Firecracker）。</p></div>
+        <div class="card violet"><h4>🖥 虚拟机</h4><p>虚拟硬件 + 独立内核/OS；隔离强、启动秒级到分钟级，内存开销以百 MB 计（要养一整套 OS）。</p></div>
+        <div class="card green"><h4>📦 容器</h4><p>共享宿主内核，隔离靠 namespace + cgroup；毫秒启动，除应用本身几乎无额外内存开销，密度高一个数量级。</p></div>
+        <div class="card"><h4>⚖️ 取舍</h4><p>省资源、快，但共享内核 → 内核漏洞就是逃逸。强隔离场景用轻量 VM（Kata / Firecracker）或用户态内核（gVisor）。</p></div>
       </div>
+
       <div class="analogy">
         <div class="at">生活类比：独栋别墅 vs 合租公寓</div>
-        <p>虚拟机像<strong>独栋别墅</strong>：每家有独立的水电煤（内核/OS），互不影响但盖房成本高。容器像一栋楼里的<strong>合租单间</strong>：共用整栋楼的水电主管道（宿主内核），但每间房有独立门锁、独立视野（namespace），物业还限制每间的用电额度（cgroup）。合租便宜灵活，但主管道（内核）出问题会影响所有人。</p>
+        <p>虚拟机像<strong>独栋别墅</strong>：每家独立水电煤（内核/OS），互不影响但盖房贵。容器像一栋楼里的<strong>合租单间</strong>：共用整栋楼的水电主管道（宿主内核），每间房有独立门锁与视野（namespace），物业还限制每间的用电额度（cgroup）。便宜灵活，但主管道出问题会影响所有人。</p>
         <div class="map">映射：<b>整栋楼水电</b>=宿主内核 · <b>独立房间视野</b>=namespace · <b>用电限额</b>=cgroup · <b>合租便宜</b>=轻量高密度</div>
       </div>
-      <div class="intuition">容器的三大支柱：<strong>namespace 管「看得见什么」（隔离视图）、cgroup 管「能用多少」（限制资源）、镜像/OverlayFS 管「根文件系统长什么样」</strong>。理解这三点，容器就没有黑魔法了。</div>
+
+      <div class="cheatsheet"><table>
+        <thead><tr><th>维度</th><th>虚拟机</th><th>容器</th><th>轻量 VM（Kata/Firecracker）</th></tr></thead>
+        <tbody>
+          <tr><td>隔离边界</td><td>硬件虚拟化，各自内核</td><td>内核提供的 namespace + cgroup</td><td>精简内核 + 硬件虚拟化</td></tr>
+          <tr><td>启动时间</td><td>数秒到数十秒</td><td>毫秒级</td><td>约百毫秒</td></tr>
+          <tr><td>额外内存开销</td><td>数百 MB 起（Guest OS）</td><td>接近 0</td><td>数十 MB</td></tr>
+          <tr><td>内核漏洞影响</td><td>被 Hypervisor 挡一层</td><td><strong>直接就是逃逸</strong></td><td>被 Hypervisor 挡一层</td></tr>
+          <tr><td>能否改内核参数</td><td>能，各自独立</td><td>不能（非命名空间化的 sysctl 是全局共享的）</td><td>能</td></tr>
+          <tr><td>典型场景</td><td>多租户、跑不同 OS</td><td>微服务、CI、高密度部署</td><td>跑不可信代码、Serverless</td></tr>
+        </tbody>
+      </table></div>
+
+      <h3>内核里根本没有「容器」这个对象</h3>
+      <p>翻遍 Linux 源码找不到 <code>struct container</code>。内核只知道 <code>struct task_struct</code> 里挂着几个指针，「造一个容器」就是把这几个指针一次性指向新建的实例：</p>
+
+      <div class="fig">
+        <svg viewBox="0 0 620 320" width="620" height="320" role="img" aria-label="容器的组合图：task_struct 里的 nsproxy、cgroups、fs、cred 四组指针分别被换成新建的 namespace 集合、cgroup 节点、容器 rootfs 与收敛后的权限，四样齐备才被人称作容器，缺一样只是部分隔离的普通进程">
+          <text x="16" y="20" fill="var(--text)" font-size="12.5" font-weight="700">「造一个容器」= 把一个普通进程的四组指针换掉</text>
+
+          <rect x="16" y="36" width="168" height="212" rx="10" fill="var(--bg-card-2)" stroke="var(--border-2)"/>
+          <text x="100" y="58" text-anchor="middle" fill="var(--text)" font-size="12" font-weight="700">struct task_struct</text>
+          <text x="100" y="74" text-anchor="middle" fill="var(--text-mute)" font-size="10">（就是一个普通进程）</text>
+
+          <rect x="30" y="88" width="140" height="30" rx="5" fill="color-mix(in srgb, var(--accent) 16%, var(--bg-card))" stroke="var(--accent)"/>
+          <text x="100" y="107" text-anchor="middle" fill="var(--text)" font-size="11">nsproxy</text>
+          <rect x="30" y="126" width="140" height="30" rx="5" fill="color-mix(in srgb, var(--green) 16%, var(--bg-card))" stroke="var(--green)"/>
+          <text x="100" y="145" text-anchor="middle" fill="var(--text)" font-size="11">cgroups (css_set)</text>
+          <rect x="30" y="164" width="140" height="30" rx="5" fill="color-mix(in srgb, var(--yellow) 20%, var(--bg-card))" stroke="var(--yellow)"/>
+          <text x="100" y="183" text-anchor="middle" fill="var(--text)" font-size="11">fs (root / pwd)</text>
+          <rect x="30" y="202" width="140" height="30" rx="5" fill="color-mix(in srgb, var(--purple) 18%, var(--bg-card))" stroke="var(--purple)"/>
+          <text x="100" y="221" text-anchor="middle" fill="var(--text)" font-size="11">cred / seccomp / LSM</text>
+
+          <path d="M176 103 L246 103" fill="none" stroke="var(--accent)" stroke-width="1.5" marker-end="url(#c1a)"/>
+          <path d="M176 141 L246 141" fill="none" stroke="var(--green)" stroke-width="1.5" marker-end="url(#c1g)"/>
+          <path d="M176 179 L246 179" fill="none" stroke="var(--yellow)" stroke-width="1.5" marker-end="url(#c1y)"/>
+          <path d="M176 217 L246 217" fill="none" stroke="var(--purple)" stroke-width="1.5" marker-end="url(#c1p)"/>
+
+          <rect x="250" y="86" width="354" height="34" rx="6" fill="color-mix(in srgb, var(--accent) 10%, var(--bg-card))" stroke="var(--border)"/>
+          <text x="262" y="101" fill="var(--accent)" font-size="11" font-weight="700">namespace（隔离视图）</text>
+          <text x="262" y="115" fill="var(--text-dim)" font-size="10.5">clone(CLONE_NEW*) / unshare / setns · 第 2 章</text>
+
+          <rect x="250" y="124" width="354" height="34" rx="6" fill="color-mix(in srgb, var(--green) 10%, var(--bg-card))" stroke="var(--border)"/>
+          <text x="262" y="139" fill="var(--green)" font-size="11" font-weight="700">cgroup（限制用量）</text>
+          <text x="262" y="153" fill="var(--text-dim)" font-size="10.5">往 cgroup.procs 写 PID，CPU/内存/IO 开始记账 · 第 3 章</text>
+
+          <rect x="250" y="162" width="354" height="34" rx="6" fill="color-mix(in srgb, var(--yellow) 12%, var(--bg-card))" stroke="var(--border)"/>
+          <text x="262" y="177" fill="var(--text)" font-size="11" font-weight="700">rootfs（分层根文件系统）</text>
+          <text x="262" y="191" fill="var(--text-dim)" font-size="10.5">OverlayFS 合并镜像层 + pivot_root · 第 4、5 章</text>
+
+          <rect x="250" y="200" width="354" height="34" rx="6" fill="color-mix(in srgb, var(--purple) 12%, var(--bg-card))" stroke="var(--border)"/>
+          <text x="262" y="215" fill="var(--purple)" font-size="11" font-weight="700">capabilities + seccomp + LSM（收敛权限）</text>
+          <text x="262" y="229" fill="var(--text-dim)" font-size="10.5">drop caps、装 BPF 过滤器、打 SELinux 标签 · 第 7 章</text>
+
+          <line x1="16" y1="264" x2="604" y2="264" stroke="var(--border-2)" stroke-width="1"/>
+          <text x="16" y="284" fill="var(--text-dim)" font-size="11">四样齐备，我们才习惯叫它「容器」——但这只是用户态的一个约定，不是内核的一个概念。</text>
+          <text x="16" y="302" fill="var(--text-mute)" font-size="11">所以它能被拆开单用：ip netns 只要 net ns · systemd 限服务只要 cgroup · K8s Pod 只共享一部分 ns。</text>
+
+          <defs>
+            <marker id="c1a" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="var(--accent)"/></marker>
+            <marker id="c1g" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="var(--green)"/></marker>
+            <marker id="c1y" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="var(--yellow)"/></marker>
+            <marker id="c1p" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="var(--purple)"/></marker>
+          </defs>
+        </svg>
+        <figcaption>拿一个真容器的 PID 验证这张图：<code>readlink /proc/&lt;pid&gt;/ns/*</code> 看各 ns 的 inode 号与宿主是否同号、<code>cat /proc/&lt;pid&gt;/cgroup</code> 看它在统一层级里的路径、<code>grep overlay /proc/&lt;pid&gt;/mountinfo</code> 看根指向哪个 merged 目录</figcaption>
+      </div>
+
+      <div class="cheatsheet"><table>
+        <thead><tr><th><code>task_struct</code> 里的字段</th><th>指向什么</th><th>谁负责换掉它</th><th>换掉之后的效果</th></tr></thead>
+        <tbody>
+          <tr><td><code>nsproxy</code></td><td>一个包含 mnt / uts / ipc / net / pid / cgroup / time namespace 指针的小结构体</td><td><code>clone()</code> 带 <code>CLONE_NEW*</code>，或 <code>unshare()</code> / <code>setns()</code></td><td>看到的挂载点、主机名、网卡、进程号全都换了一套</td></tr>
+          <tr><td><code>cgroups</code>（<code>css_set</code>）</td><td>该任务在 cgroup 树上所属节点的一组控制器状态</td><td>往 <code>cgroup.procs</code> 里写 PID</td><td>CPU / 内存 / IO 用量开始被计入并受限</td></tr>
+          <tr><td><code>fs</code>（<code>fs_struct</code>）</td><td>该任务的根目录（<code>root</code>）与当前目录（<code>pwd</code>）</td><td><code>pivot_root()</code> / <code>chroot()</code></td><td>路径解析的起点变成容器 rootfs</td></tr>
+          <tr><td><code>cred</code></td><td>uid/gid、四五个 capability 集合、所属的 user namespace</td><td>setuid / capset / <code>CLONE_NEWUSER</code></td><td>权限收敛；容器内 root 可以是宿主上的普通用户</td></tr>
+          <tr><td><code>seccomp</code></td><td>挂在任务上的 BPF 过滤器链</td><td><code>seccomp(SECCOMP_SET_MODE_FILTER, ...)</code></td><td>白名单外的系统调用直接返回 <code>EPERM</code> 或杀进程</td></tr>
+          <tr><td><code>security</code></td><td>LSM（SELinux / AppArmor）挂的标签指针</td><td>运行时写 <code>/proc/self/attr/*</code></td><td>MAC 策略开始约束它能碰哪些客体</td></tr>
+        </tbody>
+      </table></div>
+
+      <div class="intuition">三大支柱：<strong>namespace 管「看得见什么」、cgroup 管「能用多少」、镜像 / OverlayFS 管「根文件系统长什么样」</strong>。Docker、containerd、K8s 都只是把这三件事编排起来的工具。</div>
+
+      <div class="box tip">本篇的边界是<strong>容器的内核底层机制</strong>，相邻几篇各管一段，遇到这些问题请直接过去：<code>capabilities</code> 五个集合的语义、seccomp 过滤器怎么写、逃逸链完整分析 → <a href="./linux_security_model.html">Linux 安全模型</a>；内存 cgroup 的回收路径与 OOM 打分 → <a href="./numa_memory_advanced.html#ch7">NUMA 与高级内存 §7</a>；veth / bridge 在内核里怎么转发 → <a href="./kernel_network_stack.html#s5">内核网络栈 §5</a>；同一套 cgroup 树在非容器场景怎么用 → <a href="./systemd_boot_init.html#s6">systemd 与 cgroup</a>。</div>
     </section>
 
     <section class="chapter" id="ch2">
       <div class="ch-head"><div class="num">02</div><div class="t"><h2>Namespace：隔离视图</h2><div class="sub">让进程以为自己独占系统</div></div></div>
-      <p>Namespace 把某类<strong>全局系统资源</strong>包装起来，让不同 namespace 里的进程看到各自独立的实例。容器就是把一个进程放进一组新建的 namespace。</p>
+      <p>Namespace 把某类<strong>全局系统资源</strong>包装起来，让不同 namespace 里的进程看到各自独立的实例。造容器就是把一个进程放进一组新建的 namespace。</p>
+
+      <div class="fig">
+        <svg viewBox="0 0 700 400" width="700" height="400" style="min-width:660px;height:auto" role="img" aria-label="八种 namespace 全景图：以容器进程为中心，向外辐射出 mount、pid、net、user、ipc、uts、cgroup、time 八种隔离，每一种标注它包装了哪类内核资源以及有什么已知缺口">
+          <text x="16" y="20" fill="var(--text)" font-size="12.5" font-weight="700">一个容器进程，八种被换掉的「视图」——以及每种视图的缺口</text>
+
+          <circle cx="350" cy="196" r="52" fill="color-mix(in srgb, var(--accent) 18%, var(--bg-card))" stroke="var(--accent)" stroke-width="1.6"/>
+          <text x="350" y="192" text-anchor="middle" fill="var(--text)" font-size="12" font-weight="700">容器进程</text>
+          <text x="350" y="209" text-anchor="middle" fill="var(--text-dim)" font-size="10">nsproxy → 8 个 ns</text>
+
+          <rect x="16" y="40" width="196" height="46" rx="7" fill="color-mix(in srgb, var(--yellow) 14%, var(--bg-card))" stroke="var(--yellow)"/>
+          <text x="26" y="57" fill="var(--text)" font-size="11" font-weight="700">mnt · CLONE_NEWNS</text>
+          <text x="26" y="71" fill="var(--text-dim)" font-size="10">挂载树（自己的根文件系统）</text>
+          <text x="26" y="83" fill="var(--red)" font-size="10">缺口：传播类型配错会漏回宿主</text>
+
+          <rect x="16" y="94" width="196" height="46" rx="7" fill="color-mix(in srgb, var(--green) 14%, var(--bg-card))" stroke="var(--green)"/>
+          <text x="26" y="111" fill="var(--text)" font-size="11" font-weight="700">pid · CLONE_NEWPID</text>
+          <text x="26" y="125" fill="var(--text-dim)" font-size="10">PID 分配空间，容器内从 1 开始</text>
+          <text x="26" y="137" fill="var(--red)" font-size="10">缺口：嵌套的，父 ns 永远看得见</text>
+
+          <rect x="16" y="148" width="196" height="46" rx="7" fill="color-mix(in srgb, var(--info) 14%, var(--bg-card))" stroke="var(--info)"/>
+          <text x="26" y="165" fill="var(--text)" font-size="11" font-weight="700">net · CLONE_NEWNET</text>
+          <text x="26" y="179" fill="var(--text-dim)" font-size="10">整套协议栈：网卡/路由/iptables/端口</text>
+          <text x="26" y="191" fill="var(--red)" font-size="10">缺口：建销都最贵，易泄漏</text>
+
+          <rect x="16" y="202" width="196" height="46" rx="7" fill="color-mix(in srgb, var(--purple) 14%, var(--bg-card))" stroke="var(--purple)"/>
+          <text x="26" y="219" fill="var(--text)" font-size="11" font-weight="700">user · CLONE_NEWUSER</text>
+          <text x="26" y="233" fill="var(--text-dim)" font-size="10">UID/GID 映射，兼任其它 ns 的所有者</text>
+          <text x="26" y="245" fill="var(--red)" font-size="10">缺口：只能写一次，多线程不能进</text>
+
+          <rect x="488" y="40" width="196" height="46" rx="7" fill="color-mix(in srgb, var(--accent) 12%, var(--bg-card))" stroke="var(--border-2)"/>
+          <text x="498" y="57" fill="var(--text)" font-size="11" font-weight="700">ipc · CLONE_NEWIPC</text>
+          <text x="498" y="71" fill="var(--text-dim)" font-size="10">System V IPC、POSIX 消息队列</text>
+          <text x="498" y="83" fill="var(--red)" font-size="10">缺口：/dev/shm 是另一回事</text>
+
+          <rect x="488" y="94" width="196" height="46" rx="7" fill="color-mix(in srgb, var(--accent) 12%, var(--bg-card))" stroke="var(--border-2)"/>
+          <text x="498" y="111" fill="var(--text)" font-size="11" font-weight="700">uts · CLONE_NEWUTS</text>
+          <text x="498" y="125" fill="var(--text-dim)" font-size="10">主机名与 NIS 域名，就这两个字段</text>
+          <text x="498" y="137" fill="var(--red)" font-size="10">缺口：uname -r 不隔离</text>
+
+          <rect x="488" y="148" width="196" height="46" rx="7" fill="color-mix(in srgb, var(--accent) 12%, var(--bg-card))" stroke="var(--border-2)"/>
+          <text x="498" y="165" fill="var(--text)" font-size="11" font-weight="700">cgroup · CLONE_NEWCGROUP</text>
+          <text x="498" y="179" fill="var(--text-dim)" font-size="10">cgroup 层级的根视图</text>
+          <text x="498" y="191" fill="var(--red)" font-size="10">缺口：只改视图，限额一模一样</text>
+
+          <rect x="488" y="202" width="196" height="46" rx="7" fill="color-mix(in srgb, var(--accent) 12%, var(--bg-card))" stroke="var(--border-2)"/>
+          <text x="498" y="219" fill="var(--text)" font-size="11" font-weight="700">time · CLONE_NEWTIME</text>
+          <text x="498" y="233" fill="var(--text-dim)" font-size="10">单调时钟与 boottime 的偏移</text>
+          <text x="498" y="245" fill="var(--red)" font-size="10">缺口：墙上时钟仍是全局的</text>
+
+          <path d="M214 63 C 262 63, 282 150, 300 176" fill="none" stroke="var(--border-2)" stroke-width="1.3"/>
+          <path d="M214 117 C 264 117, 278 160, 298 184" fill="none" stroke="var(--border-2)" stroke-width="1.3"/>
+          <path d="M214 171 C 260 171, 272 182, 297 192" fill="none" stroke="var(--border-2)" stroke-width="1.3"/>
+          <path d="M214 225 C 262 225, 276 214, 298 206" fill="none" stroke="var(--border-2)" stroke-width="1.3"/>
+          <path d="M486 63 C 438 63, 418 150, 400 176" fill="none" stroke="var(--border-2)" stroke-width="1.3"/>
+          <path d="M486 117 C 436 117, 422 160, 402 184" fill="none" stroke="var(--border-2)" stroke-width="1.3"/>
+          <path d="M486 171 C 440 171, 428 182, 403 192" fill="none" stroke="var(--border-2)" stroke-width="1.3"/>
+          <path d="M486 225 C 438 225, 424 214, 402 206" fill="none" stroke="var(--border-2)" stroke-width="1.3"/>
+
+          <line x1="16" y1="288" x2="684" y2="288" stroke="var(--border-2)" stroke-width="1"/>
+          <text x="16" y="308" fill="var(--text)" font-size="11.5" font-weight="700">权限依赖：左右两列这七种都要求「在目标 ns 的所有者 user ns 里有 CAP_SYS_ADMIN」</text>
+          <rect x="16" y="318" width="150" height="30" rx="6" fill="color-mix(in srgb, var(--purple) 16%, var(--bg-card))" stroke="var(--purple)"/>
+          <text x="91" y="337" text-anchor="middle" fill="var(--text)" font-size="10.5">① 建 user ns（唯一免权限）</text>
+          <path d="M170 333 L206 333" fill="none" stroke="var(--purple)" stroke-width="1.5" marker-end="url(#c2p)"/>
+          <rect x="210" y="318" width="176" height="30" rx="6" fill="color-mix(in srgb, var(--green) 16%, var(--bg-card))" stroke="var(--green)"/>
+          <text x="298" y="337" text-anchor="middle" fill="var(--text)" font-size="10.5">② 在里面自动获得全套 capability</text>
+          <path d="M390 333 L426 333" fill="none" stroke="var(--green)" stroke-width="1.5" marker-end="url(#c2g)"/>
+          <rect x="430" y="318" width="176" height="30" rx="6" fill="color-mix(in srgb, var(--accent) 16%, var(--bg-card))" stroke="var(--accent)"/>
+          <text x="518" y="337" text-anchor="middle" fill="var(--text)" font-size="10.5">③ 用它去建其余七种</text>
+          <text x="16" y="368" fill="var(--text-mute)" font-size="10.5">这就是 rootless 容器的全部原理。flags 里同时给 CLONE_NEWUSER 和别的标志时，内核保证先建 user ns，一次调用即可。</text>
+          <text x="16" y="386" fill="var(--text-mute)" font-size="10.5">setns 加入已有 ns 也要按这个顺序：先进 user ns 再进 mnt / net / pid，反了得到 EPERM。</text>
+
+          <defs>
+            <marker id="c2p" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="var(--purple)"/></marker>
+            <marker id="c2g" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="var(--green)"/></marker>
+          </defs>
+        </svg>
+        <figcaption>八种 namespace 各包装一类内核资源，谁都不覆盖全部——下面两张表把「缺口」展开</figcaption>
+      </div>
+
       <div class="cheatsheet"><table>
-        <thead><tr><th>Namespace</th><th>隔离什么</th></tr></thead>
+        <thead><tr><th>Namespace</th><th>clone 标志</th><th>隔离什么</th><th>没隔离什么 / 注意</th></tr></thead>
         <tbody>
-          <tr><td><code>PID</code></td><td>进程号——容器内 PID 1 其实是宿主上的某个大 PID；容器看不到宿主进程</td></tr>
-          <tr><td><code>Mount (mnt)</code></td><td>挂载点/文件系统视图——容器有自己的根文件系统</td></tr>
-          <tr><td><code>Network (net)</code></td><td>网卡、IP、路由、端口——容器有独立网络栈</td></tr>
-          <tr><td><code>UTS</code></td><td>主机名与域名</td></tr>
-          <tr><td><code>IPC</code></td><td>System V IPC、POSIX 消息队列</td></tr>
-          <tr><td><code>User</code></td><td>UID/GID 映射——容器内 root 可映射为宿主普通用户（rootless 关键）</td></tr>
-          <tr><td><code>Cgroup</code></td><td>隐藏宿主 cgroup 层级</td></tr>
+          <tr><td><code>PID</code></td><td><code>CLONE_NEWPID</code></td><td>进程号空间——容器内 PID 1 是宿主上的某个大 PID</td><td>宿主仍能看到并 kill 容器内进程；PID 嵌套，父 ns 永远可见子 ns</td></tr>
+          <tr><td><code>Mount (mnt)</code></td><td><code>CLONE_NEWNS</code></td><td>挂载点视图——容器有自己的根文件系统</td><td>传播类型配错会把容器的挂载漏回宿主</td></tr>
+          <tr><td><code>Network (net)</code></td><td><code>CLONE_NEWNET</code></td><td>网卡、IP、路由表、iptables 规则、端口空间</td><td>创建开销最大（要初始化整套协议栈实例）</td></tr>
+          <tr><td><code>UTS</code></td><td><code>CLONE_NEWUTS</code></td><td>主机名与 NIS 域名</td><td>就这两样，最简单的一种</td></tr>
+          <tr><td><code>IPC</code></td><td><code>CLONE_NEWIPC</code></td><td>System V IPC、POSIX 消息队列</td><td>跨容器共享内存得显式挂同一个 <code>/dev/shm</code></td></tr>
+          <tr><td><code>User</code></td><td><code>CLONE_NEWUSER</code></td><td>UID/GID 映射——容器内 root 可映射为宿主普通用户</td><td>唯一能被非特权用户创建的；rootless 的基石，也是 CVE 高发区</td></tr>
+          <tr><td><code>Cgroup</code></td><td><code>CLONE_NEWCGROUP</code></td><td>隐藏宿主 cgroup 层级，只看到自己那棵子树的根</td><td>只改视图，不改限额</td></tr>
+          <tr><td><code>Time</code></td><td><code>CLONE_NEWTIME</code></td><td>单调时钟与 boottime 的偏移（5.6 起）</td><td><strong>不隔离墙上时钟</strong>，改系统时间仍是全局的</td></tr>
         </tbody>
       </table></div>
+
       <div class="tool-card">
-        <h4>相关系统调用</h4>
+        <h4>三个相关系统调用</h4>
         <ul>
-          <li><code>clone()</code>：创建新进程时带 <code>CLONE_NEW*</code> 标志，直接放进新 namespace。</li>
-          <li><code>unshare()</code>：让当前进程脱离并进入新 namespace。</li>
-          <li><code>setns()</code>：加入一个已存在的 namespace（<code>docker exec</code> 就是把新进程 setns 进目标容器的 namespace）。</li>
-          <li>亲手体验：<code>unshare --pid --net --mount --fork bash</code> 就能造一个「迷你容器」。</li>
+          <li><code>clone()</code>：创建新进程时带 <code>CLONE_NEW*</code>，子进程直接诞生在新 namespace 里。runc 用的是这个。</li>
+          <li><code>unshare()</code>：让<strong>当前</strong>进程脱离并进入新 namespace。PID namespace 特殊——当前进程不换 PID，要它的<strong>子进程</strong>才进新 PID ns，所以 <code>unshare --pid</code> 必须配 <code>--fork</code>。</li>
+          <li><code>setns()</code>：加入一个<strong>已存在</strong>的 namespace，<code>docker exec</code> 与 <code>nsenter</code> 就是它。</li>
         </ul>
       </div>
-      <div class="intuition">「容器内 PID 1」很特殊：它是 PID namespace 的 init，要负责回收僵尸子进程、转发信号。业务进程直接当 PID 1 常忘了收养孤儿进程 → 用 <code>tini</code>/<code>--init</code> 做轻量 init。这是容器里进程管理的经典坑。</div>
+
+<pre><span class="cm"># 手搓一个「迷你容器」：新的 user / PID / net / mount / UTS namespace</span>
+<span class="cm">#   -U 建 user ns（普通用户唯一能建的），-r 把自己映射成 ns 内的 root，</span>
+<span class="cm">#   于是后面那几个 --net --pid 才有 CAP_SYS_ADMIN 可用（见上图的权限链）。</span>
+$ unshare -Ur --pid --net --mount --uts --fork --mount-proc bash
+
+# id
+uid=0(root) gid=0(root) groups=0(root)          <span class="cm"># 有边界的 root</span>
+# ps -ef
+UID   PID  PPID  C STIME TTY   TIME CMD
+root    1     0  0 10:31 pts/0 00:00:00 bash    <span class="cm"># ★ 我是 PID 1</span>
+root    9     1  0 10:31 pts/0 00:00:00 ps -ef
+# ip addr
+1: lo: &lt;LOOPBACK&gt; mtu 65536 qdisc noop state DOWN   <span class="cm"># 网络也是空的</span>
+# touch /etc/newfile
+touch: cannot touch '/etc/newfile': Permission denied
+<span class="cm">#   /etc 属于宿主 uid 0，它没被映射进本 ns → 内核按 overflowuid 处理，</span>
+<span class="cm">#   这个「root」管不着它。出了 user ns 就什么都不是。</span>
+
+<span class="cm"># ⚠ --mount-proc 不能省：只隔离 PID 却不重挂 /proc，ps 读的还是宿主那份，</span>
+<span class="cm">#   会看到宿主全部进程 —— 经典的半吊子隔离。</span>
+<span class="cm"># 剩下的差距只有一件事：把根换成镜像的 rootfs（第 5 章的 pivot_root）。</span></pre>
+
+      <h3>八种 namespace 逐个看：隔离了什么、漏了什么</h3>
+      <p>上面那张表是速查，下面这张按「实际会咬人的程度」排序，给出观察手段和踩过的坑。</p>
+
+      <div class="cheatsheet"><table>
+        <thead><tr><th>Namespace</th><th>被隔离的内核对象</th><th>常用观察方式</th><th>最容易踩的坑</th></tr></thead>
+        <tbody>
+          <tr><td><code>mnt</code></td><td>该任务的挂载树（<code>mnt_namespace</code> 里那棵 mount 树）</td><td><code>cat /proc/PID/mountinfo</code>、<code>findmnt -N PID</code></td><td>传播类型配错，容器里的挂载漏回宿主或反之（见下）</td></tr>
+          <tr><td><code>pid</code></td><td>PID 分配空间（每层一个 <code>pid_namespace</code>，PID 是<strong>嵌套</strong>的）</td><td><code>ps</code> 需配合重挂 <code>/proc</code>；宿主看 <code>/proc/PID/status</code> 的 <code>NSpid</code> 行</td><td>PID 1 的信号语义与僵尸回收（见下）；<code>unshare --pid</code> 不加 <code>--fork</code> 等于没换</td></tr>
+          <tr><td><code>net</code></td><td>整套协议栈实例：网卡、路由表、邻居表、netfilter 规则、conntrack、端口号空间</td><td><code>nsenter -t PID -n ip/ss/tcpdump</code>、<code>ip netns list</code></td><td>创建与销毁都最贵；销毁走单个工作队列且要等 RCU 宽限期，批量删时明显变慢</td></tr>
+          <tr><td><code>user</code></td><td>UID/GID 映射、capability 的作用域、其它 namespace 的<strong>所有者</strong></td><td><code>cat /proc/PID/uid_map</code>、<code>lsns -t user</code></td><td>多线程进程不能给自己 <code>unshare</code>（Go 程序尤其容易撞）；映射只能写一次</td></tr>
+          <tr><td><code>ipc</code></td><td>System V 消息队列 / 信号量 / 共享内存，POSIX 消息队列</td><td><code>nsenter -t PID -i ipcs -a</code></td><td>POSIX 共享内存走 <code>/dev/shm</code>（tmpfs），跨容器共享要显式挂同一个 tmpfs</td></tr>
+          <tr><td><code>uts</code></td><td><code>struct new_utsname</code>：<code>nodename</code> 与 <code>domainname</code></td><td><code>nsenter -t PID -u hostname</code></td><td>只隔离这两个字段；<code>uname -r</code> 的内核版本<strong>不隔离</strong></td></tr>
+          <tr><td><code>cgroup</code></td><td>cgroup 层级的<strong>根视图</strong>——容器只看到自己那棵子树是 <code>/</code></td><td><code>cat /proc/PID/cgroup</code> 在容器内外对比</td><td>只改视图不改限额；没开它时能从 <code>/proc/self/cgroup</code> 读出宿主完整路径（信息泄露）</td></tr>
+          <tr><td><code>time</code></td><td><code>CLOCK_MONOTONIC</code> 与 <code>CLOCK_BOOTTIME</code> 的偏移量（5.6 起）</td><td><code>cat /proc/PID/timens_offsets</code></td><td><strong>不隔离 <code>CLOCK_REALTIME</code></strong>；偏移只能在进入该 ns 前写，进去后只读</td></tr>
+        </tbody>
+      </table></div>
+
+      <div class="tool-card amber">
+        <h4>两个非直觉之处（图里画不下的细节）</h4>
+        <ul>
+          <li><strong><code>setns</code> 进 PID namespace 后当前进程的 PID 不变</strong>，只有此后 <code>fork</code> 的子进程才在新 ns 里分配 PID——这是 <code>nsenter -t PID -p</code> 之后 <code>echo $$</code> 看起来「不对」的原因。</li>
+          <li>user 与 pid namespace 有嵌套深度上限（当前内核 32 层），嵌套容器套太深会直接失败。</li>
+        </ul>
+      </div>
+
+      <div class="tool-card violet">
+        <h4>namespace 靠什么活着——以及泄漏怎么查</h4>
+        <ul>
+          <li>namespace 是引用计数对象，<strong>最后一个引用消失时才销毁</strong>。引用只有三类：① 还有任务的 <code>nsproxy</code> 指着它；② 有人持有 <code>/proc/PID/ns/X</code> 的<strong>打开的 fd</strong>；③ 它被 <strong>bind mount</strong> 到了别处（<code>ip netns add</code> 就是这么让一个空 ns 活着的）。</li>
+          <li>所以「netns 泄漏」必是这三条之一没断，排查按三条来：<code>findmnt -t nsfs</code> 找对不上活容器的死条目（最常见，<code>umount</code> 即释放）；<code>ls -l /proc/*/fd | grep 'net:\['</code> 找谁忘了 <code>close</code>；<code>lsns -t net</code> 看有没有进程留在里面。</li>
+          <li><strong><code>NPROCS=0</code> 却还存在的 net namespace 就是泄漏</strong>（见过一台机器攒到近两千个，根因是 CNI 插件退出路径没清干净），后果是 <code>ip netns</code> 操作与 Pod 删除越来越慢——net ns 的销毁由<strong>单个工作队列串行</strong>处理，还要等 RCU 宽限期。</li>
+        </ul>
+      </div>
+
+      <h3>PID namespace 的三条特殊规则，以及可复现的验证</h3>
+      <p>PID 1 的怪脾气不是 Docker 的实现细节，而是<strong>内核对 PID namespace 里 init 进程的明文规定</strong>——规则说清了，「容器里 kill 不掉进程」和「<code>docker stop</code> 要等 10 秒」就是同一件事的两面。</p>
+
+      <div class="fig">
+        <svg viewBox="0 0 640 300" width="640" height="300" role="img" aria-label="PID 1 的信号规则与 docker stop 十秒超时的时序：同一 namespace 内发给 PID 1 的信号只有装了处理函数的才送达，连 SIGKILL 也会被丢弃；从祖先 namespace 发来时规则相同，唯独 SIGKILL 与 SIGSTOP 强制送达，因此 docker stop 的 SIGTERM 被静默丢弃后要干等十秒才被 SIGKILL 硬杀">
+          <text x="16" y="20" fill="var(--text)" font-size="12.5" font-weight="700">谁能杀掉容器里的 PID 1</text>
+
+          <rect x="16" y="34" width="286" height="104" rx="8" fill="var(--bg-card-2)" stroke="var(--border-2)"/>
+          <text x="30" y="53" fill="var(--text)" font-size="11.5" font-weight="700">① 同一 namespace 内（容器里自己发）</text>
+          <text x="30" y="72" fill="var(--text-dim)" font-size="10.5">装了 handler 的信号 → 送达</text>
+          <text x="30" y="90" fill="var(--red)" font-size="10.5">没装 handler 的 → 全部丢弃</text>
+          <text x="30" y="108" fill="var(--red)" font-size="10.5">连 SIGKILL 也丢：kill -9 1 毫无反应</text>
+          <text x="30" y="128" fill="var(--text-mute)" font-size="10">→「容器里 kill 不掉主进程」</text>
+
+          <rect x="338" y="34" width="286" height="104" rx="8" fill="var(--bg-card-2)" stroke="var(--border-2)"/>
+          <text x="352" y="53" fill="var(--text)" font-size="11.5" font-weight="700">② 祖先 namespace（宿主发）</text>
+          <text x="352" y="72" fill="var(--text-dim)" font-size="10.5">规则相同：没 handler 的照样丢</text>
+          <text x="352" y="90" fill="var(--green)" font-size="10.5">唯独 SIGKILL / SIGSTOP 强制送达</text>
+          <text x="352" y="108" fill="var(--green)" font-size="10.5">且不可捕获、不可忽略</text>
+          <text x="352" y="128" fill="var(--text-mute)" font-size="10">→ docker stop 正好卡在这条缝里</text>
+
+          <line x1="16" y1="154" x2="624" y2="154" stroke="var(--border-2)" stroke-width="1"/>
+          <text x="16" y="174" fill="var(--text)" font-size="11.5" font-weight="700">docker stop 那 10 秒的全部来历</text>
+
+          <line x1="40" y1="212" x2="600" y2="212" stroke="var(--border-2)" stroke-width="1.2"/>
+          <rect x="40" y="196" width="10" height="32" rx="2" fill="var(--yellow)"/>
+          <text x="40" y="190" fill="var(--yellow)" font-size="10.5">t=0 SIGTERM</text>
+          <rect x="50" y="198" width="440" height="28" rx="3" fill="color-mix(in srgb, var(--red) 22%, var(--bg-card))" stroke="var(--red)"/>
+          <text x="270" y="216" text-anchor="middle" fill="var(--text)" font-size="11">被内核静默丢弃（连 pending 都没有）→ 干等 10 秒</text>
+          <rect x="490" y="196" width="10" height="32" rx="2" fill="var(--red)"/>
+          <text x="500" y="190" fill="var(--red)" font-size="10.5">t=10s SIGKILL 强制送达</text>
+          <text x="512" y="216" fill="var(--text-dim)" font-size="10.5">退出码 137</text>
+
+          <text x="16" y="252" fill="var(--text-dim)" font-size="11">加 <tspan font-weight="700">--init</tspan>：tini 当 PID 1，它装了 handler → 收到后转发给业务子进程；子进程不是 PID 1，默认动作正常生效。</text>
+          <text x="16" y="270" fill="var(--green)" font-size="11">退出耗时降到零点几秒，退出码变成 143（128+15）——这就是判断「优雅退出链路通不通」的唯一硬证据。</text>
+          <text x="16" y="290" fill="var(--text-mute)" font-size="10.5">第三条规则：PID 1 一退出，该 ns 里其余进程全被内核 SIGKILL，ns 随之销毁——别指望主进程退了之后让后台线程善后。</text>
+        </svg>
+        <figcaption>验证这条规则最干净的实验体是 <code>sleep</code>（<code>SigCgt</code> 全零）：当 PID 1 时从宿主发 <code>SIGTERM</code> 它照样活着，换 <code>SIGKILL</code> 立刻没</figcaption>
+      </div>
+
+      <div class="cheatsheet"><table>
+        <thead><tr><th>规则</th><th>内核行为</th><th>在容器上表现为</th></tr></thead>
+        <tbody>
+          <tr><td><strong>同 ns 内发给 PID 1 的信号</strong></td><td><strong>只有 PID 1 自己安装了处理函数的信号才会被送达</strong>，其余一律丢弃——包括特权进程发的，也包括 <code>SIGKILL</code></td><td>容器内 <code>kill -9 1</code> 毫无反应；「容器里 kill 不掉主进程」</td></tr>
+          <tr><td><strong>祖先 ns 发给 PID 1 的信号</strong></td><td>同样要求有处理函数，<strong>唯独 <code>SIGKILL</code> / <code>SIGSTOP</code> 例外</strong>——这两个从祖先 ns 发出时强制送达且不可捕获</td><td><code>docker stop</code> 的 <code>SIGTERM</code> 被静默丢弃 → 干等 10 秒 → <code>SIGKILL</code> 生效。「优雅退出逻辑从来没跑过」</td></tr>
+          <tr><td><strong>PID 1 退出</strong></td><td>该 namespace 里<strong>所有</strong>其余进程被内核 <code>SIGKILL</code>，namespace 随之销毁</td><td>主进程一退，容器整个没了，别的进程来不及善后</td></tr>
+          <tr><td><strong>孤儿进程重新归属</strong></td><td>父进程先死的孤儿，被过继给<strong>本 namespace 的 PID 1</strong>（不是宿主 init）</td><td>PID 1 不 <code>wait()</code> 就攒僵尸，攒满 <code>pids.max</code> 后 <code>fork</code> 全部失败</td></tr>
+          <tr><td><strong>PID 是嵌套的</strong></td><td>同一个任务在每一层 namespace 里各有一个编号，父 ns 永远能看到子 ns 的全部进程</td><td>宿主上能 <code>kill</code> 容器里任何进程；<code>/proc/PID/status</code> 的 <code>NSpid</code> 行把各层编号列出来</td></tr>
+        </tbody>
+      </table></div>
+
+      <div class="box danger">僵尸的具体危害是<strong>吃 <code>pids.max</code> 的额度</strong>：撞上限之后 <code>fork</code> 返回 <code>EAGAIN</code>，容器里执行任何命令都报 <code>Resource temporarily unavailable</code>，而 CPU 与内存指标全都正常。证据在 <code>pids.current</code> 与 <code>pids.events</code> 的 <code>max</code> 计数。</div>
+
+      <div class="vs">
+        <div class="bad"><h5>❌ 信号收不到</h5>
+          <p>ENTRYPOINT 脚本末行写 <code>./myapp</code>：shell 一直是 PID 1，<code>SIGTERM</code> 发给了 shell，myapp 什么都收不到。</p>
+        </div>
+        <div class="good"><h5>✅ exec 让出 PID 1</h5>
+          <p>末行改成 <code>exec ./myapp</code>：myapp 替换掉 shell、自己成为 PID 1，能收到 <code>SIGTERM</code>（前提是注册了 handler）。</p>
+        </div>
+      </div>
+
+      <div class="intuition">判断「要不要 <code>--init</code>」只需两问：<strong>① PID 1 会不会 <code>fork</code> 出可能变孤儿的子进程？② 它有没有正确处理 <code>SIGTERM</code>？</strong>两个都是「是」才可以不要——实践中只有 nginx、PostgreSQL 这类天生的进程管理者真做到了。</div>
+
+      <h3>Mount namespace 与挂载传播：容器最容易漏出去的一环</h3>
+      <p>新建 mount namespace 时内核<strong>复制</strong>一份当前挂载树，但两棵树不是彻底断开——每个挂载点带一个<strong>传播类型</strong>，决定挂载 / 卸载事件怎么在两棵树之间流动。这是容器隔离里最容易配错、也最容易让宿主受害的一处。</p>
+
+      <div class="cheatsheet"><table>
+        <thead><tr><th>传播类型</th><th><code>mount</code> 选项</th><th>事件流向</th><th>典型用途</th></tr></thead>
+        <tbody>
+          <tr><td><strong>shared</strong></td><td><code>--make-shared</code> / <code>--make-rshared</code></td><td><strong>双向</strong>：同一 peer group 内互相传播挂载与卸载</td><td>宿主 <code>/</code> 的默认（systemd 设成 rshared）；CSI 插件要把卷「推」给别的容器时用</td></tr>
+          <tr><td><strong>private</strong></td><td><code>--make-private</code> / <code>--make-rprivate</code></td><td><strong>不传播</strong>，两边完全独立</td><td>最强隔离；代价是宿主后来新挂的东西容器里永远看不见</td></tr>
+          <tr><td><strong>slave</strong></td><td><code>--make-slave</code> / <code>--make-rslave</code></td><td><strong>单向</strong>：从 master（宿主）收，但自己的挂载<u>不</u>回传</td><td>★ 容器运行时的常用选择，理由见下</td></tr>
+          <tr><td><strong>unbindable</strong></td><td><code>--make-unbindable</code></td><td>private，且<strong>禁止被 bind mount</strong></td><td>防止「递归 bind 包含自身的子树」导致挂载点指数爆炸，多用于运行时内部的中间挂载点</td></tr>
+        </tbody>
+      </table></div>
+
+      <div class="fig">
+        <svg viewBox="0 0 620 260" width="620" height="260" role="img" aria-label="三种挂载传播类型的事件流向对比：shared 双向传播，slave 只从宿主收不往外漏，private 完全不传播">
+          <text x="20" y="20" fill="var(--text)" font-size="12.5" font-weight="700">挂载 / 卸载事件在宿主挂载树与容器挂载树之间怎么流动</text>
+
+          <rect x="24" y="42" width="150" height="54" rx="8" fill="color-mix(in srgb, var(--accent) 14%, var(--bg-card))" stroke="var(--accent)"/>
+          <text x="99" y="64" text-anchor="middle" fill="var(--text)" font-size="12">宿主挂载树</text>
+          <text x="99" y="82" text-anchor="middle" fill="var(--text-dim)" font-size="10.5">systemd 默认设为 rshared</text>
+
+          <rect x="24" y="112" width="150" height="42" rx="8" fill="color-mix(in srgb, var(--accent-2) 14%, var(--bg-card))" stroke="var(--accent-2)"/>
+          <text x="99" y="138" text-anchor="middle" fill="var(--text)" font-size="12">容器挂载树</text>
+
+          <text x="212" y="40" fill="var(--accent-4)" font-size="11.5" font-weight="700">shared（双向）</text>
+          <path d="M186 58 L272 58" fill="none" stroke="var(--accent-3)" stroke-width="1.6" marker-end="url(#mpg)"/>
+          <path d="M272 76 L186 76" fill="none" stroke="var(--danger)" stroke-width="1.6" marker-end="url(#mpr)"/>
+          <text x="290" y="62" fill="var(--text-dim)" font-size="10.5">宿主新挂的能进来 ✅</text>
+          <text x="290" y="80" fill="var(--danger)" font-size="10.5">容器挂的漏到宿主 ❌ 卸载也会反向生效</text>
+
+          <text x="212" y="112" fill="var(--accent-4)" font-size="11.5" font-weight="700">slave（单向 · 容器运行时的常用选择）</text>
+          <path d="M186 130 L272 130" fill="none" stroke="var(--accent-3)" stroke-width="1.6" marker-end="url(#mpg)"/>
+          <line x1="186" y1="148" x2="272" y2="148" stroke="var(--text-mute)" stroke-width="1.4" stroke-dasharray="4 3"/>
+          <line x1="222" y1="141" x2="236" y2="155" stroke="var(--danger)" stroke-width="1.8"/>
+          <line x1="236" y1="141" x2="222" y2="155" stroke="var(--danger)" stroke-width="1.8"/>
+          <text x="290" y="134" fill="var(--text-dim)" font-size="10.5">宿主新挂的能进来 ✅（CSI 卷、云盘热插）</text>
+          <text x="290" y="152" fill="var(--accent-3)" font-size="10.5">容器自己挂的挡在里面 ✅</text>
+
+          <text x="212" y="184" fill="var(--accent-4)" font-size="11.5" font-weight="700">private（完全不通）</text>
+          <line x1="186" y1="200" x2="272" y2="200" stroke="var(--text-mute)" stroke-width="1.4" stroke-dasharray="4 3"/>
+          <line x1="222" y1="193" x2="236" y2="207" stroke="var(--danger)" stroke-width="1.8"/>
+          <line x1="236" y1="193" x2="222" y2="207" stroke="var(--danger)" stroke-width="1.8"/>
+          <text x="290" y="204" fill="var(--text-dim)" font-size="10.5">隔离最强，但宿主后来挂的东西永远看不见</text>
+
+          <line x1="20" y1="222" x2="600" y2="222" stroke="var(--border-2)" stroke-width="1"/>
+          <text x="20" y="242" fill="var(--text-mute)" font-size="11">K8s 的三档就是这三种：None = rprivate · HostToContainer = rslave · Bidirectional = rshared（需特权）</text>
+
+          <defs>
+            <marker id="mpg" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="var(--accent-3)"/></marker>
+            <marker id="mpr" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="var(--danger)"/></marker>
+          </defs>
+        </svg>
+        <figcaption>「收得到、漏不出去」这个需求只有 slave 能满足——这就是容器运行时几乎总选它的原因</figcaption>
+      </div>
+
+      <div class="tool-card green">
+        <h4>为什么 <code>rslave</code> 是容器运行时的常用选择</h4>
+        <ul>
+          <li><strong>要「从宿主收」</strong>：宿主后来挂进来的东西（新 attach 的云盘、CSI 刚 publish 的卷）必须能出现在容器里，<code>private</code> 做不到。</li>
+          <li><strong>不能「往宿主漏」</strong>：容器内部会挂一大堆 <code>/proc</code>、tmpfs、secret 卷，<code>shared</code> 下全部传播到宿主挂载树上，而<strong>挂载操作的开销与挂载点总数相关</strong>。更严重的是<strong>卸载会反向生效</strong>：容器里 <code>umount /data</code> 会把宿主那个 bind 源也卸掉。</li>
+          <li>K8s 的 <code>Bidirectional</code>（rshared）<strong>要求容器特权</strong>，只该给 CSI 这类必须往宿主推挂载的组件。</li>
+        </ul>
+      </div>
+
+      <div class="case">
+        <h4>事故 · 宿主 <code>df</code> 输出上万行，节点上所有 mount 操作变慢</h4>
+        <div class="sym">现象：一台跑了几十个 Pod 的节点，<code>df</code> 要好几秒才返回、输出上万行；kubelet 日志里大量 <code>mount</code> 超时，新 Pod 卡在 <code>ContainerCreating</code>。</div>
+        <p>根因：为了让一个特权存储组件能把卷推给别的容器，运维给<strong>一批不相干的容器</strong>都加了 <code>mountPropagation: Bidirectional</code>。于是它们内部每一次挂载都传播回宿主挂载树，而容器反复重启、传播过来的那份没人负责卸载。现场数据：<code>/proc/mounts</code> 一万一千多行、4310 条 <code>overlay</code> 是 <code>shared</code>，活容器只有 38 个。</p>
+        <p><strong>处方</strong>：<code>Bidirectional</code> 只留给 CSI node 插件，其余一律 <code>None</code> 或 <code>HostToContainer</code>；按路径批量 <code>umount -l</code> 清残留；<strong>把 <code>wc -l /proc/mounts</code> 当节点级指标</strong>，超过几百条就告警。</p>
+      </div>
+
+      <h3>User namespace 与 ID 映射：容器内是 root，宿主上是普通用户</h3>
+      <p>User namespace 隔离的是 UID/GID 的<strong>解释方式</strong>，翻译表就是 <code>/proc/PID/uid_map</code> 与 <code>gid_map</code>。它还兼任<strong>其它 namespace 的「所有者」</strong>——能不能对一个 net ns 做特权操作，看的是你在<u>它的所有者</u> user ns 里有没有 <code>CAP_NET_ADMIN</code>。</p>
+
+      <div class="def"><strong>映射算术</strong>：<code>uid_map</code> 每行三个数（<code>inside</code>、<code>outside</code>、<code>length</code>），换算公式 <code>宿主 uid = outside + (容器内 uid − inside)</code>。<strong>没有落进任何一行的 uid 是「不可映射」的</strong>：内核把这类文件的属主显示成 <code>overflowuid</code>（通常 65534 / <code>nobody</code>），你在容器内对它<strong>没有任何权限</strong>——哪怕你是容器内的 root。</div>
+
+      <div class="fig">
+        <svg viewBox="0 0 620 250" width="620" height="250" role="img" aria-label="rootless 容器的 uid 映射：容器内 uid 0 映射到宿主 uid 1000，容器内 uid 1 到 65536 映射到宿主 100000 起的连续段，因此容器内 uid 33 写出的文件在宿主上属主是 100032">
+          <text x="16" y="20" fill="var(--text)" font-size="12.5" font-weight="700">一个 rootless 容器的两行映射，以及它算出来的属主</text>
+
+          <text x="120" y="46" text-anchor="middle" fill="var(--accent)" font-size="11.5" font-weight="700">容器内看到的 uid</text>
+          <text x="500" y="46" text-anchor="middle" fill="var(--green)" font-size="11.5" font-weight="700">宿主上真实的 uid</text>
+
+          <rect x="30" y="58" width="180" height="34" rx="6" fill="color-mix(in srgb, var(--accent) 16%, var(--bg-card))" stroke="var(--accent)"/>
+          <text x="120" y="80" text-anchor="middle" fill="var(--text)" font-size="11.5">0（容器内的 root）</text>
+          <rect x="410" y="58" width="180" height="34" rx="6" fill="color-mix(in srgb, var(--green) 16%, var(--bg-card))" stroke="var(--green)"/>
+          <text x="500" y="80" text-anchor="middle" fill="var(--text)" font-size="11.5">1000（我这个普通用户）</text>
+          <path d="M214 75 L406 75" fill="none" stroke="var(--accent)" stroke-width="1.5" marker-end="url(#c2u)"/>
+          <text x="310" y="69" text-anchor="middle" fill="var(--text-mute)" font-size="10">0 1000 1</text>
+
+          <rect x="30" y="106" width="180" height="34" rx="6" fill="color-mix(in srgb, var(--info) 16%, var(--bg-card))" stroke="var(--info)"/>
+          <text x="120" y="128" text-anchor="middle" fill="var(--text)" font-size="11.5">1 … 65536</text>
+          <rect x="410" y="106" width="180" height="34" rx="6" fill="color-mix(in srgb, var(--info) 16%, var(--bg-card))" stroke="var(--info)"/>
+          <text x="500" y="128" text-anchor="middle" fill="var(--text)" font-size="11.5">100000 … 165535</text>
+          <path d="M214 123 L406 123" fill="none" stroke="var(--info)" stroke-width="1.5" marker-end="url(#c2i)"/>
+          <text x="310" y="117" text-anchor="middle" fill="var(--text-mute)" font-size="10">1 100000 65536</text>
+          <text x="310" y="137" text-anchor="middle" fill="var(--text-mute)" font-size="10">这一段来自 /etc/subuid</text>
+
+          <rect x="30" y="158" width="560" height="38" rx="6" fill="color-mix(in srgb, var(--yellow) 14%, var(--bg-card))" stroke="var(--yellow)"/>
+          <text x="44" y="174" fill="var(--text)" font-size="11" font-weight="700">验证：容器内以 uid 33（www-data）写一个文件，宿主上 ls -n 看到属主是 100032</text>
+          <text x="44" y="190" fill="var(--text-dim)" font-size="11">100032 = outside + (容器内 uid − inside) = 100000 + (33 − 1) ✅</text>
+
+          <text x="16" y="220" fill="var(--red)" font-size="11">只映射 uid 0 是不够的：镜像里还有 nobody、www-data 等 uid，没落进映射就全变 nobody，</text>
+          <text x="16" y="238" fill="var(--red)" font-size="11">chown 与包管理器解包统统失败——这正是 subuid 要给一整段 65536 的原因。</text>
+
+          <defs>
+            <marker id="c2u" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="var(--accent)"/></marker>
+            <marker id="c2i" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="var(--info)"/></marker>
+          </defs>
+        </svg>
+        <figcaption>第一行把「我」变成容器内的 root，第二行给其余 uid 一段连续的宿主 uid</figcaption>
+      </div>
+
+<pre><span class="cm"># 这两行就是 rootless 容器的全部秘密</span>
+$ cat /proc/&lt;pid&gt;/uid_map
+         0       1000          1     <span class="cm"># 容器内 root ← 宿主 uid 1000，长度 1</span>
+         1     100000      65536     <span class="cm"># 容器内 1..65536 ← 宿主 100000..165535</span>
+
+<span class="cm"># 非特权用户想写多行 → 必须借 setuid 帮助程序（它按 /etc/subuid 授权）</span>
+$ newuidmap $PID 0 1000 1 1 100000 65536
+<span class="cm"># 写 gid_map 之前还有一道前置条件，顺序反了直接 EPERM：</span>
+$ echo deny &gt; /proc/$PID/setgroups &amp;&amp; newgidmap $PID 0 1000 1 1 100000 65536</pre>
+
+      <div class="tool-card danger">
+        <h4><code>uid_map</code> 的写入规则（踩过就会记住）</h4>
+        <ul>
+          <li><strong>只能写一次</strong>，写成功后文件变只读、再写返回 <code>EPERM</code>。映射必须一次性写全，不能增量追加。</li>
+          <li><strong>写多行区间要求写入者在<u>父</u> user ns 里持有 <code>CAP_SETUID</code></strong>。非特权用户只有一个例外：写<strong>单独一行</strong>把自己的 eUID 映射进去（<code>unshare -r</code> 干的就是这件事）——这也是 <code>newuidmap</code> / <code>newgidmap</code> 这两个 setuid 帮助程序存在的理由。</li>
+          <li>非特权场景写 <code>gid_map</code> 前<strong>必须先往 <code>setgroups</code> 写 <code>deny</code></strong>（堵住一类「丢掉附加组反而获得权限」的历史提权漏洞），写了之后该 ns 里就永久不能调 <code>setgroups()</code>。</li>
+        </ul>
+      </div>
+
+      <div class="cheatsheet"><table>
+        <thead><tr><th>rootless 容器的代价</th><th>原因</th><th>常见对策</th></tr></thead>
+        <tbody>
+          <tr><td>不能绑定 1024 以下的端口</td><td>在宿主的初始 net namespace 里没有 <code>CAP_NET_BIND_SERVICE</code></td><td>调 <code>net.ipv4.ip_unprivileged_port_start</code>，或在宿主侧做端口转发</td></tr>
+          <tr><td>网络吞吐明显低于 root 模式</td><td>没有 <code>CAP_NET_ADMIN</code>，无法把 veth 一头插进宿主网桥，只能用用户态 TCP/IP 栈（<code>slirp4netns</code> / <code>pasta</code>）中转</td><td>能接受时改用宿主网络；或用带内核加速路径的较新实现</td></tr>
+          <tr><td>早期内核上挂不了 overlayfs</td><td>在 user namespace 内挂 overlay 需要内核支持（较新的内核，约 5.11 起才允许）</td><td>退回用户态的 <code>fuse-overlayfs</code>，元数据操作更慢；或升级内核</td></tr>
+          <tr><td>cgroup 限额可能失效</td><td>普通用户对 cgroup 树没有写权限</td><td>靠 systemd 的 <code>Delegate=</code> 把一棵子树授权给用户会话（见 <a href="./systemd_boot_init.html#s6">systemd 与 cgroup</a>）</td></tr>
+          <tr><td><code>chown</code> / 包管理器可能失败</td><td>目标 uid 没落进映射区间</td><td>确保 <code>/etc/subuid</code> 给了足够大的连续段（通常 65536）</td></tr>
+        </tbody>
+      </table></div>
+
+      <h3>剩下四种：小，但各有一个非直觉之处</h3>
+      <p><strong>cgroup namespace</strong> 只改「根在哪」：没开它时 <code>cat /proc/self/cgroup</code> 会吐出自己在宿主 cgroup 树上的完整路径（信息泄露，且让「读自己的路径找限额文件」在容器内外行为不一致）；开了之后只看到 <code>0::/</code>。它<u>只改视图不改限额</u>。<strong>time namespace</strong> 只偏移单调时钟与 boottime，主要给 CRIU 用（进程恢复后单调时钟不能倒退），别指望用它给容器「改时间」。</p>
+      <p><strong>uts namespace</strong> 只有主机名与域名两个字段。<strong>ipc namespace</strong> 隔离了 System V IPC，但 POSIX 共享内存走 <code>/dev/shm</code> 这个 tmpfs、不受它管：跨容器共享必须挂同一个 tmpfs，而单容器的 <code>/dev/shm</code> <strong>默认只有 64 MB</strong>——「PyTorch 报 <code>Bus error</code>」几乎都是这 64 MB 的锅。</p>
     </section>
 
     <section class="chapter" id="ch3">
       <div class="ch-head"><div class="num">03</div><div class="t"><h2>Cgroup v2：资源限制与统计</h2><div class="sub">namespace 管隔离，cgroup 管配额</div></div></div>
-      <p>Namespace 让容器「看不见别人」，但不限制它「用多少」——一个容器仍能吃满宿主 CPU/内存。<strong>Cgroup（control group）</strong>负责<strong>限制、统计、隔离</strong>一组进程的资源用量。v2 是统一层级（unified hierarchy），已取代 v1。</p>
+      <p>Namespace 让容器「看不见别人」，但不限制它「用多少」——一个容器仍能吃满宿主 CPU 与内存。<strong>Cgroup</strong>负责<strong>限制、统计、隔离</strong>一组进程的资源用量。</p>
+
+      <div class="fig">
+        <svg viewBox="0 0 640 300" width="640" height="300" role="img" aria-label="cgroup v1 与 v2 的层级模型差异：v1 里每个控制器一棵独立的树，同一个进程可能同时挂在 cpu 树的 A 组和 memory 树的 B 组，控制器之间无法协同；v2 只有一棵统一层级，进程只属于一个节点，控制器由父组通过 subtree_control 显式下放">
+          <text x="16" y="20" fill="var(--text)" font-size="12.5" font-weight="700">v1：每个控制器一棵树</text>
+          <text x="360" y="20" fill="var(--text)" font-size="12.5" font-weight="700">v2：统一层级，只有一棵树</text>
+
+          <rect x="16" y="32" width="316" height="196" rx="8" fill="var(--bg-card-2)" stroke="var(--border-2)"/>
+          <text x="46" y="52" text-anchor="middle" fill="var(--accent)" font-size="10.5" font-weight="700">cpu/</text>
+          <text x="150" y="52" text-anchor="middle" fill="var(--green)" font-size="10.5" font-weight="700">memory/</text>
+          <text x="256" y="52" text-anchor="middle" fill="var(--info)" font-size="10.5" font-weight="700">blkio/</text>
+
+          <rect x="26" y="60" width="40" height="22" rx="4" fill="color-mix(in srgb, var(--accent) 14%, var(--bg-card))" stroke="var(--accent)"/>
+          <text x="46" y="75" text-anchor="middle" fill="var(--text)" font-size="9.5">/</text>
+          <rect x="26" y="96" width="40" height="22" rx="4" fill="color-mix(in srgb, var(--accent) 14%, var(--bg-card))" stroke="var(--accent)"/>
+          <text x="46" y="111" text-anchor="middle" fill="var(--text)" font-size="9.5">/A</text>
+          <line x1="46" y1="82" x2="46" y2="96" stroke="var(--border-2)"/>
+
+          <rect x="130" y="60" width="40" height="22" rx="4" fill="color-mix(in srgb, var(--green) 14%, var(--bg-card))" stroke="var(--green)"/>
+          <text x="150" y="75" text-anchor="middle" fill="var(--text)" font-size="9.5">/</text>
+          <rect x="130" y="96" width="40" height="22" rx="4" fill="color-mix(in srgb, var(--green) 14%, var(--bg-card))" stroke="var(--green)"/>
+          <text x="150" y="111" text-anchor="middle" fill="var(--text)" font-size="9.5">/B</text>
+          <line x1="150" y1="82" x2="150" y2="96" stroke="var(--border-2)"/>
+
+          <rect x="236" y="60" width="40" height="22" rx="4" fill="color-mix(in srgb, var(--info) 14%, var(--bg-card))" stroke="var(--info)"/>
+          <text x="256" y="75" text-anchor="middle" fill="var(--text)" font-size="9.5">/</text>
+
+          <rect x="98" y="150" width="150" height="26" rx="5" fill="color-mix(in srgb, var(--yellow) 18%, var(--bg-card))" stroke="var(--yellow)"/>
+          <text x="173" y="167" text-anchor="middle" fill="var(--text)" font-size="10.5">同一个进程</text>
+          <path d="M120 150 C 100 138, 60 130, 46 120" fill="none" stroke="var(--accent)" stroke-width="1.3" stroke-dasharray="3 2"/>
+          <path d="M160 150 C 156 138, 152 128, 150 120" fill="none" stroke="var(--green)" stroke-width="1.3" stroke-dasharray="3 2"/>
+          <path d="M212 150 C 232 138, 250 96, 256 84" fill="none" stroke="var(--info)" stroke-width="1.3" stroke-dasharray="3 2"/>
+          <text x="173" y="194" text-anchor="middle" fill="var(--red)" font-size="10.5">在 cpu 树的 /A、memory 树的 /B、blkio 树的根</text>
+          <text x="173" y="212" text-anchor="middle" fill="var(--red)" font-size="10.5">「谁在限制我」没有唯一答案</text>
+
+          <rect x="348" y="32" width="276" height="196" rx="8" fill="var(--bg-card-2)" stroke="var(--border-2)"/>
+          <rect x="446" y="46" width="80" height="24" rx="5" fill="color-mix(in srgb, var(--accent) 16%, var(--bg-card))" stroke="var(--accent)"/>
+          <text x="486" y="62" text-anchor="middle" fill="var(--text)" font-size="10">/（根）</text>
+          <line x1="486" y1="70" x2="486" y2="86" stroke="var(--border-2)"/>
+          <rect x="416" y="86" width="140" height="24" rx="5" fill="color-mix(in srgb, var(--green) 14%, var(--bg-card))" stroke="var(--green)"/>
+          <text x="486" y="102" text-anchor="middle" fill="var(--text)" font-size="10">/system.slice（只做分配）</text>
+          <line x1="486" y1="110" x2="486" y2="126" stroke="var(--border-2)"/>
+          <rect x="406" y="126" width="160" height="24" rx="5" fill="color-mix(in srgb, var(--yellow) 18%, var(--bg-card))" stroke="var(--yellow)"/>
+          <text x="486" y="142" text-anchor="middle" fill="var(--text)" font-size="10">/…/docker-xxx.scope（叶子）</text>
+          <text x="486" y="164" text-anchor="middle" fill="var(--text-dim)" font-size="10">cpu.max · memory.max · io.max · pids.max</text>
+          <text x="486" y="180" text-anchor="middle" fill="var(--text-dim)" font-size="10">全都作用在同一个节点上</text>
+          <text x="486" y="202" text-anchor="middle" fill="var(--green)" font-size="10.5">进程只属于一个节点 ✅</text>
+          <text x="486" y="218" text-anchor="middle" fill="var(--green)" font-size="10.5">控制器由父组 subtree_control 显式下放</text>
+
+          <line x1="16" y1="244" x2="624" y2="244" stroke="var(--border-2)" stroke-width="1"/>
+          <text x="16" y="264" fill="var(--text-dim)" font-size="11">一棵树才换来的能力：<tspan font-weight="700">回写限速</tspan>（脏页归属哪个 cgroup，回写时就按它的 io 权重走）、</text>
+          <text x="16" y="282" fill="var(--text-dim)" font-size="11"><tspan font-weight="700">PSI 压力指标</tspan>、以及一致的<tspan font-weight="700">委派模型</tspan>（systemd 的 Delegate= 与 rootless 容器都建立在它上面）。</text>
+        </svg>
+        <figcaption>v2 不是「重构一下更整洁」：跨控制器协同在 v1 的结构里<strong>根本无法表达</strong></figcaption>
+      </div>
+
+      <div class="def"><strong>cgroup v2 的统一层级（unified hierarchy）</strong>：所有控制器挂在<strong>同一棵树</strong>上，进程只属于一个节点；v1 则是每个控制器各一棵独立目录树，同一进程可以分属不同组。</div>
+
+      <h3>v1 为什么被放弃：不是「重构一下更整洁」，是有些事根本做不了</h3>
+
       <div class="cheatsheet"><table>
-        <thead><tr><th>控制器</th><th>关键接口</th><th>作用</th></tr></thead>
+        <thead><tr><th>问题</th><th>v1 的状况</th><th>为什么在 v1 里修不了</th><th>v2 怎么解</th></tr></thead>
         <tbody>
-          <tr><td>cpu</td><td><code>cpu.max</code> / <code>cpu.weight</code></td><td>配额（如每 100ms 最多 50ms）/ 相对权重；超额被 throttle</td></tr>
-          <tr><td>memory</td><td><code>memory.max</code> / <code>memory.high</code></td><td>硬上限（超则 OOM kill）/ 软限（超则加压回收）</td></tr>
-          <tr><td>io</td><td><code>io.max</code> / <code>io.weight</code></td><td>块设备 IOPS/带宽限制</td></tr>
-          <tr><td>pids</td><td><code>pids.max</code></td><td>限制进程数，防 fork 炸弹</td></tr>
+          <tr><td><strong>跨控制器协同</strong></td><td>内存回收要写脏页产生 I/O，但 memory 控制器不知道按哪个 blkio 组的权重限速</td><td>两个控制器的层级可以毫无关系，连「这两个组是不是同一批进程」都无法回答</td><td>一棵树 → <strong>回写限速</strong>成为可能：脏页归属哪个 cgroup，回写时就按它的 io 权重走</td></tr>
+          <tr><td><strong>语义混乱</strong></td><td>进程可以在 cpu 树的 <code>/A</code>、memory 树的 <code>/B</code>、pids 树的根</td><td>这是 v1 的<u>特性</u>而不是 bug，改掉就是不兼容</td><td>进程只属于<strong>一个</strong>节点，「谁在限制我」有唯一答案</td></tr>
+          <tr><td><strong>线程粒度</strong></td><td>v1 的 <code>tasks</code> 接受 TID，允许把同一进程的不同线程分到不同组</td><td>这对 cpu 有意义，对 memory 完全没意义（地址空间是进程共享的），却被一视同仁开放</td><td>默认<strong>进程粒度</strong>；要线程粒度得显式把 cgroup 标成 <code>threaded</code>，且只有 cpu 这类控制器可用</td></tr>
+          <tr><td><strong>委派模型</strong></td><td>没有规范的「把一棵子树交给非特权进程管」的办法</td><td>层级太多，无法定义一致的边界</td><td><code>subtree_control</code> + 目录属主构成明确的委派边界，systemd 的 <code>Delegate=</code> 与 rootless 都建立在这上面</td></tr>
         </tbody>
       </table></div>
-      <div class="tool-card amber">
-        <h4>工程要点</h4>
+
+      <div class="cheatsheet"><table>
+        <thead><tr><th>能力</th><th>cgroup v1 接口</th><th>cgroup v2 接口</th><th>要注意的差别</th></tr></thead>
+        <tbody>
+          <tr><td>挂载点</td><td><code>/sys/fs/cgroup/&lt;controller&gt;/</code> 各一棵</td><td><code>/sys/fs/cgroup/</code> 单棵</td><td>判据：根下有 <code>cgroup.controllers</code> 就是 v2；有 <code>cpu/</code> <code>memory/</code> 子目录就是 v1</td></tr>
+          <tr><td>放进程</td><td><code>tasks</code>（TID）/ <code>cgroup.procs</code>（PID）</td><td><code>cgroup.procs</code>（PID）</td><td>v2 写它会把整个<strong>线程组</strong>一起迁移</td></tr>
+          <tr><td>CPU 相对份额</td><td><code>cpu.shares</code>（默认 1024）</td><td><code>cpu.weight</code>（1–10000，默认 100）</td><td>换算约 <code>weight ≈ shares / 1024 × 100</code>，不必精确——它只在同层兄弟之间比较</td></tr>
+          <tr><td>CPU 硬配额</td><td><code>cpu.cfs_quota_us</code> + <code>cpu.cfs_period_us</code></td><td><code>cpu.max</code> 一个文件两个字段</td><td>两个值必须一起写，避免 v1 那种「改一半」的中间态</td></tr>
+          <tr><td>内存上限</td><td>只有硬 <code>limit_in_bytes</code></td><td><code>memory.max</code> / <code>high</code> / <code>low</code> / <code>min</code></td><td>v2 多出「软限」与「保护下限」，从「要么不管要么杀」变成有梯度</td></tr>
+          <tr><td>事件与统计</td><td>散落在各控制器，格式不统一</td><td><code>memory.events</code> / <code>cpu.stat</code> / <code>io.stat</code> / <code>*.pressure</code></td><td>v2 才有 <strong>PSI</strong>，这是 v1 完全没有的能力</td></tr>
+          <tr><td>非叶子节点放进程</td><td>允许</td><td><strong>禁止</strong>（根除外）</td><td>见下，这是迁移时第一个撞到的墙</td></tr>
+        </tbody>
+      </table></div>
+
+      <div class="tool-card danger">
+        <h4>「无内部进程」约束：迁到 v2 时第一个撞到的墙</h4>
         <ul>
-          <li><strong>CPU throttling</strong>：容器设了 <code>cpu.max</code>，突发计算会被限速，表现为「明明 CPU 没满却变慢」——查 <code>cpu.stat</code> 的 <code>throttled_usec</code>。K8s limits 设太紧是常见性能坑。</li>
-          <li><strong>OOM</strong>：容器内存超 <code>memory.max</code> → cgroup OOM killer 杀容器内进程（常是 PID 1，容器直接挂）。查 <code>dmesg</code> / <code>memory.events</code>。</li>
-          <li><strong>感知不到限制</strong>：老程序读 <code>/proc/cpuinfo</code> 看到的是宿主全部核数，不知道自己被限到 2 核 → 线程池开太大。需读 cgroup 限额（新版 JVM/Go runtime 已感知）。</li>
+          <li>规则：<strong>一个非根 cgroup 不能同时「自己装着进程」和「给子组开启控制器」</strong>。资源只在<strong>叶子节点</strong>上被消费，中间节点只负责分配。</li>
+          <li>为什么要这条：如果 <code>/A</code> 里既有自己的进程又有子组 <code>/A/B</code>，<code>/A</code> 的配额该怎么分？v1 没有答案，各控制器各自发明了一套隐式规则；v2 干脆把歧义从接口层面禁掉。</li>
+          <li>两个方向都会得到 <code>EBUSY</code>。标准做法是<strong>建一个 <code>.../leaf</code> 子组专门装进程</strong>——systemd 的 slice 做分配、service 当叶子，这套结构是被这条约束逼出来的。</li>
         </ul>
       </div>
-      <p>内存 cgroup 与 OOM 细节见 <a href="./numa_memory_advanced.html">NUMA + 高级内存</a>；CPU 权重/配额与调度关系见 <a href="./process_scheduling.html">进程调度</a>。</p>
+
+      <div class="cheatsheet"><table>
+        <thead><tr><th>控制器</th><th>关键接口</th><th>作用</th><th>超限行为</th></tr></thead>
+        <tbody>
+          <tr><td>cpu</td><td><code>cpu.max</code> / <code>cpu.weight</code></td><td>硬配额（每 period 最多多少 μs）/ 相对权重（1–10000，默认 100）</td><td>超配额被 <strong>throttle</strong>，冻结到下个周期</td></tr>
+          <tr><td>memory</td><td><code>memory.max</code> / <code>memory.high</code> / <code>memory.min</code></td><td>硬上限 / 软限（超了加压回收但不杀）/ 保护下限</td><td>超 <code>max</code> 先尝试回收，回收不出来就 <strong>OOM kill</strong></td></tr>
+          <tr><td>io</td><td><code>io.max</code> / <code>io.weight</code></td><td>按设备限 IOPS / 带宽，或相对权重</td><td>超限被限速（排队）</td></tr>
+          <tr><td>pids</td><td><code>pids.max</code></td><td>限制进程/线程总数</td><td><code>fork</code> 返回 <code>EAGAIN</code>，防 fork 炸弹</td></tr>
+          <tr><td>cpuset</td><td><code>cpuset.cpus</code> / <code>cpuset.mems</code></td><td>绑定可用的 CPU 核与 NUMA 节点</td><td>硬约束，新线程自动继承</td></tr>
+        </tbody>
+      </table></div>
+
+      <h3>手工造一个「有限额的进程组」</h3>
+      <p>不用 Docker，几条 <code>echo</code> 就能拿到 cgroup 的全部限制能力——这一段能彻底祛魅：</p>
+
+<pre><span class="cm"># v2 的判据：根下有 cgroup.controllers</span>
+$ cat /sys/fs/cgroup/cgroup.controllers
+cpuset cpu io memory hugetlb pids rdma misc
+
+<span class="cm"># ① 父组先「下放」控制器，子组目录里才会冒出 cpu.max / memory.max 这些文件</span>
+$ echo "+cpu +memory +pids" | sudo tee /sys/fs/cgroup/cgroup.subtree_control
+
+<span class="cm"># ② 建组就是 mkdir，控制文件由内核自动生成</span>
+$ sudo mkdir /sys/fs/cgroup/demo
+
+<span class="cm"># ③ 设限额：每 100ms 最多用 20ms CPU（=0.2 核）/ 内存 100M / 最多 50 个进程</span>
+$ echo "20000 100000" | sudo tee /sys/fs/cgroup/demo/cpu.max
+$ echo "100M"         | sudo tee /sys/fs/cgroup/demo/memory.max
+$ echo "50"           | sudo tee /sys/fs/cgroup/demo/pids.max
+
+<span class="cm"># ④ 把当前 shell 丢进去（写 PID 到 cgroup.procs，子进程自动继承）</span>
+$ echo $$ | sudo tee /sys/fs/cgroup/demo/cgroup.procs
+
+<span class="cm"># ⑤ 观察生效：这个死循环只能吃到 20% 的一个核</span>
+$ while :; do :; done &amp;
+$ top -p $!                  <span class="cm"># %CPU 稳定在 20 左右，而不是 100</span>
+
+<span class="cm"># ⑥ 顺手撞一下「无内部进程」约束</span>
+$ echo "+cpu" | sudo tee /sys/fs/cgroup/demo/cgroup.subtree_control
+tee: .../cgroup.subtree_control: Device or resource busy   <span class="cm"># ★ EBUSY</span>
+<span class="cm">#   demo 里已经有进程了，不能再变成「分配节点」。</span>
+<span class="cm">#   正解：建 demo/leaf 装进程，demo 只做分配 —— 这就是 slice/service 的形状。</span>
+
+<span class="cm"># ⑦ 删除用 rmdir（不是 rm -rf），且必须先空掉</span>
+$ sudo rmdir /sys/fs/cgroup/demo</pre>
+
+      <div class="tool-card amber">
+        <h4><code>cgroup.controllers</code> 和 <code>cgroup.subtree_control</code> 的区别（最常被搞混的一对）</h4>
+        <ul>
+          <li><code>cgroup.controllers</code> <strong>只读</strong>，回答「<u>本组自己</u>能用哪些控制器」，内容由<strong>父组的 <code>subtree_control</code> 决定</strong>；<code>cgroup.subtree_control</code> <strong>可写</strong>，回答「我要把哪些控制器<u>下放给子组</u>」。</li>
+          <li>所以「<code>mkdir</code> 了一个组但里面没有 <code>cpu.max</code>」的原因永远是<strong>父组没把 cpu 写进自己的 <code>subtree_control</code></strong>。这条链要从根一路开到你那一层，漏一级就断。</li>
+          <li>另两个值得盯的观察文件：<code>cgroup.events</code> 的 <code>populated</code>（可 <code>inotify</code> 它等子树进程归零）、<code>cgroup.stat</code> 的 <code>nr_dying_descendants</code>（见下）。</li>
+        </ul>
+      </div>
+
+      <div class="box danger"><code>nr_dying_descendants</code> 值得单独盯一眼：一个 cgroup 被 <code>rmdir</code> 后若名下还有<strong>未回收的 page cache</strong>，内核不会立刻释放它，而是让它进入「dying」状态等回收。频繁起停容器的节点上这个数字能攒到几万，表现为内核内存只增不减、遍历 cgroup 树的操作（<code>systemctl status</code>、cAdvisor 采集）越来越慢。缓解手段是给容器设 <code>memory.max</code> 让 page cache 有上界。</div>
+
+      <h3>CPU 的两种限法：<code>cpu.weight</code> 和 <code>cpu.max</code> 完全不是一回事</h3>
+      <p>这两个文件常被混为一谈，但语义、失效方式、对延迟的影响截然不同。选错的代价通常表现为「限了之后延迟毛刺变多，吞吐并没提上去」。</p>
+
+      <div class="cheatsheet"><table>
+        <thead><tr><th>维度</th><th><code>cpu.weight</code>（相对份额）</th><th><code>cpu.max</code>（绝对配额）</th></tr></thead>
+        <tbody>
+          <tr><td>语义</td><td>「<strong>争抢时</strong>按比例分」：同层兄弟按权重分配 CPU 时间</td><td>「<strong>每个周期最多用这么多</strong>」，与有没有人争抢无关</td></tr>
+          <tr><td>机器空闲时</td><td><strong>可以吃满整机</strong>——没人抢就不限</td><td>照样只能用配额那么多，剩下的 CPU 空转</td></tr>
+          <tr><td>K8s 对应</td><td><code>requests.cpu</code></td><td><code>limits.cpu</code></td></tr>
+          <tr><td>会不会 throttle</td><td><strong>不会</strong>，竞争的表现是「跑得慢一点」，平滑</td><td><strong>会</strong>，表现是「某几十毫秒完全不被调度」，尖刺</td></tr>
+          <tr><td>延迟特征</td><td>P99 随负载平滑上升</td><td>P99 出现与 period 同量级的台阶（默认 100 ms）</td></tr>
+          <tr><td>可预测性 / 隔离性</td><td>差：邻居忙时你变慢，容量规划难做</td><td>好：性能与邻居无关，适合多租户计费与 SLA 承诺</td></tr>
+          <tr><td>什么时候用</td><td>延迟敏感的在线服务；要区分优先级但不想引入尖刺</td><td>需要硬隔离、防止单容器打满整机；批处理 / 不可信负载</td></tr>
+        </tbody>
+      </table></div>
+
+      <p>格式上 <code>cpu.max</code> 是「<code>QUOTA PERIOD</code>」两个微秒值，<code>"max 100000"</code> 表示不限。<strong>「2 核配额」不等于「绑 2 个核」</strong>：20 个线程可以在 100 个核上各跑 2 ms，一样把配额用光。真要绑核用 <code>cpuset.cpus</code>。</p>
+
+      <h3>节流尖刺：「CPU 用量没到上限，延迟却很高」的成因</h3>
+      <p>这是容器时代最常见也最反直觉的困惑：面板上利用率 40%、离 limit 还差一大截，但 P99 是 P50 的十几倍。原因是<strong>利用率和配额根本不在同一个时间尺度上</strong>。</p>
+
+      <div class="analogy">
+        <div class="at">生活类比：每小时限量的自助饮水机</div>
+        <p><code>cpu.max</code> 不是「水龙头开小一点」，而是「<strong>每小时给你 12 分钟的用水额度，用完就断到下个整点</strong>」。你可能前 12 分钟就把水用完（一次接满 20 个杯子），剩下 48 分钟一滴都没有——<strong>按小时统计「用水率」只有 20%</strong>，但第 15 分钟来接水的人要干等 45 分钟。</p>
+        <div class="map">映射：<b>每小时额度</b>=quota · <b>整点</b>=period 边界 · <b>断水的 48 分钟</b>=throttle · <b>干等的人</b>=被卡住的请求</div>
+      </div>
+
+      <div class="cheatsheet"><table>
+        <thead><tr><th>时刻（周期内）</th><th>发生了什么</th><th>该周期累计 CPU</th><th>请求延迟</th></tr></thead>
+        <tbody>
+          <tr><td>0–10 ms</td><td>20 个线程同时被调度到 20 个核上，各跑 10 ms</td><td>20 × 10 = <strong>200 ms，配额用尽</strong></td><td>这 20 个请求：10 ms ✅</td></tr>
+          <tr><td>10 ms</td><td>内核把整个 cgroup 从所有运行队列上摘下（throttle）</td><td>200 ms</td><td>—</td></tr>
+          <tr><td>10–100 ms</td><td><strong>一个线程都跑不了</strong>，哪怕机器上有 80 个空闲核</td><td>200 ms（不变）</td><td>此间到达的请求：排队等 <strong>最多 90 ms</strong></td></tr>
+          <tr><td>100 ms</td><td>新周期，配额重置，积压的请求一拥而上</td><td>重新计数</td><td>—</td></tr>
+          <tr><td colspan="4"><strong>整秒平均利用率 = 200 ms × 10 个周期 / (1 s × 96 核) ≈ 20%</strong>。面板上一片绿，P99 却背着一个 90 ms 的台阶。</td></tr>
+        </tbody>
+      </table></div>
+
+      <div class="fig">
+        <svg viewBox="0 0 620 250" width="620" height="250" role="img" aria-label="CFS 配额节流的时间线：每个 100 毫秒周期里配额在头 10 毫秒被 20 个线程用光，剩下 90 毫秒整组被冻结，期间到达的请求要排队等到下个周期">
+          <text x="20" y="22" fill="var(--text)" font-size="12.5" font-weight="700">cpu.max = "200000 100000"（2 核配额 / 100 ms 周期），20 个工作线程</text>
+
+          <line x1="40" y1="72" x2="586" y2="72" stroke="var(--border-2)" stroke-width="1"/>
+          <text x="40" y="90" fill="var(--text-mute)" font-size="10.5">0</text>
+          <text x="104" y="90" fill="var(--text-mute)" font-size="10.5">10 ms</text>
+          <text x="292" y="90" text-anchor="middle" fill="var(--text-mute)" font-size="10.5">100 ms（周期边界）</text>
+          <text x="560" y="90" text-anchor="middle" fill="var(--text-mute)" font-size="10.5">200 ms</text>
+          <line x1="313" y1="40" x2="313" y2="78" stroke="var(--accent)" stroke-width="1.2" stroke-dasharray="4 3"/>
+          <line x1="586" y1="40" x2="586" y2="78" stroke="var(--accent)" stroke-width="1.2" stroke-dasharray="4 3"/>
+
+          <rect x="40" y="40" width="27" height="28" rx="3" fill="color-mix(in srgb, var(--green) 45%, var(--bg-card))" stroke="var(--green)"/>
+          <rect x="67" y="40" width="246" height="28" rx="3" fill="color-mix(in srgb, var(--danger) 28%, var(--bg-card))" stroke="var(--danger)"/>
+          <rect x="313" y="40" width="27" height="28" rx="3" fill="color-mix(in srgb, var(--green) 45%, var(--bg-card))" stroke="var(--green)"/>
+          <rect x="340" y="40" width="246" height="28" rx="3" fill="color-mix(in srgb, var(--danger) 28%, var(--bg-card))" stroke="var(--danger)"/>
+          <text x="190" y="59" text-anchor="middle" fill="var(--text)" font-size="11.5">throttled · 一个线程都不被调度（90 ms）</text>
+          <text x="463" y="59" text-anchor="middle" fill="var(--text)" font-size="11.5">throttled（90 ms）</text>
+          <text x="53" y="34" text-anchor="middle" fill="var(--accent-3)" font-size="10">跑</text>
+
+          <text x="20" y="120" fill="var(--text-dim)" font-size="11.5">配额消耗：20 线程 × 10 ms = 200 ms，在第 10 ms 就用光</text>
+          <text x="20" y="140" fill="var(--text-dim)" font-size="11.5">而机器上此刻还有 76 个核完全空闲——配额不看有没有空闲核</text>
+
+          <path d="M150 168 L150 148" fill="none" stroke="var(--accent-4)" stroke-width="1.6" marker-end="url(#cgar)"/>
+          <text x="150" y="184" text-anchor="middle" fill="var(--accent-4)" font-size="10.5">请求在 40 ms 到达</text>
+          <path d="M158 156 L306 156" fill="none" stroke="var(--accent-4)" stroke-width="1.4" stroke-dasharray="3 3" marker-end="url(#cgar)"/>
+          <text x="232" y="152" text-anchor="middle" fill="var(--accent-4)" font-size="10.5">干等 60 ms</text>
+
+          <line x1="20" y1="200" x2="600" y2="200" stroke="var(--border-2)" stroke-width="1"/>
+          <text x="20" y="220" fill="var(--accent-3)" font-size="11.5">监控看到：平均利用率 ≈ 20%（分母是「墙上时间 × 全部核数」）→ 面板一片绿</text>
+          <text x="20" y="240" fill="var(--danger)" font-size="11.5">用户感受到：P99 多出一个与 period 同量级的台阶 → 唯一可信证据是 cpu.stat 的 nr_throttled</text>
+
+          <defs><marker id="cgar" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="var(--accent-4)"/></marker></defs>
+        </svg>
+        <figcaption>节流是「整段冻结」而不是「整体变慢」——两个尺度不同，所以低利用率完全可以和重度限流并存</figcaption>
+      </div>
+
+      <div class="intuition">记住这条不等式：<strong>「利用率低」不等于「没被限流」</strong>。线程数越多、请求越突发，两者差距越大——<strong>并行度高的应用反而更容易在低利用率下被节流</strong>，因为它能在周期头几毫秒里就把额度花光。唯一可信的证据是 <code>cpu.stat</code> 的 <code>nr_throttled</code>。</div>
+
+      <h3>判读 cpu.stat 与 memory.events：容器排障的两个核心文件</h3>
+      <p><code>cpu.stat</code> 给三个关键数：<code>nr_periods</code>（经历了多少配额周期）、<code>nr_throttled</code>（多少个被限流）、<code>throttled_usec</code>（累计冻结时长）；<code>memory.events</code> 给 <code>low</code> / <code>high</code>（触发软限被加压回收）/ <code>max</code>（撞硬上限）/ <code>oom_kill</code>（真的杀了几个进程）四行。</p>
+
+      <div class="box danger">这两个文件里的数字全部是<strong>自 cgroup 创建以来的累计值</strong>，看绝对值毫无意义，必须<strong>采两次取差</strong>再算比例。经验阈值：<code>nr_throttled/nr_periods</code> 小于 1% 基本无影响，1%–5% 延迟敏感服务已能看出毛刺，超过 10% 一定要处理。<code>throttled_usec</code> 的增量<u>可以超过墙上时间</u>，它是各 CPU 上冻结时长之和。另外定内存 limit 要看 <code>memory.peak</code> 而不是 <code>memory.current</code>。</div>
+
+      <div class="fig">
+        <svg viewBox="0 0 620 300" width="620" height="300" role="img" aria-label="memory.min、low、high、max 四条线的行为差异：min 以下的内存完全不被回收，min 到 low 之间尽量不回收，low 到 high 之间正常回收，超过 high 后内核加压回收并对分配方限速但不杀进程，只有超过 max 且回收不出来才会 OOM kill">
+          <text x="16" y="20" fill="var(--text)" font-size="12.5" font-weight="700">memory 的四条线：只有最上面那条会杀进程</text>
+
+          <line x1="150" y1="40" x2="150" y2="238" stroke="var(--border-2)" stroke-width="1.4"/>
+          <text x="142" y="252" text-anchor="end" fill="var(--text-mute)" font-size="10">用量 ↑</text>
+
+          <line x1="150" y1="56" x2="596" y2="56" stroke="var(--red)" stroke-width="1.8"/>
+          <text x="144" y="60" text-anchor="end" fill="var(--red)" font-size="11" font-weight="700">memory.max</text>
+          <text x="160" y="50" fill="var(--red)" font-size="10.5">硬上限：先拼命回收，回收不出来 → <tspan font-weight="700">OOM kill</tspan>（memory.events 的 oom_kill++）</text>
+
+          <line x1="150" y1="106" x2="596" y2="106" stroke="var(--yellow)" stroke-width="1.8"/>
+          <text x="144" y="110" text-anchor="end" fill="var(--yellow)" font-size="11" font-weight="700">memory.high</text>
+          <text x="160" y="100" fill="var(--yellow)" font-size="10.5">软限：加压回收 + <tspan font-weight="700">对分配方限速</tspan>（进程变慢），<tspan font-weight="700">不杀任何进程</tspan></text>
+
+          <line x1="150" y1="162" x2="596" y2="162" stroke="var(--info)" stroke-width="1.6" stroke-dasharray="5 3"/>
+          <text x="144" y="166" text-anchor="end" fill="var(--info)" font-size="11" font-weight="700">memory.low</text>
+          <text x="160" y="156" fill="var(--info)" font-size="10.5">软保护：全局压力大时<tspan font-weight="700">尽量</tspan>不从这里回收（best-effort）</text>
+
+          <line x1="150" y1="212" x2="596" y2="212" stroke="var(--green)" stroke-width="1.6" stroke-dasharray="5 3"/>
+          <text x="144" y="216" text-anchor="end" fill="var(--green)" font-size="11" font-weight="700">memory.min</text>
+          <text x="160" y="206" fill="var(--green)" font-size="10.5">硬保护：这一段<tspan font-weight="700">绝不回收</tspan>；宿主再紧张也保住</text>
+
+          <rect x="152" y="212" width="444" height="26" fill="color-mix(in srgb, var(--green) 14%, transparent)"/>
+          <rect x="152" y="162" width="444" height="50" fill="color-mix(in srgb, var(--info) 10%, transparent)"/>
+          <rect x="152" y="106" width="444" height="56" fill="color-mix(in srgb, var(--bg-card-2) 60%, transparent)"/>
+          <rect x="152" y="56" width="444" height="50" fill="color-mix(in srgb, var(--yellow) 12%, transparent)"/>
+          <text x="374" y="136" text-anchor="middle" fill="var(--text-mute)" font-size="10">正常区间：按需回收，进程无感</text>
+          <text x="374" y="88" text-anchor="middle" fill="var(--text)" font-size="10.5">节流区：进程还活着，只是分配变慢</text>
+
+          <line x1="16" y1="258" x2="604" y2="258" stroke="var(--border-2)" stroke-width="1"/>
+          <text x="16" y="276" fill="var(--text)" font-size="11"><tspan font-weight="700">最实用的一条结论</tspan>：把 high 设在 max 的 85% 左右，你就换来一个「先变慢、后被杀」的缓冲带，</text>
+          <text x="16" y="294" fill="var(--text)" font-size="11">而 memory.events 里 <tspan font-weight="700">high 计数开始涨</tspan>就是 OOM 的提前告警——v1 只有硬 limit，没有这个梯度。</text>
+        </svg>
+        <figcaption><strong><code>high</code> 是节流不是杀进程</strong>——容器从「要么不管、要么被 SIGKILL」变成有一段可观测的减速带</figcaption>
+      </div>
+
+      <div class="cheatsheet"><table>
+        <thead><tr><th>处方</th><th>怎么做</th><th>代价 / 适用条件</th></tr></thead>
+        <tbody>
+          <tr><td><strong>把线程数降到配额量级</strong></td><td>工作线程数 ≈ 配额核数（而不是宿主核数），见第 8 章事故 3</td><td>几乎总是对的第一步，没有副作用；很多情况下只做这一步限流就消失了</td></tr>
+          <tr><td><strong>放宽或去掉 limit</strong></td><td>只留 <code>requests</code>（<code>cpu.weight</code>），靠权重做优先级</td><td>失去硬隔离：邻居忙时你变慢，容量规划变难；多租户环境不适用</td></tr>
+          <tr><td><strong>调小 period</strong></td><td>配额等比缩小，如 <code>"20000 10000"</code> 仍是 2 核，周期从 100 ms 降到 10 ms</td><td>最坏停顿从 90 ms 压到 9 ms；代价是记账开销上升、更容易在短突发上撞线。周期有取值范围限制</td></tr>
+          <tr><td><strong>启用 burst</strong></td><td>较新内核的 <code>cpu.max.burst</code>，把周期内没用完的配额攒起来供突发使用</td><td>治「平均不高但有突发」，对「持续超配额」无效；削弱硬隔离的确定性</td></tr>
+          <tr><td><strong>换成绑核</strong></td><td><code>cpuset.cpus</code> 做硬亲和，配合 K8s 的 static CPU manager policy</td><td>彻底没有 throttle，缓存亲和更好；代价是失去弹性、碎片化、只对整数核有效</td></tr>
+          <tr><td><strong>升级内核</strong></td><td>较早的内核里 CFS 带宽控制有「本地配额切片过期后被白白扣掉」的缺陷，多核多线程下造成<strong>远超预期</strong>的限流，5.4 前后修掉</td><td>先确认手上内核版本与发行版回合情况；「利用率极低却限流极重」时这是重点怀疑对象</td></tr>
+        </tbody>
+      </table></div>
+
+      <div class="tool-card amber">
+        <h4>PSI：比利用率更能反映「有没有被卡住」</h4>
+        <ul>
+          <li>v2 提供 <code>cpu.pressure</code> / <code>memory.pressure</code> / <code>io.pressure</code>。读法：<code>some avg10=42.18</code> 是「最近 10 秒里有 42% 的时间至少有一个任务在等 CPU」；<code>full=</code>（memory / io 才有）是所有任务都被卡住的比例，更严重。</li>
+          <li>利用率 100% 未必是问题（就是跑满了），而 <code>some avg10</code> 高才真正说明<strong>有人在等</strong>。</li>
+        </ul>
+      </div>
+
+      <div class="box danger">最常见的容器性能坑：<strong>应用感知不到 cgroup 限额</strong>——<code>/proc</code> 不是 namespace 化的，老程序读 <code>nproc</code> 拿到宿主全部核数，于是在 2 核配额里开 64 个工作线程，自己给自己制造上下文切换与限流。完整案例见第 8 章事故 3。</div>
+
+      <p>CPU 权重与配额如何影响调度、throttling 的完整案例见 <a href="./process_scheduling.html">进程调度</a>；内存 cgroup 的回收路径、<code>memory.min</code>/<code>low</code> 的保护语义与 OOM killer 的打分逻辑见 <a href="./numa_memory_advanced.html">NUMA 与高级内存</a>。</p>
+
+      <div class="box tip">在现代发行版上，<strong>这棵 cgroup 树的所有者是 systemd</strong>，不是容器运行时：运行时要在自己下面建 cgroup 必须靠 <code>Delegate=yes</code> 拿到授权。「普通服务怎么限资源」「为什么 <code>systemctl stop</code> 能干净地杀掉全部子进程」，答案都在 <a href="./systemd_boot_init.html">Linux 启动流程与 systemd</a>——同一套机制，入口换成 unit 文件里的 <code>CPUQuota=</code> / <code>MemoryMax=</code>。</div>
     </section>
 
     <section class="chapter" id="ch4">
       <div class="ch-head"><div class="num">04</div><div class="t"><h2>OverlayFS：镜像分层</h2><div class="sub">为什么 docker pull 能秒级、镜像能共享</div></div></div>
-      <p>容器镜像是<strong>只读层的叠加</strong>。OverlayFS（联合文件系统）把多个目录「合并」成一个视图：底下是若干<strong>只读镜像层（lowerdir）</strong>，最上面一层<strong>可写层（upperdir）</strong>。容器看到的是合并后的统一文件系统。</p>
-      <div class="tool-card green">
-        <h4>核心机制</h4>
-        <ul>
-          <li><strong>分层复用</strong>：多个镜像共享相同底层（如都基于 <code>ubuntu:22.04</code>），只存一份 → 省磁盘、拉取快。</li>
-          <li><strong>Copy-on-Write（写时复制）</strong>：改只读层的文件时，先复制到可写层再改，不动底层。所以容器改文件不影响镜像、也不影响别的容器。</li>
-          <li><strong>容器可写层是临时的</strong>：容器删除即丢——要持久化必须挂 volume/bind mount。这是「容器无状态」的物理原因。</li>
-          <li><strong>whiteout</strong>：删除只读层文件时，在可写层放一个特殊标记「遮住」它，而非真删底层。</li>
-        </ul>
+      <p>容器镜像是<strong>只读层的叠加</strong>。OverlayFS 把多个目录「合并」成一个视图：底下是若干<strong>只读镜像层（lowerdir）</strong>，最上面是<strong>可写层（upperdir）</strong>，容器看到的是合并后的统一文件系统。</p>
+
+      <div class="fig">
+        <svg viewBox="0 0 620 250" width="620" height="250" role="img" aria-label="OverlayFS 分层结构：三个只读镜像层加一个可写层合并成统一视图">
+          <rect x="330" y="20" width="260" height="46" rx="8" fill="color-mix(in srgb, var(--accent) 16%, var(--bg-card))" stroke="var(--accent)"/>
+          <text x="460" y="41" text-anchor="middle" fill="var(--text)" font-size="13">merged（容器看到的根）</text>
+          <text x="460" y="58" text-anchor="middle" fill="var(--text-dim)" font-size="11">/ 下有 app.conf(改过) + bin + lib</text>
+
+          <rect x="30" y="20" width="230" height="34" rx="6" fill="color-mix(in srgb, var(--yellow) 20%, var(--bg-card))" stroke="var(--yellow)"/>
+          <text x="145" y="42" text-anchor="middle" fill="var(--text)" font-size="12">upperdir · 可写层（容器私有）</text>
+          <text x="145" y="70" text-anchor="middle" fill="var(--text-mute)" font-size="10.5">app.conf（CoW 复制上来后改的）</text>
+
+          <rect x="30" y="86" width="230" height="30" rx="6" fill="color-mix(in srgb, var(--green) 15%, var(--bg-card))" stroke="var(--green)"/>
+          <text x="145" y="106" text-anchor="middle" fill="var(--text)" font-size="11.5">lower 3 · COPY app.conf</text>
+          <rect x="30" y="122" width="230" height="30" rx="6" fill="color-mix(in srgb, var(--green) 15%, var(--bg-card))" stroke="var(--green)"/>
+          <text x="145" y="142" text-anchor="middle" fill="var(--text)" font-size="11.5">lower 2 · RUN apk add ...</text>
+          <rect x="30" y="158" width="230" height="30" rx="6" fill="color-mix(in srgb, var(--green) 15%, var(--bg-card))" stroke="var(--green)"/>
+          <text x="145" y="178" text-anchor="middle" fill="var(--text)" font-size="11.5">lower 1 · FROM alpine</text>
+
+          <path d="M266 100 C 300 100, 300 60, 326 50" fill="none" stroke="var(--border-2)" stroke-width="1.4"/>
+          <path d="M266 40 C 296 40, 300 46, 326 46" fill="none" stroke="var(--border-2)" stroke-width="1.4"/>
+          <text x="460" y="100" text-anchor="middle" fill="var(--text-dim)" font-size="11.5">上层遮住下层同名文件</text>
+          <text x="460" y="122" text-anchor="middle" fill="var(--text-dim)" font-size="11.5">删除 = 在 upper 放一个 whiteout 标记</text>
+          <text x="460" y="144" text-anchor="middle" fill="var(--text-dim)" font-size="11.5">lower 各层被所有容器共享，只存一份</text>
+          <text x="460" y="166" text-anchor="middle" fill="var(--text-dim)" font-size="11.5">upper 随容器删除而消失</text>
+
+          <line x1="30" y1="206" x2="590" y2="206" stroke="var(--border-2)" stroke-width="1"/>
+          <text x="310" y="228" text-anchor="middle" fill="var(--text-mute)" font-size="11">同一个 alpine 基础层，100 个容器共用一份磁盘数据——这就是镜像分层的全部收益</text>
+        </svg>
+        <figcaption>只读层共享、可写层私有，写时复制把两者缝合起来。<code>lowerdir</code> 用冒号分隔，<strong>左边的在上面</strong></figcaption>
       </div>
+
+      <p>「可写层随容器销毁」是<strong>「容器无状态」的物理原因</strong>，不是一种设计倡议。而「删文件」在这里也不省空间：只读层的原件动不了（别人还在共享），upper 层还多一个 whiteout 标记占一个 inode。</p>
+
+      <h3>四个目录的职责，以及 <code>workdir</code> 为什么不能随便放</h3>
+      <div class="cheatsheet"><table>
+        <thead><tr><th>目录</th><th>职责</th><th>可写性</th><th>硬性约束</th></tr></thead>
+        <tbody>
+          <tr><td><code>lowerdir</code></td><td>只读层，可以给多个（冒号分隔，<strong>左边的在上面</strong>）。就是镜像的各层</td><td>overlay 视角只读</td><td>可以来自不同文件系统；只给一个 <code>lowerdir</code> 且不给 upper 时，整个挂载是只读的</td></tr>
+          <tr><td><code>upperdir</code></td><td>可写层。所有新建、修改（copy-up 之后）、删除标记都落在这里</td><td>读写</td><td>必须支持 <code>trusted.*</code> 扩展属性（rootless 场景改用 <code>userxattr</code> 走 <code>user.*</code>）</td></tr>
+          <tr><td><code>workdir</code></td><td>overlay 的<strong>私有暂存区</strong>：copy-up 时先把文件复制到这里、创建 whiteout 时先在这里造，然后 <code>rename</code> 到 upper</td><td>内核私有，<strong>不要去动</strong></td><td>★ 必须与 <code>upperdir</code> <strong>在同一个文件系统</strong>，且<strong>不能是 upperdir 的子目录</strong></td></tr>
+          <tr><td><code>merged</code></td><td>挂载点，合并后的视图。容器的根就是这里</td><td>读写（写落到 upper）</td><td>—</td></tr>
+        </tbody>
+      </table></div>
+      <p><code>workdir</code> 那两条约束不是实现细节，而是<strong>原子性的要求</strong>：copy-up 与创建 whiteout 必须「要么完全没做，要么完整做好」，唯一能保证原子的办法是 <code>rename()</code>，而它不能跨文件系统——所以 workdir 必须和 upperdir 同盘；而它不能是 upperdir 的子目录，因为 workdir 里的临时文件会出现在 merged 视图里。搞错时 <code>mount</code> 返回 <code>EINVAL</code>，<code>dmesg</code> 里会留一行明确原因。</p>
+
+      <h3>写时复制的粒度：整个文件</h3>
+      <p>这句话平淡，却是容器存储上最大的一颗雷：<strong>copy-up 不是按块、不是按页，而是把整个文件从 lower 完整复制到 upper</strong>，哪怕只改一个字节。可以当场量出来：对一个 1 GB 的 lower 层文件用 <code>dd</code> 改<u>第一个字节</u>，耗时约 <strong>2.3 秒</strong>、upper 目录从 0 涨到 <strong>1.0 G</strong>；第二次改同一文件只要 3 毫秒。更反直觉的是<strong>只改元数据也同样触发整文件复制</strong>——除非开了 <code>metacopy=on</code>。</p>
+
+      <div class="box danger">推论一条比一条严重：<strong>①</strong> 数据库文件放可写层，第一次写入就是「整库复制」级别的停顿；<strong>②</strong> 日志的第一次追加写同样触发全量 copy-up；<strong>③</strong> 最隐蔽的是 <strong>CI 场景</strong>：镜像里预置了 <code>node_modules</code> 或 <code>.git</code>，改动它们会逐个 copy-up 成千上万个小文件，写入量是改动量的几十倍。<strong>规则很简单：所有会被写的路径一律挂 volume 绕开 overlay。</strong>这不只是防丢数据，更是性能问题。</div>
+
+      <h3>whiteout 与 opaque：删除是怎么表达的</h3>
+      <p>只读层不能改，所以「删除」只能靠在 upper 层放标记<strong>遮住</strong>下层，而删文件和删目录用的是两种不同的标记：</p>
+
+      <div class="cheatsheet"><table>
+        <thead><tr><th>操作</th><th>upper 层里出现什么</th><th>效果</th><th>怎么验证</th></tr></thead>
+        <tbody>
+          <tr><td>删除 lower 的<strong>文件</strong></td><td>同名的<strong>字符设备</strong>，主次设备号都是 0（whiteout）</td><td>merged 视图里该名字消失</td><td><code>ls -l upper/</code> 看到 <code>c---------  0, 0</code></td></tr>
+          <tr><td>删除 lower 的<strong>目录</strong></td><td>同名 whiteout 字符设备</td><td>整个目录及其内容在 merged 里消失</td><td>同上</td></tr>
+          <tr><td>删掉 lower 的目录后<strong>又新建同名目录</strong></td><td>upper 里是<strong>真目录</strong>，带扩展属性 <code>trusted.overlay.opaque="y"</code></td><td>该目录「不透明」：只显示 upper 里的内容，不合并 lower 的同名目录</td><td><code>getfattr -d -m '' upper/dir</code></td></tr>
+          <tr><td>把 lower 的目录<strong>改名</strong></td><td>默认不允许（<code>EXDEV</code>）；开 <code>redirect_dir=on</code> 后 upper 里放一个带 <code>trusted.overlay.redirect</code> 属性的目录指回原路径</td><td>避免为改一个目录名而递归复制整棵子树</td><td>同上，看 <code>redirect</code> 属性</td></tr>
+        </tbody>
+      </table></div>
+      <p>opaque 挡住 lower 的同名目录是为了符合 POSIX 语义——「删了目录再重建，里面就该是空的」。<strong>rootless 容器用不了 <code>trusted.*</code></strong>（写它需要 <code>CAP_SYS_ADMIN</code>），较新内核提供 <code>userxattr</code> 改用 <code>user.overlay.*</code> 存这些标记。</p>
+
+      <h3>inode：两个让人困惑的现象</h3>
+      <p><strong>现象一：同一个文件在容器内和宿主上 inode 号不同。</strong>overlay 是「合成」文件系统，文件其实住在 lower 或 upper 的真实文件系统上。早期实现直接把底层 inode 号透出来，让 <code>tar</code>、<code>rsync</code>、<code>find -samefile</code> 这类依赖 <code>(st_dev, st_ino)</code> 判重的工具误判；后来引入 <code>xino</code> 把层号编码进 inode 号高位。这是合成层的必然结果。</p>
+      <p><strong>现象二（更会咬人）：copy-up 之后，之前打开的 fd 看不到新内容。</strong>copy-up 在 upper 层<strong>创建了一个新 inode</strong>，而之前打开的只读 fd 仍指向 lower 层的旧 inode，会一直读到旧内容直到关闭重开；<code>inotify</code> 监视的也是旧 inode。这是 overlayfs 明确列出的<strong>非 POSIX 行为</strong>，表现就是「运维改了配置，进程重读却拿到旧值」。</p>
+      <p><strong>还有一个必查项：inode 耗尽。</strong><code>df -h</code> 说空间还剩很多、<code>df -i</code> 却已 100%，此时 <code>touch</code> 报的是 <code>ENOSPC</code>，极易误判成「磁盘满」——<strong>两个命令必须都看</strong>。典型元凶是 <code>node_modules</code>（十万个小文件，每层各存一份）。通用排查见 <a href="./filesystem_storage_stack.html#s7">文件系统与存储栈 §7</a>。</p>
+
+      <h3>层数：为什么「合并 RUN 指令」真的有用</h3>
+      <p>overlay 的路径查找是<strong>自上而下逐层试</strong>的，<strong>而「文件不存在」最贵——必须把每一层都查完才能确定</strong>，Python 的 <code>import</code>、Node 的模块解析恰恰产生大量「查不到」的探测。量过一组数：同一份代码，37 层镜像里 <code>python -c "import pandas"</code> 冷启动 3.42 s，压到 6 层后 1.18 s；<code>strace -c</code> 显示这次导入做了 48210 次 <code>newfstatat</code>，其中 <strong>41337 次失败</strong>，每次都把 37 层全查了一遍。这才是「合并 RUN 指令」的真实收益，省磁盘只是顺带。</p>
+
+      <div class="cheatsheet"><table>
+        <thead><tr><th>overlay 挂载选项</th><th>作用</th><th>什么时候值得开</th></tr></thead>
+        <tbody>
+          <tr><td><code>metacopy=on</code></td><td>只改元数据（chmod/chown）时只复制 inode，不复制数据</td><td>镜像构建里大量 <code>chown</code> 的场景，能省掉整文件复制</td></tr>
+          <tr><td><code>redirect_dir=on</code></td><td>允许改名 lower 层的目录（用重定向属性代替递归复制）</td><td>需要在容器里 <code>mv</code> 大目录时</td></tr>
+          <tr><td><code>index=on</code></td><td>维护 lower 与 upper 的 inode 索引，让硬链接在 copy-up 后不被拆散</td><td>镜像里大量硬链接（如某些包管理器的做法）时</td></tr>
+          <tr><td><code>xino=on|auto</code></td><td>把层号编码进 <code>st_ino</code> 高位，保证同一挂载内 inode 号唯一</td><td>有工具依赖 <code>(st_dev, st_ino)</code> 判重时</td></tr>
+          <tr><td><code>userxattr</code></td><td>用 <code>user.overlay.*</code> 代替 <code>trusted.overlay.*</code> 存 whiteout / opaque 标记</td><td>rootless 容器（写 <code>trusted.*</code> 需要 <code>CAP_SYS_ADMIN</code>）</td></tr>
+          <tr><td><code>volatile</code></td><td>跳过对 upper 的同步（不保证掉电一致）</td><td>只用于<strong>可丢弃</strong>的场景：镜像构建、CI。生产容器绝不要开</td></tr>
+        </tbody>
+      </table></div>
+
       <div class="analogy">
         <div class="at">生活类比：透明玻璃叠画</div>
-        <p>镜像层像一叠<strong>透明胶片</strong>：底下几张是印好的公共图案（只读基础层），最上面一张是空白胶片（可写层）。你要涂改下面的图案时，不能直接画在公共胶片上（别人还要用），而是把那部分描到最上面的空白胶片再改（写时复制）。从正上方看，所有胶片叠加成一张完整的画（合并视图）。抽走你那张空白胶片（删容器），公共胶片完好如初。</p>
-        <div class="map">映射：<b>公共胶片</b>=只读镜像层 · <b>空白胶片</b>=可写层 · <b>描到上层再改</b>=CoW · <b>抽走上层</b>=删容器</div>
+        <p>镜像层像一叠<strong>透明胶片</strong>：底下几张印好公共图案（只读基础层），最上面一张是空白胶片（可写层）。要涂改下面的图案，不能直接画在公共胶片上（别人还要用），只能把那部分描到空白胶片再改（写时复制）。抽走你那张空白胶片（删容器），公共胶片完好如初。要「删掉」下层某个图案，只能在顶层贴一块不透明贴纸（whiteout）——贴纸本身还占地方。</p>
+        <div class="map">映射：<b>公共胶片</b>=只读镜像层 · <b>空白胶片</b>=可写层 · <b>描到上层再改</b>=CoW · <b>不透明贴纸</b>=whiteout</div>
       </div>
     </section>
 
     <section class="chapter" id="ch5">
       <div class="ch-head"><div class="num">05</div><div class="t"><h2>容器如何启动（OCI / runc）</h2><div class="sub">从 docker run 到进程诞生</div></div></div>
-      <p>Docker/K8s 只是上层。真正「造容器」的是符合 <strong>OCI（Open Container Initiative）</strong> 规范的低层运行时，如 <strong>runc</strong>。启动一个容器大致是这几步：</p>
+      <p>Docker / K8s 只是上层。真正「造容器」的是符合 <strong>OCI</strong> 规范的低层运行时（如 <strong>runc</strong>）：它读一份 <code>config.json</code>，把前面三件事（namespace / cgroup / rootfs）依次做掉，然后自己退出。</p>
       <div class="tool-card">
-        <h4>启动流程</h4>
+        <h4>启动六步</h4>
         <ul>
-          <li><strong>① 准备根文件系统</strong>：用 OverlayFS 挂载镜像各层 + 可写层，得到容器 rootfs。</li>
-          <li><strong>② 创建 namespace</strong>：<code>clone()</code> 带各 <code>CLONE_NEW*</code> 标志，进入隔离视图。</li>
-          <li><strong>③ 设置 cgroup</strong>：把新进程加入配好限额的 cgroup。</li>
-          <li><strong>④ 切换根</strong>：<code>pivot_root</code> 把根切到容器 rootfs（比 <code>chroot</code> 更安全）。</li>
-          <li><strong>⑤ 收敛权限</strong>：drop capabilities、应用 seccomp/AppArmor、设 no_new_privs。</li>
-          <li><strong>⑥ exec 用户进程</strong>：<code>execve</code> 运行镜像里的 ENTRYPOINT，容器「活」了。</li>
+          <li><strong>① 准备根文件系统</strong>：OverlayFS 挂镜像各层 + 可写层，得到容器 rootfs。</li>
+          <li><strong>② 创建 namespace</strong>：<code>clone()</code> 带各 <code>CLONE_NEW*</code>，子进程诞生在隔离视图里。</li>
+          <li><strong>③ 加入 cgroup</strong>：把新进程写进配好限额的 <code>cgroup.procs</code>。</li>
+          <li><strong>④ 切换根</strong>：<code>pivot_root</code> 切到容器 rootfs，然后<strong>卸载旧根</strong>。</li>
+          <li><strong>⑤ 收敛权限</strong>：drop caps、装 seccomp 过滤器、打 LSM 标签、设 <code>no_new_privs</code>，<strong>必须在 exec 之前全部做完</strong>。</li>
+          <li><strong>⑥ exec 用户进程</strong>：<code>execve</code> 运行 ENTRYPOINT，容器「活」了。</li>
         </ul>
       </div>
+
+      <div class="fig">
+        <svg viewBox="0 0 680 470" width="680" height="470" style="min-width:660px;height:auto" role="img" aria-label="一次 docker run 背后的时序：containerd 准备 OverlayFS 与配置并起一个 shim，runc 的 parent 阶段 clone 出 child，child 用 unshare 建各 namespace 并请 parent 从外面写 uid_map，再 clone 出真正的 PID 1，parent 把它写进 cgroup.procs 让限额生效，init 阶段做 pivot_root、挂伪文件系统、收敛权限后阻塞在 exec.fifo 上，此时容器处于 created 状态供 CNI 配置网络，runc start 往 fifo 写一个字节才唤醒它 execve 入口程序">
+          <text x="16" y="20" fill="var(--text)" font-size="12.5" font-weight="700">一次 docker run，内核那一侧真正发生了什么</text>
+
+          <line x1="118" y1="34" x2="118" y2="386" stroke="var(--border-2)" stroke-width="1.4" stroke-dasharray="4 3"/>
+
+          <rect x="16" y="38" width="96" height="30" rx="5" fill="color-mix(in srgb, var(--accent) 14%, var(--bg-card))" stroke="var(--accent)"/>
+          <text x="64" y="57" text-anchor="middle" fill="var(--text)" font-size="10.5">containerd</text>
+          <text x="130" y="50" fill="var(--text)" font-size="11">① 拉镜像 → 挂 OverlayFS 得到 rootfs → 生成 config.json</text>
+          <text x="130" y="65" fill="var(--text-dim)" font-size="10.5">② 起一个 shim（每容器一个，持 stdio 与退出状态，所以 containerd 可以重启而不杀容器）</text>
+
+          <rect x="16" y="80" width="96" height="30" rx="5" fill="color-mix(in srgb, var(--info) 14%, var(--bg-card))" stroke="var(--info)"/>
+          <text x="64" y="99" text-anchor="middle" fill="var(--text)" font-size="10.5">runc parent</text>
+          <text x="130" y="92" fill="var(--text)" font-size="11">③ 仍在宿主的全部 namespace 里；建 socketpair 与 exec.fifo，把配置通过 initpipe 传下去</text>
+          <text x="130" y="107" fill="var(--text-dim)" font-size="10.5">clone() ↓</text>
+
+          <rect x="16" y="122" width="96" height="46" rx="5" fill="color-mix(in srgb, var(--purple) 16%, var(--bg-card))" stroke="var(--purple)"/>
+          <text x="64" y="141" text-anchor="middle" fill="var(--text)" font-size="10.5">runc child</text>
+          <text x="64" y="156" text-anchor="middle" fill="var(--text-mute)" font-size="9.5">（C 写的，跑在</text>
+          <text x="64" y="166" text-anchor="middle" fill="var(--text-mute)" font-size="9.5">Go runtime 之前）</text>
+          <text x="130" y="134" fill="var(--text)" font-size="11">④ unshare(CLONE_NEWUSER | CLONE_NEWNS | CLONE_NEWNET | CLONE_NEWIPC | …)</text>
+          <text x="130" y="149" fill="var(--text-dim)" font-size="10.5">内核保证先建 user ns，再用它当其余 ns 的所有者</text>
+          <text x="130" y="164" fill="var(--yellow)" font-size="10.5">⑤ ←→ 握手：它在新 user ns 里，自己写不了 uid_map，只能求 parent 从外面写</text>
+
+          <rect x="130" y="176" width="536" height="42" rx="6" fill="color-mix(in srgb, var(--yellow) 12%, var(--bg-card))" stroke="var(--yellow)"/>
+          <text x="142" y="192" fill="var(--text)" font-size="10.5">parent 写 /proc/&lt;child&gt;/uid_map → setgroups=deny → gid_map，然后回一句「写好了，继续」</text>
+          <text x="142" y="209" fill="var(--text-mute)" font-size="10.5">写多行区间要求在<tspan font-weight="700">父</tspan> user ns 里有 CAP_SETUID —— 这就是必须分阶段的根本原因</text>
+
+          <rect x="16" y="228" width="96" height="30" rx="5" fill="color-mix(in srgb, var(--green) 16%, var(--bg-card))" stroke="var(--green)"/>
+          <text x="64" y="247" text-anchor="middle" fill="var(--text)" font-size="10.5">runc init</text>
+          <text x="130" y="240" fill="var(--text)" font-size="11">⑥ child 再 clone() 一次才有真正的 PID 1（unshare 不把调用者放进新 PID ns），随后 child 退出</text>
+          <text x="130" y="255" fill="var(--green)" font-size="10.5">⑦ parent 把这个 PID 写进 cgroup.procs → <tspan font-weight="700">限额从这一刻开始生效</tspan></text>
+
+          <rect x="130" y="266" width="536" height="60" rx="6" fill="color-mix(in srgb, var(--accent) 8%, var(--bg-card))" stroke="var(--border)"/>
+          <text x="142" y="282" fill="var(--text)" font-size="11">⑧ init 自己做完最后几步：</text>
+          <text x="142" y="298" fill="var(--text-dim)" font-size="10.5">pivot_root(".", ".") + umount2(".", MNT_DETACH) → 挂 /proc /sys /dev → drop caps / seccomp / LSM</text>
+          <text x="142" y="316" fill="var(--red)" font-size="10.5">⑨ 然后<tspan font-weight="700">阻塞在 exec.fifo 上</tspan>——入口程序一行都还没跑</text>
+
+          <rect x="16" y="336" width="650" height="46" rx="6" fill="color-mix(in srgb, var(--info) 10%, var(--bg-card))" stroke="var(--info)"/>
+          <text x="28" y="353" fill="var(--info)" font-size="11" font-weight="700">runc create 到此返回，容器状态 = created —— 这个窗口是留给上层的</text>
+          <text x="28" y="370" fill="var(--text-dim)" font-size="10.5">CNI 插件此刻把 veth 插进它的 net ns、配 IP；shim 接管 stdio；也可以 setns 进去做检查</text>
+
+          <rect x="16" y="394" width="650" height="30" rx="6" fill="color-mix(in srgb, var(--green) 14%, var(--bg-card))" stroke="var(--green)"/>
+          <text x="28" y="413" fill="var(--text)" font-size="11">⑩ runc start：往 exec.fifo 写一个字节 → init 被唤醒 → execve(entrypoint) → 容器「活」了，runc 退出</text>
+
+          <line x1="16" y1="438" x2="666" y2="438" stroke="var(--border-2)" stroke-width="1"/>
+          <text x="16" y="458" fill="var(--text-mute)" font-size="10.5">整条链上没有任何一个进程在「运行容器」——runc 造完就退出，剩下的只是一个被框住的普通进程和一个看着它的 shim。</text>
+        </svg>
+        <figcaption>三个阶段不是多余的抽象：<code>uid_map</code> 要由 ns <u>外面</u>的进程写、<code>unshare(CLONE_NEWPID)</code> 不把调用者放进新 ns、user ns 只能由单线程进程加入——三条内核限制各逼出一个阶段</figcaption>
+      </div>
+
+      <div class="cheatsheet"><table>
+        <thead><tr><th><code>clone</code> / <code>unshare</code> 标志</th><th>值</th><th>创建的 namespace</th><th>runc 里的开关</th></tr></thead>
+        <tbody>
+          <tr><td><code>CLONE_NEWNS</code></td><td><code>0x00020000</code></td><td>mount（历史最早的一个，所以名字里没有 MNT）</td><td><code>{"type":"mount"}</code>，几乎总是要</td></tr>
+          <tr><td><code>CLONE_NEWUTS</code></td><td><code>0x04000000</code></td><td>uts</td><td><code>{"type":"uts"}</code></td></tr>
+          <tr><td><code>CLONE_NEWIPC</code></td><td><code>0x08000000</code></td><td>ipc</td><td><code>{"type":"ipc"}</code></td></tr>
+          <tr><td><code>CLONE_NEWUSER</code></td><td><code>0x10000000</code></td><td>user；<strong>与其它标志同时给时内核保证先建它</strong></td><td><code>{"type":"user"}</code> + <code>uidMappings</code></td></tr>
+          <tr><td><code>CLONE_NEWPID</code></td><td><code>0x20000000</code></td><td>pid；<strong>调用者自己不进去，要靠 fork</strong></td><td><code>{"type":"pid"}</code></td></tr>
+          <tr><td><code>CLONE_NEWNET</code></td><td><code>0x40000000</code></td><td>net（创建开销最大的一种）</td><td><code>{"type":"network"}</code>；给 <code>path</code> 则是 <code>setns</code> 加入已有的（Pod 就靠这个）</td></tr>
+          <tr><td><code>CLONE_NEWCGROUP</code></td><td><code>0x02000000</code></td><td>cgroup 根视图</td><td><code>{"type":"cgroup"}</code></td></tr>
+          <tr><td><code>CLONE_NEWTIME</code></td><td><code>0x00000080</code></td><td>time（5.6 起）</td><td>OCI 规范里是 <code>{"type":"time"}</code>，运行时支持情况以版本为准</td></tr>
+        </tbody>
+      </table></div>
+
+      <div class="def"><strong>为什么用 <code>pivot_root</code> 而不是 <code>chroot</code></strong>：<code>chroot</code> 只改根目录指针，<strong>旧的根文件系统仍然挂载着、仍然可达</strong>；<code>pivot_root</code> 把旧根<strong>整个从挂载树上摘下来并卸载</strong>。用挂载点条数当场验证：容器里 <code>wc -l /proc/mounts</code> 只有二十来条，<code>chroot</code> 出来的环境里宿主那一百多条<strong>一条不少</strong>。</div>
+
+      <h3>chroot 为什么能被逃出去：把原理拆开看</h3>
+      <p><code>chroot(path)</code> 只做一件事：把 <code>task_struct→fs→root</code> 换成 <code>path</code> 的 dentry。<strong>它不改 <code>pwd</code>，也不动挂载树</strong>，于是留下几个洞：</p>
+      <div class="tool-card danger">
+        <h4>三条经典逃逸路径（都不需要漏洞）</h4>
+        <ul>
+          <li><strong>① <code>pwd</code> 落在新根之外。</strong>内核解析 <code>..</code> 的规则是「到了<u>本进程的 root</u> 就停」，但若 <code>chroot</code> 之后没紧跟 <code>chdir("/")</code>，<code>pwd</code> 已在 root 之外，这个条件永远不成立，<code>chdir("..")</code> 一路走到真正的根。</li>
+          <li><strong>② 造一个「更深的根」。</strong>即使规范地 <code>chdir("/")</code> 了，只要还持有 <code>CAP_SYS_CHROOT</code>：<code>mkdir("x")</code> → <code>chroot("x")</code>（<code>pwd</code> 留在父目录，正好落在新 root 之外）→ 回到 ①。十几行 C 代码，用的全是正常语义。</li>
+          <li><strong>③ 一个 <code>chroot</code> 之前打开的目录 fd。</strong><code>fchdir(fd)</code> 直接把 <code>pwd</code> 设到外面，同样回到 ①。</li>
+          <li>所以 <code>chroot</code> 从来不是安全边界，手册页自己就这么写着。</li>
+        </ul>
+      </div>
+      <p>runc 的做法是：<code>mount("", "/", MS_SLAVE|MS_REC)</code> 断开向宿主的传播 → 把 rootfs <code>bind</code> 成挂载点 → <code>chdir(rootfs)</code> → <code>pivot_root(".", ".")</code>（<strong>两个参数传同一个 <code>"."</code></strong>，旧根叠在新根同一位置，省掉在镜像里预留 <code>/old_root</code>）→ <code>umount2(".", MNT_DETACH)</code> 把叠着的旧根整棵摘掉。</p>
+
+      <h3>runc 为什么要分三个阶段：Go 语言撞上内核限制</h3>
+      <div class="tool-card violet">
+        <h4>两个绕不过去的坑</h4>
+        <ul>
+          <li><strong>多线程进程不能 <code>unshare</code>/<code>setns</code> user namespace。</strong>而 Go runtime 一启动就创建多个 OS 线程且无法变回单线程，所以这段逻辑必须在 Go runtime 初始化<strong>之前</strong>跑完——只有 C 的 <code>constructor</code>（<code>nsexec.c</code>）能拿到这个窗口。</li>
+          <li><strong><code>uid_map</code> 必须由 namespace <u>外面</u>的进程写。</strong>写多行映射要在<strong>父</strong> user ns 里持有 <code>CAP_SETUID</code>，而新建 user ns 的进程自己在里面反而没有，只能两个进程配合。</li>
+          <li>第三个理由更简单：<code>unshare(CLONE_NEWPID)</code> 不把调用者放进新 PID ns，必须再 <code>fork</code> 一次才有 PID 1。</li>
+        </ul>
+      </div>
+
+      <div class="intuition"><strong><code>create</code> 与 <code>start</code> 分离不是多余的抽象。</strong>容器进程必须先存在（才有 PID、才有 net namespace 可以插 veth、才能写进 cgroup），但业务代码不能在网络和限额就绪前跑起来。「先造好、卡在最后一步、由外部按下发令枪」正好解决这个矛盾。<code>created</code> 状态下 <code>cat /proc/&lt;pid&gt;/cmdline</code> 看到的还是 <code>/proc/self/exe init</code>。</div>
+
+      <div class="cheatsheet"><table>
+        <thead><tr><th>OCI 钩子</th><th>执行时机</th><th>在哪个 namespace 里</th><th>典型用途</th></tr></thead>
+        <tbody>
+          <tr><td><code>createRuntime</code></td><td>namespace 建好之后、<code>pivot_root</code> 之前</td><td>runtime（宿主）的 namespace</td><td>往容器的 net ns 里插 veth、写 <code>/proc/&lt;pid&gt;/ns</code> 相关配置</td></tr>
+          <tr><td><code>createContainer</code></td><td><code>pivot_root</code> 之后、<code>execve</code> 之前</td><td>容器的 mount namespace</td><td>往 rootfs 里补文件、调整挂载</td></tr>
+          <tr><td><code>startContainer</code></td><td><code>execve</code> 之前的最后一刻</td><td>容器的全部 namespace</td><td>跑容器内的初始化脚本</td></tr>
+          <tr><td><code>poststart</code></td><td><code>execve</code> 之后</td><td>runtime 的 namespace</td><td>注册服务发现、上报就绪</td></tr>
+          <tr><td><code>poststop</code></td><td>容器删除之后</td><td>runtime 的 namespace</td><td>清理网络、卸载卷、回收 IP</td></tr>
+          <tr><td><code>prestart</code></td><td>（已废弃，等价于 <code>createRuntime</code>）</td><td>runtime 的 namespace</td><td>老版本 CNI 插件仍在用</td></tr>
+        </tbody>
+      </table></div>
+
+      <p>想亲手验证不需要 Docker：<code>docker export $(docker create alpine) | tar -C rootfs -xf -</code> 拿一个 rootfs，<code>runc spec</code> 生成默认 <code>config.json</code>（里面的 <code>linux.namespaces</code>、<code>resources.cpu.quota</code>、<code>process.capabilities.bounding</code>、<code>seccomp</code> 就是上面六步的配置形态），<code>runc run</code> 就起来了。</p>
+
       <div class="cheatsheet"><table>
         <thead><tr><th>层次</th><th>组件</th><th>职责</th></tr></thead>
         <tbody>
-          <tr><td>编排</td><td>Kubernetes</td><td>调度、编排、扩缩容</td></tr>
-          <tr><td>高层运行时</td><td>containerd / CRI-O</td><td>拉镜像、管生命周期、对接 CRI</td></tr>
-          <tr><td>低层运行时</td><td>runc（OCI）</td><td>真正调 namespace/cgroup 造容器进程</td></tr>
-          <tr><td>隔离沙箱（可选）</td><td>Kata / gVisor / Firecracker</td><td>更强隔离（轻量 VM / 用户态内核）</td></tr>
+          <tr><td>编排</td><td>Kubernetes</td><td>调度、编排、扩缩容、声明式管理</td></tr>
+          <tr><td>高层运行时</td><td>containerd / CRI-O</td><td>拉镜像、管生命周期、对接 kubelet 的 CRI 接口</td></tr>
+          <tr><td>shim</td><td>containerd-shim-runc-v2</td><td>每容器一个，持有 stdio 与退出状态；<strong>它的存在让 containerd 可以重启而不杀掉容器</strong></td></tr>
+          <tr><td>低层运行时</td><td>runc（OCI runtime spec）</td><td>真正调 namespace / cgroup / pivot_root 造出容器进程，然后退出</td></tr>
+          <tr><td>隔离沙箱（可选）</td><td>Kata / gVisor / Firecracker</td><td>替换 runc，用轻量 VM 或用户态内核提供更强隔离</td></tr>
         </tbody>
       </table></div>
     </section>
 
     <section class="chapter" id="ch6">
       <div class="ch-head"><div class="num">06</div><div class="t"><h2>容器网络</h2><div class="sub">独立网络栈怎么连出去</div></div></div>
-      <p>每个容器有独立的 network namespace（自己的网卡、IP、路由）。它怎么和宿主/外网通信？</p>
-      <div class="tool-card violet">
-        <h4>常见模式</h4>
+      <p>每个容器有独立的 network namespace（自己的网卡、IP、路由表、iptables 规则）。它怎么和宿主 / 外网通信？答案全部由几个虚拟设备拼出来，没有任何魔法。</p>
+
+      <div class="cheatsheet"><table>
+        <thead><tr><th>模式</th><th>做法</th><th>性能</th><th>适用</th></tr></thead>
+        <tbody>
+          <tr><td><code>bridge</code>（默认）</td><td>宿主建虚拟网桥 <code>docker0</code>，每容器一对 veth 插上去，出外网靠 NAT</td><td>有 NAT 与网桥转发开销</td><td>通用；单机多容器互通</td></tr>
+          <tr><td><code>host</code></td><td>不建 net namespace，直接用宿主网络栈</td><td>零开销</td><td>高性能网络服务；代价是端口冲突与零隔离</td></tr>
+          <tr><td><code>none</code></td><td>只有 loopback</td><td>—</td><td>完全不需要网络，或自己用 CNI 配</td></tr>
+          <tr><td><code>container:&lt;id&gt;</code></td><td>共用另一个容器的 net namespace</td><td>同 host</td><td>K8s Pod 内多容器共享网络就是这个（靠 pause 容器持有 ns）</td></tr>
+          <tr><td>macvlan / ipvlan</td><td>直接从物理网卡派生子接口，容器有独立 MAC/IP</td><td>接近裸机</td><td>需要容器在二层网络里像独立主机一样存在</td></tr>
+        </tbody>
+      </table></div>
+
+      <h3>手工搭一个 bridge 网络：Docker 到底做了什么</h3>
+      <p><code>docker0</code> 没有任何神秘之处，几条 <code>ip</code> 命令就能复现：<code>ip netns add c1</code> 造一个「容器」；<code>ip link add veth-host type veth peer name eth0</code> 造一对虚拟网线，<code>ip link set eth0 netns c1</code> 把一头塞进去；宿主侧建网桥并把另一头 <code>master br-demo</code> 插上；容器侧配 IP、把网桥设成默认网关；最后开 <code>ip_forward</code> 加一条 <code>iptables -t nat -A POSTROUTING -s 172.30.0.0/24 ! -o br-demo -j MASQUERADE</code>——这条 SNAT 规则就是能出外网的全部原因。</p>
+
+      <div class="fig">
+        <svg viewBox="0 0 700 340" width="700" height="340" style="min-width:680px;height:auto" role="img" aria-label="bridge 模式下一个包从容器出到外网的完整路径：容器协议栈发出后经 veth 对直接进入宿主侧的接收路径，再经网桥二层转发、netfilter 的 FORWARD 链、SNAT 改写与 conntrack 记账，最后走宿主协议栈从物理网卡发出；图下方列出四个判据与对应的失败症状">
+          <text x="16" y="20" fill="var(--text)" font-size="12.5" font-weight="700">一个包从容器出到外网，要走过的每一跳</text>
+
+          <rect x="16" y="34" width="120" height="72" rx="8" fill="color-mix(in srgb, var(--accent) 14%, var(--bg-card))" stroke="var(--accent)"/>
+          <text x="76" y="54" text-anchor="middle" fill="var(--text)" font-size="11" font-weight="700">容器 net ns</text>
+          <text x="76" y="72" text-anchor="middle" fill="var(--text-dim)" font-size="10">自己的协议栈</text>
+          <text x="76" y="88" text-anchor="middle" fill="var(--text-dim)" font-size="10">eth0 172.30.0.2</text>
+          <text x="76" y="101" text-anchor="middle" fill="var(--text-mute)" font-size="9.5">默认网关 = 网桥</text>
+
+          <path d="M140 70 L188 70" fill="none" stroke="var(--accent)" stroke-width="1.6" marker-end="url(#c6a)"/>
+          <rect x="192" y="42" width="106" height="56" rx="8" fill="color-mix(in srgb, var(--info) 14%, var(--bg-card))" stroke="var(--info)"/>
+          <text x="245" y="62" text-anchor="middle" fill="var(--text)" font-size="11" font-weight="700">veth 对</text>
+          <text x="245" y="79" text-anchor="middle" fill="var(--text-dim)" font-size="10">一根内存里的短路线</text>
+          <text x="245" y="92" text-anchor="middle" fill="var(--text-mute)" font-size="9.5">无硬件队列、无 DMA</text>
+
+          <path d="M302 70 L350 70" fill="none" stroke="var(--info)" stroke-width="1.6" marker-end="url(#c6i)"/>
+          <rect x="354" y="42" width="106" height="56" rx="8" fill="color-mix(in srgb, var(--green) 14%, var(--bg-card))" stroke="var(--green)"/>
+          <text x="407" y="62" text-anchor="middle" fill="var(--text)" font-size="11" font-weight="700">bridge 二层转发</text>
+          <text x="407" y="79" text-anchor="middle" fill="var(--text-dim)" font-size="10">MAC 学习 + fdb 查表</text>
+          <text x="407" y="92" text-anchor="middle" fill="var(--text-mute)" font-size="9.5">端口须为 forwarding</text>
+
+          <path d="M464 70 L512 70" fill="none" stroke="var(--green)" stroke-width="1.6" marker-end="url(#c6g)"/>
+          <rect x="516" y="42" width="168" height="56" rx="8" fill="color-mix(in srgb, var(--yellow) 16%, var(--bg-card))" stroke="var(--yellow)"/>
+          <text x="600" y="62" text-anchor="middle" fill="var(--text)" font-size="11" font-weight="700">netfilter：FORWARD + NAT</text>
+          <text x="600" y="79" text-anchor="middle" fill="var(--text-dim)" font-size="10">MASQUERADE 改写源地址</text>
+          <text x="600" y="92" text-anchor="middle" fill="var(--text-mute)" font-size="9.5">conntrack 记下回程五元组</text>
+
+          <path d="M600 102 L600 128" fill="none" stroke="var(--yellow)" stroke-width="1.6" marker-end="url(#c6y)"/>
+          <rect x="516" y="132" width="168" height="42" rx="8" fill="color-mix(in srgb, var(--accent) 10%, var(--bg-card))" stroke="var(--border-2)"/>
+          <text x="600" y="150" text-anchor="middle" fill="var(--text)" font-size="11">宿主协议栈 → 物理网卡</text>
+          <text x="600" y="166" text-anchor="middle" fill="var(--text-mute)" font-size="9.5">回程包靠 conntrack 还原</text>
+
+          <text x="16" y="132" fill="var(--red)" font-size="10.5" font-weight="700">桥接流量本不该过三层防火墙</text>
+          <text x="16" y="148" fill="var(--text-dim)" font-size="10.5">是 br_netfilter（bridge-nf-call-iptables=1）</text>
+          <text x="16" y="163" fill="var(--text-dim)" font-size="10.5">把桥接包硬拉进 iptables 的。K8s 要求打开</text>
+          <text x="16" y="178" fill="var(--text-dim)" font-size="10.5">它（Service 规则要作用于跨容器流量），</text>
+          <text x="16" y="193" fill="var(--text-dim)" font-size="10.5">代价是每个桥接包都过一遍规则链——</text>
+          <text x="16" y="208" fill="var(--text-dim)" font-size="10.5">这也是 Cilium 用 eBPF 取代它的主要动机。</text>
+
+          <line x1="16" y1="226" x2="684" y2="226" stroke="var(--border-2)" stroke-width="1"/>
+          <text x="16" y="246" fill="var(--text)" font-size="11.5" font-weight="700">四个判据：任何一个不对就不通，按这个顺序查</text>
+          <text x="16" y="266" fill="var(--text-dim)" font-size="10.5">ⓐ <tspan font-weight="700">veth 配对</tspan> ip -d link show 里的 "@ifN" 与 "master br-demo" —— 忘了插网桥是最常见的错 → 症状：ping 网关不通</text>
+          <text x="16" y="284" fill="var(--text-dim)" font-size="10.5">ⓑ <tspan font-weight="700">网桥学到 MAC</tspan> bridge fdb show / bridge link show，state 必须是 forwarding → 症状：同上</text>
+          <text x="16" y="302" fill="var(--text-dim)" font-size="10.5">ⓒ <tspan font-weight="700">NAT 规则在涨包数</tspan> iptables -t nat -L POSTROUTING -nv 的 pkts 列 → 一直是 0 说明包没走到这条规则；症状：网关通、外网不通</text>
+          <text x="16" y="320" fill="var(--text-dim)" font-size="10.5">ⓓ <tspan font-weight="700">conntrack 有条目</tspan> conntrack -L 两行是原始五元组与回程包该长的样子 → 表项被挤掉，回包就找不到家；症状：偶发不通</text>
+
+          <defs>
+            <marker id="c6a" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="var(--accent)"/></marker>
+            <marker id="c6i" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="var(--info)"/></marker>
+            <marker id="c6g" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="var(--green)"/></marker>
+            <marker id="c6y" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="var(--yellow)"/></marker>
+          </defs>
+        </svg>
+        <figcaption>「小包通、大包不通」不在这四条里——那是 MTU：中间设备一旦丢掉 ICMP，路径 MTU 发现就失效、大包被静默黑洞</figcaption>
+      </div>
+
+      <div class="tool-card green">
+        <h4>veth 与 bridge 的开销来自哪里</h4>
         <ul>
-          <li><strong>bridge（默认）</strong>：宿主建一个虚拟网桥 <code>docker0</code>；每个容器一对 <strong>veth pair</strong>（虚拟网线），一头在容器内、一头插网桥；出外网靠 <strong>NAT（iptables MASQUERADE）</strong>。</li>
-          <li><strong>host</strong>：容器直接用宿主网络栈，无隔离、无 NAT 开销，端口直接暴露。</li>
-          <li><strong>none</strong>：只有 loopback，完全隔离，自己配。</li>
-          <li><strong>K8s CNI</strong>：跨节点 Pod 通信由 CNI 插件（Calico/Cilium/Flannel）实现，Cilium 用 eBPF 做高性能网络与策略。</li>
+          <li><strong>veth 不是网卡的模拟，而是一根「内存里的短路线」</strong>：一端的发送函数直接把 <code>skb</code> 交给另一端的接收路径，不经过硬件队列、没有 DMA（所以默认 <code>qdisc noqueue</code>）。开销主要是<strong>多走一遍协议栈</strong>，而不是数据拷贝。</li>
+          <li><strong>bridge 模式的开销是叠加的</strong>：图上每一跳都不贵，但加起来足以在小包高 PPS 场景下成为瓶颈。</li>
+          <li>内核侧 veth / bridge / netfilter 的实现细节、以及 XDP 与 eBPF 怎么压短这条路径，见 <a href="./kernel_network_stack.html#s5">内核网络栈 §5</a> 与 <a href="./kernel_network_stack.html#s3">§3 netfilter 与 conntrack</a>。</li>
         </ul>
       </div>
-      <p>底层网络编程与 eBPF 见 <a href="./networking_guide.html">网络编程</a> 与 <a href="./observability_ebpf.html">eBPF 实战</a>。</p>
+
+      <h3>NAT 的两个真实上限：conntrack 表与端口</h3>
+      <p>第一道硬墙是 <strong>conntrack 表</strong>（<code>nf_conntrack_max</code> 是容量、<code>nf_conntrack_count</code> 是用量）。表满时包被直接丢弃，<code>dmesg</code> 里有明确一行 <code>nf_conntrack: table full</code>——但业务侧看到的是「随机超时」，而 CPU、内存、带宽全都正常，日志里像是对端的问题。按状态分类通常会发现大头是 <code>TIME_WAIT</code>（表项要挂 120 秒）。</p>
+      <p>第二道墙是 <strong>SNAT 可用的源端口</strong>：<code>ip_local_port_range</code> 默认约 2.8 万个。严格说这是「每个 (目的 IP, 目的端口) 组合」下的可用量，但所有容器都连同一个下游 VIP 时，它就是实打实的全局上限。</p>
+
+      <div class="cheatsheet"><table>
+        <thead><tr><th>症状</th><th>根因</th><th>处方</th></tr></thead>
+        <tbody>
+          <tr><td>随机超时，<code>dmesg</code> 有 <code>table full</code></td><td>conntrack 表满</td><td>调大 <code>nf_conntrack_max</code>（每条目约几百字节）+ 缩短 <code>TIME_WAIT</code> 超时 + 改用长连接</td></tr>
+          <tr><td>连同一个下游时出现 <code>EADDRNOTAVAIL</code></td><td>SNAT 源端口耗尽</td><td>放宽 <code>ip_local_port_range</code>；给下游加多个 VIP；或让该服务走 <code>host</code> 网络绕开 SNAT</td></tr>
+          <tr><td>小包正常、大包卡住或超时</td><td>MTU 不匹配：overlay 封装要留头部空间，容器网卡 MTU 必须相应减小；中间设备丢掉 ICMP 后路径 MTU 发现失效，大包被静默黑洞</td><td>显式让容器 MTU 与网桥一致；用 <code>ping -M do -s &lt;size&gt;</code> 二分找出真实可用 MTU</td></tr>
+          <tr><td>UDP（尤其 DNS）偶发丢包后重试才成功</td><td>多线程对同一五元组做 SNAT/DNAT 时 conntrack 表项插入存在竞争窗口，冲突的那个包被丢弃</td><td>用连接池 / 本地 DNS 缓存减少并发新建；给 MASQUERADE 加 <code>--random-fully</code>；或调 <code>ndots</code> 减少查询</td></tr>
+          <tr><td>规则数量大后转发延迟明显上升</td><td>iptables 规则链线性匹配，Service 多时每个包要过很长的链</td><td>切到 <code>nftables</code> 实现，或用 eBPF 数据面（Cilium）绕开 iptables</td></tr>
+        </tbody>
+      </table></div>
+
+      <h3><code>--net=host</code> 的取舍</h3>
+      <div class="cheatsheet"><table>
+        <thead><tr><th>维度</th><th><code>bridge</code>（默认）</th><th><code>--net=host</code></th></tr></thead>
+        <tbody>
+          <tr><td>是否新建 net namespace</td><td>是，容器有独立 IP 与端口空间</td><td><strong>否</strong>，直接用宿主的协议栈</td></tr>
+          <tr><td>每包额外开销</td><td>veth 一跳 + 网桥转发 + netfilter + NAT 记账</td><td><strong>零</strong>——和宿主上的普通进程一样</td></tr>
+          <tr><td>端口</td><td>容器内可以随便用 80、和别的容器重名</td><td>与宿主及其它 host 容器<strong>共享端口空间，会冲突</strong>；配置里不能写死端口</td></tr>
+          <tr><td>conntrack</td><td>每条连接一个表项</td><td>不产生 NAT 表项，绕开了上面两道墙</td></tr>
+          <tr><td>可观测性</td><td>要 <code>nsenter -n</code> 才能抓包</td><td>宿主上直接 <code>tcpdump</code>、<code>ss</code> 就能看到</td></tr>
+          <tr><td>隔离性</td><td>看不到宿主的网卡、路由、监听端口</td><td><strong>网络维度零隔离</strong>：能访问宿主 <code>127.0.0.1</code> 上的所有服务（往往含未鉴权的管理端口、数据库）</td></tr>
+          <tr><td>适用</td><td>绝大多数业务容器</td><td>高 PPS 的网关 / 代理 / 存储节点；节点级 agent；本来就要看宿主网络的组件</td></tr>
+        </tbody>
+      </table></div>
+      <div class="box danger"><code>--net=host</code> 最容易被低估的是<strong>安全影响而不是端口冲突</strong>。很多服务把「只监听 127.0.0.1 就是安全的」当前提（Redis、Etcd、各种 admin 端口、云元数据服务都这样），而一个 host 网络的容器眼里的 <code>127.0.0.1</code> 就是宿主的。所以开 host 网络前先问一句「这台机器的 loopback 上有什么」。见 <a href="./linux_security_model.html#s6">Linux 安全模型 §6</a>。</div>
+
+      <div class="tool-card violet">
+        <h4>端口映射（-p 8080:80）到底是什么</h4>
+        <ul>
+          <li>本质是一条 <strong>DNAT 规则</strong>：进宿主 8080 的包，目的地址被改写成容器 IP 的 80，然后正常路由过去。<code>iptables -t nat -L DOCKER -n</code> 里那条 <code>DNAT tcp dpt:8080 to:172.17.0.2:80</code> 就是它。</li>
+          <li>Docker 还会起一个 <code>docker-proxy</code> 占住宿主端口，处理 DNAT 覆盖不到的情况（如从宿主自己 <code>127.0.0.1:8080</code> 访问）。它是「端口明明没人用却说被占用」的常见元凶。</li>
+          <li>大流量下 NAT 会消耗 conntrack 表项，表满直接丢包；跑高连接数服务时考虑 <code>host</code> 网络或 macvlan。</li>
+        </ul>
+      </div>
+
+      <p>K8s 里跨节点 Pod 通信由 CNI 插件（Calico / Cilium / Flannel）实现，Cilium 用 eBPF 替掉 iptables、规则多时优势明显。内核侧的收发包路径见 <a href="./kernel_network_stack.html">内核网络栈与流量治理</a>；用户态 socket 编程见 <a href="./networking_guide.html">网络编程</a>。</p>
     </section>
 
     <section class="chapter" id="ch7">
       <div class="ch-head"><div class="num">07</div><div class="t"><h2>容器安全</h2><div class="sub">共享内核 = 隔离没有 VM 强</div></div></div>
+      <p>容器的隔离是<strong>内核提供的</strong>，所以隔离强度的上限就是内核的正确性。这句话有两层含义：内核有漏洞时容器逃逸是现实威胁；而更常见的是——<strong>大多数逃逸根本不需要漏洞，只需要一个错误的配置</strong>。</p>
       <div class="tool-card danger">
-        <h4>纵深防御</h4>
+        <h4>纵深防御的五层</h4>
         <ul>
-          <li><strong>Capabilities</strong>：把 root 的超级权限拆成细粒度能力，容器默认只保留一小部分，drop 掉危险的（如 <code>CAP_SYS_ADMIN</code>）。别用 <code>--privileged</code>。</li>
-          <li><strong>Seccomp</strong>：系统调用白/黑名单，禁掉容器用不到的危险 syscall，缩小攻击面。</li>
+          <li><strong>Capabilities</strong>：把 root 拆成细粒度能力，容器默认只留一小部分。绝不要 <code>--privileged</code>，也别随手加 <code>CAP_SYS_ADMIN</code>——那一项基本等于 root。</li>
+          <li><strong>Seccomp</strong>：系统调用白名单，把攻击面从 300+ 个 syscall 缩到几十个。K8s 里要显式设 <code>seccompProfile: RuntimeDefault</code> 才启用。</li>
           <li><strong>User namespace（rootless）</strong>：容器内 root 映射成宿主普通用户，即使逃逸也不是宿主 root。</li>
-          <li><strong>只读根 + no_new_privs</strong>：根文件系统只读、禁止提权，减少被篡改可能。</li>
-          <li><strong>强隔离场景</strong>：多租户/不可信代码用 <strong>gVisor（用户态内核拦截 syscall）</strong> 或 <strong>Kata/Firecracker（轻量 VM）</strong>，用一点性能换 VM 级隔离。</li>
+          <li><strong>只读根 + <code>no_new_privs</code></strong>：根只读、禁止 setuid 提权，可写目录单独挂 tmpfs。</li>
+          <li><strong>强隔离场景</strong>：多租户 / 跑不可信代码用 <strong>gVisor</strong> 或 <strong>Kata / Firecracker</strong>，用一点性能换 VM 级隔离。</li>
         </ul>
       </div>
-      <div class="intuition">记住：容器<strong>共享宿主内核</strong>，所以「容器逃逸」多是通过内核漏洞或错误配置（特权容器、挂 docker.sock、挂宿主敏感目录）。安全基线：最小权限 + 非 root + seccomp + 不 privileged。</div>
+      <p>三条自查一分钟能做完：<code>{{.HostConfig.Privileged}}</code> 必须是 <code>false</code>；<code>.HostConfig.Binds</code> 里有没有挂 <code>docker.sock</code>、<code>/</code>、<code>/proc</code>；容器内用 <code>capsh --decode=$(grep CapEff /proc/self/status | cut -f2)</code> 展开实际能力，出现 <code>cap_sys_admin</code> / <code>cap_sys_module</code> / <code>cap_sys_ptrace</code> 就要警惕。顺带确认 <code>grep Seccomp /proc/self/status</code> 是 <code>2</code> 而不是 <code>0</code>。</p>
+
+      <h3>隔离边界的真实形状：哪些东西<u>根本没有</u>被 namespace 化</h3>
+      <p>讨论容器安全时最有用的清单不是「有哪些逃逸手法」，而是<strong>「内核里有哪些资源压根没有 namespace 化」</strong>——这些是隔离边界上天然的缺口，不需要漏洞就能观察到。</p>
+
+      <div class="cheatsheet"><table>
+        <thead><tr><th>资源</th><th>被隔离了吗</th><th>容器里看到 / 影响到什么</th><th>后果与应对</th></tr></thead>
+        <tbody>
+          <tr><td>内核版本与编译配置</td><td><strong>否</strong></td><td><code>uname -r</code> 永远是宿主内核；<code>/proc/config.gz</code> 也是宿主的</td><td>「镜像里装了另一个发行版」不等于换了内核。依赖特定内核特性的程序必须检查宿主内核</td></tr>
+          <tr><td>CPU / 内存的硬件信息</td><td><strong>否</strong></td><td><code>/proc/cpuinfo</code>、<code>/proc/meminfo</code>、<code>/proc/loadavg</code> 全是宿主的</td><td>第 8 章事故 3 的根源。要么让应用读 cgroup，要么挂 <code>lxcfs</code> 伪装</td></tr>
+          <tr><td>绝大多数 sysctl</td><td><strong>否</strong></td><td><code>vm.*</code>、<code>fs.file-max</code>、<code>kernel.pid_max</code> 等都是全局的</td><td>容器里改要么被拒，要么<strong>影响整机</strong>。只有 <code>net.*</code>、<code>kernel.hostname</code>、System V IPC 与 <code>fs.mqueue.*</code> 这几类是命名空间化的，运行时也只允许改这几类</td></tr>
+          <tr><td>墙上时钟</td><td><strong>否</strong></td><td>time namespace 只偏移单调时钟；改 <code>CLOCK_REALTIME</code> 影响整机</td><td>需要「改时间」的测试用用户态方案，不要给 <code>CAP_SYS_TIME</code></td></tr>
+          <tr><td>内核模块</td><td><strong>否</strong></td><td><code>insmod</code> 加载的模块对全机生效</td><td><code>CAP_SYS_MODULE</code> 等价于宿主 root，绝不能给</td></tr>
+          <tr><td>内核日志环</td><td><strong>否</strong></td><td><code>dmesg</code> 能读到宿主全部内核消息（含别的容器的 OOM）</td><td>设 <code>kernel.dmesg_restrict=1</code>，并 drop <code>CAP_SYSLOG</code></td></tr>
+          <tr><td>页缓存</td><td><strong>否</strong>（只记账到 cgroup）</td><td>一个容器大量读文件会挤掉别人的缓存；卷共享时能通过缓存命中时间推断别人读过什么</td><td>用 <code>memory.max</code> 给 page cache 上界；高敏场景用独立卷</td></tr>
+          <tr><td>CPU 的微架构状态</td><td><strong>否</strong></td><td>共享缓存、TLB、分支预测器、SMT 兄弟核</td><td>侧信道攻击的物理基础。多租户要么禁 SMT + 独占核，要么上轻量 VM</td></tr>
+          <tr><td>PID 空间</td><td>是（但<strong>嵌套</strong>）</td><td>宿主永远能看到并操作容器内进程，反之不行</td><td>设计如此，不是缺陷；也是 <code>nsenter</code> 排障能成立的前提</td></tr>
+          <tr><td>cgroup 限额本身</td><td>只隔离<strong>视图</strong></td><td>开了 cgroup ns 也只是看不见宿主路径，限额一模一样</td><td>不要把 cgroup ns 当安全机制</td></tr>
+        </tbody>
+      </table></div>
+
+      <div class="intuition">这张表就是「容器隔离弱于 VM」的具体内容：<strong>不是「namespace 不够严密」，而是「namespace 只覆盖了内核资源的一部分」</strong>。剩下这些是共享的，共享就意味着可观测、可干扰、可作为攻击面。所以判断一个负载能不能进普通容器，问题应该是「它会不会碰到这张表里的东西」，而不是「我有没有把 capability drop 干净」。</div>
+
+      <div class="box tip"><strong>本篇到此为止。</strong>安全维度再往下属于另一篇的范围，这里不重复：capabilities 五个集合的语义与提权计算 → <a href="./linux_security_model.html#s3">Linux 安全模型 §3</a>；seccomp-bpf 过滤器怎么写、怎么排查被拦的调用 → <a href="./linux_security_model.html#s4">§4</a>；SELinux / AppArmor 的标签模型与 <code>audit2allow</code> 排障 → <a href="./linux_security_model.html#s5">§5</a>；namespace 作为安全边界的形式化分析 → <a href="./linux_security_model.html#s6">§6</a>；逃逸链完整拆解（<code>docker.sock</code>、<code>core_pattern</code>、release_agent）→ <a href="./linux_security_model.html#s7">§7</a>；加固基线 → <a href="./linux_security_model.html#s8">§8</a>。</div>
     </section>
 
     <section class="chapter" id="ch8">
-      <div class="ch-head"><div class="num">08</div><div class="t"><h2>checklist</h2></div></div>
+      <div class="ch-head"><div class="num">08</div><div class="t"><h2>三个生产事故 + checklist</h2><div class="sub">从现象到根因</div></div></div>
+
+      <div class="case">
+        <h4>事故 1 · 退出码 137，但容器内存监控只有 60%</h4>
+        <div class="sym">现象：Java 服务容器每隔几小时被杀一次，<code>docker inspect</code> 显示 <code>ExitCode: 137</code>、<code>OOMKilled: true</code>，但 Prometheus 上的 JVM 堆内存曲线一直平稳在 60%。</div>
+        <p>关键认知：<strong>cgroup 统计的是整个容器的内存，不只是 JVM 堆</strong>——<code>memory.max</code> 管的是 RSS + page cache + 内核栈 + 直接内存 + metaspace + 线程栈的总和。这个服务用了大量 NIO 直接内存，堆外增长完全没被堆监控覆盖。</p>
+<pre><span class="cm"># 退出码 137 = 128 + 9，即被 SIGKILL —— 但谁杀的？先看内核怎么说</span>
+$ dmesg -T | grep -i 'killed process'
+[Wed Sep  3 04:12:08] <span class="num">Memory cgroup</span> out of memory: Killed process 84213 (java)
+  total-vm:9821044kB, anon-rss:<span class="num">2048112</span>kB, file-rss:18224kB
+<span class="cm">#   ★ "Memory cgroup out of memory" = 容器自己超了 memory.max</span>
+<span class="cm">#     若是 "Out of memory: Killed process"（不带 cgroup 字样）= 整机内存不足，</span>
+<span class="cm">#     那是宿主超卖，和这个容器的 limit 无关 —— 两者处方完全不同。</span>
+
+<span class="cm"># 分解容器内存的真实构成 —— 不要只信应用自己的监控</span>
+$ cat /sys/fs/cgroup/&lt;path&gt;/memory.stat | head -6
+anon <span class="num">2097152000</span>          <span class="cm"># 匿名页：堆 + 直接内存 + 线程栈 ← 大头在这</span>
+file 184320000            <span class="cm"># page cache（读写文件带来的，可回收）</span>
+kernel_stack 8388608
+slab 41943040
+sock 2097152
+
+$ cat /sys/fs/cgroup/&lt;path&gt;/memory.events
+high <span class="num">2841</span>                <span class="cm"># 触发 memory.high 软限、被加压回收的次数（提前告警信号）</span>
+max <span class="num">193</span>                 <span class="cm"># 撞到 memory.max 硬上限的次数</span>
+oom_kill <span class="num">7</span>              <span class="cm"># ★ 已经被杀 7 次了</span></pre>
+        <div class="cheatsheet"><table>
+          <thead><tr><th><code>memory.stat</code> 字段</th><th>是什么</th><th>能不能回收</th><th>它变大通常意味着</th></tr></thead>
+          <tbody>
+            <tr><td><code>anon</code></td><td>匿名页：堆、线程栈、<code>malloc</code> 拿到的内存、JVM 的直接内存</td><td><strong>不能</strong>（只能换出到 swap，容器里通常禁 swap）</td><td>真的在用或者漏了。这是 OOM 的主要贡献者</td></tr>
+            <tr><td><code>file</code></td><td>page cache：读写文件带进来的</td><td>能（干净页直接丢，脏页先回写）</td><td>大量顺序 I/O。<strong>它计入 <code>memory.current</code>，所以「内存快满了」经常只是缓存多</strong></td></tr>
+            <tr><td><code>shmem</code></td><td>tmpfs / POSIX 共享内存（<code>/dev/shm</code>）</td><td><strong>不能</strong>——它长得像 file，行为像 anon</td><td>最容易误判的一项：往 <code>/dev/shm</code> 或 <code>emptyDir: memory</code> 写文件会直接吃内存额度</td></tr>
+            <tr><td><code>slab</code> / <code>slab_reclaimable</code></td><td>内核对象：dentry、inode 缓存等</td><td>部分能</td><td>大量小文件操作（<code>npm install</code>）；容器里也算在自己头上</td></tr>
+            <tr><td><code>kernel_stack</code></td><td>每个线程 8–16 KB 的内核栈</td><td>不能</td><td>线程数失控。上千线程时这一项能到几十 MB</td></tr>
+            <tr><td><code>sock</code></td><td>socket 缓冲区</td><td>不能</td><td>连接数暴涨或对端不读导致发送队列堆积</td></tr>
+            <tr><td><code>percpu</code></td><td>per-CPU 分配的内核结构</td><td>不能</td><td>核数多 + cgroup 多时不可忽略</td></tr>
+          </tbody>
+        </table></div>
+        <p><strong>判读顺序</strong>：先看 <code>anon + shmem + kernel_stack</code> 之和——这是「杀了也回收不出来」的部分，接近 <code>memory.max</code> 就一定会 OOM；<code>file</code> 高不用慌。本例中 <code>anon</code> 占 2 GB 而堆监控只覆盖其中一部分，差值就是直接内存。</p>
+        <p><strong>处方</strong>：① <code>-XX:MaxDirectMemorySize</code> 显式限制直接内存，让 JVM 自己先报错而不是被内核 kill；② <code>-XX:MaxRAMPercentage</code> 让堆按容器 limit 定；③ <code>memory.high</code> 设在 <code>max</code> 的 85% 左右，换一段「先变慢、后被杀」的缓冲带；④ 监控口径改成「<code>anon + shmem</code> 对 <code>memory.max</code> 的占比」。见 <a href="./numa_memory_advanced.html#ch7">NUMA 与高级内存 §7</a>。</p>
+      </div>
+
+      <div class="case">
+        <h4>事故 2 · 宿主磁盘被吃满，但每个容器看着都很小</h4>
+        <div class="sym">现象：节点 <code>/var/lib/docker</code> 所在分区 100%，新 Pod 全部 <code>ImagePullBackOff</code>。逐个进容器 <code>du -sh /</code>，加起来远小于实际占用。</div>
+        <p>三个来源都在容器外面：<strong>① 已停止容器的可写层没清；② 悬空镜像；③ 日志文件</strong>——stdout/stderr 由 json-file 驱动写在宿主上，默认<strong>不限大小、不轮转</strong>，一个话痨服务几天就能写出几十 GB。</p>
+        <p><strong>怎么定位</strong>：<code>docker system df -v</code> 看三类的 <code>RECLAIMABLE</code> 占比（现场是镜像 82 GB 里 74% 可回收、卷 31 GB 里 91%）；日志单独查 <code>du -sh /var/lib/docker/containers/*/*-json.log</code>，本例最大一个 14 GB。别忘了 <code>df -i</code>。</p>
+        <p><strong>处方</strong>：daemon 级配置日志轮转（<code>log-opts</code> 的 <code>max-size</code> / <code>max-file</code>）；定期 <code>docker system prune</code>；给 <code>/var/lib/docker</code> 独立分区，别让它撑爆根分区把整个节点带下去。见 <a href="./filesystem_storage_stack.html">文件系统与存储栈</a>。</p>
+      </div>
+
+      <div class="case">
+        <h4>事故 3 · 容器里 nproc 说 96 核，实际只有 2 核配额</h4>
+        <div class="sym">现象：把服务从物理机搬进容器后 QPS 反而降了 40%，CPU 限流严重，火焰图里大量时间花在锁竞争和上下文切换上。</div>
+        <p><code>/proc</code> 不是 namespace 化的——<code>nproc</code>、<code>/proc/cpuinfo</code>、<code>/proc/meminfo</code> 看到的都是<strong>宿主的真实硬件</strong>（<code>docker run --cpus=2 alpine nproc</code> 老老实实回答 96），于是所有「按核数自动配置」的默认值全错。正确读法是直接读 <code>/sys/fs/cgroup/cpu.max</code>。</p>
+        <p><strong>处方</strong>：① 升级 runtime（JVM 的 <code>UseContainerSupport</code>、较新 Go 的 cgroup 感知、<code>automaxprocs</code>）；② 显式设置线程数环境变量，不依赖 auto；③ 平台侧挂 <code>lxcfs</code> 伪装 <code>/proc</code>。</p>
+      </div>
+
       <div class="checklist">
         <h4>容器排障 / 加固速查</h4>
         <ul>
-          <li>容器「无故变慢」→ 查 <code>cpu.stat</code> 的 throttled（CPU limit 太紧）。</li>
-          <li>容器突然重启/退出 137 → OOM，查 <code>dmesg</code> / <code>memory.events</code>，调 <code>memory.max</code> 或修内存泄漏。</li>
-          <li>应用线程池/GC 开太大 → 程序没感知 cgroup 限额，读的是宿主核数；升级 runtime 或显式配置。</li>
-          <li>僵尸进程堆积 → 业务当 PID 1 没收养孤儿，加 <code>--init</code>/tini。</li>
-          <li>数据丢失 → 写在容器可写层（CoW，删容器即丢），持久化要挂 volume。</li>
-          <li>安全 → 非 root 运行、drop 多余 capabilities、加 seccomp、别 <code>--privileged</code>、别挂 <code>docker.sock</code>。</li>
+          <li>容器「无故变慢」→ 先看 <code>cpu.stat</code> 的 <code>nr_throttled</code> / <code>throttled_usec</code>，别只看利用率曲线；而且要<strong>采两次取差</strong>，里面全是累计值。</li>
+          <li>退出码 137 → 被 SIGKILL，通常是 cgroup OOM。查 <code>dmesg</code>、<code>memory.events</code> 的 <code>oom_kill</code>、<code>memory.stat</code> 的 <code>anon</code>，注意堆外内存也算数。</li>
+          <li>退出码 139 → SIGSEGV，应用自己崩了，去看 core dump，参考 <a href="../perf-debug/crash_debugging_guide.html">崩溃调试</a>。</li>
+          <li>线程池 / GC 线程开太大 → 程序没感知 cgroup 限额，读的是宿主核数；升级 runtime 或显式配置。</li>
+          <li>僵尸堆积、<code>docker stop</code> 等满 10 秒 → PID 1 问题。用 <code>--init</code>，ENTRYPOINT 用 <code>exec</code> 形式。</li>
+          <li>数据丢失 → 写在可写层（删容器即丢）。持久化必须挂 volume；大文件小改动也必须挂，否则每次写都整文件 CoW。</li>
+          <li>宿主磁盘满 → <code>docker system df -v</code>，重点查容器日志与悬空镜像；顺手 <code>df -i</code> 看 inode。</li>
+          <li>容器里没有排查工具 → <code>nsenter -t &lt;宿主PID&gt; -n</code> 从宿主进它的 namespace，或 <code>kubectl debug</code> 起临时容器。</li>
+          <li>安全 → 非 root、drop 全部 caps 再按需加、seccomp、只读根、绝不 <code>--privileged</code>、绝不挂 <code>docker.sock</code>。</li>
+          <li>节点上 mount 变慢、<code>df</code> 输出上万行 → 挂载传播配成了 <code>rshared</code>。把 <code>wc -l /proc/mounts</code> 当节点级指标。</li>
+          <li>Pod 删除变慢、<code>ip netns</code> 卡顿 → netns 泄漏。<code>lsns -t net</code> 找 <code>NPROCS=0</code>，<code>findmnt -t nsfs</code> 找残留 bind mount。</li>
+          <li>「磁盘还有空间却创建不了文件」→ inode 耗尽，<code>df -h</code> 和 <code>df -i</code> 永远一起看。</li>
+          <li>随机超时但 CPU / 内存 / 带宽都正常 → 看 <code>dmesg</code> 有没有 <code>nf_conntrack: table full</code>，再看 SNAT 源端口是否耗尽。</li>
+          <li>「配置改了但进程读到旧值」→ copy-up 换了 inode，老 fd 还指着 lower 层旧文件。重开文件，或把配置挂成 volume。</li>
+          <li>共享内存不足、<code>Bus error</code> → <code>/dev/shm</code> 默认只有 64 MB，调 <code>--shm-size</code>。</li>
+          <li>频繁起停容器的节点内核内存只增不减 → 看 <code>cgroup.stat</code> 的 <code>nr_dying_descendants</code>。</li>
         </ul>
       </div>
-      <div class="intuition">一句话记忆：<strong>容器 = namespace（隔离视图）+ cgroup（限制资源）+ OverlayFS（分层根文件系统）包起来的普通进程；共享内核所以轻量但隔离弱。</strong></div>
+      <div class="intuition">排障时永远记得：<strong>它就是宿主上的一个进程</strong>，宿主上所有工具都能用在它身上。</div>
     </section>
 
-    <footer style="text-align:center;padding:40px 20px 20px;color:var(--text-dim);font-size:13px;line-height:2">
-      系统主线：<a href="./process_scheduling.html">🗓 进程调度</a> &nbsp;·&nbsp;
-      <a href="./numa_memory_advanced.html">🧠 NUMA / cgroup memory</a> &nbsp;·&nbsp;
-      <a href="./observability_ebpf.html">🔬 eBPF 实战</a><br>
-      架构：<a href="../architect/microservices_architecture.html">🧩 微服务架构</a> &nbsp;·&nbsp;
-      <a href="../architect/observability_engineering.html">🔭 可观测性</a>
-    </footer>
+    <section class="chapter" id="ch9">
+      <div class="ch-head"><div class="num">09</div><div class="t"><h2>面试题（12 道）</h2><div class="sub">分层自测</div></div></div>
+
+      <h3 id="ch9-1">9.1 基础（必答）</h3>
+      <p class="qa-hint">点击每道题展开参考答案（先自测，再对照）。</p>
+      <ol class="qa-list">
+        <li><details class="qa">
+          <summary><span class="lvl basic">基础</span>容器和虚拟机的本质区别是什么？</summary>
+          <div class="ans">
+            <p>虚拟机虚拟的是<strong>硬件</strong>，里面跑完整的 Guest OS 与独立内核；容器不虚拟任何硬件，所有容器<strong>共享宿主的同一个内核</strong>，只是被 namespace 限制视野、被 cgroup 限制用量，进程在宿主的 <code>ps</code> 里就能看到。</p>
+            <p>由此推出的三条差异：</p>
+            <ul>
+              <li>开销：容器没有 Guest OS，额外内存接近 0、启动毫秒级；VM 要几百 MB 和数秒。</li>
+              <li>隔离强度：VM 有 Hypervisor 挡一层；容器共享内核，<strong>内核漏洞直接等于逃逸</strong>。</li>
+              <li>能力边界：VM 里可以改内核参数、加载模块；容器不能。</li>
+            </ul>
+            <p>能加分的一句：<strong>内核里根本没有 <code>struct container</code></strong>，「造容器」只是换掉 <code>task_struct</code> 的 <code>nsproxy</code> / <code>cgroups</code> / <code>fs</code> / <code>cred</code>；正因为它不是内核对象，这几样才能<strong>拆开单用</strong>。选型判据是「这个负载会不会碰到共享内核这条边界」。</p>
+          </div>
+        </details></li>
+        <li><details class="qa">
+          <summary><span class="lvl basic">基础</span>namespace 和 cgroup 分别解决什么问题？只有其中一个会怎样？</summary>
+          <div class="ans">
+            <p><strong>namespace 管「看得见什么」</strong>——隔离进程号、挂载点、网络栈、主机名、IPC、用户 ID 的视图；<strong>cgroup 管「能用多少」</strong>——限制并统计 CPU、内存、I/O、进程数。</p>
+            <p>缺一个的后果：</p>
+            <ul>
+              <li>只有 namespace 没有 cgroup：容器看不到别人，但能吃满宿主全部 CPU 与内存，把邻居饿死。</li>
+              <li>只有 cgroup 没有 namespace：用量限住了，但能看到宿主所有进程、挂载、网卡，毫无隔离。</li>
+            </ul>
+            <p>加上第三样——OverlayFS 提供的分层根文件系统——才构成一个完整的容器。</p>
+            <p>两者的<strong>实现风格也不同</strong>：namespace 是「换指针」，代价一次性付在创建时（net ns 最贵），运行期几乎零开销；cgroup 是「持续记账」，开销分摊在整个生命周期。它们都<strong>被单独用过</strong>，所以<strong>「容器」是约定而不是内核机制</strong>。</p>
+          </div>
+        </details></li>
+        <li><details class="qa">
+          <summary><span class="lvl basic">基础</span>为什么容器删掉后数据就没了？怎么持久化？</summary>
+          <div class="ans">
+            <p>因为写入落在 OverlayFS 的<strong>可写层（upperdir）</strong>上，这一层随容器生命周期创建销毁；镜像的只读层则共享且不可改。</p>
+            <p>持久化的三种方式：</p>
+            <ul>
+              <li><strong>volume</strong>：由 Docker/K8s 管理的独立存储，生命周期与容器解耦，推荐。</li>
+              <li><strong>bind mount</strong>：把宿主某个目录挂进容器，简单但把容器和宿主路径绑死了。</li>
+              <li><strong>tmpfs</strong>：用于不需要持久化但需要可写的场景（只读根 + 可写 <code>/tmp</code>）。</li>
+            </ul>
+            <p>加分点：除了「会丢」，还有<strong>性能</strong>理由——CoW 的粒度是整个文件，所以「所有会被写的路径一律挂 volume」是硬性规则。另一个 overlay 独有的坑：<strong>copy-up 会创建新 inode</strong>，之前打开的只读 fd 仍指着旧 inode，表现是「配置改了，进程重读却拿到旧值」。</p>
+          </div>
+        </details></li>
+        <li><details class="qa">
+          <summary><span class="lvl basic">基础</span>容器退出码 137 和 139 分别意味着什么？</summary>
+          <div class="ans">
+            <p>Shell 约定：被信号杀死的进程退出码是 <code>128 + 信号编号</code>。</p>
+            <ul>
+              <li><strong>137 = 128 + 9（SIGKILL）</strong>：最常见的是 cgroup 内存超限被 OOM killer 杀，也可能是 <code>docker stop</code> 超时后的强杀。</li>
+              <li><strong>139 = 128 + 11（SIGSEGV）</strong>：应用自己段错误，和容器机制无关。</li>
+              <li><strong>143 = 128 + 15（SIGTERM）</strong>：正常收到停止信号退出。<code>docker stop</code> 后拿到 143 说明优雅退出链路是通的，拿到 137 说明 <code>SIGTERM</code> 没被处理。</li>
+              <li><strong>134 = 128 + 6（SIGABRT）</strong>：断言失败、未捕获异常、glibc 检测到堆破坏。</li>
+            </ul>
+            <p>另外三个由运行时而非内核产生的码：<strong>125</strong> = 运行时自己出错（容器压根没启动）；<strong>126</strong> = 命令不可执行；<strong>127</strong> = 命令不存在，多半是动态链接了镜像里没有的 <code>.so</code>。</p>
+            <p><strong>确认 137 是谁干的，三个证据一起看</strong>：① <code>State.OOMKilled</code>；② <code>dmesg</code> 里 <code>Memory cgroup out of memory</code> 是<strong>容器超了自己的 <code>memory.max</code></strong>，不带 cgroup 字样的则是<strong>整机内存不足</strong>；③ <code>memory.events</code> 的 <code>oom_kill</code> 在不在涨。</p>
+            <div class="point warn"><div class="label">陷阱</div><div>cgroup OOM killer 杀的是<strong>该 cgroup 里得分最高的任务</strong>，不一定是 PID 1。所以完全可能「容器还在跑、退出码也没变，但某个工作进程悄悄消失了」，业务表现为部分功能失效而不是崩溃重启。只能靠 <code>oom_kill</code> 计数发现。</div></div>
+          </div>
+        </details></li>
+      </ol>
+
+      <h3 id="ch9-2">9.2 中级（区分熟练度）</h3>
+      <ol class="qa-list" start="5">
+        <li><details class="qa">
+          <summary><span class="lvl mid">中级</span>容器内的 PID 1 有什么特殊之处？为什么建议用 --init？</summary>
+          <div class="ans">
+            <p>PID namespace 的 1 号进程扮演 init 角色，内核对它有两条特殊规则：</p>
+            <ul>
+              <li><strong>孤儿进程都过继给它</strong>，必须调 <code>wait()</code> 回收，否则僵尸堆积、耗尽 PID。</li>
+              <li><strong>它不会响应自己没装处理函数的默认信号</strong>。这本是内核防止误杀 init 的保护机制，用在容器上就成了坑：<code>docker stop</code> 的 <code>SIGTERM</code> 被忽略，等 10 秒超时后 <code>SIGKILL</code> 硬杀。</li>
+            </ul>
+            <p>把规则说精确能明显区分层次：<strong>同 ns 内</strong>发给 PID 1 的信号只有装了 handler 的才送达，<strong>连 <code>SIGKILL</code> 都丢</strong>；<strong>从祖先 ns</strong>发来时规则相同，<strong>唯独 <code>SIGKILL</code> / <code>SIGSTOP</code> 例外</strong>。第三条：<strong>PID 1 一退出，该 ns 里其余进程全被内核 <code>SIGKILL</code></strong>。</p>
+            <p><code>--init</code> 注入一个极小的 init（tini）当 PID 1，回收僵尸并转发信号。判断要不要它只需两问：<strong>PID 1 会不会 fork 出可能变孤儿的子进程？它有没有正确处理 SIGTERM？</strong>两个都是「是」才可以不要。</p>
+          </div>
+        </details></li>
+        <li><details class="qa">
+          <summary><span class="lvl mid">中级</span>容器 CPU 利用率只有 40%，服务却明显变慢。怎么定位？</summary>
+          <div class="ans">
+            <p>首先怀疑 <strong>cpu.max 的突发限流</strong>：配额是「每个 period 内最多用多少 CPU 时间」，突发负载会提前耗尽配额，剩余时间整段被冻结。按秒平均后利用率不高，但请求就卡在被冻结的那几十毫秒里。</p>
+            <p>证据在 <code>cpu.stat</code>：</p>
+            <pre>nr_periods 41022
+nr_throttled 18847     # 限流命中率 46%
+throttled_usec 982114000</pre>
+            <p><strong>但这三个数是累计值，看绝对值没有意义</strong>。必须采两次取差算比例：<code>&lt; 1%</code> 基本无影响，<code>1%–5%</code> 已能看出毛刺，<code>&gt; 10%</code> 一定要处理。</p>
+            <p>为什么利用率会「骗人」：它的分母是「墙上时间 × 全部核数」，配额的分母是「一个 period」，<strong>并行度越高、越突发，两者差距越大</strong>；更好的指标是 <code>cpu.pressure</code> 的 <code>some avg10</code>。处方按性价比排序：<strong>先把线程数降到配额量级</strong>（常常只做这一步限流就消失），再考虑调小 period、改用 <code>cpu.weight</code>、或用 <code>cpuset.cpus</code> 绑核。</p>
+          </div>
+        </details></li>
+        <li><details class="qa">
+          <summary><span class="lvl mid">中级</span>为什么用 pivot_root 而不是 chroot 切换容器根目录？</summary>
+          <div class="ans">
+            <p><code>chroot</code> 只是改变进程的根目录指针，<strong>旧的根文件系统仍然挂载着、在挂载树上仍然存在</strong>。这带来两个问题：</p>
+            <ul>
+              <li>只要还有 <code>CAP_SYS_CHROOT</code>，可以再 chroot 到一个更深的目录，然后利用当前工作目录还在外面的特性 <code>cd ..</code> 一路走回真正的根。</li>
+              <li>任何在 chroot 之前打开的、指向外部的文件描述符仍然可用，<code>fchdir()</code> 就能出去。</li>
+            </ul>
+            <p>原理值得说清：<code>chroot</code> 只改 <code>task_struct→fs→root</code>，<strong>不改 <code>pwd</code></strong>。内核解析 <code>..</code> 的规则是「到了本进程的 root 就停」，可一旦 <code>pwd</code> 落在 root <u>之外</u>，这个条件永远不成立——逃逸代码不需要任何漏洞。而 <code>pivot_root</code> 把旧根<strong>整个从挂载树上摘下来</strong>再 <code>umount</code>，容器的挂载 namespace 里根本不存在通往宿主的路径。</p>
+            <p>能报出 runc 的实际写法会加分（<code>pivot_root(".", ".")</code> 两个参数传同一个 <code>"."</code>，再 <code>umount2(".", MNT_DETACH)</code>）。验证很直接：容器里 <code>wc -l /proc/mounts</code> 只有二十来条，<code>chroot</code> 环境里宿主那一百多条<strong>一条不少</strong>。</p>
+          </div>
+        </details></li>
+        <li><details class="qa">
+          <summary><span class="lvl mid">中级</span>容器里 nproc 显示 96 核，为什么？会造成什么后果？</summary>
+          <div class="ans">
+            <p>因为 <code>/proc</code> <strong>不是 namespace 化的</strong>，读到的都是宿主机的真实硬件；cgroup 的配额是另一套东西，放在 <code>/sys/fs/cgroup</code> 下，两者互不相通。受害者是所有「按核数自动配置」的默认值：JVM 的 GC 线程数与 ForkJoinPool 并行度、Go 的 GOMAXPROCS、Nginx 的 <code>worker_processes auto</code>、C++ 的 <code>hardware_concurrency()</code>。</p>
+            <p>后果不是「稍微浪费一点」，而是<strong>比不加限制还差</strong>：线程数远超配额核数 → 大量上下文切换与锁竞争 → 头几毫秒就把周期配额花光 → 剩下几十毫秒整组被冻结。也就是说线程开太多还<strong>放大了 CFS 节流</strong>。</p>
+            <p>值得一并指出：<strong>这不止是核数的问题</strong>。<code>/proc/meminfo</code> 同样是宿主的，「按可用内存的 1/4 设堆」也全错；<code>/proc/loadavg</code> 让容器内的自适应限流读到不相干的负载。</p>
+            <p>三种解法：升级到能感知 cgroup 的 runtime；显式设置线程数环境变量（最保险）；平台侧挂 <code>lxcfs</code> 伪装这几个 <code>/proc</code> 文件。正确读法始终是直接读 <code>cpu.max</code> 与 <code>memory.max</code>。</p>
+          </div>
+        </details></li>
+      </ol>
+
+      <h3 id="ch9-3">9.3 高级（体现深度）</h3>
+      <ol class="qa-list" start="9">
+        <li><details class="qa">
+          <summary><span class="lvl adv">高级</span>cgroup v2 相比 v1 改了什么？为什么要改？</summary>
+          <div class="ans">
+            <p>v1 的核心问题是<strong>每个控制器一棵独立的层级树</strong>：一个进程可以同时在 cpu 树的 <code>/A</code>、memory 树的 <code>/B</code>、blkio 树的 <code>/C</code>。三个麻烦：</p>
+            <ul>
+              <li>语义混乱，很难回答「这个进程到底被谁限制着」。</li>
+              <li>控制器无法协同——内存回收会产生 I/O，但 memory 控制器不知道按哪个 blkio 组的权重限速。</li>
+              <li>没有统一的委派模型，容器运行时和 systemd 争抢 cgroup 树的所有权。</li>
+            </ul>
+            <p>v2 的改动：</p>
+            <ul>
+              <li><strong>统一层级</strong>：只有一棵树，进程只属于一个节点，所有控制器作用在同一结构上。</li>
+              <li><strong>显式下放</strong>：父组要写 <code>cgroup.subtree_control</code>，子组里才有那些控制文件。</li>
+              <li><strong>「无内部进程」约束</strong>：非根的非叶子节点不能直接放进程。</li>
+              <li><strong>更好的内存控制</strong>：<code>memory.high</code>（软限，<u>加压回收并对分配方限速</u>而不是杀进程）与 <code>memory.min</code>（保护下限）。</li>
+              <li><strong>PSI 压力指标</strong>：给出「有多少时间有任务在等这个资源」，比利用率更真实。</li>
+            </ul>
+          </div>
+        </details></li>
+        <li><details class="qa">
+          <summary><span class="lvl adv">高级</span>OverlayFS 的写时复制有什么性能陷阱？工程上怎么规避？</summary>
+          <div class="ans">
+            <p>两个陷阱：</p>
+            <p><strong>① 写放大：CoW 的粒度是整个文件，不是块。</strong>对来自只读层的 2 GB 文件改 1 个字节，OverlayFS 先把 2 GB 完整复制到可写层才让你改（<code>chmod</code> 同样触发，除非开 <code>metacopy=on</code>）。</p>
+            <p><strong>② 层数过多拖慢元数据操作。</strong>每次 <code>open</code> 要自上而下逐层查找，<strong>而「文件不存在」必须把每一层都查完</strong>；Python 的 <code>import</code> 恰恰产生大量「查不到」的探测。这才是「合并 RUN 指令」的真实理由。</p>
+            <p>规避：</p>
+            <ul>
+              <li>所有<strong>会被写</strong>的数据一律挂 volume 或 bind mount 绕开 overlay。</li>
+              <li>控制层数，多阶段构建，把频繁变动的层放最上面以利用缓存。</li>
+              <li>I/O 敏感的负载考虑其它 storage driver，或干脆挂独立块设备。</li>
+            </ul>
+          </div>
+        </details></li>
+        <li><details class="qa">
+          <summary><span class="lvl adv">高级</span>容器逃逸有哪些常见路径？分别怎么自查？</summary>
+          <div class="ans">
+            <p>绝大多数逃逸不需要内核 0day，只需要一个错误配置：</p>
+            <ul>
+              <li><strong><code>--privileged</code></strong>：全部 capability 加设备访问，可以直接挂宿主磁盘读写任意文件。自查 <code>{{.HostConfig.Privileged}}</code> 必须为 false。</li>
+              <li><strong>挂载 <code>/var/run/docker.sock</code></strong>：等于交出宿主 root——容器里能调 Docker API 造一个特权容器并挂宿主根目录。</li>
+              <li><strong><code>CAP_SYS_ADMIN</code></strong>：能挂文件系统、操作 cgroup，是多条逃逸链的起点。自查 <code>capsh --decode=$(grep CapEff /proc/self/status | cut -f2)</code>。</li>
+              <li><strong>挂宿主 <code>/proc</code>、<code>/sys</code> 为可写</strong>：能通过 <code>core_pattern</code> 这类可写入口在宿主上执行命令。</li>
+              <li><strong>hostPID / hostNetwork</strong>：能看到并操作宿主全部进程、直接访问宿主本地服务，横向移动能力极强。</li>
+              <li><strong>内核漏洞</strong>：共享内核意味着任何本地提权漏洞都可能成为逃逸漏洞。</li>
+            </ul>
+            <p>系统性的防御是纵深的：非 root 运行 + user namespace remap + drop 全部 caps + seccomp + 只读根 + <code>no_new_privs</code> + 及时打内核补丁。详见 <a href="./linux_security_model.html">Linux 安全模型</a>。</p>
+          </div>
+        </details></li>
+        <li><details class="qa">
+          <summary><span class="lvl adv">高级</span>K8s Pod 里的多个容器是怎么共享网络和存储的？pause 容器起什么作用？</summary>
+          <div class="ans">
+            <p>Pod 是「一组共享部分 namespace 的容器」。具体共享哪些：</p>
+            <ul>
+              <li><strong>network namespace</strong>：共享同一个 IP 与端口空间，可以用 <code>localhost</code> 互通——也意味着<strong>同一 Pod 内不能监听同一个端口</strong>。</li>
+              <li><strong>IPC namespace</strong>：可以用 System V IPC / POSIX 消息队列互通。<strong>UTS</strong>：共享主机名。</li>
+              <li><strong>存储</strong>：不是共享 namespace，而是把同一个 volume 分别挂进各容器的挂载点。</li>
+              <li><strong>PID namespace 默认<u>不</u>共享</strong>，要显式设 <code>shareProcessNamespace: true</code>。</li>
+              <li><strong>mount namespace 各自独立</strong>——所以每个容器有自己的根文件系统和镜像。</li>
+            </ul>
+            <p><strong>pause 容器</strong>的作用是<strong>持有这些共享的 namespace</strong>：它第一个启动并创建 network/IPC/UTS namespace，业务容器用 <code>setns</code> 加入。价值在于业务容器可以随意崩溃重启，而 Pod 的 IP 由 pause 持有、<strong>始终不变</strong>。这是「用一个最小的、绝不崩溃的进程锚定共享状态」的经典设计，和 containerd-shim 持有容器 stdio 一脉相承。</p>
+          </div>
+        </details></li>
+      </ol>
+    </section>
+
+    <div class="footer-nav">
+      <a href="./process_scheduling.html">← 进程调度</a>
+      <a href="./numa_memory_advanced.html">NUMA / cgroup memory</a>
+      <a href="./linux_security_model.html">Linux 安全模型</a>
+      <a href="./kernel_network_stack.html">内核网络栈</a>
+      <a href="./observability_ebpf.html">eBPF 实战</a>
+      <a href="linux_system_directory.html">目录</a>
+      <a href="../index.html">主页</a>
+    </div>
 
   </main>
 </div>
