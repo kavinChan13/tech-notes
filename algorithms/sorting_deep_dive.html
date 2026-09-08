@@ -5,8 +5,8 @@
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>排序全景 · 八大排序手写 / Ω(n log n) 下界证明 / introsort 源码级剖析 / 严格弱序 UB / 外部排序</title>
-<meta name="description" content="排序全景：排序是 算法设计思想的博物馆：分治、堆、增量、桶、下界证明、自适应、多算法切换——几乎每一种通用技巧都能在排序里找到最干净的实例。这一篇手写八种排序，证明比较排序的 Ω(n log n) 下界，然后逐行剖开 libstdc++ 的 std::sort">
+<title>排序全景 · Ω(n log n) 下界 / introsort / 稳定性 / 外部排序</title>
+<meta name="description" content="排序全景：比较排序的 Ω(n log n) 下界、快排分区与退化、归并稳定性、堆的数组下标、introsort 三段切换、计数/基数如何突破下界，以及外部排序与小 n 插入的工程取舍。">
 <link rel="stylesheet" href="../assets/guide-theme.css">
 <style>
   html { scroll-behavior: smooth; }
@@ -91,7 +91,7 @@
       <a class="tn-home" href="../index.html">← 主页</a>
       <a href="algorithms_directory.html">目录</a>
       <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
-      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 50 min</span>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 35 min</span>
       <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
     </div>
   </div>
@@ -143,7 +143,7 @@
             <li><a href="#s8-3">桶排序</a></li>
           </ol>
         </li>
-        <li><a href="#s9">std::sort 源码级剖析</a>
+        <li><a href="#s9">std::sort：introsort</a>
           <ol>
             <li><a href="#s9-1">introsort 三段结构</a></li>
             <li><a href="#s9-2">stable_sort 与其他兄弟</a></li>
@@ -178,17 +178,16 @@
   <header class="hero">
     <div class="badge">Algorithms · Sorting · 2026</div>
     <h1>排序全景</h1>
-    <p class="sub">排序是<strong>算法设计思想的博物馆</strong>：分治、堆、增量、桶、下界证明、自适应、多算法切换——几乎每一种通用技巧都能在排序里找到最干净的实例。这一篇手写八种排序，证明比较排序的 Ω(n log n) 下界，然后逐行剖开 libstdc++ 的 <code>std::sort</code>，看工业级实现如何同时拿到「常数小」和「最坏有保证」。</p>
+    <p class="sub">排序是<strong>算法设计思想的博物馆</strong>：分治、堆、增量、桶、下界、自适应、多算法切换都能在这里找到最干净的实例。本篇用图讲清比较下界、快排退化、归并稳定、堆下标和 introsort；代码只留 Hoare 分区、堆下沉和计数数组，不堆五种完整实现。</p>
     <div class="meta-row">
       <span class="pill red">核心难度 ★★★★☆</span>
       <span class="pill cyan">面试出现率 极高</span>
-      <span class="pill green">阅读时长 ~50 min</span>
+      <span class="pill green">阅读时长 ~35 min</span>
       <span class="pill amber">前置 复杂度 · 递归与分治</span>
     </div>
     <div class="meta">
-      <span>八大排序手写</span>
-      <span>决策树下界证明</span>
-      <span>introsort 剖析</span>
+      <span>决策树下界</span>
+      <span>introsort 三段</span>
       <span>严格弱序 UB</span>
       <span>外部排序</span>
       <span>TimSort / pdqsort</span>
@@ -202,7 +201,7 @@
     <div class="t"><h2>排序是算法思想的博物馆</h2><p class="sub">为什么一个「已经被库解决」的问题值得学透</p></div>
   </div>
 
-  <p>实际工作里你几乎永远该写 <code>std::sort</code>，不会手写快排。但排序值得单独学一章，理由不是「以后要用」，而是<strong>它把几乎所有通用算法技巧都装在一个足够小的问题里</strong>：</p>
+  <p>生产里几乎永远写 <code>std::sort</code>。学排序不是为了以后手写八种实现，而是<strong>它把几乎所有通用算法技巧都装进一个足够小的问题</strong>：分治、堆、增量、分桶、下界证明、自适应、多算法切换、外部内存——每一种都能在排序里找到最干净的实例。</p>
 
   <table>
     <thead><tr><th>技巧</th><th>在排序里的化身</th><th>在别处的样子</th></tr></thead>
@@ -218,9 +217,9 @@
     </tbody>
   </table>
 
-  <div class="analogy">学排序像<strong>学做菜时先练几道基础菜</strong>。没人指望你以后天天做番茄炒蛋——但控火、调味、下锅顺序这些能力是在这几道菜里练出来的，后面做什么都用得上。<br><br>反过来说，只会背「快排平均 O(n log n)」而讲不出为什么 <code>std::sort</code> 要在小区间切插入排序，就像只会背菜谱不会控火：<em>菜谱能应付熟悉的菜，控火才能应付新菜。</em></div>
+  <div class="analogy">学排序像<strong>练几道基础菜</strong>：控火、调味是在这里练出来的，没人指望你以后天天手写快排。只会背「快排平均 O(n log n)」却讲不出 <code>std::sort</code> 为何小区间切插入、深度超限为何切堆排，就像只会背菜谱不会控火——熟菜能应付，新菜不行。</div>
 
-  <p>本章的组织方式是：<strong>先手写（§2–§6）</strong>，把每种排序的机制和它的适用边界讲清；<strong>再证下界（§7–§8）</strong>，理解「为什么不能更快」以及「怎样绕过这个限制」；<strong>最后看工业实现（§9–§11）</strong>，理解理论到生产之间还差什么。</p>
+  <p>组织：<strong>§2–§6 机制与边界</strong>（O(n²) → 希尔 → 归并稳定 → 快排分区与退化 → 堆下标），<strong>§7–§8 下界与如何绕过</strong>（决策树 → 计数/基数），<strong>§9–§11 工业实现</strong>（introsort、外部排序、选型）。代码只留分区、下沉、计数数组三块，其余用图和表。</p>
 
   <h3 id="s1-1">1.1 与其他章节的关系</h3>
   <ul>
@@ -242,78 +241,74 @@
 
   <h3 id="s2-1">2.1 冒泡与选择</h3>
 
-  <div class="vs">
-    <div class="bad">
-      <h5>冒泡排序：稳定，但一无是处</h5>
-<pre><span class="kw">void</span> <span class="fn">bubble_sort</span>(<span class="kw">int</span>* a, <span class="kw">int</span> n) {
-    <span class="kw">for</span> (<span class="kw">int</span> i = <span class="num">0</span>; i &lt; n - <span class="num">1</span>; ++i) {
-        <span class="kw">bool</span> swapped = <span class="kw">false</span>;
-        <span class="kw">for</span> (<span class="kw">int</span> j = <span class="num">0</span>; j &lt; n - <span class="num">1</span> - i; ++j)
-            <span class="kw">if</span> (a[j] &gt; a[j + <span class="num">1</span>]) {
-                std::<span class="fn">swap</span>(a[j], a[j + <span class="num">1</span>]);
-                swapped = <span class="kw">true</span>;
-            }
-        <span class="kw">if</span> (!swapped) <span class="kw">break</span>;   <span class="cm">// 已有序，提前退出</span>
-    }
-}
-<span class="cm">// 最坏/平均 Θ(n²)，最好 Θ(n)</span>
-<span class="cm">// 交换次数 = 逆序对数量（每次交换消掉恰好 1 个）</span></pre>
-    </div>
-    <div class="bad">
-      <h5>选择排序：不稳定，但交换最少</h5>
-<pre><span class="kw">void</span> <span class="fn">selection_sort</span>(<span class="kw">int</span>* a, <span class="kw">int</span> n) {
-    <span class="kw">for</span> (<span class="kw">int</span> i = <span class="num">0</span>; i &lt; n - <span class="num">1</span>; ++i) {
-        <span class="kw">int</span> m = i;
-        <span class="kw">for</span> (<span class="kw">int</span> j = i + <span class="num">1</span>; j &lt; n; ++j)
-            <span class="kw">if</span> (a[j] &lt; a[m]) m = j;
-        std::<span class="fn">swap</span>(a[i], a[m]);
-    }
-}
-<span class="cm">// 任何输入都是 Θ(n²) 次比较（不自适应）</span>
-<span class="cm">// 但只做 n-1 次交换 ← 唯一优点</span></pre>
-    </div>
-  </div>
-
-  <p>两条值得记住的性质：</p>
-
-  <ul>
-    <li><strong>冒泡的交换次数恰好等于逆序对数量</strong>——每次相邻交换只能消掉一个逆序对。这给了逆序对一个物理意义：它是「把数组排好所需的最少相邻交换次数」。</li>
-    <li><strong>选择排序的交换次数是 O(n)，比较次数固定 Θ(n²)</strong>。所以当「元素极大、移动极贵，而比较极便宜」时它反而有意义——比如排序一堆几 MB 的结构体且没法用索引间接排序。这个场景很罕见，但它解释了为什么这个看似最差的算法还活着。</li>
-  </ul>
-
-  <div class="note">选择排序<strong>不稳定</strong>：<code>[2a, 2b, 1]</code> 第一轮会把 1 和 2a 交换，得到 <code>[1, 2b, 2a]</code>，两个 2 的相对顺序反了。想让它稳定就得改成「插入」而不是「交换」，那就变成插入排序了。</div>
-
-  <h3 id="s2-2">2.2 插入排序凭什么最快</h3>
-
-  <p>插入排序在渐进上和冒泡一样是 Θ(n²)，但它是<strong>唯一被写进工业级排序实现的 O(n²) 算法</strong>。libstdc++ 的 <code>std::sort</code>、Java 的 <code>Arrays.sort</code>、Python 的 TimSort 全都在小区间用它。</p>
-
-<pre><span class="kw">void</span> <span class="fn">insertion_sort</span>(<span class="kw">int</span>* a, <span class="kw">int</span> n) {
-    <span class="kw">for</span> (<span class="kw">int</span> i = <span class="num">1</span>; i &lt; n; ++i) {
-        <span class="kw">int</span> key = a[i];
-        <span class="kw">int</span> j = i - <span class="num">1</span>;
-        <span class="kw">while</span> (j &gt;= <span class="num">0</span> &amp;&amp; a[j] &gt; key) {   <span class="cm">// &gt; 而不是 &gt;= → 稳定</span>
-            a[j + <span class="num">1</span>] = a[j];             <span class="cm">// 后移而非交换：写 1 次而不是 3 次</span>
-            --j;
-        }
-        a[j + <span class="num">1</span>] = key;
-    }
-}</pre>
-
+  <p>两个 O(n²) 只值记住性质，不必各写一份实现：</p>
   <table>
-    <thead><tr><th>优点</th><th>为什么</th><th>对比冒泡</th></tr></thead>
+    <thead><tr><th></th><th>比较</th><th>交换</th><th>稳定</th><th>记住什么</th></tr></thead>
     <tbody>
-      <tr><td><strong>自适应</strong></td><td>近乎有序时内层几乎不动 → Θ(n + 逆序对数)</td><td>冒泡也自适应，但常数大</td></tr>
-      <tr><td><strong>写操作少</strong></td><td>后移（1 次赋值）而非交换（3 次赋值）</td><td>冒泡每次都是完整交换</td></tr>
-      <tr><td><strong>分支可预测</strong></td><td>内层循环通常连续「不进入」或连续「进入」</td><td>冒泡的比较结果更随机</td></tr>
-      <tr><td><strong>顺序访问</strong></td><td>只碰相邻元素，全程 cache 命中</td><td>相同</td></tr>
-      <tr><td><strong>稳定 + 原地</strong></td><td>O(1) 额外空间</td><td>相同</td></tr>
-      <tr><td><strong>在线</strong></td><td>可以边接收边排</td><td>冒泡不行</td></tr>
+      <tr><td>冒泡</td><td>最坏 Θ(n²)，最好 Θ(n)</td><td>= 逆序对数</td><td><span class="cell-ok">是</span></td><td>每次相邻交换消恰好 1 个逆序对；逆序对 = 排好所需的最少相邻交换次数</td></tr>
+      <tr><td>选择</td><td>固定 Θ(n²)，不自适应</td><td>O(n)</td><td>否</td><td>元素极大、移动极贵而比较极便宜时才有用（几 MB 结构体又不能间接排序）</td></tr>
     </tbody>
   </table>
 
-  <div class="tip">「近乎有序时是 Θ(n + I)」（I = 逆序对数）这个性质极其有用。它意味着<strong>插入排序对「已经排好、又插入了少量新元素」的数组几乎是线性的</strong>。这正是 introsort 的收尾策略能成立的原因：快排把数组分得「块内无序但块间有序」后，整体逆序对数已经被压到 O(n × cutoff)，最后一遍插入排序就是线性的。</div>
+  <div class="fig">
+    <svg viewBox="0 0 720 210" role="img" aria-label="稳定性谁破坏：选择排序长距离交换会翻转相等元素，插入排序后移不会">
+      <text class="tb" x="16" y="22">稳定性谁破坏：看会不会做「长距离交换」</text>
+      <text class="ts" x="16" y="44">输入 [2a, 2b, 1] —— 两个 2 原本 2a 在前</text>
+      <rect class="box-y" x="16" y="56" width="52" height="32" rx="4"/><text class="tm" x="26" y="76">2a</text>
+      <rect class="box-y" x="72" y="56" width="52" height="32" rx="4"/><text class="tm" x="82" y="76">2b</text>
+      <rect class="box-a" x="128" y="56" width="52" height="32" rx="4"/><text class="tm" x="142" y="76">1</text>
+      <path class="ln-r" d="M154,96 L42,128" fill="none"/>
+      <text class="tr" x="190" y="76">选择：min=1 与 2a 对换</text>
+      <rect class="box-a" x="16" y="136" width="52" height="32" rx="4"/><text class="tm" x="28" y="156">1</text>
+      <rect class="box-y" x="72" y="136" width="52" height="32" rx="4"/><text class="tm" x="82" y="156">2b</text>
+      <rect class="box-r" x="128" y="136" width="52" height="32" rx="4"/><text class="tm" x="136" y="156">2a</text>
+      <text class="tr" x="190" y="156">2a、2b 相对顺序反了 → 不稳定</text>
+      <rect class="box-g" x="400" y="56" width="304" height="132" rx="8"/>
+      <text class="tb" x="416" y="80">插入 / 冒泡 / 归并</text>
+      <text class="ts" x="416" y="100">只做相邻后移或按序追加</text>
+      <text class="ts" x="416" y="118">相等时停在右侧（用 &gt; 不用 ≥）</text>
+      <text class="tg" x="416" y="142">→ 相对顺序不变，稳定</text>
+      <text class="ts" x="416" y="166">快排 / 堆排 / 选择：跨区交换</text>
+      <text class="tr" x="416" y="184">→ 相等元素顺序被打乱</text>
+    </svg>
+    <figcaption>凡是长距离交换的排序基本都不稳定（选择、快排、堆排、introsort）。想稳定就只能相邻移动或按序追加（冒泡、插入、归并、计数、基数、TimSort）。</figcaption>
+  </div>
 
-  <div class="warn">注意内层条件是 <code>a[j] &gt; key</code> 而不是 <code>&gt;=</code>。用 <code>&gt;=</code> 会在遇到相等元素时继续往前移，把相等元素的相对顺序反过来——<strong>丢掉稳定性</strong>，而且白做无用的移动。这个一字之差是插入排序最常见的实现 bug。</div>
+  <h3 id="s2-2">2.2 插入排序凭什么最快</h3>
+
+  <p>渐进同样 Θ(n²)，却是<strong>唯一写进工业实现的 O(n²) 算法</strong>：libstdc++ 的 <code>std::sort</code>、Java 的 <code>Arrays.sort</code>、Python 的 TimSort 都在小区间用它。真实复杂度是 <strong>Θ(n + I)</strong>（I = 逆序对数），不是固定 n²——已有序时内层一次都不进，就是线性。</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 720 228" role="img" aria-label="插入排序对近乎有序数组几乎线性：每个新元素只走很短的后移">
+      <text class="tb" x="16" y="22">近乎有序：已排好的前缀 + 少量新键，每个 key 只后移几格</text>
+      <rect class="box-g" x="16" y="40" width="48" height="36" rx="4"/><text class="tm" x="28" y="62">1</text>
+      <rect class="box-g" x="68" y="40" width="48" height="36" rx="4"/><text class="tm" x="80" y="62">3</text>
+      <rect class="box-g" x="120" y="40" width="48" height="36" rx="4"/><text class="tm" x="132" y="62">4</text>
+      <rect class="box-g" x="172" y="40" width="48" height="36" rx="4"/><text class="tm" x="184" y="62">7</text>
+      <rect class="box-g" x="224" y="40" width="48" height="36" rx="4"/><text class="tm" x="236" y="62">9</text>
+      <rect class="box-y" x="276" y="40" width="48" height="36" rx="4"/><text class="tm" x="284" y="62">2</text>
+      <text class="ty" x="276" y="92">新键</text>
+      <path class="ln-a" d="M300,96 L140,128" fill="none" marker-end="url(#arIns)"/>
+      <defs>
+        <marker id="arIns" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+          <path class="ar-a" d="M0,0 L10,5 L0,10 z"/>
+        </marker>
+      </defs>
+      <rect class="box-g" x="16" y="136" width="48" height="36" rx="4"/><text class="tm" x="28" y="158">1</text>
+      <rect class="box-a" x="68" y="136" width="48" height="36" rx="4"/><text class="tm" x="80" y="158">2</text>
+      <rect class="box-g" x="120" y="136" width="48" height="36" rx="4"/><text class="tm" x="132" y="158">3</text>
+      <rect class="box-g" x="172" y="136" width="48" height="36" rx="4"/><text class="tm" x="184" y="158">4</text>
+      <rect class="box-g" x="224" y="136" width="48" height="36" rx="4"/><text class="tm" x="236" y="158">7</text>
+      <rect class="box-g" x="276" y="136" width="48" height="36" rx="4"/><text class="tm" x="288" y="158">9</text>
+      <text class="tg" x="340" y="62">内层：a[j] &gt; key 才后移（1 次写，不是交换 3 次）</text>
+      <text class="tg" x="340" y="82">相等就停 → 稳定；写成 ≥ 会翻序</text>
+      <text class="ts" x="340" y="108">I = 2 的逆序 → 这一轮 Θ(1) 次移动</text>
+      <text class="ts" x="340" y="152">已排好再插入少量新元素 ≈ 线性</text>
+      <text class="tp" x="340" y="176">introsort 收尾：块间有序后 I = O(n·cutoff)</text>
+    </svg>
+    <figcaption>后移而非交换、只碰相邻、分支可预测——所以小 n 和近乎有序都极快。内层必须是 <code>a[j] &gt; key</code>，写成 ≥ 既丢掉稳定性又白做移动。</figcaption>
+  </div>
+  <p>相对冒泡：后移是 1 次写而不是交换 3 次；内层通常连续进入或不进入，分支可预测；只碰相邻，全程 cache 命中；稳定、原地、可在线接收。这正是 introsort 收尾能成立的原因：快排把数组分成「块内无序、块间有序」后，逆序对数被压到 O(n × cutoff)，最后一遍插入是线性的。</p>
 </section>
 
 <!-- ================================================================ §3 -->
@@ -323,26 +318,9 @@
     <div class="t"><h2>希尔排序：唯一的悬案</h2><p class="sub">一个渐进复杂度至今没有定论的经典算法</p></div>
   </div>
 
-  <p>插入排序慢，是因为它一次只能把元素往前挪<strong>一格</strong>——一个在末尾的最小元素要挪 n 步。希尔排序（Shell sort）的想法是：<strong>先做「跨大步」的插入排序，让元素快速接近最终位置，再逐步缩小步长</strong>。</p>
+  <p>插入排序一次只能挪<strong>一格</strong>——末尾的最小元素要走 n 步。希尔的想法：<strong>先跨大步插入，再逐步缩小步长</strong>（Knuth：h = 3h+1）。最后一轮 h=1 就是普通插入，但此时数组已近乎有序，那一轮接近 Θ(n)。</p>
 
-<pre><span class="kw">void</span> <span class="fn">shell_sort</span>(<span class="kw">int</span>* a, <span class="kw">int</span> n) {
-    <span class="cm">// Knuth 序列：1, 4, 13, 40, 121, ... (3h+1)</span>
-    <span class="kw">int</span> h = <span class="num">1</span>;
-    <span class="kw">while</span> (h &lt; n / <span class="num">3</span>) h = <span class="num">3</span> * h + <span class="num">1</span>;
-
-    <span class="kw">for</span> (; h &gt;= <span class="num">1</span>; h /= <span class="num">3</span>) {
-        <span class="cm">// 对每个「间隔为 h 的子序列」做插入排序</span>
-        <span class="kw">for</span> (<span class="kw">int</span> i = h; i &lt; n; ++i) {
-            <span class="kw">int</span> key = a[i], j = i - h;
-            <span class="kw">while</span> (j &gt;= <span class="num">0</span> &amp;&amp; a[j] &gt; key) { a[j + h] = a[j]; j -= h; }
-            a[j + h] = key;
-        }
-    }
-    <span class="cm">// h == 1 的最后一轮就是普通插入排序，</span>
-    <span class="cm">// 但此时数组已「几乎有序」→ 那一轮接近 Θ(n)</span>
-}</pre>
-
-  <div class="analogy">希尔排序像<strong>整理一屋子散落的书</strong>。你不会一本一本挪到最终位置（那是插入排序，走的路太长），而是先<strong>粗分</strong>：把书大致按「文学 / 技术 / 杂志」丢到三堆（大步长），再在每堆里细分，最后才在每个小分类里精确排序。<br><br>每一轮都让书离目标更近，所以最后那轮精确排序时，几乎不用走远路。</div>
+  <div class="analogy">像整理散落的书：先粗分成几堆（大步长），再在堆内细分，最后才精确排。每轮都让元素离目标更近。</div>
 
   <table>
     <thead><tr><th>增量序列</th><th>已证明的复杂度</th><th>备注</th></tr></thead>
@@ -356,9 +334,9 @@
     </tbody>
   </table>
 
-  <div class="def"><strong>为什么原始序列（不断除以 2）最差</strong>：所有步长都是偶数，所以在最后一轮（h=1）之前，<strong>奇数位和偶数位的元素从未互相比较过</strong>。构造一个「小的全在奇数位、大的全在偶数位」的输入，前面所有轮次都白做，最后一轮退化成完整的插入排序。<br>好的增量序列必须让相邻步长<strong>互质</strong>（或至少不共享因子），这样不同轮次才能真正互相帮忙。</div>
+  <div class="def"><strong>原始序列（不断 ÷2）最差</strong>：步长全是偶数，h=1 之前奇偶位从未比较过。构造「小的全在奇数位、大的全在偶数位」，前面所有轮次都白做。好序列要让相邻步长<strong>互质</strong>，不同轮次才能互相帮忙。</div>
 
-  <p>希尔排序今天几乎不用于生产（<code>std::sort</code> 全面更好），但它有两个不可替代的价值：<strong>①</strong> 它是<strong>教科书里唯一渐进复杂度未定论的经典算法</strong>，说明「算法分析」本身是有难度的学问；<strong>②</strong> 它<strong>原地、无递归、代码只有几行</strong>，在极度受限的嵌入式环境（几 KB RAM、不允许递归、不能带 std）里仍是不错的选择。</p>
+  <p>希尔排序今天几乎不用于生产（<code>std::sort</code> 全面更好）。留下两件事：<strong>①</strong> 教科书里唯一渐进复杂度未定论的经典算法，说明「算法分析」本身有难度；<strong>②</strong> 原地、无递归、几行代码，适合几 KB RAM、不允许递归、不能带 std 的嵌入式。</p>
 </section>
 
 <!-- ================================================================ §4 -->
@@ -369,71 +347,49 @@
   </div>
 
   <h3 id="s4-1">4.1 两种递归方向</h3>
-
-  <div class="vs">
-    <div class="good">
-      <h5>自顶向下（递归）</h5>
-<pre><span class="kw">void</span> <span class="fn">msort</span>(<span class="kw">int</span>* a, <span class="kw">int</span> lo, <span class="kw">int</span> hi, <span class="kw">int</span>* buf) {
-    <span class="kw">if</span> (hi - lo &lt;= <span class="num">32</span>) {          <span class="cm">// cutoff</span>
-        <span class="fn">insertion_sort</span>(a + lo, hi - lo);
-        <span class="kw">return</span>;
-    }
-    <span class="kw">int</span> mid = lo + (hi - lo) / <span class="num">2</span>;
-    <span class="fn">msort</span>(a, lo, mid, buf);
-    <span class="fn">msort</span>(a, mid, hi, buf);
-    <span class="kw">if</span> (a[mid - <span class="num">1</span>] &lt;= a[mid]) <span class="kw">return</span>;  <span class="cm">// 已首尾有序 → 跳过合并</span>
-    <span class="fn">merge_into</span>(a, lo, mid, hi, buf);
-}
-<span class="cm">// 栈深 O(log n)；好写、好加 cutoff</span></pre>
-    </div>
-    <div class="good">
-      <h5>自底向上（迭代）</h5>
-<pre><span class="kw">void</span> <span class="fn">msort_bu</span>(<span class="kw">int</span>* a, <span class="kw">int</span> n, <span class="kw">int</span>* buf) {
-    <span class="kw">for</span> (<span class="kw">int</span> w = <span class="num">1</span>; w &lt; n; w *= <span class="num">2</span>)
-        <span class="kw">for</span> (<span class="kw">int</span> lo = <span class="num">0</span>; lo &lt; n - w; lo += <span class="num">2</span> * w)
-            <span class="fn">merge_into</span>(a, lo, lo + w,
-                       std::<span class="fn">min</span>(lo + <span class="num">2</span> * w, n), buf);
-}
-<span class="cm">// 零栈深；宽度 1→2→4→8... 逐层合并</span>
-<span class="cm">// 链表归并排序的首选（不用随机访问找中点）</span></pre>
-    </div>
-  </div>
-
-<pre><span class="cm">// 合并：两个已排序段 [lo,mid) 和 [mid,hi) → buf → 回写</span>
-<span class="kw">void</span> <span class="fn">merge_into</span>(<span class="kw">int</span>* a, <span class="kw">int</span> lo, <span class="kw">int</span> mid, <span class="kw">int</span> hi, <span class="kw">int</span>* buf) {
-    <span class="kw">int</span> i = lo, j = mid, k = lo;
-    <span class="kw">while</span> (i &lt; mid &amp;&amp; j &lt; hi)
-        buf[k++] = (a[j] &lt; a[i]) ? a[j++] : a[i++];   <span class="cm">// ← 等号在这里决定稳定性</span>
-    <span class="kw">while</span> (i &lt; mid) buf[k++] = a[i++];
-    <span class="kw">while</span> (j &lt; hi)  buf[k++] = a[j++];
-    std::<span class="fn">copy</span>(buf + lo, buf + hi, a + lo);
-}</pre>
+  <table>
+    <thead><tr><th></th><th>自顶向下</th><th>自底向上</th></tr></thead>
+    <tbody>
+      <tr><td>形态</td><td>切半 → 递归 → 合并；cutoff≤32 切插入</td><td>宽度 1→2→4… 逐层合并</td></tr>
+      <tr><td>栈</td><td>O(log n)</td><td>零栈深</td></tr>
+      <tr><td>优化</td><td>好加 cutoff；<code>a[mid-1]≤a[mid]</code> 可跳过合并</td><td>链表首选（不用随机访问找中点）</td></tr>
+    </tbody>
+  </table>
+  <p>两个必加的优化：叶子占了一半节点，cutoff 切插入把常数打下来；若左段最大值 ≤ 右段最小值，整段已有序，跳过 O(n) 合并——近乎有序输入可以从 Θ(n log n) 掉到接近 Θ(n)。</p>
 
   <h3 id="s4-2">4.2 稳定性从哪里来</h3>
+  <p>稳定性<strong>完全由合并时那一个比较的方向决定</strong>。相等取左边 → 原顺序保留；取右边就翻序。</p>
 
-  <p>归并排序的稳定性<strong>完全由合并时那一个比较的方向决定</strong>：</p>
-
-  <div class="vs">
-    <div class="good">
-      <h5>✅ 稳定</h5>
-<pre>buf[k++] = (a[j] &lt; a[i]) ? a[j++] : a[i++];
-<span class="cm">// 相等时（!(a[j] &lt; a[i]) 成立）取左边 a[i]</span>
-<span class="cm">// → 原本在前面的元素仍在前面</span></pre>
-    </div>
-    <div class="bad">
-      <h5>❌ 不稳定</h5>
-<pre>buf[k++] = (a[i] &gt; a[j]) ? a[j++] : a[i++];
-<span class="cm">// 等价，仍稳定。真正会破坏稳定的是：</span>
-buf[k++] = (a[j] &lt;= a[i]) ? a[j++] : a[i++];
-<span class="cm">// 相等时取右边 → 相对顺序被反转</span></pre>
-    </div>
+  <div class="fig">
+    <svg viewBox="0 0 720 250" role="img" aria-label="归并合并时相等取左边才稳定：左段 5a 先于右段 5b 写出">
+      <text class="tb" x="16" y="22">合并 [lo, mid) 与 [mid, hi) → 相等时取谁，决定稳不稳</text>
+      <text class="ts" x="16" y="46">左段已有序</text>
+      <rect class="box-g" x="16" y="54" width="56" height="32" rx="4"/><text class="tm" x="28" y="74">3</text>
+      <rect class="box-a" x="76" y="54" width="56" height="32" rx="4"/><text class="tm" x="86" y="74">5a</text>
+      <rect class="box-g" x="136" y="54" width="56" height="32" rx="4"/><text class="tm" x="148" y="74">8</text>
+      <text class="ts" x="220" y="46">右段已有序</text>
+      <rect class="box-g" x="220" y="54" width="56" height="32" rx="4"/><text class="tm" x="232" y="74">4</text>
+      <rect class="box-p" x="280" y="54" width="56" height="32" rx="4"/><text class="tm" x="290" y="74">5b</text>
+      <rect class="box-g" x="340" y="54" width="56" height="32" rx="4"/><text class="tm" x="352" y="74">9</text>
+      <text class="ta" x="76" y="102">i → 5a</text>
+      <text class="tp" x="280" y="102">j → 5b</text>
+      <rect class="box-g" x="16" y="118" width="340" height="52" rx="6"/>
+      <text class="tg" x="28" y="140">✅ a[j] &lt; a[i] 才取右；相等取左 5a</text>
+      <text class="ts" x="28" y="158">写出 … 3, 4, 5a, 5b … 相对顺序不变</text>
+      <rect class="box-r" x="372" y="118" width="332" height="52" rx="6"/>
+      <text class="tr" x="384" y="140">❌ a[j] ≤ a[i] 相等也取右 5b</text>
+      <text class="ts" x="384" y="158">写出 … 3, 4, 5b, 5a … 顺序被反转</text>
+      <rect class="box-p" x="16" y="184" width="688" height="50" rx="8"/>
+      <text class="tb" x="28" y="206">为什么要稳定：多关键字可以分步排</text>
+      <text class="ts" x="28" y="224">先按薪资、再按部门稳定排一遍 = SQL ORDER BY 部门, 薪资。不稳定就必须写复合 comparator。</text>
+    </svg>
+    <figcaption>归并是唯一同时做到「稳定 + 最坏 O(n log n)」的比较排序。稳定性就这一处比较。</figcaption>
   </div>
-
-  <div class="def"><strong>稳定（stable）</strong>：排序后，<em>比较意义上相等</em>的元素保持它们在输入中的相对顺序。<br><strong>为什么它重要</strong>：稳定性让<strong>多关键字排序可以分步做</strong>。想按「部门升序、部门内按薪资降序」排，只需先按薪资降序排一遍，再按部门升序<em>稳定</em>排一遍——第二遍不会打乱第一遍的结果。这在 SQL 的 <code>ORDER BY a, b</code>、表格 UI 的多列点击排序里是刚需。<br>不稳定排序想做到同样的事，必须写一个把所有关键字合起来比较的复合 comparator。</div>
+  <div class="def"><strong>稳定</strong>：比较意义上相等的元素保持它们在输入中的相对顺序。它让<strong>多关键字可以分步排</strong>——先按薪资降序、再按部门升序稳定排一遍，第二遍不打乱第一遍。SQL 的 <code>ORDER BY a, b</code>、表格多列点击都靠这个。不稳定排序必须写把所有关键字合起来的复合 comparator。</div>
 
   <h3 id="s4-3">4.3 原地归并的代价</h3>
 
-  <p>归并排序的最大缺点是需要 O(n) 临时空间。存在「原地归并」算法，但代价很高：</p>
+  <p>归并的短板是 O(n) 缓冲。存在原地归并，但旋转法变成 Θ(n log²n)，块归并常数极大。链表归并只重接指针，<strong>不需要临时数组</strong>——所以 <code>std::list::sort</code> 用归并而不是快排：链表没有随机访问，快排分区做不了。</p>
 
   <table>
     <thead><tr><th>方案</th><th>额外空间</th><th>时间</th><th>实用性</th></tr></thead>
@@ -446,9 +402,7 @@ buf[k++] = (a[j] &lt;= a[i]) ? a[j++] : a[i++];
     </tbody>
   </table>
 
-  <p>最后一行值得注意：<strong>链表归并排序不需要临时缓冲</strong>，因为合并只是重接指针，不需要移动数据。这就是为什么 <code>std::list::sort</code> 用的是归并排序而不是快排——链表没有随机访问，快排的分区做不了，而归并在链表上反而比在数组上更省空间。</p>
-
-  <div class="info"><code>std::stable_sort</code> 的策略是：<strong>尝试分配 n 个元素的临时缓冲</strong>（<code>get_temporary_buffer</code>）。分配成功走标准归并 Θ(n log n)；<strong>分配失败则退化成原地归并，变成 Θ(n log²n)</strong>。这是标准里少见的「复杂度取决于能否分配内存」的接口——所以在内存紧张的环境里，<code>stable_sort</code> 会静默变慢一个 log 因子。</div>
+  <p><code>std::stable_sort</code>：<strong>能分到 n 个缓冲就 Θ(n log n)，分不到就退化成原地归并 Θ(n log²n)</strong>。这是标准里少见的「复杂度取决于能否分配内存」的接口——内存紧时会静默变慢一个 log，不要默认拿它当「更安全的 sort」。</p>
 </section>
 
 <!-- ================================================================ §5 -->
@@ -460,7 +414,7 @@ buf[k++] = (a[j] &lt;= a[i]) ? a[j++] : a[i++];
 
   <h3 id="s5-1">5.1 分区三法</h3>
 
-  <p>快排的全部工作在<strong>分区（partition）</strong>：选一个 pivot，把数组重排成「≤ pivot 的在左、≥ pivot 的在右」。三种主流写法有实质差异。</p>
+  <p>快排的全部工作在<strong>分区（partition）</strong>：选一个 pivot，把数组重排成「≤ pivot 的在左、≥ pivot 的在右」。合并是空操作。三种主流写法的不变式不同：Lomuto 单指针推进、Hoare 双指针对撞、三路把「等于 pivot」单独隔出来。</p>
 
   <div class="fig">
     <svg viewBox="0 0 720 300" role="img" aria-label="Lomuto、Hoare、三路分区三种分区方案的指针移动方式对比">
@@ -517,23 +471,8 @@ buf[k++] = (a[j] &lt;= a[i]) ? a[j++] : a[i++];
     <figcaption>三种分区的不变式不同：Lomuto 单指针推进，Hoare 双指针对撞，三路把「等于 pivot」单独隔出来。</figcaption>
   </div>
 
-  <div class="vs">
-    <div class="bad">
-      <h5>Lomuto：好写，但有陷阱</h5>
-<pre><span class="kw">int</span> <span class="fn">partition_lomuto</span>(<span class="kw">int</span>* a, <span class="kw">int</span> lo, <span class="kw">int</span> hi) {
-    <span class="kw">int</span> pivot = a[hi - <span class="num">1</span>];   <span class="cm">// 取末位</span>
-    <span class="kw">int</span> i = lo;
-    <span class="kw">for</span> (<span class="kw">int</span> j = lo; j &lt; hi - <span class="num">1</span>; ++j)
-        <span class="kw">if</span> (a[j] &lt; pivot) std::<span class="fn">swap</span>(a[i++], a[j]);
-    std::<span class="fn">swap</span>(a[i], a[hi - <span class="num">1</span>]);
-    <span class="kw">return</span> i;
-}
-<span class="cm">// ❌ 全等数组 [5,5,5,...,5]：</span>
-<span class="cm">//    a[j] &lt; pivot 永假 → i 不动 → 划分成 (0, n-1)</span>
-<span class="cm">//    → Θ(n²) 且栈深 O(n)</span></pre>
-    </div>
-    <div class="good">
-      <h5>Hoare：交换少，全等也能均分</h5>
+  <p>只留 Hoare：交换少、全等也能均分。Lomuto 在全等数组上 <code>a[j] &lt; pivot</code> 永假 → 切成 (0, n−1) → Θ(n²)。三路把「== pivot」隔出来，k 个不同值时 Θ(n log k)，枚举/小整数键才必须用。</p>
+
 <pre><span class="kw">int</span> <span class="fn">partition_hoare</span>(<span class="kw">int</span>* a, <span class="kw">int</span> lo, <span class="kw">int</span> hi) {
     <span class="kw">int</span> pivot = a[lo + (hi - lo) / <span class="num">2</span>];
     <span class="kw">int</span> i = lo - <span class="num">1</span>, j = hi;
@@ -544,30 +483,9 @@ buf[k++] = (a[j] &lt;= a[i]) ? a[j++] : a[i++];
         std::<span class="fn">swap</span>(a[i], a[j]);
     }
 }
-<span class="cm">// ✅ 全等数组：i、j 各走一步就相遇 → 中点划分</span>
-<span class="cm">// ⚠️ 返回的 j 不是 pivot 的最终位置！</span>
-<span class="cm">//    递归必须写 [lo, j+1) 和 [j+1, hi)</span></pre>
-    </div>
-  </div>
-
-  <div class="danger">Hoare 分区最容易写错的地方：<strong>它返回的下标不是「pivot 已就位」的位置</strong>，而只是一个分界点。所以递归必须是 <code>qsort(lo, j+1); qsort(j+1, hi);</code>——不能像 Lomuto 那样跳过中间那个元素写成 <code>qsort(lo, j); qsort(j+1, hi);</code>，那会丢掉一个元素。<br>另外 <code>do{++i}while(a[i]&lt;pivot)</code> 的哨兵依赖：pivot 必须是数组里<em>真实存在</em>的元素（不能取平均值之类），否则指针可能越界。</div>
-
-  <p><strong>三路分区</strong>（荷兰国旗问题）在有大量重复键时是唯一正确的选择：</p>
-
-<pre><span class="cm">// 返回 [lt, gt)：这段全等于 pivot，不需要再递归</span>
-std::pair&lt;<span class="kw">int</span>, <span class="kw">int</span>&gt; <span class="fn">partition3</span>(<span class="kw">int</span>* a, <span class="kw">int</span> lo, <span class="kw">int</span> hi) {
-    <span class="kw">int</span> pivot = a[lo + (hi - lo) / <span class="num">2</span>];
-    <span class="kw">int</span> lt = lo, i = lo, gt = hi;
-    <span class="kw">while</span> (i &lt; gt) {
-        <span class="kw">if</span> (a[i] &lt; pivot)      std::<span class="fn">swap</span>(a[lt++], a[i++]);
-        <span class="kw">else</span> <span class="kw">if</span> (a[i] &gt; pivot) std::<span class="fn">swap</span>(a[i], a[--gt]);
-        <span class="kw">else</span>                   ++i;
-    }
-    <span class="kw">return</span> {lt, gt};
-}
-<span class="cm">// 只有 k 个不同值时：Θ(n log k)。全等数组 → Θ(n)</span></pre>
-
-  <div class="tip">什么时候必须用三路：<strong>按枚举字段排序</strong>（状态、类型、省份）、<strong>按布尔或小整数排序</strong>、<strong>按截断后的时间戳排序</strong>。这些场景里不同值可能只有几十个，而元素有百万个。Lomuto/两路会做大量无意义的递归，三路直接把复杂度从 Θ(n log n) 降到 Θ(n log k)。</div>
+<span class="cm">// 返回值不是 pivot 就位下标 → 递归写 [lo, j+1) 与 [j+1, hi)</span>
+<span class="cm">// pivot 必须是数组里真实存在的元素，否则 do-while 可能越界</span></pre>
+  <div class="danger">返回的 j <strong>不是</strong>「pivot 已就位」的下标，只是分界点。递归必须写 <code>[lo, j+1)</code> 与 <code>[j+1, hi)</code>——不能像 Lomuto 那样跳过中间那个元素，否则会丢掉一个。大量重复键（枚举、布尔、截断时间戳）才必须上三路：等于 pivot 的一段一次到位，复杂度从 Θ(n log n) 降到 Θ(n log k)。</div>
 
   <h3 id="s5-2">5.2 pivot 怎么选</h3>
 
@@ -582,39 +500,72 @@ std::pair&lt;<span class="kw">int</span>, <span class="kw">int</span>&gt; <span 
       <tr><td>median-of-medians</td><td><span class="cell-ok">无，最坏 O(n)</span></td><td><span class="cell-bad">常数 5–10×</span></td><td>只作为兜底，不作主路径</td></tr>
     </tbody>
   </table>
-
-  <div class="def"><strong>随机化的真正作用</strong>：它<strong>不改善最坏复杂度</strong>（随机化快排的最坏仍是 Θ(n²)），而是把「最坏何时发生」从<em>攻击者可控</em>变成<em>不可控</em>。这是一个安全性质而非性能性质。<br>对比 <strong>introsort 的做法</strong>：它用一个深度计数器<em>检测</em>退化并切换算法，从而把最坏<em>真正</em>拉回 O(n log n)。两者可以叠加，libstdc++ 就是「三点取中 + 深度超限转堆排」。</div>
-
-  <div class="warn">2011 年前后有一批针对「三点取中」的<strong>算法复杂度攻击</strong>：攻击者构造特定的锯齿输入，使每次三点取中都选到极值，把服务端的排序拖成 O(n²)。<br>这类攻击的通用防御是<strong>把随机性引入到攻击者无法预测的地方</strong>——随机 pivot（种子来自进程启动时的熵）或 introsort 的深度检测。<em>凡是「输入由外部提供 + 算法有可构造的最坏情形」，就要把它当安全问题处理。</em></div>
+  <p>随机化<strong>不改善最坏渐近</strong>（最坏仍 Θ(n²)），而是把「最坏何时发生」从攻击者可控变成不可控——这是安全性质。introsort 用深度计数器<em>检测</em>退化并切堆排，才把最坏<em>真正</em>拉回 O(n log n)。两者可叠加：生产实现就是三点取中 + 深度超限转堆排。凡是「输入由外部提供 + 算法有可构造的最坏」，都要当安全问题处理。</p>
+  <div class="fig">
+    <svg viewBox="0 0 720 200" role="img" aria-label="随机化把最坏从攻击者可控变成不可控；三点取中是启发式，introsort 才真正保证最坏">
+      <text class="tb" x="16" y="22">随机化 / 三点取中：解决的不是「最坏复杂度」，而是「谁能构造最坏」</text>
+      <rect class="box-r" x="16" y="36" width="220" height="88" rx="8"/>
+      <text class="tb" x="28" y="58">取首/末位</text>
+      <text class="ts" x="28" y="76">已排序 / 倒序 = 每次极值</text>
+      <text class="tr" x="28" y="96">树退化成链，Θ(n²)</text>
+      <text class="ts" x="28" y="114">最坏输入太常见</text>
+      <rect class="box-y" x="250" y="36" width="220" height="88" rx="8"/>
+      <text class="tb" x="262" y="58">三点取中 · 随机选</text>
+      <text class="ts" x="262" y="76">首/中/末取中位数，或随机下标</text>
+      <text class="ty" x="262" y="96">期望均衡，实测最好</text>
+      <text class="ts" x="262" y="114">最坏仍 Θ(n²)，只是难构造</text>
+      <rect class="box-g" x="484" y="36" width="220" height="88" rx="8"/>
+      <text class="tb" x="496" y="58">introsort 深度检测</text>
+      <text class="ts" x="496" y="76">超 2⌊log₂n⌋ 层 → 切堆排</text>
+      <text class="tg" x="496" y="96">最坏真正 O(n log n)</text>
+      <text class="ts" x="496" y="114">随机化是安全性质，这个才是性能保证</text>
+      <rect class="box-p" x="16" y="138" width="688" height="48" rx="8"/>
+      <text class="ts" x="28" y="158">2011 年有过针对三点取中的复杂度攻击：锯齿输入让每次中位数都是极值。</text>
+      <text class="ts" x="28" y="176">外部输入 + 可构造最坏 = 安全问题。防御：熵种子随机 pivot，或深度兜底。</text>
+    </svg>
+    <figcaption>随机化不改善最坏渐近；introsort 用廉价计数器把最坏拉回 O(n log n)。两者可叠加。</figcaption>
+  </div>
 
   <h3 id="s5-3">5.3 退化与爆栈</h3>
+  <p>两个独立维度：时间 Θ(n²)（慢，但不崩）和栈深 O(n)（<strong>SIGSEGV</strong>，比慢严重得多）。很多人只记得第一个。栈深的修法<strong>不依赖任何概率假设</strong>：无论 pivot 多差，「较短的那一半」必然 ≤ n/2，所以只递归短边、长边转循环，栈深上界 log₂n 是确定性的。时间退化另用 introsort 深度检测，两件事别混。</p>
 
-  <p>朴素快排有<strong>两个</strong>独立的退化维度，很多人只记得第一个：</p>
+  <div class="fig">
+    <svg viewBox="0 0 720 248" role="img" aria-label="快排递归树：均衡是 log n 层，最坏退化成链；只递归小半边可把栈深压住">
+      <text class="tb" x="16" y="20">快排树：均衡 vs 最坏链</text>
+      <text class="tg" x="16" y="42">均衡 · 每层切半 · 高 log₂n</text>
+      <rect class="box-a" x="88" y="50" width="70" height="24" rx="4"/><text class="tm" x="108" y="66">n</text>
+      <path class="ln" d="M110,74 L70,96" fill="none"/><path class="ln" d="M136,74 L176,96" fill="none"/>
+      <rect class="box-g" x="40" y="96" width="60" height="22" rx="4"/><text class="tm" x="52" y="111">n/2</text>
+      <rect class="box-g" x="146" y="96" width="60" height="22" rx="4"/><text class="tm" x="158" y="111">n/2</text>
+      <path class="ln" d="M60,118 L40,138" fill="none"/><path class="ln" d="M90,118 L110,138" fill="none"/>
+      <path class="ln" d="M166,118 L146,138" fill="none"/><path class="ln" d="M196,118 L216,138" fill="none"/>
+      <rect class="box-g" x="16" y="138" width="48" height="20" rx="3"/><text class="ts" x="22" y="152">n/4</text>
+      <rect class="box-g" x="72" y="138" width="48" height="20" rx="3"/><text class="ts" x="78" y="152">n/4</text>
+      <rect class="box-g" x="128" y="138" width="48" height="20" rx="3"/><text class="ts" x="134" y="152">n/4</text>
+      <rect class="box-g" x="184" y="138" width="48" height="20" rx="3"/><text class="ts" x="190" y="152">n/4</text>
+      <text class="ts" x="16" y="176">总工作每层 Θ(n) × log n 层 = Θ(n log n)</text>
 
-  <table>
-    <thead><tr><th>维度</th><th>症状</th><th>修法</th><th>是否有确定性保证</th></tr></thead>
-    <tbody>
-      <tr><td><strong>时间</strong>退化到 Θ(n²)</td><td>慢，但不崩</td><td>随机化 pivot（概率性）<br>introsort 深度检测（确定性）</td><td>只有 introsort 有</td></tr>
-      <tr><td><strong>栈深</strong>退化到 O(n)</td><td><span class="cell-bad">SIGSEGV</span></td><td><strong>只递归较小的一半</strong>，大的一半转循环</td><td><span class="cell-ok">有，且无条件</span></td></tr>
-    </tbody>
-  </table>
+      <text class="tr" x="280" y="42">最坏 · 每次切掉 1 个 · 高 n</text>
+      <rect class="box-r" x="300" y="50" width="70" height="22" rx="4"/><text class="tm" x="318" y="65">n</text>
+      <path class="ln-r" d="M335,72 L335,86" fill="none"/>
+      <rect class="box-r" x="300" y="86" width="70" height="22" rx="4"/><text class="tm" x="312" y="101">n−1</text>
+      <path class="ln-r" d="M335,108 L335,122" fill="none"/>
+      <rect class="box-r" x="300" y="122" width="70" height="22" rx="4"/><text class="tm" x="312" y="137">n−2</text>
+      <text class="tr" x="380" y="66">已排序 + 取端点</text>
+      <text class="tr" x="380" y="86">或 Lomuto + 全等</text>
+      <text class="ts" x="380" y="108">时间 Σk = Θ(n²)</text>
+      <text class="ts" x="380" y="128">朴素递归栈深 O(n) → 崩</text>
 
-<pre><span class="cm">// 两个修法同时上：栈深 ≤ log₂n，时间最坏 O(n log n)</span>
-<span class="kw">void</span> <span class="fn">qsort_prod</span>(<span class="kw">int</span>* a, <span class="kw">int</span> lo, <span class="kw">int</span> hi, <span class="kw">int</span> depth_limit) {
-    <span class="kw">while</span> (hi - lo &gt; <span class="num">16</span>) {
-        <span class="kw">if</span> (depth_limit-- == <span class="num">0</span>) {          <span class="cm">// ① 退化检测 → 堆排兜底</span>
-            <span class="fn">heap_sort</span>(a + lo, hi - lo);
-            <span class="kw">return</span>;
-        }
-        <span class="kw">int</span> p = <span class="fn">partition_hoare</span>(a, lo, hi);
-        <span class="cm">// ② 只递归小半边，大半边转循环 → 栈深 ≤ log₂n</span>
-        <span class="kw">if</span> (p - lo &lt; hi - p) { <span class="fn">qsort_prod</span>(a, lo, p + <span class="num">1</span>, depth_limit); lo = p + <span class="num">1</span>; }
-        <span class="kw">else</span>                 { <span class="fn">qsort_prod</span>(a, p + <span class="num">1</span>, hi, depth_limit); hi = p + <span class="num">1</span>; }
-    }
-    <span class="cm">// ③ 小区间留给最后统一的插入排序（见 §9.1）</span>
-}</pre>
-
-  <p>第二个修法值得强调，因为它<strong>不依赖任何概率假设</strong>：无论 pivot 选得多差，「较短的那一半」必然不超过 n/2，所以栈深上界 log₂n 是<strong>确定性</strong>的。这一点比随机化 pivot 更可靠。</p>
+      <rect class="box-p" x="520" y="50" width="184" height="118" rx="8"/>
+      <text class="tb" x="532" y="72">修栈深（无条件）</text>
+      <text class="ts" x="532" y="92">只递归较短一半</text>
+      <text class="ts" x="532" y="110">较长一半转 while</text>
+      <text class="tg" x="532" y="130">短边 ≤ n/2</text>
+      <text class="tg" x="532" y="148">栈 ≤ log₂n</text>
+      <text class="ts" x="280" y="176">时间退化另用 introsort 深度检测（见 §9），两件事别混。</text>
+    </svg>
+    <figcaption>链状树既慢又爆栈。栈深可以无条件压住，这一点比随机化更可靠；时间最坏必须靠切换算法才能真正拉回来，见 §9。</figcaption>
+  </div>
 </section>
 
 <!-- ================================================================ §6 -->
@@ -624,7 +575,7 @@ std::pair&lt;<span class="kw">int</span>, <span class="kw">int</span>&gt; <span 
     <div class="t"><h2>堆排序：理论完美、实测最慢</h2><p class="sub">最坏 O(n log n) + O(1) 空间，却几乎不被单独使用</p></div>
   </div>
 
-  <p>堆排序在纸面上看几乎无懈可击：<strong>最坏 Θ(n log n)</strong>（不像快排会退化）、<strong>真正 O(1) 额外空间</strong>（不像归并要缓冲）、<strong>无递归</strong>（不会爆栈）。</p>
+  <p>纸面完美：<strong>最坏 Θ(n log n)</strong>、O(1) 空间、无递归。定位是 introsort 的降落伞，不是主力。</p>
 
 <pre><span class="cm">// 下沉：把 a[i] 沉到正确位置，堆大小为 n</span>
 <span class="kw">void</span> <span class="fn">sift_down</span>(<span class="kw">int</span>* a, <span class="kw">int</span> i, <span class="kw">int</span> n) {
@@ -636,38 +587,31 @@ std::pair&lt;<span class="kw">int</span>, <span class="kw">int</span>&gt; <span 
         std::<span class="fn">swap</span>(a[i], a[m]);
         i = m;
     }
-}
-
-<span class="kw">void</span> <span class="fn">heap_sort</span>(<span class="kw">int</span>* a, <span class="kw">int</span> n) {
-    <span class="cm">// ① 建堆：自底向上，Θ(n) 而不是 Θ(n log n)</span>
-    <span class="kw">for</span> (<span class="kw">int</span> i = n / <span class="num">2</span> - <span class="num">1</span>; i &gt;= <span class="num">0</span>; --i) <span class="fn">sift_down</span>(a, i, n);
-    <span class="cm">// ② 逐个取最大值放到末尾</span>
-    <span class="kw">for</span> (<span class="kw">int</span> end = n - <span class="num">1</span>; end &gt; <span class="num">0</span>; --end) {
-        std::<span class="fn">swap</span>(a[<span class="num">0</span>], a[end]);
-        <span class="fn">sift_down</span>(a, <span class="num">0</span>, end);
-    }
 }</pre>
 
-  <div class="def"><strong>建堆是 Θ(n) 而不是 Θ(n log n)</strong>：自底向上建堆时，深度为 d 的节点最多下沉 (h−d) 层，而深度 d 上有 2^d 个节点。求和：<br><code>Σ 2^d · (h−d) = n · Σ (h−d)/2^(h−d) ≤ n · Σ k/2^k = 2n</code><br>关键在于<strong>大部分节点在底层，而底层节点几乎不用下沉</strong>。反之「逐个 push 建堆」是 Θ(n log n)，因为每次 sift-up 的都是最深的节点。<em>这是面试高频陷阱题。</em></div>
+  <div class="fig">
+    <svg viewBox="0 0 720 250" role="img" aria-label="二叉堆的数组下标：父 i 的左孩子 2i+1、右孩子 2i+2，访问步长指数增长">
+      <text class="tb" x="16" y="22">数组下标即树：parent i → 左 2i+1、右 2i+2</text>
+      <rect class="box-a" x="310" y="36" width="56" height="28" rx="4"/><text class="tm" x="328" y="54">0</text>
+      <path class="ln" d="M324,64 L250,92" fill="none"/><path class="ln" d="M352,64 L426,92" fill="none"/>
+      <rect class="box-g" x="220" y="92" width="56" height="28" rx="4"/><text class="tm" x="238" y="110">1</text>
+      <rect class="box-g" x="400" y="92" width="56" height="28" rx="4"/><text class="tm" x="418" y="110">2</text>
+      <path class="ln" d="M236,120 L180,148" fill="none"/><path class="ln" d="M260,120 L316,148" fill="none"/>
+      <path class="ln" d="M416,120 L360,148" fill="none"/><path class="ln" d="M440,120 L496,148" fill="none"/>
+      <rect class="box-y" x="152" y="148" width="52" height="26" rx="4"/><text class="tm" x="166" y="165">3</text>
+      <rect class="box-y" x="292" y="148" width="52" height="26" rx="4"/><text class="tm" x="306" y="165">4</text>
+      <rect class="box-y" x="336" y="148" width="52" height="26" rx="4"/><text class="tm" x="350" y="165">5</text>
+      <rect class="box-y" x="472" y="148" width="52" height="26" rx="4"/><text class="tm" x="486" y="165">6</text>
+      <rect class="box" x="16" y="188" width="688" height="48" rx="6"/>
+      <text class="tm" x="28" y="208">下标  0    1    2    3    4    5    6</text>
+      <text class="ts" x="28" y="226">下沉走 0→1→3→… 步长 ×2，超出 L2 后几乎每层一次 miss，预取器失效</text>
+    </svg>
+    <figcaption>自底向上建堆 Θ(n)：底层节点几乎不用下沉。逐个 push 才是 Θ(n log n)。</figcaption>
+  </div>
+  <div class="def"><strong>建堆是 Θ(n) 不是 Θ(n log n)</strong>：深度 d 的节点最多下沉 (h−d) 层，深度 d 上有 2^d 个节点。求和 <code>Σ 2^d·(h−d) ≤ 2n</code>。关键是<strong>大部分节点在底层，几乎不用下沉</strong>。反过来「逐个 push」每次 sift-up 的都是最深节点，才是 Θ(n log n)。面试高频陷阱。</div>
+  <div class="analogy">堆的访问像在楼里找人、每次只能问两个下属：下标 2i+1 是指数跳跃，预取器猜不到下一站。快排和归并沿着走廊走——操作次数未必更少，但 cache 命中好得多。所以「比较次数少」不等于跑得快。</div>
 
-  <p>那它为什么实测最慢？</p>
-
-  <table>
-    <thead><tr><th>问题</th><th>说明</th></tr></thead>
-    <tbody>
-      <tr><td><strong>cache 极不友好</strong></td><td>下沉时访问下标 i → 2i+1 → 4i+3 …，<strong>访问步长指数增长</strong>。数组一旦超出 L2，几乎每层都是一次 cache miss，而且预取器完全无法预测。</td></tr>
-      <tr><td><strong>比较和交换次数多</strong></td><td>每次下沉要比较两个孩子再决定，实测比较次数约是快排的 2 倍。</td></tr>
-      <tr><td><strong>分支不可预测</strong></td><td>「左孩子大还是右孩子大」基本是随机的 → 分支误预测率接近 50%。</td></tr>
-      <tr><td><strong>不稳定</strong></td><td>交换堆顶和末尾会打乱相等元素的顺序。</td></tr>
-      <tr><td><strong>不自适应</strong></td><td>已排序数组也要走完整流程（甚至更慢——升序数组是最坏的建堆输入）。</td></tr>
-    </tbody>
-  </table>
-
-  <div class="analogy">堆排序的访问模式像<strong>在一栋楼里找人，但每次只能问「你的两个下属是谁」</strong>。你从顶楼开始，每往下一层就要跑到楼里完全不同的位置（下标 2i+1 是指数跳跃），电梯（预取器）根本猜不到你下一站去哪。<br><br>快排和归并则像<strong>沿着走廊一间间走</strong>——虽然总路程可能更长，但一路顺着走，电梯提前在下一层等着你。<em>这就是为什么「操作次数更少」不等于「跑得更快」。</em></div>
-
-  <p>所以堆排序的实际定位是：<strong>作为兜底算法，而不是主算法</strong>。introsort 用它做「快排退化时的降落伞」，正是因为它最坏有保证、原地、无递归——这三条恰好补齐了快排的短板。</p>
-
-  <div class="info">堆本身（作为<strong>优先队列</strong>）用途极广：Dijkstra、Top-K、定时器、任务调度、合并 K 个有序流。堆排序只是堆的一个副产品。堆的完整展开（d-ary 堆、斐波那契堆、可删除堆、流式 Top-K、堆 vs 时间轮）在批次 2 的<em>堆与 Top-K</em>，STL 接口层面见 <a href="../stl/stl_containers_ppt.html">STL 容器深度剖析</a>。</div>
+  <p>实测慢：cache 差（步长指数增长，超出 L2 后几乎每层一次 miss）、比较约快排 2 倍、分支近 50% 误预测、不稳定、不自适应（升序甚至是最坏建堆输入）。所以只做兜底——最坏有保证、原地、无递归，恰好补齐快排短板。堆作为优先队列的用途远大于堆排序（Dijkstra / Top-K / 定时器 / K 路归并），见 <a href="../stl/stl_containers_ppt.html">STL 容器</a>。</p>
 </section>
 
 <!-- ================================================================ §7 -->
@@ -679,9 +623,7 @@ std::pair&lt;<span class="kw">int</span>, <span class="kw">int</span>&gt; <span 
 
   <h3 id="s7-1">7.1 决策树模型</h3>
 
-  <p>要证明「不存在更快的算法」，必须先把「所有可能的算法」形式化。<strong>决策树模型</strong>做的就是这件事：把任何只靠<em>比较</em>来决定行为的排序算法，抽象成一棵二叉树。</p>
-
-  <div class="def"><strong>比较排序的决策树</strong>：每个<em>内部节点</em>是一次比较 <code>a[i] : a[j]</code>，两条出边对应「&lt;」和「≥」；每个<em>叶子</em>是一个最终的输出排列。算法在某个输入上的执行，就是从根走到某个叶子的一条路径；<strong>路径长度 = 该输入上的比较次数</strong>，<strong>树高 = 最坏情形比较次数</strong>。<br>这个模型覆盖了插入、归并、快排、堆排等所有「只用比较获取信息」的算法——它们的差别只是树的形状不同。</div>
+  <p>把「只靠比较」的排序抽象成二叉树：内部节点是 <code>a[i]:a[j]</code>，叶子是一种输出排列。<strong>路径长度 = 该输入的比较次数，树高 = 最坏比较次数</strong>。插入、归并、快排、堆排的差别只是树的形状不同。</p>
 
   <div class="fig">
     <svg viewBox="0 0 720 320" role="img" aria-label="三个元素排序的决策树，共 6 个叶子，树高 3">
@@ -753,20 +695,17 @@ std::pair&lt;<span class="kw">int</span>, <span class="kw">int</span>&gt; <span 
 
 ∴ 任何比较排序的最坏比较次数是 <span class="hl">Ω(n log n)</span>。∎</div>
 
-  <div class="analogy">这个证明的结构像<strong>二十个问题猜谜</strong>。每个是/非问题最多把候选答案<strong>减半</strong>，所以要从 N 个候选里锁定唯一答案，至少要问 log₂N 次。<br><br>排序要区分的候选是 n! 种可能的排列，而每次比较只能问一个是/非问题——所以 log₂(n!) ≈ n log n 次比较是<strong>信息论下界</strong>，跟你多聪明无关。<em>想突破它，只能改变「问问题」的方式：不问「谁大」，而是直接问「你的值是多少」——那就是 §8 的计数与基数排序。</em></div>
-
-  <p>三个必须理解的推论：</p>
+  <div class="analogy">像二十个问题：每个是/非最多把候选<strong>减半</strong>，要从 N 个候选里锁定一个，至少问 log₂N 次。排序要区分的候选是 n! 种排列，每次比较只能问一个是/非——所以 log₂(n!) ≈ n log n 是<strong>信息论下界</strong>，跟算法多聪明无关。想突破只能改问法：不问「谁大」，问「你的值是多少」（§8 计数与基数）。</div>
 
   <table>
     <thead><tr><th>推论</th><th>含义</th></tr></thead>
     <tbody>
-      <tr><td><strong>归并排序是渐进最优的</strong></td><td>它的 Θ(n log n) 恰好达到下界，所以在比较模型内不可能有渐进更好的算法。优化只能在常数上做。</td></tr>
-      <tr><td><strong>平均情形也是 Ω(n log n)</strong></td><td>同一个证明可以改成「叶子的平均深度 ≥ log₂(n!)」——不只是最坏。所以「平均更快」的比较排序也不存在。</td></tr>
-      <tr><td><strong>下界只约束「比较模型」</strong></td><td>它<strong>不</strong>约束能直接用元素值做索引/位运算的算法。这不是漏洞，而是模型边界——计数、基数、桶排序正是从这里出去的。</td></tr>
+      <tr><td>归并渐进最优</td><td>Θ(n log n) 恰好达到下界，比较模型内只能抠常数</td></tr>
+      <tr><td>平均也是 Ω(n log n)</td><td>同一证明可改成「叶子平均深度 ≥ log₂(n!)」，不存在平均更快的比较排序</td></tr>
+      <tr><td>只约束比较模型</td><td>能用元素值做索引/位运算的算法不受限——这是模型边界，不是漏洞</td></tr>
     </tbody>
   </table>
-
-  <div class="note">同一个决策树论证还能给出别的下界。例如「查找有序数组中的元素」：n 个可能答案 + 每次比较三分（&lt;、=、&gt;）→ 至少 log₃n 次；若只用二路比较则至少 log₂n 次——这正是<a href="./binary_search_patterns.html">二分查找</a>为什么不可能更快。<strong>「用决策树数叶子」是证明下界的通用套路，值得掌握。</strong></div>
+  <p>同一套路能证「有序数组查找至少 log₂n 次比较」，见 <a href="./binary_search_patterns.html">二分查找</a>。<strong>用决策树数叶子是证明下界的通用方法。</strong></p>
 </section>
 
 <!-- ================================================================ §8 -->
@@ -776,127 +715,65 @@ std::pair&lt;<span class="kw">int</span>, <span class="kw">int</span>&gt; <span 
     <div class="t"><h2>突破下界</h2><p class="sub">不比较，直接用值做下标</p></div>
   </div>
 
-  <p>Ω(n log n) 只约束「只靠比较获取信息」的算法。如果元素的值本身能<strong>直接当下标用</strong>，我们就能跳过比较，做到线性。代价是对输入加了限制。</p>
+  <p>值能<strong>直接当下标</strong>就能跳过比较，做到线性。Ω(n log n) 只约束「只靠比较获取信息」的算法；这条路对输入加了限制：键必须是范围已知的整数、可按位拆的定长键，或近似均匀的实数。</p>
 
   <h3 id="s8-1">8.1 计数排序</h3>
+  <p>k = O(n) 时 Θ(n+k)；k ≫ n 不可行（百万个 32 位整数要 16 GB 计数数组）。<strong>倒序回填才稳定</strong>——正序会把相同值按倒序填入。稳定性在这里不是可选项：LSD 基数每一轮都是一次稳定计数，写成正序会让前面几轮的结果被打乱，整段基数排序出错。</p>
 
-<pre><span class="cm">// 前提：键是范围已知的小整数 [0, k)</span>
-<span class="kw">void</span> <span class="fn">counting_sort</span>(std::vector&lt;<span class="kw">int</span>&gt;&amp; a, <span class="kw">int</span> k) {
-    std::vector&lt;<span class="kw">int</span>&gt; <span class="fn">cnt</span>(k, <span class="num">0</span>);
-    <span class="kw">for</span> (<span class="kw">int</span> x : a) ++cnt[x];              <span class="cm">// ① 统计</span>
-    <span class="kw">for</span> (<span class="kw">int</span> i = <span class="num">1</span>; i &lt; k; ++i)
-        cnt[i] += cnt[i - <span class="num">1</span>];               <span class="cm">// ② 前缀和 = 每个值的结束位置</span>
-
-    std::vector&lt;<span class="kw">int</span>&gt; <span class="fn">out</span>(a.<span class="fn">size</span>());
-    <span class="kw">for</span> (<span class="kw">int</span> i = (<span class="kw">int</span>)a.<span class="fn">size</span>() - <span class="num">1</span>; i &gt;= <span class="num">0</span>; --i)  <span class="cm">// ③ 倒序回填 → 稳定</span>
-        out[--cnt[a[i]]] = a[i];
-    a = std::<span class="fn">move</span>(out);
-}
-<span class="cm">// Θ(n + k) 时间，Θ(n + k) 空间</span></pre>
-
-  <div class="warn">第三步<strong>必须倒序遍历</strong>才能保证稳定性。正序遍历时，相同值的元素会按倒序填入。稳定性在这里不是可选项——<strong>基数排序完全依赖计数排序的稳定性</strong>（§8.2），写成正序会让整个基数排序出错。</div>
-
-  <p>适用边界很清楚：<strong>k = O(n) 时是 Θ(n)，k 远大于 n 时退化</strong>。给 100 万个 32 位整数排序，k = 2³² —— 计数数组要 16 GB，完全不可行。</p>
+<pre><span class="cm">// a = [2, 0, 2, 1, 0]，k = 3</span>
+<span class="cm">// ① 计数     cnt = [2, 1, 2]</span>
+<span class="cm">// ② 前缀和   cnt = [2, 3, 5]   ← 每个值的结束下标</span>
+<span class="kw">for</span> (<span class="kw">int</span> i = n - <span class="num">1</span>; i &gt;= <span class="num">0</span>; --i)  <span class="cm">// ③ 倒序回填 → 稳定</span>
+    out[--cnt[a[i]]] = a[i];
+<span class="cm">// → [0, 0, 1, 2, 2]</span></pre>
 
   <h3 id="s8-2">8.2 基数排序</h3>
+  <p>大值域拆成 d 组小值域，逐位做稳定计数。32 位按 8 位一组 → d=4、K=256，顺序访问、零比较、零分支误预测，实测常比 <code>std::sort</code> 快 2–3×——这是唯一能明确打败 introsort 的通用排序。列式数据库、GPU（cub::DeviceRadixSort）、「按定长整数 key 排百万级记录」都在用。</p>
 
-  <p>计数排序的问题是值域太大。基数排序的解法是<strong>把大值域拆成若干小值域，逐位做稳定的计数排序</strong>。</p>
-
-  <table>
-    <thead><tr><th></th><th>LSD（从低位到高位）</th><th>MSD（从高位到低位）</th></tr></thead>
-    <tbody>
-      <tr><td>做法</td><td>对每一位做一遍稳定计数排序，共 d 遍</td><td>按高位分桶，再递归排每个桶</td></tr>
-      <tr><td>依赖稳定性</td><td><span class="cell-bad">必须</span>（否则前面的排序被打乱）</td><td>不需要</td></tr>
-      <tr><td>能否提前结束</td><td>否，d 遍全跑</td><td><span class="cell-ok">能</span>（桶内只剩 1 个元素就停）</td></tr>
-      <tr><td>适合</td><td>定长键（整数、定长字符串）</td><td>变长键（字符串前缀差异大时极快）</td></tr>
-      <tr><td>实现难度</td><td><span class="cell-ok">简单，循环即可</span></td><td>递归 + 大量小桶，常数大</td></tr>
-    </tbody>
-  </table>
-
-<pre><span class="cm">// LSD 基数排序：8 位一组，32 位整数 → 4 遍</span>
-<span class="kw">void</span> <span class="fn">radix_sort_u32</span>(std::vector&lt;<span class="kw">uint32_t</span>&gt;&amp; a) {
-    <span class="kw">constexpr</span> <span class="kw">int</span> BITS = <span class="num">8</span>, K = <span class="num">1</span> &lt;&lt; BITS, MASK = K - <span class="num">1</span>;
-    std::vector&lt;<span class="kw">uint32_t</span>&gt; <span class="fn">buf</span>(a.<span class="fn">size</span>());
-
-    <span class="kw">for</span> (<span class="kw">int</span> shift = <span class="num">0</span>; shift &lt; <span class="num">32</span>; shift += BITS) {
-        <span class="kw">int</span> cnt[K] = {};
-        <span class="kw">for</span> (<span class="kw">uint32_t</span> x : a) ++cnt[(x &gt;&gt; shift) &amp; MASK];
-        <span class="kw">for</span> (<span class="kw">int</span> i = <span class="num">1</span>; i &lt; K; ++i) cnt[i] += cnt[i - <span class="num">1</span>];
-        <span class="kw">for</span> (<span class="kw">int</span> i = (<span class="kw">int</span>)a.<span class="fn">size</span>() - <span class="num">1</span>; i &gt;= <span class="num">0</span>; --i)
-            buf[--cnt[(a[i] &gt;&gt; shift) &amp; MASK]] = a[i];
-        a.<span class="fn">swap</span>(buf);                        <span class="cm">// 双缓冲，避免拷贝</span>
-    }
-}
-<span class="cm">// Θ(d · (n + K))，这里 d=4, K=256 → 实测比 std::sort 快 2~3×</span></pre>
-
-  <div class="danger">基数排序对<strong>有符号整数和浮点数</strong>需要额外处理，因为按位比较和数值比较不一致：
-  <ul>
-    <li><strong>有符号整数</strong>（补码）：负数的最高位是 1，按无符号排会排到正数后面。修法：把最高位翻转（<code>x ^ 0x80000000</code>）。</li>
-    <li><strong>IEEE 754 浮点</strong>：正数可以直接按位比较（这是 IEEE 754 的设计），但<strong>负数的位模式是倒序的</strong>。修法：正数翻符号位，负数全位取反。</li>
-  </ul>
-  漏掉这一步的 bug 很隐蔽——正数测试全过，一上负数就错。</div>
-
-  <p>基数排序在真实工程里用得比想象中多：<strong>列式数据库的排序、GPU 排序（cub::DeviceRadixSort）、Spark 的 shuffle 有时用它、以及所有「按定长整数 key 排百万级记录」的场景</strong>。它是唯一能在实测上明确打败 <code>std::sort</code> 的通用排序。</p>
-
-  <h3 id="s8-3">8.3 桶排序</h3>
-
-<pre><span class="cm">// 前提：键在 [0,1) 上近似均匀分布</span>
-<span class="kw">void</span> <span class="fn">bucket_sort</span>(std::vector&lt;<span class="kw">double</span>&gt;&amp; a) {
-    <span class="kw">size_t</span> n = a.<span class="fn">size</span>();
-    std::vector&lt;std::vector&lt;<span class="kw">double</span>&gt;&gt; <span class="fn">b</span>(n);
-    <span class="kw">for</span> (<span class="kw">double</span> x : a) b[(<span class="kw">size_t</span>)(n * x)].<span class="fn">push_back</span>(x);   <span class="cm">// 散到 n 个桶</span>
-    <span class="kw">for</span> (<span class="kw">auto</span>&amp; v : b) <span class="fn">insertion_sort</span>(v);                   <span class="cm">// 桶内排序</span>
-    <span class="cm">// 依次拼接</span>
-}
-<span class="cm">// 均匀分布下期望 Θ(n)；全挤一个桶时退化 Θ(n²)</span></pre>
-
-  <div class="note">桶排序的复杂度<strong>完全依赖输入分布假设</strong>，这让它成为三者中最脆弱的一个：数据一偏斜就退化。它的真正价值不在于当排序算法用，而在于<strong>「先按范围分桶，再各桶独立处理」这个模式</strong>——分布式系统里的 range partition、Spark 的 <code>rangePartitioner</code>、外部排序的分区阶段，全都是桶排序的思想。而它们也都必须解决同一个问题：<strong>数据倾斜时怎么办</strong>（通常靠采样 + 动态调整分界点）。</div>
+  <div class="fig">
+    <svg viewBox="0 0 720 250" role="img" aria-label="字符串 LSD 从低位到高位稳定计数；MSD 从高位分桶，桶内可提前结束">
+      <text class="tb" x="16" y="22">字符串：LSD 走完全长；MSD 按前缀分桶，短前缀就能停</text>
+      <text class="ty" x="16" y="46">LSD · 先排末字符，再排倒数第二……必须每轮稳定</text>
+      <rect class="box-y" x="16" y="54" width="70" height="28" rx="4"/><text class="tm" x="28" y="72">cat</text>
+      <rect class="box-y" x="90" y="54" width="70" height="28" rx="4"/><text class="tm" x="102" y="72">car</text>
+      <rect class="box-y" x="164" y="54" width="70" height="28" rx="4"/><text class="tm" x="176" y="72">cap</text>
+      <text class="ts" x="250" y="64">第 1 遍按末位 p/r/t</text>
+      <text class="ts" x="250" y="80">第 2 遍按中间 a…（稳定，不打乱上轮）</text>
+      <text class="tg" x="16" y="100">定长整数 / 定长串：循环 d 遍即可</text>
+      <rect class="box-a" x="16" y="118" width="688" height="118" rx="8"/>
+      <text class="tb" x="28" y="140">MSD · 先按首字符分桶，再递归排每个桶</text>
+      <rect class="box-g" x="28" y="152" width="80" height="26" rx="4"/><text class="tm" x="46" y="170">c*</text>
+      <rect class="box-p" x="120" y="152" width="80" height="26" rx="4"/><text class="tm" x="138" y="170">d*</text>
+      <rect class="box-y" x="212" y="152" width="80" height="26" rx="4"/><text class="tm" x="230" y="170">t*</text>
+      <text class="ts" x="310" y="162">变长串、前缀差异大时桶很快只剩 1 个 → 提前结束</text>
+      <text class="ts" x="310" y="178">不依赖稳定性；递归 + 小桶常数大</text>
+      <text class="ts" x="28" y="198">工程：定长整数用 LSD；字典/URL/变长串用 MSD（或 trie 思想）</text>
+      <text class="tr" x="28" y="218">桶排序同族：均匀才线性，偏斜就退化——分布式 range partition 必须处理倾斜</text>
+    </svg>
+    <figcaption>LSD 完全依赖每轮稳定计数；MSD 用前缀把问题缩小。列存 / GPU 排序大量用 LSD 整数基数。</figcaption>
+  </div>
+  <div class="danger">有符号整数（补码）最高位是 1，按无符号排会跑到正数后面——先翻最高位（<code>x ^ 0x80000000</code>）。IEEE 754 正数可按位比，<strong>负数的位模式是倒序</strong>：正数翻符号位、负数全位取反。漏掉这步的 bug 很隐蔽：正数测试全过，一上负数就错。</div>
 
   <table>
     <thead><tr><th>算法</th><th>时间</th><th>空间</th><th>稳定</th><th>前提</th></tr></thead>
     <tbody>
-      <tr><td>计数排序</td><td>Θ(n + k)</td><td>Θ(n + k)</td><td><span class="cell-ok">是</span></td><td>键是范围小的整数</td></tr>
-      <tr><td>基数排序（LSD）</td><td>Θ(d(n + K))</td><td>Θ(n + K)</td><td><span class="cell-ok">是</span></td><td>键可按位拆分且定长</td></tr>
-      <tr><td>桶排序</td><td>期望 Θ(n)</td><td>Θ(n)</td><td>取决于桶内算法</td><td><span class="cell-bad">键近似均匀分布</span></td></tr>
+      <tr><td>计数</td><td>Θ(n+k)</td><td>Θ(n+k)</td><td><span class="cell-ok">是</span></td><td>小整数键</td></tr>
+      <tr><td>基数 LSD</td><td>Θ(d(n+K))</td><td>Θ(n+K)</td><td><span class="cell-ok">是</span></td><td>定长可按位拆</td></tr>
+      <tr><td>桶</td><td>期望 Θ(n)</td><td>Θ(n)</td><td>依桶内</td><td><span class="cell-bad">近似均匀</span></td></tr>
     </tbody>
   </table>
+  <h3 id="s8-3">8.3 桶排序</h3>
+  <p>期望 Θ(n)，但<strong>依赖均匀分布</strong>，一偏斜就 Θ(n²)。真正留下的不是当排序用，而是「按范围分桶再独立处理」——分布式 range partition、Spark 的 <code>rangePartitioner</code>、外部排序的分区阶段都是它。它们也必须解决同一个问题：数据倾斜时怎么办（通常靠采样 + 动态调整分界点）。</p>
 </section>
-
-<!-- ================================================================ §9 -->
 <section class="chapter" id="s9">
   <div class="ch-head">
     <div class="num">09</div>
-    <div class="t"><h2>std::sort 源码级剖析</h2><p class="sub">工业级实现比教科书多了什么</p></div>
+    <div class="t"><h2>std::sort：introsort</h2><p class="sub">快排主路径 + 堆排兜底 + 小段插入，不要去背库源码</p></div>
   </div>
 
   <h3 id="s9-1">9.1 introsort 三段结构</h3>
 
-  <p>libstdc++ 的 <code>std::sort</code> 是 <strong>introsort</strong>（introspective sort，Musser 1997）：快排为主，堆排兜底，插入排序收尾。它的骨架只有两个函数：</p>
-
-<pre><span class="cm">// bits/stl_algo.h（简化并加注释）</span>
-<span class="kw">template</span>&lt;<span class="kw">typename</span> It, <span class="kw">typename</span> Comp&gt;
-<span class="kw">void</span> <span class="fn">__sort</span>(It first, It last, Comp comp) {
-    <span class="kw">if</span> (first == last) <span class="kw">return</span>;
-    <span class="fn">__introsort_loop</span>(first, last, <span class="fn">__lg</span>(last - first) * <span class="num">2</span>, comp);  <span class="cm">// ①②</span>
-    <span class="fn">__final_insertion_sort</span>(first, last, comp);                    <span class="cm">// ③</span>
-}
-
-<span class="kw">constexpr</span> <span class="kw">int</span> _S_threshold = <span class="num">16</span>;   <span class="cm">// 小区间阈值</span>
-
-<span class="kw">template</span>&lt;<span class="kw">typename</span> It, <span class="kw">typename</span> Size, <span class="kw">typename</span> Comp&gt;
-<span class="kw">void</span> <span class="fn">__introsort_loop</span>(It first, It last, Size depth_limit, Comp comp) {
-    <span class="kw">while</span> (last - first &gt; _S_threshold) {          <span class="cm">// 小区间直接留给 ③</span>
-        <span class="kw">if</span> (depth_limit == <span class="num">0</span>) {                   <span class="cm">// ② 退化 → 堆排兜底</span>
-            std::<span class="fn">__partial_sort</span>(first, last, last, comp);
-            <span class="kw">return</span>;
-        }
-        --depth_limit;
-        <span class="cm">// ① 三点取中 + Hoare 风格分区</span>
-        It cut = std::<span class="fn">__unguarded_partition_pivot</span>(first, last, comp);
-        <span class="fn">__introsort_loop</span>(cut, last, depth_limit, comp);   <span class="cm">// 递归右半</span>
-        last = cut;                                    <span class="cm">// 左半转循环 → 栈深有界</span>
-    }
-}</pre>
+  <p><code>std::sort</code> 是 <strong>introsort</strong>（Musser 1997）：快排为主，深度超限切堆排，最后全局插入。短板互不重叠，用一个 <code>depth_limit</code> 串起来。</p>
 
   <div class="fig">
     <svg viewBox="0 0 720 258" role="img" aria-label="introsort 的三段结构：快排主路径、堆排兜底、插入排序收尾">
@@ -945,19 +822,28 @@ std::pair&lt;<span class="kw">int</span>, <span class="kw">int</span>&gt; <span 
     </svg>
     <figcaption>introsort 的价值不在任何单个算法，而在于三者短板互补，用一个廉价的监控量在它们之间切换。</figcaption>
   </div>
+  <div class="tip">「快路径求常数 + 廉价监控量 + 慢路径兜底最坏」到处可见：<code>nth_element</code> 的 introselect、GMP 按位数切乘法、JIT 解释→热点编译、TCP 快重传→超时、DB 的 nested-loop → hash join 回退。用一个 int 计数器就把快排/堆排/插排串起来。</div>
 
-  <p>三处实现细节值得单独说：</p>
-
-  <table>
-    <thead><tr><th>细节</th><th>为什么这么做</th></tr></thead>
-    <tbody>
-      <tr><td><strong>深度上限 = 2⌊log₂n⌋</strong></td><td>理想划分需要 log₂n 层，留 2 倍余量。超过说明 pivot 选择在这个输入上系统性地差，不是运气问题。</td></tr>
-      <tr><td><strong>最后一遍插入排序是<em>全局</em>的</strong></td><td>不是对每个小块单独排。因为块间已有序，全局插入排序的逆序对总数是 O(16n)，一遍下来就是 Θ(n)——而且顺序扫描，cache 全命中。分块排反而要多次进出。</td></tr>
-      <tr><td><strong>unguarded_partition</strong></td><td>「无哨兵检查」的分区：因为三点取中保证了 pivot 不是最值，指针不会跑出边界，于是内层循环<strong>省掉了边界判断</strong>。这个优化在最内层循环里，收益显著。</td></tr>
-    </tbody>
-  </table>
-
-  <div class="tip">这个「<strong>快路径求常数 + 廉价监控量 + 慢路径兜底最坏</strong>」的结构在系统软件里到处可见：<code>std::nth_element</code> 的 introselect、GMP 按位数切换乘法算法、JIT 的解释执行→热点编译、TCP 的快重传→超时重传、数据库的 nested-loop join→hash join 回退。<strong>识别出这个模式，你就能在自己的系统里复用它。</strong></div>
+  <div class="fig">
+    <svg viewBox="0 0 720 200" role="img" aria-label="工程上小 n 切插入排序：快排停在每块不超过 16，再对整段做一遍插入">
+      <text class="tb" x="16" y="22">工程：小 n 插入 —— cutoff=16，最后一遍是全局插入不是逐块排</text>
+      <rect class="box-y" x="16" y="40" width="88" height="36" rx="4"/><text class="ts" x="28" y="62">块 ≤16</text>
+      <rect class="box-g" x="108" y="40" width="24" height="36" rx="3"/>
+      <rect class="box-y" x="136" y="40" width="88" height="36" rx="4"/><text class="ts" x="148" y="62">块 ≤16</text>
+      <rect class="box-g" x="228" y="40" width="24" height="36" rx="3"/>
+      <rect class="box-y" x="256" y="40" width="88" height="36" rx="4"/><text class="ts" x="268" y="62">块 ≤16</text>
+      <rect class="box-g" x="348" y="40" width="24" height="36" rx="3"/>
+      <rect class="box-y" x="376" y="40" width="88" height="36" rx="4"/><text class="ts" x="388" y="62">块 ≤16</text>
+      <text class="tg" x="480" y="54">块间已有序</text>
+      <text class="ts" x="480" y="72">每元素离最终位 ≤16</text>
+      <rect class="box-a" x="16" y="92" width="688" height="92" rx="8"/>
+      <text class="tb" x="28" y="114">为什么 cutoff 是 16 而不是 2 或 64</text>
+      <text class="ts" x="28" y="134">太小：递归/分区开销吃掉插入的优势；太大：块内无序，I 不再是 O(n)</text>
+      <text class="ts" x="28" y="152">全局插一次：逆序对 O(16n) → Θ(n)，顺序扫 cache 全中。分块排要多次进出。</text>
+      <text class="tp" x="28" y="170">unguarded_partition 省掉边界检查，前提是比较器满足严格弱序，否则指针冲出数组。</text>
+    </svg>
+    <figcaption>深度上限 2⌊log₂n⌋：理想只需 log n 层，超了说明 pivot 系统性差，切堆排。unguarded_partition 省掉边界检查，前提是三点取中保证 pivot 不是最值——这也是比较器一旦不自洽就会越界的原因。</figcaption>
+  </div>
 
   <h3 id="s9-2">9.2 stable_sort 与其他兄弟</h3>
 
@@ -973,65 +859,24 @@ std::pair&lt;<span class="kw">int</span>, <span class="kw">int</span>&gt; <span 
     </tbody>
   </table>
 
-  <div class="def"><strong>选型口诀</strong>：<br>· 要全排序、不在乎相等元素顺序 → <code>sort</code><br>· 要全排序、需要稳定（多关键字分步排、UI 多列排序） → <code>stable_sort</code><br>· <strong>只要前 k 个</strong> → <code>partial_sort</code>（O(n log k)，k 远小于 n 时快得多）<br>· <strong>只要第 k 个 / 只要「前 k 个但不关心它们内部顺序」</strong> → <code>nth_element</code>（O(n)，最快）<br>· 要边来边排、随时取最大 → <code>priority_queue</code></div>
-
-  <p>一个常见的浪费：求「Top 100」时写 <code>sort</code> 再取前 100。正确做法是 <code>nth_element</code> 把前 100 个挪到前面（O(n)），再对这 100 个 <code>sort</code>（O(100 log 100)）——总共 O(n)，而不是 O(n log n)。n = 10⁷ 时这是 20 倍以上的差距。</p>
+  <p>选型：全排且不在乎相等顺序 → <code>sort</code>；要稳定（多关键字分步、UI 多列） → <code>stable_sort</code>；只要前 k → <code>partial_sort</code>（O(n log k)）；只要第 k 个、或前 k 内部无序 → <code>nth_element</code>（O(n)，最快）；边来边取最大 → <code>priority_queue</code>。求 Top 100 写全量 <code>sort</code> 是浪费：<code>nth_element</code> 把前 100 挪到前面再局部 <code>sort</code> 才是 O(n)。n=10⁷ 时比全排快 20 倍以上。</p>
 
   <h3 id="s9-3">9.3 严格弱序：真实事故</h3>
 
-  <p><code>std::sort</code> 要求比较器满足<strong>严格弱序（strict weak ordering）</strong>。违反它<strong>不是「结果错」，而是未定义行为</strong>——实际表现通常是<strong>数组越界写入，然后在别的地方崩溃</strong>。</p>
-
-  <div class="def"><strong>严格弱序的三条要求</strong>（记 <code>comp(a,b)</code> 为「a 排在 b 前面」）：
-  <ul>
-    <li><strong>反自反</strong>：<code>comp(a, a)</code> 必须为 <code>false</code>。</li>
-    <li><strong>非对称 + 传递</strong>：<code>comp(a,b)</code> 与 <code>comp(b,a)</code> 不能同真；<code>comp(a,b) &amp;&amp; comp(b,c)</code> ⟹ <code>comp(a,c)</code>。</li>
-    <li><strong>「等价」的传递性</strong>：定义 <code>equiv(a,b)</code> 为 <code>!comp(a,b) &amp;&amp; !comp(b,a)</code>，则 <code>equiv</code> 必须是等价关系（可传递）。</li>
-  </ul>
-  简单说：<strong>用 <code>&lt;</code> 而不是 <code>&lt;=</code></strong>，并且保证多字段比较逻辑自洽。</div>
-
-  <div class="vs">
-    <div class="bad">
-      <h5>❌ 四种真实见过的错法</h5>
-<pre><span class="cm">// ① 用了 &lt;= ：违反反自反</span>
-std::<span class="fn">sort</span>(v.<span class="fn">begin</span>(), v.<span class="fn">end</span>(),
-    [](<span class="kw">int</span> a, <span class="kw">int</span> b){ <span class="kw">return</span> a &lt;= b; });
-
-<span class="cm">// ② 多字段写漏：a,b 互相都「小于」</span>
-[](<span class="kw">const</span> P&amp; a, <span class="kw">const</span> P&amp; b) {
-    <span class="kw">if</span> (a.x &lt; b.x) <span class="kw">return</span> <span class="kw">true</span>;
-    <span class="kw">return</span> a.y &lt; b.y;      <span class="cm">// ← x 更大时也可能返回 true</span>
-}
-
-<span class="cm">// ③ 浮点 NaN：所有比较都是 false</span>
-[](<span class="kw">double</span> a, <span class="kw">double</span> b){ <span class="kw">return</span> a &lt; b; }
-<span class="cm">// 数据含 NaN → equiv 不可传递</span>
-
-<span class="cm">// ④ 比较器有状态 / 依赖外部可变量</span>
-[&amp;](<span class="kw">int</span> a, <span class="kw">int</span> b){ <span class="kw">return</span> score[a]++ &lt; score[b]; };</pre>
-    </div>
-    <div class="good">
-      <h5>✅ 正确写法</h5>
-<pre><span class="cm">// ① 严格小于</span>
-std::<span class="fn">sort</span>(v.<span class="fn">begin</span>(), v.<span class="fn">end</span>(),
-    [](<span class="kw">int</span> a, <span class="kw">int</span> b){ <span class="kw">return</span> a &lt; b; });
-
-<span class="cm">// ② 多字段用 tie（自动正确）</span>
-[](<span class="kw">const</span> P&amp; a, <span class="kw">const</span> P&amp; b) {
+  <p>违反严格弱序是 <strong>UB</strong>，典型表现不是顺序错，而是 <code>unguarded_partition</code> 指针冲出数组、几分钟后在别处崩。三条：反自反（<code>comp(a,a)</code> 为假）、非对称且传递、「等价」可传递。用 <code>&lt;</code> 不用 <code>&lt;=</code>。</p>
+  <table>
+    <thead><tr><th>错法</th><th>破坏</th><th>修</th></tr></thead>
+    <tbody>
+      <tr><td><code>return a &lt;= b</code></td><td>反自反</td><td>用 <code>&lt;</code></td></tr>
+      <tr><td>多字段 if 链写漏</td><td>可能 a&lt;b 且 b&lt;a</td><td><code>std::tie</code> / <code>&lt;=&gt;</code></td></tr>
+      <tr><td>数据含 NaN</td><td>等价不可传递</td><td>先 <code>erase_if(isnan)</code></td></tr>
+      <tr><td>比较器有副作用</td><td>两次比较结果不同</td><td>无副作用；外部键先物化成 pair</td></tr>
+    </tbody>
+  </table>
+<pre>[](<span class="kw">const</span> P&amp; a, <span class="kw">const</span> P&amp; b) {
     <span class="kw">return</span> std::<span class="fn">tie</span>(a.x, a.y) &lt; std::<span class="fn">tie</span>(b.x, b.y);
-}
-<span class="cm">// 或 C++20：return a &lt;=&gt; b &lt; 0;（有 operator&lt;=&gt; 时）</span>
-
-<span class="cm">// ③ 先过滤 / 归一化 NaN</span>
-std::<span class="fn">erase_if</span>(v, [](<span class="kw">double</span> x){ <span class="kw">return</span> std::<span class="fn">isnan</span>(x); });
-
-<span class="cm">// ④ 比较器必须无副作用、幂等</span>
-<span class="cm">//   需要按外部键排序时，先物化成 pair 再排</span></pre>
-    </div>
-  </div>
-
-  <div class="danger"><strong>为什么违反会导致越界而不只是「顺序错」</strong>：introsort 的 <code>__unguarded_partition</code> 内层循环<strong>省掉了边界检查</strong>——它依赖「pivot 不是最值，所以指针一定会在某个元素处停下」这个由严格弱序保证的前提。比较器一旦不自洽，<code>while (comp(*i, pivot)) ++i;</code> 就可能永远为真，<strong>指针一路冲出数组，往堆上乱写</strong>。<br><br>典型症状是：<em>排序本身没报错，但几分钟后在完全无关的代码里崩溃</em>——因为被踩坏的是别人的数据。这也是为什么这类 bug 极难定位。</div>
-
-  <div class="tip">怎么防：<strong>①</strong> Debug 构建下开 <code>-D_GLIBCXX_DEBUG</code>（libstdc++）或 <code>_ITERATOR_DEBUG_LEVEL=2</code>（MSVC），它们会<strong>主动校验比较器是否满足严格弱序</strong>并给出明确报错；<strong>②</strong> 多字段比较统一用 <code>std::tie</code> 或 C++20 的 <code>operator&lt;=&gt;</code>，不手写 if 链；<strong>③</strong> 把「排序前检查是否含 NaN」加进处理浮点数据的流程；<strong>④</strong> code review 时看到 <code>&lt;=</code> 出现在比较器里，一律当 bug 处理。<br>相关的调试手段见 <a href="../perf-debug/sanitizers_guide.html">Sanitizers 实战</a>。</div>
+}</pre>
+  <p>Debug 开 <code>-D_GLIBCXX_DEBUG</code> / <code>_ITERATOR_DEBUG_LEVEL=2</code> 会主动校验。review 见到比较器里的 <code>&lt;=</code> 一律当 bug。见 <a href="../perf-debug/sanitizers_guide.html">Sanitizers</a>。之所以会越界而不只是顺序错：unguarded 内层省掉了边界检查，依赖「pivot 不是最值、指针一定会停下」——比较器不自洽时 <code>while (comp(*i, pivot)) ++i</code> 可能永远为真，往堆上乱写，几分钟后在无关代码里崩。</p>
 </section>
 
 <!-- ================================================================ §10 -->
@@ -1043,7 +888,7 @@ std::<span class="fn">erase_if</span>(v, [](<span class="kw">double</span> x){ <
 
   <h3 id="s10-1">10.1 外部排序与多路归并</h3>
 
-  <p>要排序 1 TB 数据但只有 16 GB 内存时，所有内存排序算法都失效。<strong>外部排序</strong>的两阶段方案是所有大数据系统的基础：</p>
+  <p>1 TB 数据、16 GB 内存时走<strong>外部排序</strong>：分块内排生成有序 run，再 K 路归并。核心不是算法（归并都会），而是让磁盘 I/O 尽可能顺序。</p>
 
   <div class="fig">
     <svg viewBox="0 0 720 280" role="img" aria-label="外部排序两阶段：分块内排序生成有序 run，然后 K 路归并">
@@ -1109,19 +954,11 @@ std::<span class="fn">erase_if</span>(v, [](<span class="kw">double</span> x){ <
     <figcaption>外部排序的核心不是算法，而是让磁盘 I/O 尽可能顺序。K 的选择是「归并遍数」与「每路缓冲大小」的权衡。</figcaption>
   </div>
 
-  <p>三个关键工程点：</p>
-
-  <ul>
-    <li><strong>K 路归并用最小堆，每条记录 O(log K)</strong>。不要写成「两两归并」——那要 log₂K 遍，每遍都完整读写一次全量数据，I/O 是 K 路的 log₂K 倍。</li>
-    <li><strong>K 不是越大越好</strong>。内存要在 K+1 个缓冲区之间分，K 太大则每路缓冲太小，磁盘从顺序读退化成随机读。经典结论：机械盘上 K 通常取几十到几百，NVMe 上可以更大。</li>
-    <li><strong>置换选择（replacement selection）能让 run 更长</strong>。用一个堆持续吞吐而不是「读满一批排一批」，期望能生成 <strong>2× 内存大小</strong>的 run，从而减少 run 数量。代价是实现复杂、且对已有序输入才有明显收益。</li>
-  </ul>
-
-  <div class="info">外部排序的思想在现代系统里无处不在：<strong>LSM-Tree 的 compaction</strong> 就是多路归并（<a href="../architect/storage_and_data_architecture.html">存储与数据架构</a>）、<strong>MapReduce/Spark 的 shuffle</strong> 是「map 端分块排序 + reduce 端归并」（<a href="../bigdata/spark_internals.html">Spark 内核</a>）、数据库的 <code>ORDER BY</code> 在结果集超过 <code>sort_buffer_size</code> 时也走磁盘归并。</div>
+  <p>K 路用最小堆，每条 O(log K)；别两两归并（I/O × log₂K）。K 太大则每路缓冲变小、顺序读变随机读——机械盘几十到几百，NVMe 可更大，必须实测。置换选择用持续吞吐的堆代替「读满一批排一批」，期望生成 <strong>2× 内存</strong>的 run，对已部分有序才明显。LSM compaction / Spark shuffle / DB <code>ORDER BY</code> 溢出都是这套，见 <a href="../architect/storage_and_data_architecture.html">存储架构</a>、<a href="../bigdata/spark_internals.html">Spark 内核</a>。</p>
 
   <h3 id="s10-2">10.2 TimSort 与 pdqsort</h3>
 
-  <p>教科书排序假设输入是均匀随机的。<strong>真实数据几乎从不是</strong>——日志按时间近似有序、数据库结果集部分有序、多个有序流拼接后是分段有序。两个现代排序算法就是冲着这一点设计的。</p>
+  <p>真实数据几乎从不是均匀随机的——日志按时间近似有序、数据库结果集部分有序、多个有序流拼接后是分段有序。教科书假设均匀随机，<code>std::sort</code> 基本不自适应。TimSort 和 pdqsort 就是冲着真实分布设计的。</p>
 
   <table>
     <thead><tr><th></th><th>TimSort（Python / Java 对象数组）</th><th>pdqsort（Rust / Boost / 现代 C++ 提案）</th></tr></thead>
@@ -1136,29 +973,11 @@ std::<span class="fn">erase_if</span>(v, [](<span class="kw">double</span> x){ <
     </tbody>
   </table>
 
-  <div class="def"><strong>自适应排序（adaptive sort）</strong>：复杂度随输入的「无序程度」变化，而不是只看 n。常用的无序度量有<em>逆序对数 I</em>、<em>天然有序段数 R</em>、<em>最少需移动的元素数</em>。<br>插入排序对 I 自适应（Θ(n+I)）；TimSort 对 R 自适应（Θ(n log R)）；<code>std::sort</code> 基本<strong>不</strong>自适应。这就是为什么在「已排好又追加了一小批」的场景里，TimSort 能比 <code>std::sort</code> 快一个数量级。</div>
-
-  <div class="tip">C++ 里想吃到这个红利，最简单的办法不是换排序算法，而是<strong>利用已有的有序性</strong>：<br>· 已排好的 <code>v</code> 追加了一小段新数据 → 对新段单独 <code>sort</code>，然后 <code>std::inplace_merge</code>（O(n) 或 O(n log n) 视缓冲而定），而不是整体重排。<br>· 多个有序序列合并 → <code>std::merge</code> 两两合并，或用最小堆做 K 路归并。<br>· 只是想知道「是否已有序」→ <code>std::is_sorted</code> 是 O(n)，比排一遍便宜得多。</div>
+  <p>自适应：复杂度随无序程度变。插入对逆序对 I 自适应（Θ(n+I)）；TimSort 对天然有序段数 R 自适应（Θ(n log R)）；<code>std::sort</code> 基本不自适应，所以「已排好又追加一小批」时 TimSort 能快一个数量级。C++ 里不必换算法：追加一小段 → 局部 <code>sort</code> + <code>inplace_merge</code>；多路有序 → <code>merge</code> / 堆；先问有没有序 → <code>is_sorted</code>。</p>
 
   <h3 id="s10-3">10.3 并行排序</h3>
 
-<pre><span class="cm">// C++17 并行执行策略（libstdc++ 需 -ltbb）</span>
-<span class="cm">#include &lt;execution&gt;</span>
-std::<span class="fn">sort</span>(std::execution::par, v.<span class="fn">begin</span>(), v.<span class="fn">end</span>());
-std::<span class="fn">stable_sort</span>(std::execution::par, v.<span class="fn">begin</span>(), v.<span class="fn">end</span>());</pre>
-
-  <p>并行排序的加速比通常远低于核数，原因有三：</p>
-
-  <table>
-    <thead><tr><th>瓶颈</th><th>说明</th><th>缓解</th></tr></thead>
-    <tbody>
-      <tr><td><strong>合并步串行</strong></td><td>并行归并的顶层那次 O(n) 合并是串行的，按 Amdahl 定律单独就限制了上限</td><td><strong>并行 merge</strong>：在一半里二分找另一半的划分点，把合并也切开</td></tr>
-      <tr><td><strong>内存带宽饱和</strong></td><td>排序是 memory-bound 的。8 核同时搬数据，带宽先到顶，CPU 反而在等</td><td>降低数据移动量（排索引而非排对象）、用基数排序（顺序访问友好）</td></tr>
-      <tr><td><strong>负载不均</strong></td><td>并行快排的划分不均时，某个线程干得远多于别人</td><td>任务窃取（TBB / Rayon 的模型）</td></tr>
-    </tbody>
-  </table>
-
-  <div class="warn">在决定并行化之前先算一笔账：<strong>排 10⁷ 个 int，<code>std::sort</code> 单线程约 0.6 秒</strong>。如果整个任务只需要几百毫秒，并行的收益可能被线程启动和同步吃掉。而且并行版本的<strong>内存占用更高</strong>（每个任务一份缓冲）。<br>更划算的优化往往在别处：<strong>①</strong> 排「索引 + key」而不是排大对象（减少数据移动）；<strong>②</strong> key 是定长整数时改用<strong>基数排序</strong>，单线程就能快 2–3 倍；<strong>③</strong> 只要 Top-K 就用 <code>nth_element</code>，把 O(n log n) 降成 O(n)。<em>先换算法，再上并行。</em></div>
+  <p>C++17：<code>std::sort(std::execution::par, …)</code>（libstdc++ 需 TBB）。加速比通常远低于核数：顶层那次 O(n) 合并串行（Amdahl 上限）、排序是 memory-bound 多核先撞带宽墙、快排划分不均。并行版内存占用也更高。10⁷ 个 int 单线程约 0.6s——如果 ②③ 已经压到 1 秒内，并行可能不必要。先换算法（基数、排索引而非大对象、<code>nth_element</code>），再上并行。</p>
 </section>
 
 <!-- ================================================================ §11 -->
@@ -1184,12 +1003,12 @@ std::<span class="fn">stable_sort</span>(std::execution::par, v.<span class="fn"
     </tbody>
   </table>
 
-  <div class="def"><strong>生产选型的四步顺序</strong>（按收益从大到小）：
+  <div class="def"><strong>生产选型四步</strong>（按收益从大到小）：
   <ol>
-    <li><strong>先问需不需要全排序。</strong>只要第 k 个 → <code>nth_element</code>（O(n)）；只要前 k 个 → <code>partial_sort</code>（O(n log k)）；只要知道有没有序 → <code>is_sorted</code>（O(n)）。这一步经常直接省掉一个 log。</li>
-    <li><strong>再问键是什么。</strong>定长整数/定长字符串 → 试<strong>基数排序</strong>，单线程常能快 <code>std::sort</code> 2–3 倍。枚举/小整数 → 计数排序或三路快排。</li>
+    <li><strong>先问要不要全排。</strong>只要第 k 个 → <code>nth_element</code>（O(n)）；只要前 k 个 → <code>partial_sort</code>（O(n log k)）；只要知道有没有序 → <code>is_sorted</code>。这一步经常直接省掉一个 log。</li>
+    <li><strong>再问键是什么。</strong>定长整数/定长字符串 → 试基数排序，单线程常能快 <code>std::sort</code> 2–3 倍。枚举/小整数 → 计数或三路快排。</li>
     <li><strong>再问要不要稳定。</strong>要 → <code>stable_sort</code>；不要 → <code>sort</code>。别为了「保险」默认用 <code>stable_sort</code>，它慢且吃 O(n) 内存。</li>
-    <li><strong>最后才考虑并行。</strong>而且先减少数据移动量（排索引而非排对象）。</li>
+    <li><strong>最后才并行</strong>，而且先减少数据移动（排索引而非排对象）。</li>
   </ol></div>
 
   <h3 id="s11-1">11.1 八大排序对照（交互）</h3>
@@ -1433,7 +1252,7 @@ std::<span class="fn">sort</span>(v.<span class="fn">begin</span>(), v.<span cla
 </div>
 
 <footer>
-  <p>排序全景 — 八大排序手写 · Ω(n log n) 下界证明 · introsort 源码级剖析 · 严格弱序 UB · 外部排序与 TimSort — Kavin Tech Notes · 2026</p>
+  <p>排序全景 — Ω(n log n) 下界 · introsort · 稳定性 · 外部排序 — Kavin Tech Notes · 2026</p>
 </footer>
 
 <script>
