@@ -17,7 +17,13 @@ The home page aggregates are then derived:
   学习路径 = number of `.path` cards under `#paths`
 
 Also reports notes that exist on disk but are not linked from their directory
-page (orphans), and `*_study_path.html` files missing from `#paths`.
+page (orphans), `*_study_path.html` files missing from `#paths`, and rows in
+the home page's 最新更新 timeline that are out of chronological order.
+
+That last check exists because the timeline is the one place on the site where
+a *correct* edit still produces a *wrong* page: appending a new entry anywhere
+but the top leaves it buried mid-list, where nobody scrolls. Nothing about the
+HTML is malformed, so every other audit stays green.
 
 Usage:
     python scripts/audit_counts.py            # report, non-zero exit on drift
@@ -44,6 +50,10 @@ STAT = re.compile(r"<div class=\"stat\"><dt>(?P<label>[^<]+)</dt><dd>(?P<value>[
 
 ITEM = re.compile(r'<div class="item"[^>]*>')
 DIR_META_CNT = re.compile(r"(<span>)(~?)(\d+) 篇(</span>)")
+
+LATEST_BLOCK = re.compile(r'<div class="latest">([\s\S]*?)\n\s*</div>')
+LATEST_ROW = re.compile(
+    r'<a class="l-row" href="([^"]+)"[\s\S]*?<span class="l-date">([^<]+)</span>')
 
 
 def directory_pages() -> dict[str, Path]:
@@ -117,6 +127,20 @@ def main(argv: list[str]) -> int:
                 continue
             problems.append(
                 f"{rel} is reachable from neither the #paths section nor its directory page")
+
+    # ---- 最新更新 timeline must read newest-first ----
+    block = LATEST_BLOCK.search(index_src)
+    if block is None:
+        problems.append('index.html has no <div class="latest"> timeline')
+    else:
+        rows = LATEST_ROW.findall(block.group(1))
+        if not rows:
+            problems.append("index.html 最新更新 timeline is empty")
+        for (prev_href, prev_date), (href, date) in zip(rows, rows[1:]):
+            if date > prev_date:
+                problems.append(
+                    f"index.html 最新更新 out of order: {href} ({date}) sits below "
+                    f"{prev_href} ({prev_date}); new entries go at the top of the list")
 
     # ---- notes nothing else on the site links to ----
     # A page can legitimately live outside its directory listing (cross-topic
