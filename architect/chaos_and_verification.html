@@ -1,0 +1,994 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>架构的可验证性 · 混沌工程 / 故障注入 / 契约测试 / 影子流量 / 演练机制</title>
+<meta name="description" content="怎么证明那些弹性设计真的生效：稳态假设怎么定义、故障注入的四个层次与爆炸半径控制、为什么绝大多数降级方案在真出事时不工作、契约测试解决什么与不解决什么、金丝雀与影子流量的适用边界、以及怎么把演练变成常态而不是一年一次的活动——含 4 条 ADR 与 12 道面试题">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<style>
+  body { overflow-x: hidden; }
+  main { min-width: 0; }
+  section.chapter > h2 { color: var(--accent); font-size: 1.5rem; margin: 0 0 1rem; padding-bottom: .5rem; border-bottom: 1px solid var(--border); }
+
+  .box.arch { border-color: var(--accent-2); background: color-mix(in srgb, var(--accent-2) 8%, var(--bg-card)); }
+  .box.arch::before { content: "⭐ 架构师视角: "; color: var(--accent-2); font-weight: 700; }
+  .box.num { border-color: var(--accent-3); background: color-mix(in srgb, var(--accent-3) 8%, var(--bg-card)); }
+  .box.num::before { content: "🧮 算一下: "; color: var(--accent-3); font-weight: 700; }
+  .box.real { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 8%, var(--bg-card)); }
+  .box.real::before { content: "💣 真实故障形态: "; color: var(--danger); font-weight: 700; }
+
+  .adr { border: 1px solid color-mix(in srgb, var(--accent-2) 40%, var(--border)); border-radius: 12px; margin: 20px 0; overflow: hidden; background: var(--bg-card); }
+  .adr-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 12px 16px; background: color-mix(in srgb, var(--accent-2) 10%, var(--bg-card)); border-bottom: 1px solid color-mix(in srgb, var(--accent-2) 30%, var(--border)); }
+  .adr-id { font-family: var(--mono); font-size: 12px; font-weight: 700; letter-spacing: .06em; padding: 3px 9px; border-radius: 5px; background: var(--accent-2); color: var(--bg); }
+  .adr-title { font-weight: 700; color: var(--text); flex: 1 1 260px; min-width: 0; }
+  .adr-status { font-family: var(--mono); font-size: 11px; padding: 2px 8px; border-radius: 99px; border: 1px solid var(--accent-3); color: var(--accent-3); }
+  .adr-row { display: grid; grid-template-columns: 92px 1fr; gap: 14px; padding: 11px 16px; border-bottom: 1px solid var(--border); font-size: 14px; }
+  .adr-row:last-child { border-bottom: none; }
+  .adr-row > div { min-width: 0; }
+  .adr-row .k { color: var(--accent); font-weight: 600; font-family: var(--mono); font-size: 12.5px; }
+  @media (max-width: 760px) { .adr-row { grid-template-columns: 1fr; gap: 4px; } }
+
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 16px 0; }
+  .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin: 16px 0; }
+  @media (max-width: 760px) { .grid-2, .grid-3 { grid-template-columns: 1fr; } }
+  .grid-2 > *, .grid-3 > * { min-width: 0; }
+  .panel { border: 1px solid var(--border); border-radius: 9px; padding: 12px 14px; background: var(--bg-card); min-width: 0; }
+  .panel > h4 { margin: 0 0 6px; font-size: 14px; }
+  .panel.good { border-left: 3px solid var(--accent-3); }
+  .panel.bad { border-left: 3px solid var(--danger); }
+  .panel.mid { border-left: 3px solid var(--accent-4); }
+  .panel.info { border-left: 3px solid var(--accent); }
+  .good-cell { background: color-mix(in srgb, var(--accent-3) 10%, transparent); }
+  .bad-cell { background: color-mix(in srgb, var(--danger) 10%, transparent); }
+  .mid-cell { background: color-mix(in srgb, var(--accent-4) 10%, transparent); }
+  .win { color: var(--accent-3); font-weight: 700; }
+  .lose { color: var(--danger); font-weight: 700; }
+
+  .fig { margin: 22px 0; overflow-x: auto; }
+  .fig svg { max-width: 100%; height: auto; }
+  .fig figcaption { font-size: 12.5px; color: var(--text-dim); margin-top: 8px; text-align: center; }
+  .fig .box   { fill: var(--bg-card-2); stroke: var(--border-2); stroke-width: 1.2; }
+  .fig .box-a { fill: color-mix(in srgb, var(--accent) 14%, var(--bg-card)); stroke: var(--accent); stroke-width: 1.2; }
+  .fig .box-g { fill: color-mix(in srgb, var(--accent-3) 14%, var(--bg-card)); stroke: var(--accent-3); stroke-width: 1.2; }
+  .fig .box-p { fill: color-mix(in srgb, var(--accent-2) 14%, var(--bg-card)); stroke: var(--accent-2); stroke-width: 1.2; }
+  .fig .box-y { fill: color-mix(in srgb, var(--accent-4) 14%, var(--bg-card)); stroke: var(--accent-4); stroke-width: 1.2; }
+  .fig .box-r { fill: color-mix(in srgb, var(--danger) 14%, var(--bg-card)); stroke: var(--danger); stroke-width: 1.2; }
+  .fig .t  { fill: var(--text); font-size: 12px; }
+  .fig .tb { fill: var(--text); font-size: 12.5px; font-weight: 700; }
+  .fig .ts { fill: var(--text-dim); font-size: 10.5px; }
+  .fig .tm { fill: var(--text-dim); font-size: 10.5px; font-family: var(--mono); }
+  .fig .ta { fill: var(--accent); font-size: 11.5px; font-weight: 700; }
+  .fig .tg { fill: var(--accent-3); font-size: 11px; font-weight: 600; }
+  .fig .ty { fill: var(--accent-4); font-size: 11px; font-weight: 600; }
+  .fig .tr { fill: var(--danger); font-size: 11px; font-weight: 600; }
+  .fig .tp { fill: var(--accent-2); font-size: 11px; font-weight: 600; }
+  .fig .ln   { stroke: var(--border-2); stroke-width: 1.4; fill: none; }
+  .fig .ln-a { stroke: var(--accent); stroke-width: 1.7; fill: none; }
+  .fig .ln-g { stroke: var(--accent-3); stroke-width: 1.7; fill: none; }
+  .fig .ln-r { stroke: var(--danger); stroke-width: 1.7; fill: none; }
+  .fig .ln-y { stroke: var(--accent-4); stroke-width: 1.7; fill: none; }
+  .fig .ln-d { stroke: var(--text-mute); stroke-width: 1.2; fill: none; stroke-dasharray: 4 3; }
+  .fig .ar-a { fill: var(--accent); }
+  .fig .ar-g { fill: var(--accent-3); }
+  .fig .ar-r { fill: var(--danger); }
+  .fig .grid { stroke: var(--border); stroke-width: .8; fill: none; }
+</style>
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav tn-shell-overlay">
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="system_architecture_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 40 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="layout">
+<aside class="toc">
+  <h2>架构的可验证性 · Roadmap</h2>
+  <nav>
+    <ol>
+      <li><a href="#s1">没验证过的弹性设计不算数</a>
+        <ol>
+          <li><a href="#s1-1">三条平时不跑的代码路径</a></li>
+          <li><a href="#s1-2">「配置了」和「生效了」之间</a></li>
+        </ol>
+      </li>
+      <li><a href="#s2">稳态假设：先定义「正常」</a>
+        <ol>
+          <li><a href="#s2-1">为什么必须先有稳态</a></li>
+          <li><a href="#s2-2">怎么选稳态指标</a></li>
+          <li><a href="#s2-3">一次实验的五个要素</a></li>
+        </ol>
+      </li>
+      <li><a href="#s3">故障注入的四个层次</a>
+        <ol>
+          <li><a href="#s3-1">从进程到区域</a></li>
+          <li><a href="#s3-2">最值钱的一类：慢，而不是挂</a></li>
+          <li><a href="#s3-3">ADR-001 注入点放在哪</a></li>
+        </ol>
+      </li>
+      <li><a href="#s4">爆炸半径：怎么让实验不变成事故</a>
+        <ol>
+          <li><a href="#s4-1">四个维度的限制</a></li>
+          <li><a href="#s4-2">中止条件必须自动</a></li>
+          <li><a href="#s4-3">ADR-002 从预发到生产的阶梯</a></li>
+        </ol>
+      </li>
+      <li><a href="#s5">契约测试：解决什么、不解决什么</a>
+        <ol>
+          <li><a href="#s5-1">集成测试的组合爆炸</a></li>
+          <li><a href="#s5-2">消费者驱动的契约</a></li>
+          <li><a href="#s5-3">它挡不住的三类问题</a></li>
+        </ol>
+      </li>
+      <li><a href="#s6">在生产里验证：金丝雀与影子流量</a>
+        <ol>
+          <li><a href="#s6-1">四种手段的适用边界</a></li>
+          <li><a href="#s6-2">影子流量的三个陷阱</a></li>
+          <li><a href="#s6-3">ADR-003 发布验证策略</a></li>
+        </ol>
+      </li>
+      <li><a href="#s7">把演练变成常态</a>
+        <ol>
+          <li><a href="#s7-1">一年一次的演练没有价值</a></li>
+          <li><a href="#s7-2">从手动到自动的四个阶段</a></li>
+          <li><a href="#s7-3">ADR-004 演练的组织方式</a></li>
+        </ol>
+      </li>
+      <li><a href="#s8">速查与反向判据</a>
+        <ol>
+          <li><a href="#s8-1">四条 ADR 汇总</a></li>
+          <li><a href="#s8-2">该验证哪些东西：一张清单</a></li>
+          <li><a href="#s8-3">什么时候不该做混沌工程</a></li>
+        </ol>
+      </li>
+      <li><a href="#s9">高频面试题 · 混沌工程与验证</a>
+        <ol>
+          <li><a href="#s9-1">基础（必答）</a></li>
+          <li><a href="#s9-2">中级（区分熟练度）</a></li>
+          <li><a href="#s9-3">高级（体现深度）</a></li>
+        </ol>
+      </li>
+    </ol>
+  </nav>
+</aside>
+
+<main>
+
+<header class="hero">
+  <div class="badge">Architecture · Verification · 2026</div>
+  <h1>架构的可验证性</h1>
+  <p class="sub">前一篇讲了限流、熔断、降级、隔离怎么设计。这一篇处理一个更尴尬的问题：<strong>你怎么知道它们真的会生效？</strong>这些代码路径平时一次都不跑，等到真出事那一刻才第一次执行——而那是最不适合发现 bug 的时刻。</p>
+  <div class="meta-row">
+    <span class="pill red">核心难度 ★★★★☆</span>
+    <span class="pill cyan">可靠性工程</span>
+    <span class="pill green">阅读时长 ~40 min</span>
+    <span class="pill amber">前置 弹性与过载保护</span>
+  </div>
+</header>
+
+<!-- =========================================================== -->
+<section class="chapter" id="s1">
+  <div class="ch-head">
+    <div class="num">01</div>
+    <div class="t">
+      <h2>没验证过的弹性设计不算数</h2>
+      <div class="sub">它们有一个共同特征：平时一行都不执行</div>
+    </div>
+  </div>
+
+  <h3 id="s1-1">1.1 三条平时不跑的代码路径</h3>
+
+  <p><a href="resilience_patterns.html">弹性与过载保护</a>那一篇设计的所有东西，都有一个共同的性质：<strong>它们只在故障时执行。</strong>这让它们成为整个系统里最不可靠的部分——不是因为写得差，而是因为它们从来没被真的跑过。</p>
+
+  <div class="grid-3">
+    <div class="panel bad">
+      <h4>降级兜底</h4>
+      <p>「主库挂了读从库」「实时算不出来读离线表」。这条分支上一次执行是什么时候？很可能是<strong>写完它的那次单元测试</strong>。此后依赖变了、数据格式变了、权限过期了，没人知道。</p>
+    </div>
+    <div class="panel bad">
+      <h4>熔断与限流</h4>
+      <p>阈值配好了，但从来没有真的被触发过。<a href="resilience_patterns.html#s8-2">弹性篇 §8.2</a> 演示过：一组各自看起来都合理的参数，凑在一起可能有一项永远不会生效——<strong>而只有真的打到那个阈值才会发现。</strong></p>
+    </div>
+    <div class="panel bad">
+      <h4>故障转移</h4>
+      <p>主备切换、跨区切流、Pod 重建。演练过一次（上线前），之后系统改了二十版。<strong>「上次演练在半年前」和「没演练过」在可靠性上是同一个意思。</strong></p>
+    </div>
+  </div>
+
+  <div class="box arch">
+    这三者的共同结构值得单独说：<strong>它们是「保险」，而保险的特点是你只在最需要它的时候才发现它没买。</strong><br><br>
+    普通功能有一个天然的验证机制——用户每天在用，坏了立刻有人喊。弹性代码没有这个机制，它的正确性<strong>不会被日常使用所检验</strong>。所以它必须有一个人为制造的检验机制，这就是这一整篇的主题。
+  </div>
+
+  <h3 id="s1-2">1.2 「配置了」和「生效了」之间</h3>
+
+  <p>更具体一点，下面这些都是「配置存在但不生效」的真实形态。它们的共同点是：<strong>系统功能完全正常，所有自检都过，只有真出事时才暴露。</strong></p>
+
+  <table>
+    <thead><tr><th>配置了什么</th><th>为什么不生效</th></tr></thead>
+    <tbody>
+      <tr><td>熔断器的慢调用率阈值</td><td class="bad-cell">慢调用阈值设得比超时还大，这一项<strong>永远不会触发</strong>（<a href="resilience_patterns.html#s8-2">弹性篇 §8.2</a>）</td></tr>
+      <tr><td>依赖的线程池隔离</td><td class="bad-cell">线程隔离了，但共用一个 HTTP 连接池——<strong>隔离只做了一半</strong></td></tr>
+      <tr><td>降级开关</td><td class="bad-cell">开关在配置中心，而配置中心和业务在同一机房，一起挂了</td></tr>
+      <tr><td>PostgreSQL 行级安全</td><td class="bad-cell">应用连的是表的 owner，<strong>owner 默认绕过 RLS</strong>（<a href="security_architecture.html#s4-3">安全篇 §4.3</a>）</td></tr>
+      <tr><td>Pod 的 <code>preStop</code> 优雅下线</td><td class="bad-cell"><code>terminationGracePeriodSeconds</code> 没跟着调，preStop 还没跑完进程就被 SIGKILL</td></tr>
+      <tr><td>跨区故障转移</td><td class="bad-cell">DNS TTL 是 300 秒，切换后要等 5 分钟——而 SLA 承诺的是 1 分钟</td></tr>
+    </tbody>
+  </table>
+
+  <div class="box arch">
+    这张表可以反过来读，它给出了一条选实验的原则：<strong>优先验证那些「配置和效果之间隔着一层间接性」的东西。</strong><br><br>
+    「熔断阈值是 50%」是一个配置项，「熔断真的会在下游变慢时跳闸」是一个行为——中间隔着统计窗口、慢调用判定、装饰器顺序好几层。<strong>隔的层数越多，配置和效果脱节的概率越大，越值得注入一次故障去看看。</strong>
+  </div>
+</section>
+
+<!-- =========================================================== -->
+<section class="chapter" id="s2">
+  <div class="ch-head">
+    <div class="num">02</div>
+    <div class="t">
+      <h2>稳态假设：先定义「正常」</h2>
+      <div class="sub">没有稳态定义的故障注入只是在生产环境搞破坏</div>
+    </div>
+  </div>
+
+  <h3 id="s2-1">2.1 为什么必须先有稳态</h3>
+
+  <p>混沌工程和「随便杀个 Pod 看看」的区别，全在这一步。<strong>混沌工程是一个实验方法，实验必须有可证伪的假设。</strong>而假设的形式是固定的：</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 940 240" style="min-width:740px;height:auto" role="img" aria-label="混沌实验的结构：先定义稳态指标的正常范围，提出假设即注入某个故障后稳态仍然保持，然后注入故障并持续观察，最后得到两种结论——假设成立说明这道防线有效，假设被证伪则找到了一个真实的脆弱点">
+      <rect class="box-a" x="20" y="40" width="200" height="86" rx="8"/>
+      <text class="tb" x="34" y="64">① 定义稳态</text>
+      <text class="ts" x="34" y="84">下单成功率 ≥ 99.9%</text>
+      <text class="ts" x="34" y="102">P99 ≤ 500 ms</text>
+      <text class="tm" x="34" y="120">用业务指标，不用 CPU</text>
+
+      <rect class="box-p" x="248" y="40" width="200" height="86" rx="8"/>
+      <text class="tb" x="262" y="64">② 提出假设</text>
+      <text class="ts" x="262" y="84">「杀掉一个库存服务实例</text>
+      <text class="ts" x="262" y="102">后，稳态仍然保持」</text>
+      <text class="tm" x="262" y="120">必须是可证伪的陈述</text>
+
+      <rect class="box-y" x="476" y="40" width="200" height="86" rx="8"/>
+      <text class="tb" x="490" y="64">③ 注入 + 观察</text>
+      <text class="ts" x="490" y="84">限定爆炸半径（§4）</text>
+      <text class="ts" x="490" y="102">自动中止条件就位</text>
+      <text class="tm" x="490" y="120">观察窗口要足够长</text>
+
+      <rect class="box" x="704" y="40" width="216" height="86" rx="8"/>
+      <text class="tb" x="718" y="64">④ 两种结论</text>
+      <text class="tg" x="718" y="84">成立 → 这道防线确实有效</text>
+      <text class="tr" x="718" y="102">证伪 → 找到一个真实脆弱点</text>
+      <text class="tm" x="718" y="120">两种都是有价值的产出</text>
+
+      <path class="ln-a" d="M220 83 H240"/><path class="ar-a" d="M240 78 l8 5 -8 5 z"/>
+      <path class="ln-a" d="M448 83 H468"/><path class="ar-a" d="M468 78 l8 5 -8 5 z"/>
+      <path class="ln-a" d="M676 83 H696"/><path class="ar-a" d="M696 78 l8 5 -8 5 z"/>
+
+      <rect class="box-r" x="20" y="150" width="900" height="72" rx="8"/>
+      <text class="tb" x="36" y="172">跳过 ① 会怎样</text>
+      <text class="t" x="36" y="194">没有稳态定义，你只能观察到「杀了 Pod，好像没事」——但「好像没事」不是结论。成功率掉了 0.3% 算不算没事？</text>
+      <text class="t" x="36" y="214">P99 从 200 ms 涨到 900 ms 算不算？<tspan class="ta">没有事先写下的判据，事后一定会倾向于说「还行」</tspan>——实验就白做了。</text>
+    </svg>
+    <figcaption>图 1 · 一次混沌实验的四步。第 ① 步是把「搞破坏」变成「做实验」的那一步。</figcaption>
+  </div>
+
+  <h3 id="s2-2">2.2 怎么选稳态指标</h3>
+
+  <table>
+    <thead><tr><th>选</th><th>不选</th><th>为什么</th></tr></thead>
+    <tbody>
+      <tr class="good-cell"><td><strong>下单成功率</strong></td><td class="bad-cell">CPU 使用率</td><td>业务指标才是用户感受到的。<strong>CPU 掉到 0 可能意味着一切正常（空闲），也可能意味着全部线程卡在 IO</strong></td></tr>
+      <tr class="good-cell"><td><strong>端到端 P99</strong></td><td class="bad-cell">单个服务的响应时间</td><td>单服务快不代表链路快；而且实验要验证的正是「局部故障不影响整体」</td></tr>
+      <tr class="good-cell"><td><strong>订单量（与昨天同时段比）</strong></td><td>请求量</td><td>请求量在故障时可能因为重试而<strong>上升</strong>，看着更「健康」了</td></tr>
+      <tr><td>降级触发率</td><td>—</td><td class="good-cell">这是个好的<strong>辅助</strong>指标：它证明降级路径确实被走到了，而不是「压根没触发所以看起来没事」</td></tr>
+    </tbody>
+  </table>
+
+  <div class="box arch">
+    最后一行值得强调。有一类实验结果特别有欺骗性：<strong>注入了故障，稳态完全没变，于是宣布「系统很健壮」。</strong>但可能真相是<strong>故障根本没生效</strong>——注入的是 A 服务的延迟，而这条链路上根本没调 A。<br><br>
+    所以每个实验除了稳态指标，还要有一个<strong>「故障确实发生了」的证据指标</strong>：注入延迟就看那一跳的耗时是否真的上升了，杀 Pod 就看实例数是否真的减少了。<strong>没有这个证据，「实验通过」和「实验没做」无法区分。</strong>
+  </div>
+
+  <h3 id="s2-3">2.3 一次实验的五个要素</h3>
+
+  <p>写成模板，每次实验前填完再动手。这份记录本身也是资产——半年后系统改了，可以按同一份定义重跑一遍：</p>
+
+  <table>
+    <thead><tr><th>要素</th><th>示例</th></tr></thead>
+    <tbody>
+      <tr><td><strong>稳态</strong></td><td>下单成功率 ≥ 99.9%，端到端 P99 ≤ 500 ms，持续 10 分钟</td></tr>
+      <tr><td><strong>假设</strong></td><td>「库存服务任意一个实例被杀掉后，稳态仍然保持」</td></tr>
+      <tr><td><strong>注入</strong></td><td>随机杀掉 3 个库存服务实例中的 1 个</td></tr>
+      <tr><td><strong>爆炸半径</strong></td><td>只影响内部灰度租户；持续 5 分钟；工作日 10:00–11:00</td></tr>
+      <tr class="bad-cell"><td><strong>中止条件</strong></td><td class="bad-cell">成功率 &lt; 99.5% 或 P99 &gt; 1 s，<strong>自动</strong>回滚并告警</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- =========================================================== -->
+<section class="chapter" id="s3">
+  <div class="ch-head">
+    <div class="num">03</div>
+    <div class="t">
+      <h2>故障注入的四个层次</h2>
+      <div class="sub">杀 Pod 是最容易做的，也是最没价值的一类</div>
+    </div>
+  </div>
+
+  <h3 id="s3-1">3.1 从进程到区域</h3>
+
+  <div class="fig">
+    <svg viewBox="0 0 960 300" style="min-width:780px;height:auto" role="img" aria-label="故障注入的四个层次与它们各自验证什么：应用层注入异常和延迟验证降级与超时逻辑；进程层杀实例验证副本与优雅下线；网络层注入延迟丢包和分区验证熔断与重试；基础设施层挂掉可用区验证跨区容灾；层次越往下影响面越大准备成本越高">
+      <rect class="box-g" x="20" y="40" width="220" height="120" rx="9"/>
+      <text class="tb" x="34" y="64">① 应用层</text>
+      <text class="ts" x="34" y="84">注入异常、延迟、错误码</text>
+      <text class="tm" x="34" y="104">（代码里的注入点或 sidecar）</text>
+      <text class="tg" x="34" y="128">验证：降级分支、超时、</text>
+      <text class="tg" x="34" y="146">熔断的慢调用判定</text>
+
+      <rect class="box-a" x="256" y="40" width="220" height="120" rx="9"/>
+      <text class="tb" x="270" y="64">② 进程 / 实例层</text>
+      <text class="ts" x="270" y="84">杀 Pod、OOM、CPU 打满</text>
+      <text class="tm" x="270" y="104">（最容易做的一类）</text>
+      <text class="tg" x="270" y="128">验证：副本数够不够、</text>
+      <text class="tg" x="270" y="146">优雅下线、重建速度</text>
+
+      <rect class="box-y" x="492" y="40" width="220" height="120" rx="9"/>
+      <text class="tb" x="506" y="64">③ 网络层</text>
+      <text class="ts" x="506" y="84">延迟、丢包、分区、DNS 失败</text>
+      <text class="tm" x="506" y="104">（tc / iptables / mesh）</text>
+      <text class="ty" x="506" y="128">验证：超时预算、重试、</text>
+      <text class="ty" x="506" y="146">熔断、脑裂处理</text>
+
+      <rect class="box-r" x="728" y="40" width="212" height="120" rx="9"/>
+      <text class="tb" x="742" y="64">④ 基础设施层</text>
+      <text class="ts" x="742" y="84">挂掉整个可用区</text>
+      <text class="tm" x="742" y="104">（成本最高，最难回滚）</text>
+      <text class="tr" x="742" y="128">验证：跨区容灾、</text>
+      <text class="tr" x="742" y="146">数据复制、切流预案</text>
+
+      <path class="ln-d" d="M20 184 H940"/>
+      <text class="tm" x="20" y="204">影响面 / 准备成本 →</text>
+      <path class="ln-r" d="M180 200 H900"/><path class="ar-r" d="M900 195 l8 5 -8 5 z"/>
+
+      <rect class="box-p" x="20" y="222" width="920" height="62" rx="8"/>
+      <text class="tb" x="36" y="244">价值密度和成本是反过来的</text>
+      <text class="t" x="36" y="266">② 最容易做，所以大多数团队从它开始——但现代编排系统本来就在做这件事（Pod 天天在被重建），</text>
+      <text class="t" x="36" y="284">它能发现的问题<tspan class="ta">日常运维已经发现过了</tspan>。真正没被日常覆盖、又最常出事的是 ①③——尤其是「慢」（§3.2）。</text>
+    </svg>
+    <figcaption>图 2 · 四个层次。从 ② 开始入门没问题，但停在 ② 就等于没做混沌工程。</figcaption>
+  </div>
+
+  <h3 id="s3-2">3.2 最值钱的一类：慢，而不是挂</h3>
+
+  <div class="box real">
+    「挂掉」是最容易处理的故障形态——连接被拒绝、请求立刻失败、熔断器很快跳闸、副本被摘除。整套机制都是为它设计的，而且它<strong>会立刻释放资源</strong>。<br><br>
+    「变慢」完全不同：请求成功了，只是花了 2 秒。健康检查通过（它只探测端口），负载均衡不摘除，熔断器如果只统计失败率就永远不跳（<a href="resilience_patterns.html#s3-2">弹性篇 §3.2</a>），而调用方的线程被一个个占住——<strong><a href="resilience_patterns.html#s1-3">1.9 秒就能打满线程池</a></strong>。
+  </div>
+
+  <p>所以故障注入的价值排序，和「哪种故障更容易注入」正好相反：</p>
+
+  <table>
+    <thead><tr><th>注入什么</th><th>能发现什么</th><th>价值</th></tr></thead>
+    <tbody>
+      <tr class="good-cell">
+        <td><strong>给某个依赖注入 2 秒延迟</strong></td>
+        <td class="good-cell">熔断的慢调用率配没配、超时值合不合理、线程池会不会被占满、降级会不会触发</td>
+        <td class="good-cell">最高。它一次能验证四件事，而且是最真实的故障形态</td>
+      </tr>
+      <tr><td>注入错误码 / 异常</td><td>降级分支是否真的能跑通、错误是否被正确分类为可重试</td><td>高。而且很安全</td></tr>
+      <tr><td>注入网络分区</td><td>脑裂处理、共识系统的行为、跨区切流</td><td>高，但准备成本大</td></tr>
+      <tr class="mid-cell"><td>杀 Pod</td><td>副本数、优雅下线、重建速度</td><td class="mid-cell">中等——<strong>日常运维已经覆盖了大部分</strong>（滚动升级每天都在杀 Pod）</td></tr>
+      <tr><td>CPU / 内存打满</td><td>资源限额、驱逐策略、邻居干扰</td><td>中等，且容易误伤同机的其它服务</td></tr>
+    </tbody>
+  </table>
+
+  <h3 id="s3-3">3.3 ADR-001 注入点放在哪</h3>
+
+  <div class="adr">
+    <div class="adr-head"><span class="adr-id">ADR-001</span><span class="adr-title">故障注入优先做在服务间通信层（sidecar / 客户端库），而不是业务代码里</span><span class="adr-status">已接受</span></div>
+    <div class="adr-row"><div class="k">背景</div><div>最有价值的注入是「给某个依赖加延迟或错误」（§3.2）。这件事有三个可能的位置：业务代码里埋 if、客户端库统一实现、或者 sidecar 拦截。</div></div>
+    <div class="adr-row"><div class="k">候选</div><div>① 业务代码里埋注入点 ② 统一的 RPC 客户端库支持注入 ③ Service Mesh 的 sidecar ④ 网络层 tc/iptables</div></div>
+    <div class="adr-row"><div class="k">决策</div><div>选 ②（我们没有 Mesh，见 <a href="microservices_architecture.html#s10-1">微服务篇 ADR-003</a>）。在共享的 RPC 客户端库里实现「按目标服务 + 按百分比注入延迟/错误」，由一个独立的配置通道下发，<strong>生产环境默认全关，且开启需要显式的实验声明</strong>。</div></div>
+    <div class="adr-row"><div class="k">后果</div><div><span class="win">得到</span>：注入点覆盖所有服务间调用，不需要业务代码改动；注入的粒度可以精确到「A 调 B 的某个方法」；实验配置和业务配置分开，不会被误操作打开。<br><span class="lose">付出</span>：<strong>注入能力本身是一个生产环境里的风险</strong>——它是一个「能让服务变慢」的开关。必须有严格的权限控制、审计、以及自动过期（实验配置超过时限自动失效）；不走这个客户端库的调用（第三方 SDK、直接 HTTP）注入不到。</div></div>
+    <div class="adr-row"><div class="k">何时重议</div><div>若引入 Service Mesh，注入能力应迁到 sidecar——覆盖面更全（包括不走我们客户端库的调用），且和业务代码彻底解耦。</div></div>
+  </div>
+</section>
+
+<!-- =========================================================== -->
+<section class="chapter" id="s4">
+  <div class="ch-head">
+    <div class="num">04</div>
+    <div class="t">
+      <h2>爆炸半径：怎么让实验不变成事故</h2>
+      <div class="sub">这一章决定了你能不能在生产环境做实验</div>
+    </div>
+  </div>
+
+  <h3 id="s4-1">4.1 四个维度的限制</h3>
+
+  <div class="grid-2">
+    <div class="panel info">
+      <h4>① 流量范围</h4>
+      <p>只影响内部租户 / 特定 header 的请求 / 1% 的流量。<strong>优先用「内部租户」而不是「随机 1%」</strong>——前者出问题的对象是自己人，后者是真实客户。</p>
+    </div>
+    <div class="panel info">
+      <h4>② 时间范围</h4>
+      <p>实验有明确的开始与结束，<strong>并且到时自动结束</strong>（不依赖人记得关）。工作日白天做，团队都在。</p>
+    </div>
+    <div class="panel info">
+      <h4>③ 影响强度</h4>
+      <p>先注入 200 ms 延迟，再 500 ms，再 2 s。<strong>阶梯上升</strong>，每一档观察够了再往上，而不是直接上最坏情况。</p>
+    </div>
+    <div class="panel info">
+      <h4>④ 可回滚性</h4>
+      <p>一键关闭，且关闭路径<strong>不依赖被注入的那个组件</strong>。这一条最容易被忽略——如果关闭开关要经过正在被注入延迟的那条链路，你就关不掉它。</p>
+    </div>
+  </div>
+
+  <div class="box arch">
+    第 ④ 条是从事故里学来的：混沌实验的<strong>控制通道必须独立于数据通道</strong>。如果实验的开关走的是同一套服务发现、同一个配置中心、同一条网络路径，那么实验一旦把这些搞挂，你就失去了停止实验的能力。<br><br>
+    这和 <a href="security_architecture.html#s9-3">安全篇 ADR-005</a> 让审计日志走独立信任域是同一个原则：<strong>任何用来控制或观察故障的东西，都不能和故障共享故障域。</strong>
+  </div>
+
+  <h3 id="s4-2">4.2 中止条件必须自动</h3>
+
+  <div class="box real">
+    「我们会盯着监控，不对劲就停」——这句话在实验开始后 20 分钟就不成立了。人会分心、会去开会、会看错图。而<strong>混沌实验造成的伤害是按秒累积的</strong>。<br><br>
+    更糟的情形：实验注入的正是「让系统变慢」，而变慢会让监控数据的上报也变慢——<strong>你看到的图是滞后的</strong>，等你发现不对，实际影响已经比图上严重得多。
+  </div>
+
+  <p>所以中止条件必须是代码，而且它有三个要求：</p>
+
+  <ul>
+    <li><strong>基于稳态指标</strong>（§2.2），不是基于「感觉」。成功率跌破某个值、P99 超过某个值，直接触发。</li>
+    <li><strong>观测通道独立</strong>。判断中止条件的那套指标，不能和被注入的组件共享链路——理由同 §4.1 第 ④ 条。</li>
+    <li><strong>宁可误停</strong>。中止条件应该设得比真实的告警线更严格：实验的价值不值得冒险。<strong>误停一次的成本是重跑一次实验，漏停一次的成本是一次真实事故。</strong></li>
+  </ul>
+
+  <h3 id="s4-3">4.3 ADR-002 从预发到生产的阶梯</h3>
+
+  <div class="adr">
+    <div class="adr-head"><span class="adr-id">ADR-002</span><span class="adr-title">混沌实验按四级阶梯推进，同一个实验必须在低一级通过后才能升级</span><span class="adr-status">已接受</span></div>
+    <div class="adr-row"><div class="k">背景</div><div>「在生产做混沌」是这套方法的价值来源（预发环境的依赖、数据量、流量特征都不真实），但直接上生产的风险不可接受。需要一个能逐步建立信心的路径。</div></div>
+    <div class="adr-row"><div class="k">决策</div><div>四级：<strong>① 预发环境</strong>（验证注入机制本身工作、中止条件能触发）→ <strong>② 生产 · 内部租户</strong>（真实依赖真实数据，影响对象是自己人）→ <strong>③ 生产 · 1% 真实流量</strong> → <strong>④ 生产 · 全量的单可用区</strong>。<br>每一级要连续通过 2 次才能升级；任一级失败则修复后从 ① 重来。</div></div>
+    <div class="adr-row"><div class="k">后果</div><div><span class="win">得到</span>：绝大多数问题在 ①② 就被发现，代价极低；到 ③④ 时对系统行为已经有充分预期。<br><span class="lose">付出</span>：一个实验走完全程需要几周，<strong>这会让人倾向于只做一次就不再重复</strong>——所以必须配 §7 的自动化，让重跑的成本趋近于零，否则这套阶梯会变成「做一遍就束之高阁」。</div></div>
+    <div class="adr-row"><div class="k">前置条件</div><div>①②③④ 都要求：中止条件已代码化、观测通道独立、回滚路径不依赖被注入的组件。<strong>这三条没做到之前，一级都不能做。</strong></div></div>
+  </div>
+</section>
+
+<!-- =========================================================== -->
+<section class="chapter" id="s5">
+  <div class="ch-head">
+    <div class="num">05</div>
+    <div class="t">
+      <h2>契约测试：解决什么、不解决什么</h2>
+      <div class="sub">它常被当成集成测试的替代品，但两者管的不是同一件事</div>
+    </div>
+  </div>
+
+  <h3 id="s5-1">5.1 集成测试的组合爆炸</h3>
+
+  <div class="box num">
+    12 个服务，要验证它们之间的接口都对得上。<strong>端到端集成测试</strong>的做法是把 12 个都拉起来跑一遍：<br><br>
+    · 每次运行要准备 12 套环境和数据，耗时以十分钟计；<br>
+    · <strong>任意一个服务不稳定，整条测试就红</strong>——12 个服务各有 1% 的概率抖一下，整体成功率就只有 <code>0.99¹² = 89%</code>；<br>
+    · 挂了之后要花时间判断「是真的坏了还是环境抖了」，几次之后<strong>所有人开始无视它</strong>。<br><br>
+    这是集成测试在微服务下的真实结局：<strong>不是它没用，是它的信噪比撑不住。</strong>
+  </div>
+
+  <h3 id="s5-2">5.2 消费者驱动的契约</h3>
+
+  <p>契约测试换了个思路：<strong>不验证「整体能跑通」，只验证「每一对生产者—消费者之间的约定没被破坏」。</strong>而且是消费者说了算。</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 940 280" style="min-width:740px;height:auto" role="img" aria-label="消费者驱动契约测试的流程：消费者写下自己实际用到的字段和期望生成契约文件，契约发布到契约仓库；生产者在自己的 CI 里用这些契约做验证，如果一个改动破坏了任何消费者的契约就在合并前失败；两边都不需要同时启动对方的服务">
+      <rect class="box-a" x="20" y="46" width="220" height="96" rx="9"/>
+      <text class="tb" x="34" y="70">消费者（订单服务）</text>
+      <text class="ts" x="34" y="92">「我调用户服务时，只用</text>
+      <text class="ts" x="34" y="110">到 id / name 两个字段，</text>
+      <text class="ts" x="34" y="128">期望 200 且 name 非空」</text>
+
+      <rect class="box-p" x="360" y="46" width="220" height="96" rx="9"/>
+      <text class="tb" x="374" y="70">契约仓库</text>
+      <text class="ts" x="374" y="92">存放所有消费者声明的</text>
+      <text class="ts" x="374" y="110">期望，按版本管理</text>
+      <text class="tm" x="374" y="130">生产者能查到「谁在用我」</text>
+
+      <rect class="box-g" x="700" y="46" width="220" height="96" rx="9"/>
+      <text class="tb" x="714" y="70">生产者（用户服务）CI</text>
+      <text class="tg" x="714" y="92">用全部契约验证自己</text>
+      <text class="tr" x="714" y="110">破坏任何一个 → 合并前失败</text>
+      <text class="tm" x="714" y="130">不需要启动消费者</text>
+
+      <path class="ln-a" d="M240 94 H352"/><path class="ar-a" d="M352 89 l8 5 -8 5 z"/>
+      <text class="tm" x="248" y="86">发布契约</text>
+      <path class="ln-g" d="M580 94 H692"/><path class="ar-g" d="M692 89 l8 5 -8 5 z"/>
+      <text class="tm" x="592" y="86">拉取全部契约</text>
+
+      <rect class="box-y" x="20" y="166" width="900" height="94" rx="8"/>
+      <text class="tb" x="36" y="188">它买到的两件事</text>
+      <text class="t" x="36" y="210">① <strong>不需要同时启动两边</strong>——消费者对着 mock 跑，生产者对着契约跑，都是快速的单服务测试。</text>
+      <text class="t" x="36" y="230">② <strong>破坏性变更在合并前就被挡住</strong>，而且能精确告诉你「破坏了哪个消费者的哪个期望」。</text>
+      <text class="ta" x="36" y="252">最有价值的副产品：契约仓库回答了「我这个字段还有谁在用」——这是删字段和下线接口时唯一可靠的依据。</text>
+    </svg>
+    <figcaption>图 3 · 消费者驱动契约。注意方向：<strong>是消费者声明自己需要什么，不是生产者声明自己提供什么。</strong></figcaption>
+  </div>
+
+  <div class="box arch">
+    「方向」这件事是契约测试最容易被误解的一点。如果由生产者声明「我提供 20 个字段」，那么改动任何一个字段都会被判为破坏——但实际上可能没有任何消费者在用它。<br><br>
+    由消费者声明「我只用到这 2 个」之后，判据变成了<strong>「有没有真实的人在依赖它」</strong>。生产者可以放心地改动那 18 个没人用的字段，而这正是 API 能够演进的前提（<a href="api_design.html#s7">API 设计 · 版本演进</a>）。<strong>它把「兼容性」从一个理论问题变成了一个有确定答案的问题。</strong>
+  </div>
+
+  <h3 id="s5-3">5.3 它挡不住的三类问题</h3>
+
+  <table>
+    <thead><tr><th>挡不住</th><th>为什么</th><th>该用什么</th></tr></thead>
+    <tbody>
+      <tr>
+        <td class="bad-cell"><strong>语义变了但结构没变</strong></td>
+        <td class="bad-cell">字段 <code>amount</code> 的单位从「元」改成「分」，契约完全通过——类型没变、字段还在</td>
+        <td>没有银弹。只能靠命名（<code>amount_cents</code>）、评审、以及生产环境的对账</td>
+      </tr>
+      <tr>
+        <td class="bad-cell"><strong>性能与容量</strong></td>
+        <td class="bad-cell">契约只验证「返回值对不对」，不验证「多久返回」。而<a href="#s3-2">「慢」才是最危险的故障形态</a></td>
+        <td class="good-cell">故障注入（§3）+ 压测</td>
+      </tr>
+      <tr>
+        <td class="bad-cell"><strong>时序与状态相关的问题</strong></td>
+        <td class="bad-cell">「先调 A 再调 B」和「先 B 再 A」结果不同、并发下的竞态、Saga 的补偿路径</td>
+        <td>端到端测试（少量、只覆盖关键路径）+ 生产验证（§6）</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="box arch">
+    所以这三者是<strong>互补而不是替代</strong>的关系，各自覆盖不同的失效类型：<br>
+    <strong>契约测试</strong>管「接口约定没被破坏」——高频、快速、在合并前拦截。<br>
+    <strong>故障注入</strong>管「异常路径真的能走通」——低频、在生产做。<br>
+    <strong>少量端到端测试</strong>管「关键业务流程能跑完」——只保留最核心的几条，因为它们贵且脆弱。<br><br>
+    常见的错误是<strong>用其中一个去替代另一个</strong>：用契约测试替掉全部集成测试（时序问题漏了）、或者因为有了端到端测试就不做契约（合并前拦不住，只能在集成环境里发现）。
+  </div>
+</section>
+
+<!-- =========================================================== -->
+<section class="chapter" id="s6">
+  <div class="ch-head">
+    <div class="num">06</div>
+    <div class="t">
+      <h2>在生产里验证：金丝雀与影子流量</h2>
+      <div class="sub">测试环境永远不真实，所以最后一道验证只能在生产做</div>
+    </div>
+  </div>
+
+  <h3 id="s6-1">6.1 四种手段的适用边界</h3>
+
+  <table>
+    <thead><tr><th>手段</th><th>做什么</th><th>能验证</th><th>不能验证 / 代价</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><strong>金丝雀发布</strong></td>
+        <td>新版本先接 1% 真实流量，指标正常再逐步放大</td>
+        <td class="good-cell">真实流量下的正确性与性能</td>
+        <td class="bad-cell">那 1% 的用户是<strong>真的在承担风险</strong>；小流量下低频路径可能覆盖不到</td>
+      </tr>
+      <tr>
+        <td><strong>影子流量</strong></td>
+        <td>把生产流量<strong>复制</strong>一份打给新版本，结果丢弃不返回用户</td>
+        <td class="good-cell">性能、资源占用、崩溃——<strong>用户零风险</strong></td>
+        <td class="bad-cell">有副作用的请求不能影子（§6.2）；成本翻倍</td>
+      </tr>
+      <tr>
+        <td><strong>流量回放</strong></td>
+        <td>录制生产流量，在隔离环境重放</td>
+        <td>可重复、可对比新旧版本的输出差异</td>
+        <td>数据会过期（回放昨天的请求，今天的数据已经变了）</td>
+      </tr>
+      <tr>
+        <td><strong>特性开关</strong></td>
+        <td>新代码上线但默认关闭，按维度逐步打开</td>
+        <td class="good-cell">把「发布」和「启用」解耦，回滚是改配置不是回滚版本</td>
+        <td class="mid-cell">开关会累积成技术债；<strong>两条代码路径都要维护和测试</strong></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="box arch">
+    这四种里，<strong>「特性开关」最容易被低估。</strong>它做的事情是把「部署」和「启用」拆成两个独立的动作——代码可以先上线（在真实环境里被编译、被加载、依赖都就位），过几天再打开。<br><br>
+    这一拆的价值在于：<strong>出问题时的回滚是改一个配置（秒级、无风险），而不是回滚一个版本（分钟级，且要处理数据库迁移这类不可逆的东西）。</strong>对于 <a href="high_concurrency_gateway.html#s11">发版代价很高的组件</a>（比如那个重启一次要迁移 30 万连接的网关），这个差别是决定性的。
+  </div>
+
+  <h3 id="s6-2">6.2 影子流量的三个陷阱</h3>
+
+  <p>影子流量听起来是完美方案——真实流量、零用户风险。但它有三个必须处理的问题，任何一个没处理都会造成真实事故：</p>
+
+  <div class="grid-3">
+    <div class="panel bad">
+      <h4>① 副作用会真的发生</h4>
+      <p>影子的是<strong>请求</strong>，不是「只读」。一个下单请求被影子之后，影子系统真的会扣库存、真的会调支付。<br><strong>必须让影子链路上的所有写操作都指向隔离的资源</strong>，或者只影子只读请求——而后者会让验证覆盖面大打折扣。</p>
+    </div>
+    <div class="panel bad">
+      <h4>② 下游被打了两遍</h4>
+      <p>影子请求会继续往下游传。如果不阻断，下游服务实际承受了 2 倍流量——<strong>影子实验本身成了压测</strong>，而且是没打招呼的那种。<br>要在请求上打影子标记，并在每一跳决定是继续影子还是打桩。</p>
+    </div>
+    <div class="panel bad">
+      <h4>③ 结果对比很难自动化</h4>
+      <p>新旧版本的输出经常有「无害的差异」：时间戳、随机 ID、字段顺序、浮点尾数。<br>不做归一化的话，对比结果全是噪音；归一化过头又会把真正的差异也抹掉。<strong>这部分的工程量通常被严重低估。</strong></p>
+    </div>
+  </div>
+
+  <div class="box real">
+    ①②两条合起来会产生一类很典型的事故：影子流量上线后，<strong>下游的第三方支付网关按 2 倍请求量计费</strong>，而且其中一半是「影子订单」——它们真的被创建了，需要人工清理。<br>
+    这不是假设，它是影子流量最常见的翻车方式。<strong>「影子」这个名字容易让人以为它是被动的、无副作用的，但它发出的是真实请求。</strong>
+  </div>
+
+  <h3 id="s6-3">6.3 ADR-003 发布验证策略</h3>
+
+  <div class="adr">
+    <div class="adr-head"><span class="adr-id">ADR-003</span><span class="adr-title">默认用「特性开关 + 金丝雀」；影子流量只用于只读路径的性能验证</span><span class="adr-status">已接受</span></div>
+    <div class="adr-row"><div class="k">背景</div><div>预发环境的依赖、数据量、流量特征都不真实，最后一道验证只能在生产做。四种手段各有边界（§6.1），影子流量的副作用问题（§6.2）在有写操作的链路上处理成本很高。</div></div>
+    <div class="adr-row"><div class="k">决策</div><div>① 所有有行为变化的改动都<strong>带特性开关上线</strong>，默认关闭；② 打开时走金丝雀：内部租户 → 1% → 10% → 100%，每一档有明确的观察窗口和自动回滚条件；③ <strong>影子流量只用于只读查询路径</strong>的性能与资源验证，写路径不做影子；④ 特性开关有<strong>强制过期时间</strong>，到期未清理则 CI 告警。</div></div>
+    <div class="adr-row"><div class="k">后果</div><div><span class="win">得到</span>：回滚从「回滚版本」降级为「改配置」；风险按流量比例可控；避免了影子写路径那一整类事故。<br><span class="lose">付出</span>：<strong>每个开关意味着两条代码路径都要维护和测试</strong>，开关数量必须严格控制（④ 的过期机制就是为此）；只读影子的覆盖面有限，写路径的性能问题只能靠金丝雀在小流量下暴露，可能不够。</div></div>
+  </div>
+</section>
+
+<!-- =========================================================== -->
+<section class="chapter" id="s7">
+  <div class="ch-head">
+    <div class="num">07</div>
+    <div class="t">
+      <h2>把演练变成常态</h2>
+      <div class="sub">这一章决定了前面六章是不是白写</div>
+    </div>
+  </div>
+
+  <h3 id="s7-1">7.1 一年一次的演练没有价值</h3>
+
+  <div class="box num">
+    假设一次演练能验证系统在<strong>那一刻</strong>的弹性是有效的。之后系统每天都在变：发版、加依赖、改配置、扩缩容。<br><br>
+    按一个中等团队每天几次发版算，<strong>半年后系统已经和演练时不是同一个系统了</strong>。演练结论的有效期，大致等于「系统发生实质变化所需的时间」——通常是几周，不是一年。<br><br>
+    所以「上次演练在半年前」和「没演练过」，在可靠性上几乎是同一个意思。
+  </div>
+
+  <p>更麻烦的是，一年一次的演练还有两个结构性问题：</p>
+
+  <ul>
+    <li><strong>它会被准备。</strong>提前一个月通知，各团队把已知的问题先修一遍，演练当天一切顺利——<strong>验证的是「被准备过的系统」，不是真实系统。</strong></li>
+    <li><strong>它太贵，所以不敢做真的。</strong>动静大、要协调很多人、出问题影响面广，于是范围一再缩小，最后变成一次走过场。</li>
+  </ul>
+
+  <h3 id="s7-2">7.2 从手动到自动的四个阶段</h3>
+
+  <div class="fig">
+    <svg viewBox="0 0 940 270" style="min-width:740px;height:auto" role="img" aria-label="演练自动化的四个阶段：手动演练需要人协调成本高频率低；脚本化让重跑成本下降；接入CI后每次发版自动跑关键实验；持续运行则是在生产环境按计划自动注入故障；随着自动化程度提高单次成本下降而验证频率上升">
+      <path class="ln" d="M70 210 H900"/>
+      <path class="ln" d="M70 40 V210"/>
+      <text class="tm" x="14" y="60">高</text>
+      <text class="tm" x="14" y="206">低</text>
+      <text class="ts" x="16" y="130">频率</text>
+      <text class="ts" x="800" y="234">自动化程度 →</text>
+
+      <rect class="box-r" x="100" y="150" width="160" height="52" rx="7"/>
+      <text class="tb" x="114" y="172">① 手动演练</text>
+      <text class="tm" x="114" y="190">季度一次，要协调</text>
+
+      <rect class="box-y" x="300" y="120" width="160" height="52" rx="7"/>
+      <text class="tb" x="314" y="142">② 脚本化</text>
+      <text class="tm" x="314" y="160">一条命令跑完</text>
+
+      <rect class="box-a" x="500" y="82" width="160" height="52" rx="7"/>
+      <text class="tb" x="514" y="104">③ 接入 CI</text>
+      <text class="tm" x="514" y="122">每次发版自动跑</text>
+
+      <rect class="box-g" x="700" y="46" width="180" height="52" rx="7"/>
+      <text class="tb" x="714" y="68">④ 持续运行</text>
+      <text class="tm" x="714" y="86">生产按计划自动注入</text>
+
+      <path class="ln-d" d="M260 176 L300 146"/>
+      <path class="ln-d" d="M460 146 L500 108"/>
+      <path class="ln-d" d="M660 108 L700 72"/>
+
+      <text class="tr" x="100" y="140">单次成本高 →</text>
+      <text class="tg" x="700" y="118">→ 单次成本趋近于零</text>
+
+      <text class="ts" x="70" y="254">关键的转折在 ②：只要重跑一次实验的成本降到「一条命令」，频率就会自然上升。<tspan class="ta">在此之前谈频率是没意义的。</tspan></text>
+    </svg>
+    <figcaption>图 4 · 频率不是靠纪律提上去的，是靠成本降下来自然升上去的。</figcaption>
+  </div>
+
+  <div class="box arch">
+    从 ① 到 ② 是投入产出比最高的一步，而且它经常被跳过——团队做完一次手动演练，写了份复盘文档，然后就没有然后了。<strong>把那次演练的步骤脚本化（注入、观测、判定、回滚）通常只要一两天，但它把重跑成本从「半天 + 协调五个人」降到「五分钟」。</strong><br><br>
+    从 ③ 到 ④ 则要谨慎：在生产环境持续自动注入故障，前提是 §4 的爆炸半径控制和自动中止已经<strong>经过验证</strong>（而不只是「配置了」——这正是本文第 1 章的主题，它在这里回到了自己身上）。
+  </div>
+
+  <h3 id="s7-3">7.3 ADR-004 演练的组织方式</h3>
+
+  <div class="adr">
+    <div class="adr-head"><span class="adr-id">ADR-004</span><span class="adr-title">演练由服务的负责团队自己做，不设专职混沌团队；每次事故复盘必须产出一个可重跑的实验</span><span class="adr-status">已接受</span></div>
+    <div class="adr-row"><div class="k">背景</div><div>集中式的混沌团队有一个结构性问题：他们不了解各服务的业务语义，只能做通用的注入（杀 Pod），而<a href="#s3-2">最有价值的注入是业务相关的</a>（给某个特定依赖加延迟，观察某个特定降级是否触发）。同时，一年一次的集中演练无法跟上系统的变化速度（§7.1）。</div></div>
+    <div class="adr-row"><div class="k">决策</div><div>① 平台团队提供<strong>能力</strong>（注入机制、爆炸半径控制、观测、自动中止），不负责设计实验；② 实验由服务的负责团队自己设计和运行，因为只有他们知道该验证什么；③ <strong>每次真实事故的复盘，必须产出一个能自动重跑的混沌实验</strong>，用来验证修复有效、并防止回归。</div></div>
+    <div class="adr-row"><div class="k">后果</div><div><span class="win">得到</span>：实验紧贴业务，价值密度高；③ 让实验集合<strong>随着真实事故自然增长</strong>，而且每一个都对应一个真实发生过的问题——这比凭空设计实验清单靠谱得多。<br><span class="lose">付出</span>：能力建设的投入在平台团队，收益在业务团队，<strong>需要有人推动采用，否则平台建好了没人用</strong>；各团队的实验质量参差不齐，需要评审机制。</div></div>
+    <div class="adr-row"><div class="k">关键实践</div><div>③ 是这条 ADR 里最值钱的一句。它把「混沌工程」从一个需要额外动力去做的事，变成了<strong>事故复盘流程里的一个必填项</strong>——而事故复盘本来就会做。<strong>把新习惯挂在已有习惯上，比创造一个新流程容易得多。</strong></div></div>
+  </div>
+</section>
+
+<!-- =========================================================== -->
+<section class="chapter" id="s8">
+  <div class="ch-head">
+    <div class="num">08</div>
+    <div class="t">
+      <h2>速查与反向判据</h2>
+      <div class="sub">包括「什么时候不该做混沌工程」</div>
+    </div>
+  </div>
+
+  <h3 id="s8-1">8.1 四条 ADR 汇总</h3>
+
+  <table>
+    <thead><tr><th>编号</th><th>决策</th><th>核心理由</th><th>付出的代价</th></tr></thead>
+    <tbody>
+      <tr><td>ADR-001</td><td>注入点做在 RPC 客户端库，不在业务代码里</td><td>覆盖所有服务间调用，粒度可到方法级，业务代码零改动</td><td>注入能力本身是生产环境的风险，要权限控制 + 审计 + 自动过期；不走该库的调用注入不到</td></tr>
+      <tr><td>ADR-002</td><td>四级阶梯：预发 → 内部租户 → 1% → 单可用区</td><td>绝大多数问题在前两级就被发现，代价极低</td><td>走完全程要几周，容易变成「做一遍就束之高阁」——必须配自动化</td></tr>
+      <tr><td>ADR-003</td><td>特性开关 + 金丝雀为主；影子流量只用于只读路径</td><td>回滚从「回滚版本」降级为「改配置」；避开影子写路径的整类事故</td><td>每个开关两条代码路径都要维护；只读影子覆盖面有限</td></tr>
+      <tr><td>ADR-004</td><td>演练由服务负责团队自己做；每次事故复盘必须产出一个可重跑的实验</td><td>实验紧贴业务；实验集合随真实事故自然增长</td><td>能力在平台、收益在业务，需要有人推动采用；实验质量参差需要评审</td></tr>
+    </tbody>
+  </table>
+
+  <h3 id="s8-2">8.2 该验证哪些东西：一张清单</h3>
+
+  <p>按「这条路径平时跑不跑」筛一遍，跑不到的都是候选：</p>
+
+  <table>
+    <thead><tr><th>#</th><th>验证什么</th><th>怎么注入</th><th>期望看到</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>下游变慢时熔断会跳闸</td><td>给该依赖注入 2 s 延迟</td><td class="good-cell">熔断在统计窗口内跳闸，且<strong>是被慢调用率触发的</strong>（不是失败率）</td></tr>
+      <tr><td>2</td><td>降级分支真的能跑通</td><td>让该依赖返回错误</td><td>返回兜底结果，且带降级标记；降级率指标上升</td></tr>
+      <tr><td>3</td><td>线程池隔离真的隔离了</td><td>给一个依赖注入延迟</td><td class="good-cell">其它依赖的成功率与延迟<strong>完全不受影响</strong></td></tr>
+      <tr><td>4</td><td>限流阈值有效</td><td>压测超过阈值</td><td>被拒绝的请求返回 429 + Retry-After，而不是超时或 500</td></tr>
+      <tr><td>5</td><td>优雅下线不掉请求</td><td>滚动重启一个实例</td><td class="good-cell">在途请求全部完成；<strong>新连接不再进入正在下线的实例</strong></td></tr>
+      <tr><td>6</td><td>跨区故障转移在 SLA 内完成</td><td>切断一个可用区</td><td>切换时间 &lt; 承诺值（注意 DNS TTL！）</td></tr>
+      <tr><td>7</td><td>配置中心挂了业务还能启动</td><td>断开配置中心</td><td class="good-cell">用本地兜底副本启动成功——<strong>这条几乎总是不通过</strong></td></tr>
+      <tr><td>8</td><td>消息积压后能追上</td><td>暂停消费者 10 分钟再恢复</td><td>积压被消化，且恢复时不打死下游（有限速）</td></tr>
+      <tr><td>9</td><td>依赖的证书过期</td><td>把测试环境的证书时间调到过期后</td><td>有明确的错误和告警，而不是静默失败</td></tr>
+      <tr><td>10</td><td>数据库主从切换</td><td>触发一次切换</td><td>连接池能识别并重连；在途事务的行为符合预期</td></tr>
+    </tbody>
+  </table>
+
+  <div class="box arch">
+    第 7 条值得单独提：<strong>「配置中心挂了业务还能不能启动」这条实验，在大多数团队第一次做的时候都不通过。</strong>因为启动时读配置是天经地义的，没人想过它会读不到。<br><br>
+    而它的后果特别严重——配置中心故障通常伴随着机房级问题，此时如果所有服务都因为读不到配置而起不来，故障就从「一个组件挂了」升级成「整个系统起不来了」。<strong>这是一个成本极低（写个本地兜底副本）、收益极高、但必须有人想起来的检查项。</strong>
+  </div>
+
+  <h3 id="s8-3">8.3 什么时候不该做混沌工程</h3>
+
+  <table>
+    <thead><tr><th>如果……</th><th>为什么先别做</th></tr></thead>
+    <tbody>
+      <tr>
+        <td class="bad-cell">已知的问题还没修完</td>
+        <td class="bad-cell">混沌工程是<strong>用来发现未知问题</strong>的。如果监控上已经有一堆红的、已知的脆弱点还排着队，那么注入故障只会得到你已经知道的答案，纯属浪费。<strong>先修已知的。</strong></td>
+      </tr>
+      <tr>
+        <td class="bad-cell">没有可观测能力</td>
+        <td class="bad-cell">注入了故障但看不出发生了什么，实验就没有产出。<strong>能观测是前置条件，不是配套。</strong>而且没有观测就无法自动中止（§4.2），实验本身变得危险</td>
+      </tr>
+      <tr>
+        <td>系统还在快速变化 / MVP 阶段</td>
+        <td>架构每周都在变，今天验证的结论下周就失效。这个阶段的投入应该放在<strong>可观测和快速回滚</strong>上</td>
+      </tr>
+      <tr>
+        <td class="bad-cell">没有自动中止和独立的控制通道</td>
+        <td class="bad-cell">这不是「先别做」，是<strong>绝对不能做</strong>。缺了它们，一次实验随时会变成一次真实事故，而且是你自己造成的</td>
+      </tr>
+      <tr>
+        <td>组织上没有「失败是可接受的」共识</td>
+        <td class="mid-cell">如果实验发现问题后追究的是「谁做的实验搞挂了系统」而不是「我们发现了一个脆弱点」，那么<strong>没有人会再做第二次</strong>。这是组织问题，技术上解决不了</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="box arch">
+    最后一行是这一整篇的真正前提。混沌工程的产出<strong>本质上是坏消息</strong>——它的价值就在于发现「原来这里不行」。<br><br>
+    一个把坏消息当成事故来追责的组织，会很快学会不去找坏消息：实验范围越做越小、越做越安全、直到只剩下已知一定会通过的那些。<strong>此时流程还在，产出已经归零，而且没人会说破。</strong><br>
+    所以推行这套方法时，最该先确认的不是工具选型，而是<strong>「实验发现问题时，第一反应是感谢还是追责」</strong>。
+  </div>
+</section>
+
+<!-- =========================================================== -->
+<section class="chapter" id="s9">
+  <div class="ch-head">
+    <div class="num">09</div>
+    <div class="t">
+      <h2>高频面试题 · 混沌工程与验证</h2>
+      <div class="sub">12 道，按难度分三档</div>
+    </div>
+  </div>
+
+  <p class="qa-hint">点击每道题展开参考答案（先自测，再对照）。</p>
+
+  <h3 id="s9-1">9.1 基础（必答）</h3>
+
+  <ol class="qa-list">
+    <li><details class="qa">
+      <summary><span class="lvl basic">基础</span>混沌工程和「随便杀个 Pod 看看」有什么区别？</summary>
+      <div class="ans">
+        <p>区别全在<strong>稳态假设</strong>这一步。混沌工程是一个实验方法，实验必须有可证伪的假设。</p>
+        <div class="point good"><div class="label">一次实验的四步</div><div>① <strong>定义稳态</strong>（下单成功率 ≥ 99.9%、P99 ≤ 500 ms，用业务指标不用 CPU）→ ② <strong>提出假设</strong>（「杀掉一个库存实例后稳态仍然保持」）→ ③ <strong>限定爆炸半径后注入并观察</strong> → ④ 假设成立说明这道防线有效，被证伪则找到一个真实脆弱点。<strong>两种结论都是有价值的产出。</strong></div></div>
+        <div class="point bad"><div class="label">跳过第①步会怎样</div><div>你只能观察到「杀了 Pod，好像没事」——但「好像没事」不是结论。成功率掉 0.3% 算不算？P99 从 200 ms 涨到 900 ms 算不算？<strong>没有事先写下的判据，事后一定会倾向于说「还行」</strong>，实验就白做了。</div></div>
+        <div class="point deep"><div class="label">加分：还要有「故障确实发生了」的证据</div><div>有一类结果特别有欺骗性：注入了故障、稳态完全没变，宣布系统健壮——但真相可能是<strong>故障根本没生效</strong>（注入的是 A 的延迟，而这条链路没调 A）。没有证据指标，「实验通过」和「实验没做」无法区分。</div></div>
+      </div>
+    </details></li>
+
+    <li><details class="qa">
+      <summary><span class="lvl basic">基础</span>为什么弹性设计特别需要专门验证？</summary>
+      <div class="ans">
+        <p>因为它们有一个共同性质：<strong>只在故障时执行，平时一行都不跑。</strong></p>
+        <div class="point"><div class="label">普通功能有天然的验证机制</div><div>用户每天在用，坏了立刻有人喊。<strong>弹性代码没有这个机制</strong>——它的正确性不会被日常使用检验。降级分支上一次执行可能是写完它的那次单元测试，此后依赖变了、数据格式变了、权限过期了，没人知道。</div></div>
+        <div class="point bad"><div class="label">「配置了」不等于「生效了」</div><div>熔断的慢调用阈值设得比超时还大（永远不触发）；线程隔离了但共用连接池（隔离只做了一半）；降级开关在配置中心而配置中心和业务一起挂；RLS 配了但应用连的是表 owner（默认绕过）；<code>preStop</code> 写了但 <code>terminationGracePeriodSeconds</code> 没跟着调。<strong>这些的共同点是：系统功能完全正常，所有自检都过。</strong></div></div>
+        <div class="point good"><div class="label">选实验的原则</div><div>优先验证那些<strong>「配置和效果之间隔着一层间接性」</strong>的东西。「熔断阈值 50%」是配置，「下游变慢时真的跳闸」是行为，中间隔着统计窗口、慢调用判定、装饰器顺序好几层——隔的层数越多，脱节概率越大。</div></div>
+      </div>
+    </details></li>
+
+    <li><details class="qa">
+      <summary><span class="lvl basic">基础</span>怎么控制混沌实验的爆炸半径？</summary>
+      <div class="ans">
+        <div class="point"><div class="label">四个维度</div><div><strong>流量范围</strong>：优先用「内部租户」而不是「随机 1%」——前者出问题的对象是自己人。<strong>时间范围</strong>：明确的起止，且<strong>到时自动结束</strong>，不依赖人记得关。<strong>影响强度</strong>：200 ms → 500 ms → 2 s 阶梯上升。<strong>可回滚性</strong>：一键关闭。</div></div>
+        <div class="point deep"><div class="label">第四条有个容易忽略的要求</div><div><strong>关闭路径不能依赖被注入的那个组件。</strong>如果实验开关走的是同一套服务发现、同一个配置中心、同一条网络路径，那么实验一旦把这些搞挂，你就失去了停止实验的能力。<br><strong>控制通道必须独立于数据通道</strong>——和「审计日志要写到独立信任域」是同一个原则。</div></div>
+        <div class="point bad"><div class="label">中止条件必须是代码</div><div>「我们会盯着监控，不对劲就停」在实验开始 20 分钟后就不成立了。更糟的是：如果注入的正是「让系统变慢」，那么<strong>监控数据的上报也会变慢，你看到的图是滞后的</strong>。<br>中止条件要基于稳态指标、观测通道独立、<strong>宁可误停</strong>——误停的成本是重跑一次实验，漏停的成本是一次真实事故。</div></div>
+      </div>
+    </details></li>
+
+    <li><details class="qa">
+      <summary><span class="lvl basic">基础</span>契约测试解决什么问题？</summary>
+      <div class="ans">
+        <p>解决<strong>端到端集成测试在微服务下的信噪比问题</strong>。12 个服务各有 1% 概率抖一下，整体成功率就只有 <code>0.99¹² = 89%</code>——挂了之后要花时间判断「是真坏了还是环境抖了」，几次之后所有人开始无视它。</p>
+        <div class="point good"><div class="label">换的思路</div><div>不验证「整体能跑通」，只验证「<strong>每一对生产者—消费者之间的约定没被破坏</strong>」。消费者声明「我调用户服务时只用到 id / name」，生产者在自己的 CI 里用全部消费者的契约验证自己。<strong>两边都不需要启动对方。</strong></div></div>
+        <div class="point deep"><div class="label">方向很关键：消费者驱动</div><div>如果由生产者声明「我提供 20 个字段」，改任何一个都会被判为破坏——但可能根本没人在用。由消费者声明之后，判据变成<strong>「有没有真实的人在依赖它」</strong>，生产者可以放心改那 18 个没人用的字段。<strong>它把兼容性从理论问题变成了有确定答案的问题。</strong></div></div>
+        <div class="point"><div class="label">最有价值的副产品</div><div>契约仓库回答了「我这个字段还有谁在用」——这是删字段和下线接口时唯一可靠的依据。</div></div>
+      </div>
+    </details></li>
+  </ol>
+
+  <h3 id="s9-2">9.2 中级（区分熟练度）</h3>
+
+  <ol class="qa-list" start="5">
+    <li><details class="qa">
+      <summary><span class="lvl mid">中级</span>故障注入应该优先注入什么？为什么不是杀 Pod？</summary>
+      <div class="ans">
+        <p><strong>优先注入「慢」，不是「挂」。</strong>杀 Pod 最容易做，也是价值最低的一类。</p>
+        <div class="point"><div class="label">为什么杀 Pod 价值低</div><div>现代编排系统本来就在做这件事——滚动升级每天都在杀 Pod。它能发现的问题<strong>日常运维已经发现过了</strong>。</div></div>
+        <div class="point bad"><div class="label">为什么「慢」最危险</div><div>「挂掉」会立刻释放资源：连接被拒、请求立刻失败、熔断很快跳闸、副本被摘除——整套机制都是为它设计的。<br>「变慢」完全不同：请求成功了只是花了 2 秒，<strong>健康检查通过</strong>（它只探端口）、负载均衡不摘除、熔断如果只统计失败率就永远不跳，而调用方的线程被一个个占住——<strong>约 2 秒就能打满线程池</strong>。</div></div>
+        <div class="point good"><div class="label">所以最高价值的注入是「给某个依赖加 2 秒延迟」</div><div>它一次能验证四件事：熔断的慢调用率配没配、超时值合不合理、线程池会不会被占满、降级会不会触发。<strong>而且这是最真实的故障形态。</strong></div></div>
+        <div class="point"><div class="label">四个层次</div><div>应用层（异常/延迟）→ 进程层（杀实例）→ 网络层（延迟/丢包/分区）→ 基础设施层（挂可用区）。影响面和准备成本递增，但<strong>价值密度和成本是反过来的</strong>。</div></div>
+      </div>
+    </details></li>
+
+    <li><details class="qa">
+      <summary><span class="lvl mid">中级</span>影子流量有什么坑？</summary>
+      <div class="ans">
+        <p>「影子」这个名字容易让人以为它是被动的、无副作用的，<strong>但它发出的是真实请求</strong>。三个必须处理的问题：</p>
+        <div class="point bad"><div class="label">① 副作用会真的发生</div><div>一个下单请求被影子之后，影子系统真的会扣库存、真的会调支付。必须让影子链路上所有写操作指向隔离资源，或者只影子只读请求（但那会让覆盖面大打折扣）。</div></div>
+        <div class="point bad"><div class="label">② 下游被打了两遍</div><div>影子请求会继续往下游传。不阻断的话下游实际承受 2 倍流量——<strong>影子实验本身成了没打招呼的压测</strong>。要在请求上打影子标记，每一跳决定继续影子还是打桩。</div></div>
+        <div class="point bad"><div class="label">③ 结果对比很难自动化</div><div>新旧版本的输出经常有无害差异：时间戳、随机 ID、字段顺序、浮点尾数。不归一化则全是噪音，归一化过头又会抹掉真正的差异。<strong>这部分工程量通常被严重低估。</strong></div></div>
+        <div class="point warn"><div class="label">①②合起来的典型事故</div><div>影子上线后<strong>第三方支付网关按 2 倍请求量计费</strong>，其中一半是真的被创建的「影子订单」，需要人工清理。这是影子流量最常见的翻车方式。</div></div>
+      </div>
+    </details></li>
+
+    <li><details class="qa">
+      <summary><span class="lvl mid">中级</span>契约测试能替代集成测试吗？</summary>
+      <div class="ans">
+        <p>不能，它们覆盖的失效类型不同。契约测试挡不住三类问题：</p>
+        <div class="point bad"><div class="label">① 语义变了但结构没变</div><div>字段 <code>amount</code> 的单位从「元」改成「分」——<strong>契约完全通过</strong>，类型没变字段还在。没有银弹，只能靠命名（<code>amount_cents</code>）、评审和生产对账。</div></div>
+        <div class="point bad"><div class="label">② 性能与容量</div><div>契约只验证「返回值对不对」，不验证「多久返回」——而「慢」才是最危险的故障形态。这块要靠故障注入和压测。</div></div>
+        <div class="point bad"><div class="label">③ 时序与状态</div><div>「先调 A 再调 B」和反过来结果不同、并发竞态、Saga 的补偿路径。这些只能靠少量端到端测试和生产验证。</div></div>
+        <div class="point good"><div class="label">三者是互补关系</div><div><strong>契约测试</strong>管接口约定（高频、快速、合并前拦截）；<strong>故障注入</strong>管异常路径（低频、生产做）；<strong>少量端到端</strong>管关键业务流程（只留最核心的几条，因为贵且脆弱）。<br>常见错误是用其中一个替代另一个。</div></div>
+      </div>
+    </details></li>
+
+    <li><details class="qa">
+      <summary><span class="lvl mid">中级</span>金丝雀、影子流量、特性开关怎么选？</summary>
+      <div class="ans">
+        <div class="point"><div class="label">金丝雀</div><div>新版本先接 1% 真实流量。能验证真实流量下的正确性与性能，但<strong>那 1% 的用户是真的在承担风险</strong>，且小流量下低频路径可能覆盖不到。</div></div>
+        <div class="point"><div class="label">影子流量</div><div>复制流量给新版本、结果丢弃。<strong>用户零风险</strong>，适合验证性能、资源占用、崩溃。代价是有副作用的请求不能影子，且成本翻倍。</div></div>
+        <div class="point good"><div class="label">特性开关 —— 最容易被低估的一个</div><div>它把<strong>「部署」和「启用」拆成两个独立动作</strong>：代码先上线（在真实环境被编译加载、依赖就位），过几天再打开。<br>价值在于<strong>回滚是改配置（秒级、无风险）而不是回滚版本（分钟级，还要处理数据库迁移这类不可逆的东西）</strong>。对发版代价高的组件（比如重启一次要迁移几十万连接的网关），这个差别是决定性的。</div></div>
+        <div class="point warn"><div class="label">开关的代价</div><div>每个开关意味着<strong>两条代码路径都要维护和测试</strong>，而且会累积成技术债。必须有强制过期时间，到期未清理则告警。</div></div>
+      </div>
+    </details></li>
+  </ol>
+
+  <h3 id="s9-3">9.3 高级（体现深度）</h3>
+
+  <ol class="qa-list" start="9">
+    <li><details class="qa">
+      <summary><span class="lvl adv">高级</span>怎么让混沌工程在团队里真的持续下去？</summary>
+      <div class="ans">
+        <p>核心矛盾是：一年一次的演练<strong>没有价值</strong>（半年后系统已经不是同一个系统了，「上次演练在半年前」和「没演练过」几乎等价），但高频演练又太贵。</p>
+        <div class="point bad"><div class="label">一年一次还有两个结构性问题</div><div><strong>它会被准备</strong>——提前一个月通知，各团队先把已知问题修一遍，验证的是「被准备过的系统」；<strong>它太贵所以不敢做真的</strong>——范围一再缩小，最后变成走过场。</div></div>
+        <div class="point good"><div class="label">频率不是靠纪律，是靠成本</div><div>四个阶段：手动 → <strong>脚本化</strong> → 接入 CI → 生产持续运行。<strong>从①到②是投入产出比最高的一步</strong>，通常只要一两天，却把重跑成本从「半天 + 协调五个人」降到「五分钟」。在此之前谈频率没有意义。</div></div>
+        <div class="point good"><div class="label">组织上最有效的一招</div><div><strong>每次真实事故的复盘，必须产出一个能自动重跑的混沌实验。</strong>这把混沌工程从「需要额外动力去做的事」变成了事故复盘流程里的一个必填项——而复盘本来就会做。<strong>把新习惯挂在已有习惯上，比创造一个新流程容易得多。</strong>而且实验集合会随真实事故自然增长，每一个都对应真实发生过的问题。</div></div>
+        <div class="point deep"><div class="label">不要设专职混沌团队</div><div>他们不了解各服务的业务语义，只能做通用注入（杀 Pod），而最有价值的注入是业务相关的。<strong>平台团队提供能力，业务团队设计实验。</strong></div></div>
+      </div>
+    </details></li>
+
+    <li><details class="qa">
+      <summary><span class="lvl adv">高级</span>如果只能做 3 个混沌实验，你选哪 3 个？</summary>
+      <div class="ans">
+        <p>按「这条路径平时跑不跑」+「不通过的概率有多大」筛：</p>
+        <div class="point good"><div class="label">① 给核心依赖注入 2 秒延迟</div><div>一次验证四件事：熔断的<strong>慢调用率</strong>配没配、超时值合不合理、线程池会不会被占满、降级会不会触发。这是性价比最高的一个。</div></div>
+        <div class="point good"><div class="label">② 断开配置中心，重启一个服务</div><div>看它能不能用本地兜底副本启动成功。<strong>这条在大多数团队第一次做时都不通过</strong>——因为启动时读配置是天经地义的，没人想过读不到。<br>后果特别严重：配置中心故障通常伴随机房级问题，此时所有服务都起不来，故障就从「一个组件挂了」升级成「整个系统起不来」。</div></div>
+        <div class="point good"><div class="label">③ 滚动重启一个实例，看优雅下线</div><div>在途请求是否全部完成、新连接是否不再进入正在下线的实例。这条覆盖了 <code>preStop</code> 与 <code>terminationGracePeriodSeconds</code> 是否匹配——一个非常常见的配置脱节。</div></div>
+        <div class="point deep"><div class="label">选择的原则</div><div>不是「哪个故障最可怕」，而是<strong>「哪条路径平时最少被执行，且配置与效果之间隔的层数最多」</strong>。可怕但天天在跑的路径（比如实例重建）反而不需要专门验证。</div></div>
+      </div>
+    </details></li>
+
+    <li><details class="qa">
+      <summary><span class="lvl adv">高级</span>什么情况下不该做混沌工程？</summary>
+      <div class="ans">
+        <div class="point bad"><div class="label">① 已知的问题还没修完</div><div>混沌工程是<strong>用来发现未知问题</strong>的。如果监控上已经一堆红的、已知脆弱点还排着队，注入故障只会得到你已经知道的答案。<strong>先修已知的。</strong></div></div>
+        <div class="point bad"><div class="label">② 没有可观测能力</div><div>注入了但看不出发生了什么，实验没有产出；而且<strong>没有观测就无法自动中止</strong>，实验本身变得危险。可观测是前置条件不是配套。</div></div>
+        <div class="point bad"><div class="label">③ 没有自动中止和独立控制通道</div><div>这不是「先别做」，是<strong>绝对不能做</strong>。缺了它们，一次实验随时变成一次真实事故，而且是你自己造成的。</div></div>
+        <div class="point"><div class="label">④ 系统还在快速变化 / MVP 阶段</div><div>今天的结论下周就失效。这个阶段该投在可观测和快速回滚上。</div></div>
+        <div class="point deep"><div class="label">⑤ 最重要的一条：组织上没有「失败可接受」的共识</div><div>混沌工程的产出<strong>本质上是坏消息</strong>——它的价值就在于发现「原来这里不行」。<br>一个把坏消息当事故来追责的组织，会很快学会不去找坏消息：实验范围越做越小、越做越安全，直到只剩下已知一定会通过的那些。<strong>此时流程还在，产出已经归零，而且没人会说破。</strong><br>所以推行时最该先确认的不是工具选型，而是「实验发现问题时，第一反应是感谢还是追责」。</div></div>
+      </div>
+    </details></li>
+
+    <li><details class="qa">
+      <summary><span class="lvl adv">高级</span>怎么在生产环境安全地做故障注入？注入能力本身有什么风险？</summary>
+      <div class="ans">
+        <div class="point"><div class="label">先说注入点放哪</div><div>最有价值的注入是「给某个依赖加延迟或错误」。三个可能位置：业务代码里埋 if（侵入、覆盖不全）、<strong>统一的 RPC 客户端库</strong>（覆盖所有服务间调用、粒度到方法级、业务零改动）、Service Mesh 的 sidecar（覆盖最全，但要有 Mesh）。</div></div>
+        <div class="point bad"><div class="label">注入能力本身就是一个生产环境的风险</div><div>它是一个<strong>「能让服务变慢」的开关</strong>。必须配：严格的权限控制、完整审计、<strong>自动过期</strong>（实验配置超时自动失效）、以及生产环境默认全关且开启需要显式的实验声明。<br>否则它会成为一个攻击面，或者被误操作打开后忘记关掉。</div></div>
+        <div class="point good"><div class="label">四级阶梯建立信心</div><div>预发（验证注入机制和中止条件本身能工作）→ 生产·内部租户 → 生产·1% 流量 → 生产·单可用区全量。每级连续通过 2 次才升级，任一级失败则修复后从头来。<strong>绝大多数问题在前两级就被发现，代价极低。</strong></div></div>
+        <div class="point warn"><div class="label">阶梯的副作用要预见</div><div>走完全程要几周，<strong>这会让人倾向于只做一次就束之高阁</strong>。必须配自动化让重跑成本趋近于零，否则这套阶梯本身会杀死实验的频率。</div></div>
+      </div>
+    </details></li>
+  </ol>
+</section>
+
+<div class="footer-nav">
+  <a href="resilience_patterns.html">← 限流 · 熔断 · 降级 · 隔离</a>
+  <a href="observability_engineering.html">可观测性（实验的前置条件）</a>
+  <a href="capacity_backpressure_design.html">容量估算与背压</a>
+  <a href="security_architecture.html">安全架构</a>
+  <a href="../system/incident_playbook.html">相关 · 故障应急手册</a>
+  <a href="system_architecture_directory.html">目录</a>
+  <a href="../index.html">主页</a>
+</div>
+
+
+
+</main>
+</div>
+
+<script>
+(function () {
+  var sections = document.querySelectorAll('section.chapter');
+  var links = document.querySelectorAll('aside.toc nav a');
+  if (!sections.length || !links.length) return;
+  var obs = new IntersectionObserver(function (entries) {
+    entries.forEach(function (e) {
+      if (!e.isIntersecting) return;
+      var href = '#' + e.target.id;
+      links.forEach(function (a) { a.classList.toggle('active', a.getAttribute('href') === href); });
+    });
+  }, { rootMargin: '-30% 0px -60% 0px' });
+  sections.forEach(function (s) { obs.observe(s); });
+})();
+</script>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

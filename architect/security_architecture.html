@@ -1,0 +1,1576 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>安全架构 · 威胁建模 / 认证与授权 / 服务间身份 / 密钥管理 / 纵深防御 / 供应链</title>
+<meta name="description" content="架构师视角的安全：STRIDE 威胁建模怎么在一次设计评审里真的跑起来、认证与授权的边界为什么必须分开、JWT 当 session 用会怎样、服务间身份从共享密钥到 mTLS 再到 SPIFFE、密钥的三个生命周期问题、纵深防御的层次与它们各自能挡住什么、以及供应链与 SBOM——含 5 条 ADR 与 12 道面试题">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<style>
+  /* format-unify: shell (hero / layout / toc / chapter / pre / table / box) 来自
+     guide-theme.css + article.css；这里只写本页特有的组件。 */
+  body { overflow-x: hidden; }
+  main { min-width: 0; }
+  section.chapter > h2 { color: var(--accent); font-size: 1.5rem; margin: 0 0 1rem; padding-bottom: .5rem; border-bottom: 1px solid var(--border); }
+
+  .box.arch { border-color: var(--accent-2); background: color-mix(in srgb, var(--accent-2) 8%, var(--bg-card)); }
+  .box.arch::before { content: "⭐ 架构师视角: "; color: var(--accent-2); font-weight: 700; }
+  .box.attack { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 8%, var(--bg-card)); }
+  .box.attack::before { content: "💀 攻击者视角: "; color: var(--danger); font-weight: 700; }
+  .box.num { border-color: var(--accent-3); background: color-mix(in srgb, var(--accent-3) 8%, var(--bg-card)); }
+  .box.num::before { content: "🧮 算一下: "; color: var(--accent-3); font-weight: 700; }
+
+  .adr { border: 1px solid color-mix(in srgb, var(--accent-2) 40%, var(--border)); border-radius: 12px; margin: 20px 0; overflow: hidden; background: var(--bg-card); }
+  .adr-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 12px 16px; background: color-mix(in srgb, var(--accent-2) 10%, var(--bg-card)); border-bottom: 1px solid color-mix(in srgb, var(--accent-2) 30%, var(--border)); }
+  .adr-id { font-family: var(--mono); font-size: 12px; font-weight: 700; letter-spacing: .06em; padding: 3px 9px; border-radius: 5px; background: var(--accent-2); color: var(--bg); }
+  .adr-title { font-weight: 700; color: var(--text); flex: 1 1 260px; min-width: 0; }
+  .adr-status { font-family: var(--mono); font-size: 11px; padding: 2px 8px; border-radius: 99px; border: 1px solid var(--accent-3); color: var(--accent-3); }
+  .adr-row { display: grid; grid-template-columns: 92px 1fr; gap: 14px; padding: 11px 16px; border-bottom: 1px solid var(--border); font-size: 14px; }
+  .adr-row:last-child { border-bottom: none; }
+  .adr-row > div { min-width: 0; }
+  .adr-row .k { color: var(--accent); font-weight: 600; font-family: var(--mono); font-size: 12.5px; }
+  @media (max-width: 760px) { .adr-row { grid-template-columns: 1fr; gap: 4px; } }
+
+  /* STRIDE 卡片 */
+  .stride { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; margin: 18px 0; }
+  .sd { border: 1px solid var(--border); border-left: 3px solid var(--danger); border-radius: 9px; padding: 12px 14px; background: var(--bg-card); min-width: 0; }
+  .sd .ltr { font-family: var(--mono); font-size: 22px; font-weight: 700; color: var(--danger); line-height: 1; float: left; margin: 0 10px 4px 0; }
+  .sd h4 { margin: 0 0 4px; font-size: 14px; }
+  .sd p { font-size: 12.5px; color: var(--text-dim); line-height: 1.6; margin: 3px 0; }
+  .sd .ctl { font-size: 12px; color: var(--accent-3); margin-top: 6px; }
+
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 16px 0; }
+  .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin: 16px 0; }
+  @media (max-width: 760px) { .grid-2, .grid-3 { grid-template-columns: 1fr; } }
+  .grid-2 > *, .grid-3 > * { min-width: 0; }
+  .panel { border: 1px solid var(--border); border-radius: 9px; padding: 12px 14px; background: var(--bg-card); min-width: 0; }
+  .panel > h4 { margin: 0 0 6px; font-size: 14px; }
+  .panel.good { border-left: 3px solid var(--accent-3); }
+  .panel.bad { border-left: 3px solid var(--danger); }
+  .panel.mid { border-left: 3px solid var(--accent-4); }
+  .panel.info { border-left: 3px solid var(--accent); }
+  .good-cell { background: color-mix(in srgb, var(--accent-3) 10%, transparent); }
+  .bad-cell { background: color-mix(in srgb, var(--danger) 10%, transparent); }
+  .mid-cell { background: color-mix(in srgb, var(--accent-4) 10%, transparent); }
+  .win { color: var(--accent-3); font-weight: 700; }
+  .lose { color: var(--danger); font-weight: 700; }
+
+  .fig { margin: 22px 0; overflow-x: auto; }
+  .fig svg { max-width: 100%; height: auto; }
+  .fig figcaption { font-size: 12.5px; color: var(--text-dim); margin-top: 8px; text-align: center; }
+  .fig .box   { fill: var(--bg-card-2); stroke: var(--border-2); stroke-width: 1.2; }
+  .fig .box-a { fill: color-mix(in srgb, var(--accent) 14%, var(--bg-card)); stroke: var(--accent); stroke-width: 1.2; }
+  .fig .box-g { fill: color-mix(in srgb, var(--accent-3) 14%, var(--bg-card)); stroke: var(--accent-3); stroke-width: 1.2; }
+  .fig .box-p { fill: color-mix(in srgb, var(--accent-2) 14%, var(--bg-card)); stroke: var(--accent-2); stroke-width: 1.2; }
+  .fig .box-y { fill: color-mix(in srgb, var(--accent-4) 14%, var(--bg-card)); stroke: var(--accent-4); stroke-width: 1.2; }
+  .fig .box-r { fill: color-mix(in srgb, var(--danger) 14%, var(--bg-card)); stroke: var(--danger); stroke-width: 1.2; }
+  .fig .t  { fill: var(--text); font-size: 12px; }
+  .fig .tb { fill: var(--text); font-size: 12.5px; font-weight: 700; }
+  .fig .ts { fill: var(--text-dim); font-size: 10.5px; }
+  .fig .tm { fill: var(--text-dim); font-size: 10.5px; font-family: var(--mono); }
+  .fig .ta { fill: var(--accent); font-size: 11.5px; font-weight: 700; }
+  .fig .tg { fill: var(--accent-3); font-size: 11px; font-weight: 600; }
+  .fig .ty { fill: var(--accent-4); font-size: 11px; font-weight: 600; }
+  .fig .tr { fill: var(--danger); font-size: 11px; font-weight: 600; }
+  .fig .tp { fill: var(--accent-2); font-size: 11px; font-weight: 600; }
+  .fig .ln   { stroke: var(--border-2); stroke-width: 1.4; fill: none; }
+  .fig .ln-a { stroke: var(--accent); stroke-width: 1.7; fill: none; }
+  .fig .ln-g { stroke: var(--accent-3); stroke-width: 1.7; fill: none; }
+  .fig .ln-r { stroke: var(--danger); stroke-width: 1.7; fill: none; }
+  .fig .ln-y { stroke: var(--accent-4); stroke-width: 1.7; fill: none; }
+  .fig .ln-d { stroke: var(--text-mute); stroke-width: 1.2; fill: none; stroke-dasharray: 4 3; }
+  .fig .ar-a { fill: var(--accent); }
+  .fig .ar-g { fill: var(--accent-3); }
+  .fig .ar-r { fill: var(--danger); }
+  .fig .grid { stroke: var(--border); stroke-width: .8; fill: none; }
+</style>
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav tn-shell-overlay">
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="system_architecture_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 60 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="layout">
+<aside class="toc">
+  <h2>安全架构 · Roadmap</h2>
+  <nav>
+    <ol>
+      <li><a href="#s1">安全为什么是架构问题</a>
+        <ol>
+          <li><a href="#s1-1">「安全」不是一个非功能需求</a></li>
+          <li><a href="#s1-2">场景：一个多租户 SaaS</a></li>
+          <li><a href="#s1-3">四个必须先回答的问题</a></li>
+        </ol>
+      </li>
+      <li><a href="#s2">威胁建模：让它在评审里真的跑起来</a>
+        <ol>
+          <li><a href="#s2-1">从数据流图开始，不是从清单开始</a></li>
+          <li><a href="#s2-2">STRIDE 与它对应的控制</a></li>
+          <li><a href="#s2-3">定级：不是所有威胁都要处理</a></li>
+          <li><a href="#s2-4">为什么大多数威胁建模会流于形式</a></li>
+        </ol>
+      </li>
+      <li><a href="#s3">认证与授权：边界必须分开</a>
+        <ol>
+          <li><a href="#s3-1">两个问题，两套机制</a></li>
+          <li><a href="#s3-2">JWT 当 session 用会怎样</a></li>
+          <li><a href="#s3-3">令牌撤销的三种做法</a></li>
+          <li><a href="#s3-4">ADR-001 会话与令牌的选型</a></li>
+        </ol>
+      </li>
+      <li><a href="#s4">授权模型：ACL / RBAC / ABAC / ReBAC</a>
+        <ol>
+          <li><a href="#s4-1">四种模型与它们的成本</a></li>
+          <li><a href="#s4-2">授权决策放在哪一层</a></li>
+          <li><a href="#s4-3">多租户的隔离必须在数据层兜底</a></li>
+        </ol>
+      </li>
+      <li><a href="#s5">服务间身份：从共享密钥到 SPIFFE</a>
+        <ol>
+          <li><a href="#s5-1">三代做法与各自的失效点</a></li>
+          <li><a href="#s5-2">身份的自举问题</a></li>
+          <li><a href="#s5-3">ADR-002 工作负载身份</a></li>
+        </ol>
+      </li>
+      <li><a href="#s6">密钥：三个生命周期问题</a>
+        <ol>
+          <li><a href="#s6-1">从哪来：不能是配置文件</a></li>
+          <li><a href="#s6-2">怎么轮换：双密钥窗口</a></li>
+          <li><a href="#s6-3">泄露了怎么办</a></li>
+          <li><a href="#s6-4">ADR-003 密钥分发与轮换</a></li>
+        </ol>
+      </li>
+      <li><a href="#s7">纵深防御：每一层能挡住什么</a>
+        <ol>
+          <li><a href="#s7-1">攻击链与防线的对应</a></li>
+          <li><a href="#s7-2">「零信任」到底改变了什么</a></li>
+          <li><a href="#s7-3">爆炸半径与最小权限的量化</a></li>
+        </ol>
+      </li>
+      <li><a href="#s8">供应链与运行时</a>
+        <ol>
+          <li><a href="#s8-1">依赖是最大的攻击面</a></li>
+          <li><a href="#s8-2">SBOM 解决什么、不解决什么</a></li>
+          <li><a href="#s8-3">ADR-004 依赖钉版与准入</a></li>
+        </ol>
+      </li>
+      <li><a href="#s9">检测与响应：假设已经被攻破</a>
+        <ol>
+          <li><a href="#s9-1">审计日志的三条硬要求</a></li>
+          <li><a href="#s9-2">该告警什么</a></li>
+          <li><a href="#s9-3">ADR-005 审计日志的独立性</a></li>
+        </ol>
+      </li>
+      <li><a href="#s10">速查与反向判据</a>
+        <ol>
+          <li><a href="#s10-1">五条 ADR 汇总</a></li>
+          <li><a href="#s10-2">设计评审清单</a></li>
+          <li><a href="#s10-3">什么时候不该加这层安全</a></li>
+        </ol>
+      </li>
+      <li><a href="#s11">高频面试题 · 安全架构</a>
+        <ol>
+          <li><a href="#s11-1">基础（必答）</a></li>
+          <li><a href="#s11-2">中级（区分熟练度）</a></li>
+          <li><a href="#s11-3">高级（体现深度）</a></li>
+        </ol>
+      </li>
+    </ol>
+  </nav>
+</aside>
+
+<main>
+
+<header class="hero">
+  <div class="badge">Architecture · Security · 2026</div>
+  <h1>安全架构</h1>
+  <p class="sub">安全不是在设计完之后加的一层，它是一组会改变系统形状的约束。这一篇讲架构师真正要做的决策：威胁建模怎么在评审里跑起来、认证与授权的边界为什么必须分开、服务间身份怎么自举、密钥的三个生命周期问题、纵深防御每一层各自能挡住什么，以及这些防护什么时候不值得加。</p>
+  <div class="meta-row">
+    <span class="pill red">核心难度 ★★★★☆</span>
+    <span class="pill cyan">架构师必备</span>
+    <span class="pill green">阅读时长 ~60 min</span>
+    <span class="pill amber">前置 分布式基础 · HTTP</span>
+  </div>
+</header>
+
+<!-- =========================================================== -->
+<section class="chapter" id="s1">
+  <div class="ch-head">
+    <div class="num">01</div>
+    <div class="t">
+      <h2>安全为什么是架构问题</h2>
+      <div class="sub">如果它只是「加个鉴权中间件」，那它确实不是架构问题</div>
+    </div>
+  </div>
+
+  <h3 id="s1-1">1.1 「安全」不是一个非功能需求</h3>
+
+  <p>性能、可用性这些非功能需求有一个共同点：<strong>它们可以在系统建好之后被测量和改善</strong>。慢了就优化，不够可用就加副本，改动通常是局部的。安全不是这样：</p>
+
+  <div class="grid-3">
+    <div class="panel bad">
+      <h4>它不可测量</h4>
+      <p>你可以测出 P99 是 200 ms，但没有任何指标能告诉你「本系统的安全性是 99.9%」。<strong>没有漏洞被发现，和没有漏洞，是两件事。</strong></p>
+    </div>
+    <div class="panel bad">
+      <h4>它改的是结构</h4>
+      <p>「服务间要互相认证」会改变部署拓扑、发布流程、故障模式。这不是加一个中间件，是给每个工作负载引入一个身份的生命周期。</p>
+    </div>
+    <div class="panel bad">
+      <h4>它的失败是离散的</h4>
+      <p>性能退化是连续的（慢一点、再慢一点）。安全的失败是<strong>阶跃</strong>：要么没事，要么整个数据库被拖走。中间没有过渡态。</p>
+    </div>
+  </div>
+
+  <div class="box arch">
+    第三条决定了安全设计的基本方法论和性能设计完全不同。性能可以「先做出来再优化」，因为中间态是可用的；<strong>安全不能「先做出来再加固」，因为在加固之前系统是完全敞开的，而且你不知道那段时间里有没有人进来过。</strong><br><br>
+    这也是为什么安全必须在<strong>架构阶段</strong>做决策：认证方式、信任边界、密钥怎么到达进程——这几件事一旦定了，后面几年都很难改。而它们恰好都是架构决策，不是编码细节。
+  </div>
+
+  <h3 id="s1-2">1.2 场景：一个多租户 SaaS</h3>
+
+  <p>全篇用一个具体系统做锚点，否则所有讨论都会飘：</p>
+
+  <div class="grid-2">
+    <div class="panel info">
+      <h4>业务</h4>
+      <p>面向企业的多租户数据分析 SaaS。3000 家客户，最大的一家有 8000 个用户。客户上传自己的业务数据，在平台上做分析、配置报表、通过 API 拉结果。</p>
+    </div>
+    <div class="panel info">
+      <h4>技术</h4>
+      <p>12 个微服务跑在 Kubernetes 上，共用一套 PostgreSQL（按 <code>tenant_id</code> 逻辑隔离）与对象存储。有 Web 前端、移动端、以及给客户系统调用的 OpenAPI。</p>
+    </div>
+  </div>
+
+  <p>这个场景的选择不是随意的：<strong>多租户 + 客户数据 + 开放 API</strong> 这三条凑在一起，把安全架构里最难的几个问题全都逼出来了——租户之间怎么隔离、令牌怎么撤销、服务之间凭什么互相信任、以及一个服务被攻破之后能波及多远。</p>
+
+  <h3 id="s1-3">1.3 四个必须先回答的问题</h3>
+
+  <p>在画任何图之前，先把这四个问题的答案写下来。<strong>它们的答案会决定后面每一章的选择</strong>，而且它们在项目后期几乎改不动：</p>
+
+  <table>
+    <thead><tr><th>问题</th><th>本例的答案</th><th>它决定了什么</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><strong>要防谁？</strong></td>
+        <td>① 外部攻击者 ② <strong>其它租户</strong>（最重要）③ 内部误操作 ④ 被攻破的自家服务</td>
+        <td class="bad-cell">第②条把「租户隔离」提到了和外部防护同等的位置——这是多租户系统与单租户系统最大的分野</td>
+      </tr>
+      <tr>
+        <td><strong>最坏能损失什么？</strong></td>
+        <td>客户的业务数据被跨租户读取；一次泄露会同时影响 3000 家客户</td>
+        <td>决定了纵深防御要做到几层（§7），以及审计日志的保留要求（§9）</td>
+      </tr>
+      <tr>
+        <td><strong>信任边界在哪？</strong></td>
+        <td>不在网络边界上——集群内部的服务之间<strong>也不互相信任</strong>（§5）</td>
+        <td class="good-cell">这一条就是「零信任」的实际含义，它会改变部署拓扑</td>
+      </tr>
+      <tr>
+        <td><strong>合规要求？</strong></td>
+        <td>客户会做安全问卷；数据要能按租户导出与删除；审计日志留存 1 年</td>
+        <td>「能按租户删除」这条会反向约束数据模型——这是最容易在后期发现改不动的一条</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="box attack">
+    第一个问题里「防谁」的顺序值得注意。多数团队默认把「外部攻击者」排第一，但在多租户 SaaS 里，<strong>最现实的攻击路径是一个合法租户</strong>：他有合法账号、能调所有 API、能反复试探，而且他的每一次请求在日志里都看起来正常。外部攻击者要先突破认证，合法租户已经在里面了。<br>
+    <strong>所以「租户 A 能不能看到租户 B 的数据」这个问题，比「怎么防 SQL 注入」更值得花时间。</strong>
+  </div>
+</section>
+
+<!-- =========================================================== -->
+<section class="chapter" id="s2">
+  <div class="ch-head">
+    <div class="num">02</div>
+    <div class="t">
+      <h2>威胁建模：让它在评审里真的跑起来</h2>
+      <div class="sub">大多数威胁建模的产出是一份没人看的表格，这一章讲怎么避免</div>
+    </div>
+  </div>
+
+  <h3 id="s2-1">2.1 从数据流图开始，不是从清单开始</h3>
+
+  <p>威胁建模最常见的错误做法是：拿一份 OWASP Top 10 清单，逐条问「我们有没有这个问题」。这样做的产出永远是「都考虑过了」，因为清单是通用的，而威胁是具体的。</p>
+
+  <p>正确的起点是<strong>数据流图 + 信任边界</strong>：画出数据从哪来、经过谁、存到哪，然后<strong>在每一条跨越信任边界的箭头上</strong>问 STRIDE 六个问题。跨边界的箭头才是威胁的所在，边界内部的调用不用逐个建模。</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 960 380" style="min-width:780px;height:auto" role="img" aria-label="多租户SaaS的数据流图与信任边界：浏览器和客户系统在最外层不可信区，经过网关进入服务区，服务区内部有API网关、分析服务、报表服务，再往内是数据区包含PostgreSQL和对象存储；三条虚线标出三层信任边界，每条跨越边界的箭头都是一个需要做威胁建模的点">
+      <path class="ln-r" d="M250 24 V356" stroke-dasharray="7 5"/>
+      <path class="ln-r" d="M560 24 V356" stroke-dasharray="7 5"/>
+      <path class="ln-r" d="M780 24 V356" stroke-dasharray="7 5"/>
+      <text class="tr" x="60" y="20">① 不可信区</text>
+      <text class="tr" x="290" y="20">② 边缘（已认证，未授权）</text>
+      <text class="tr" x="600" y="20">③ 服务区</text>
+      <text class="tr" x="800" y="20">④ 数据区</text>
+
+      <rect class="box-r" x="20" y="46" width="200" height="54" rx="7"/>
+      <text class="tb" x="34" y="70">浏览器 / 移动端</text>
+      <text class="tm" x="34" y="88">用户凭据在这里</text>
+      <rect class="box-r" x="20" y="120" width="200" height="54" rx="7"/>
+      <text class="tb" x="34" y="144">客户的服务器</text>
+      <text class="tm" x="34" y="162">调 OpenAPI，长期凭据</text>
+      <rect class="box-r" x="20" y="194" width="200" height="54" rx="7"/>
+      <text class="tb" x="34" y="218">攻击者</text>
+      <text class="tm" x="34" y="236">以及<tspan class="tr">另一个合法租户</tspan></text>
+
+      <rect class="box-y" x="280" y="60" width="250" height="70" rx="8"/>
+      <text class="tb" x="294" y="84">API 网关</text>
+      <text class="ts" x="294" y="102">TLS 终止 · 认证 · 限流</text>
+      <text class="tm" x="294" y="120">只回答「你是谁」，不回答「你能干嘛」</text>
+      <rect class="box-y" x="280" y="150" width="250" height="56" rx="8"/>
+      <text class="tb" x="294" y="174">身份服务</text>
+      <text class="tm" x="294" y="192">签发 / 校验令牌，管撤销</text>
+
+      <rect class="box-a" x="590" y="46" width="170" height="50" rx="7"/>
+      <text class="t" x="604" y="68">分析服务</text>
+      <text class="tm" x="604" y="86">重计算</text>
+      <rect class="box-a" x="590" y="112" width="170" height="50" rx="7"/>
+      <text class="t" x="604" y="134">报表服务</text>
+      <rect class="box-a" x="590" y="178" width="170" height="50" rx="7"/>
+      <text class="t" x="604" y="200">导入服务</text>
+      <text class="tm" x="604" y="218">处理客户上传的文件</text>
+      <rect class="box-p" x="590" y="244" width="170" height="50" rx="7"/>
+      <text class="t" x="604" y="266">授权服务</text>
+      <text class="tm" x="604" y="284">回答「能不能」</text>
+
+      <rect class="box-g" x="806" y="60" width="140" height="60" rx="7"/>
+      <text class="t" x="820" y="84">PostgreSQL</text>
+      <text class="tm" x="820" y="102">按 tenant_id</text>
+      <rect class="box-g" x="806" y="140" width="140" height="60" rx="7"/>
+      <text class="t" x="820" y="164">对象存储</text>
+      <text class="tm" x="820" y="182">客户原始文件</text>
+      <rect class="box-g" x="806" y="220" width="140" height="60" rx="7"/>
+      <text class="t" x="820" y="244">审计日志</text>
+      <text class="tm" x="820" y="262">单向写入（§9）</text>
+
+      <path class="ln-r" d="M220 73 H272"/><path class="ar-r" d="M272 68 l8 5 -8 5 z"/>
+      <path class="ln-r" d="M220 147 H250 V95 H272"/><path class="ar-r" d="M272 90 l8 5 -8 5 z"/>
+      <path class="ln-r" d="M220 221 H250 V110 H272"/><path class="ar-r" d="M272 105 l8 5 -8 5 z"/>
+      <path class="ln-a" d="M530 90 H582"/><path class="ar-a" d="M582 85 l8 5 -8 5 z"/>
+      <path class="ln-a" d="M530 105 H560 V137 H582"/><path class="ar-a" d="M582 132 l8 5 -8 5 z"/>
+      <path class="ln-a" d="M530 118 H560 V203 H582"/><path class="ar-a" d="M582 198 l8 5 -8 5 z"/>
+      <path class="ln-g" d="M760 71 H798"/><path class="ar-g" d="M798 66 l8 5 -8 5 z"/>
+      <path class="ln-g" d="M760 137 H780 V90 H798"/><path class="ar-g" d="M798 85 l8 5 -8 5 z"/>
+      <path class="ln-g" d="M760 203 H780 V170 H798"/><path class="ar-g" d="M798 165 l8 5 -8 5 z"/>
+      <path class="ln-d" d="M760 269 H780 V250 H798"/>
+
+      <text class="tb" x="20" y="316">每一条跨越虚线的箭头 = 一个建模点</text>
+      <text class="ts" x="20" y="336">本图有 3 条边界、9 条跨界箭头。对这 9 条各问一遍 STRIDE，就是一次完整的威胁建模——</text>
+      <text class="ts" x="20" y="354">比对着 OWASP Top 10 逐条自问「我们有没有这个问题」有用得多，因为它是<tspan class="ta">针对这个系统</tspan>的。</text>
+    </svg>
+    <figcaption>图 1 · 信任边界把系统切成四个区。<strong>边界的位置就是设计决策</strong>——比如把「授权服务」放在服务区而不是边缘，是 §3.1 的结论。</figcaption>
+  </div>
+
+  <h3 id="s2-2">2.2 STRIDE 与它对应的控制</h3>
+
+  <p>STRIDE 是六类威胁的首字母。它的价值不在于分类本身，而在于<strong>每一类都对应一组已知的控制手段</strong>——问完六个问题，该做什么基本就清楚了：</p>
+
+  <div class="stride">
+    <div class="sd">
+      <div class="ltr">S</div>
+      <h4>Spoofing · 冒充</h4>
+      <p>攻击者假装成另一个用户或另一个服务。</p>
+      <p class="ctl">→ 认证：用户侧 OIDC，服务侧 mTLS（§3、§5）</p>
+    </div>
+    <div class="sd">
+      <div class="ltr">T</div>
+      <h4>Tampering · 篡改</h4>
+      <p>请求、数据或代码在传输/存储中被改。</p>
+      <p class="ctl">→ TLS、签名、只追加的审计日志、镜像签名（§8、§9）</p>
+    </div>
+    <div class="sd">
+      <div class="ltr">R</div>
+      <h4>Repudiation · 抵赖</h4>
+      <p>做了操作但事后否认，而你无法证明。</p>
+      <p class="ctl">→ 审计日志：谁、何时、对什么、结果（§9.1）</p>
+    </div>
+    <div class="sd">
+      <div class="ltr">I</div>
+      <h4>Info Disclosure · 信息泄露</h4>
+      <p>本例最要命的一类：<strong>跨租户读取</strong>。</p>
+      <p class="ctl">→ 授权 + 数据层兜底（§4.3）、加密、最小返回字段</p>
+    </div>
+    <div class="sd">
+      <div class="ltr">D</div>
+      <h4>DoS · 拒绝服务</h4>
+      <p>把资源耗尽让别人用不了。</p>
+      <p class="ctl">→ 限流、配额、隔离——见 <a href="resilience_patterns.html">弹性与过载保护</a></p>
+    </div>
+    <div class="sd">
+      <div class="ltr">E</div>
+      <h4>Elevation · 提权</h4>
+      <p>普通用户拿到管理员能力，或服务拿到不该有的权限。</p>
+      <p class="ctl">→ 最小权限、授权集中决策、容器能力裁剪（§7.3）</p>
+    </div>
+  </div>
+
+  <p>把这六个问题套到图 1 的九条跨界箭头上，会得到几十条候选威胁。<strong>这时候不要急着全部处理</strong>——下一节是定级。</p>
+
+  <h3 id="s2-3">2.3 定级：不是所有威胁都要处理</h3>
+
+  <p>威胁建模的产出如果是「四十条待办」，那它一定不会被执行。必须定级，而定级的两个维度是<strong>可能性</strong>和<strong>影响</strong>：</p>
+
+  <table>
+    <thead><tr><th>威胁（本例节选）</th><th>可能性</th><th>影响</th><th>处置</th></tr></thead>
+    <tbody>
+      <tr class="bad-cell">
+        <td>租户 A 通过构造 <code>tenant_id</code> 参数读到租户 B 的数据</td>
+        <td>高——合法租户就能试</td>
+        <td>灾难性——3000 家客户信任崩塌</td>
+        <td class="bad-cell"><strong>缓解</strong>：授权 + 数据层强制过滤双保险（§4.3）</td>
+      </tr>
+      <tr class="bad-cell">
+        <td>导入服务解析客户上传的文件时被 RCE</td>
+        <td>中——解析器是常见漏洞源</td>
+        <td>高——能横向移动到数据区</td>
+        <td class="bad-cell"><strong>缓解</strong>：解析放沙箱进程 + 该服务的数据库凭据只读且限租户</td>
+      </tr>
+      <tr class="mid-cell">
+        <td>API 长期凭据泄露（客户把它提交到公开仓库）</td>
+        <td class="mid-cell">高——这几乎必然会发生</td>
+        <td>中——限于该租户</td>
+        <td><strong>缓解</strong>：凭据带前缀便于扫描器识别；支持一键轮换；异常来源告警</td>
+      </tr>
+      <tr>
+        <td>攻击者暴力破解用户密码</td>
+        <td>高</td>
+        <td>低——有 MFA 和限速</td>
+        <td class="good-cell"><strong>接受</strong>（已有控制足够），继续监控</td>
+      </tr>
+      <tr>
+        <td>内部运维直接查生产库看到客户数据</td>
+        <td>中</td>
+        <td>中</td>
+        <td><strong>转移</strong>：走审批 + 全程录屏，把技术问题转成流程与责任问题</td>
+      </tr>
+      <tr>
+        <td>国家级攻击者的 0day 供应链攻击</td>
+        <td>极低</td>
+        <td>灾难性</td>
+        <td class="mid-cell"><strong>接受</strong>——不在本系统的防御能力范围内，明确写下来</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="box arch">
+    最后一行的「接受」是威胁建模里最被低估的一个动作。<strong>把「我们不防这个」显式写下来，比假装能防更负责任</strong>：它让后来者知道这是一个已知的、有意识的选择，而不是遗漏；出事时复盘也有据可查。<br><br>
+    四种处置只有这四种——<strong>缓解、转移、接受、消除</strong>（消除 = 干脆不做这个功能）。任何一条威胁如果最后既没缓解也没明确接受，就是悬着的。
+  </div>
+
+  <h3 id="s2-4">2.4 为什么大多数威胁建模会流于形式</h3>
+
+  <p>三个高频原因，每一个都有对应的做法：</p>
+
+  <div class="grid-3">
+    <div class="panel bad">
+      <h4>① 做得太晚</h4>
+      <p>系统已经上线才做，产出的每一条都意味着重构，于是全部变成「排期待定」。<br><strong>做法</strong>：在写第一行代码之前做一次粗的，之后每次<strong>信任边界发生变化</strong>时补一次——加一个外部集成、开一个新 API、引入一个新的数据存储。</p>
+    </div>
+    <div class="panel bad">
+      <h4>② 由安全团队单独做</h4>
+      <p>安全团队不了解业务细节，产出的是通用清单；开发团队没参与，不认可结论。<br><strong>做法</strong>：<strong>由设计这个系统的人主持</strong>，安全的人参与提问。威胁建模是一次设计评审，不是一次审计。</p>
+    </div>
+    <div class="panel bad">
+      <h4>③ 没有产出可执行的东西</h4>
+      <p>产出一份 Word 表格，然后归档。<br><strong>做法</strong>：每条「缓解」都必须变成一张<strong>工单</strong>或一条 <strong>ADR</strong>；每条「接受」都写进 ADR 的「后果」一栏。<a href="architecture_methodology.html#ch7">ADR 那一章</a>讲的记录方式在这里正好适用。</p>
+    </div>
+  </div>
+</section>
+
+<!-- =========================================================== -->
+<section class="chapter" id="s3">
+  <div class="ch-head">
+    <div class="num">03</div>
+    <div class="t">
+      <h2>认证与授权：边界必须分开</h2>
+      <div class="sub">把它们混在一起，是这一层最常见也最贵的错误</div>
+    </div>
+  </div>
+
+  <h3 id="s3-1">3.1 两个问题，两套机制</h3>
+
+  <table>
+    <thead><tr><th></th><th>认证 Authentication</th><th>授权 Authorization</th></tr></thead>
+    <tbody>
+      <tr><td>回答的问题</td><td>你是谁</td><td>你能对<strong>这个东西</strong>做<strong>这件事</strong>吗</td></tr>
+      <tr><td>输入</td><td>凭据（密码、证书、令牌）</td><td>身份 + 资源 + 动作 + 上下文</td></tr>
+      <tr><td>结果</td><td>一个身份，或者失败</td><td>允许 / 拒绝</td></tr>
+      <tr><td>变化频率</td><td class="good-cell">低——登录方式几年不变</td><td class="bad-cell">高——每加一个功能就多一条规则</td></tr>
+      <tr><td>能在哪做</td><td class="good-cell">边缘（网关）就够，做一次即可</td><td class="bad-cell"><strong>必须靠近资源</strong>，因为只有资源持有者知道它属于谁</td></tr>
+    </tbody>
+  </table>
+
+  <p>最后两行是把它们分开的理由。<strong>认证的结论是全局的</strong>（「这是租户 42 的用户 7」在任何地方都成立），所以在网关做一次、往下游传结论，是对的。<strong>授权的结论是局部的</strong>（「用户 7 能不能看报表 993」取决于报表 993 属于谁），网关不知道报表 993 属于谁，它做不了这个判断。</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 940 260" style="min-width:740px;height:auto" role="img" aria-label="授权放在网关与放在资源处的对比：网关只能按URL模式判断权限，于是持有report:read权限的租户A可以把URL里的报表编号改成租户B的从而越权读取；而把授权判断放在报表服务里时，服务知道报表993属于租户B，会直接拒绝">
+      <rect class="box-r" x="20" y="34" width="900" height="96" rx="9"/>
+      <text class="tb" x="36" y="56">❌ 授权放在网关：它只看得见 URL</text>
+      <rect class="box" x="40" y="70" width="150" height="42" rx="5"/>
+      <text class="ts" x="54" y="88">租户 A 的用户</text>
+      <text class="tm" x="54" y="104">持 report:read</text>
+      <rect class="box-y" x="250" y="70" width="230" height="42" rx="5"/>
+      <text class="ts" x="264" y="88">网关规则</text>
+      <text class="tm" x="264" y="104">/api/reports/* → 要 report:read ✔</text>
+      <rect class="box-r" x="540" y="70" width="180" height="42" rx="5"/>
+      <text class="ts" x="554" y="88">报表服务</text>
+      <text class="tm" x="554" y="104">照单执行，不再判断</text>
+      <rect class="box-r" x="770" y="70" width="150" height="42" rx="5"/>
+      <text class="tr" x="784" y="88">返回租户 B 的报表</text>
+      <text class="tm" x="784" y="104">GET /reports/<tspan class="tr">993</tspan></text>
+      <path class="ln-r" d="M190 91 H242"/><path class="ar-r" d="M242 86 l8 5 -8 5 z"/>
+      <path class="ln-r" d="M480 91 H532"/><path class="ar-r" d="M532 86 l8 5 -8 5 z"/>
+      <path class="ln-r" d="M720 91 H762"/><path class="ar-r" d="M762 86 l8 5 -8 5 z"/>
+
+      <rect class="box-g" x="20" y="146" width="900" height="96" rx="9"/>
+      <text class="tb" x="36" y="168">✅ 认证在边缘，授权在资源处</text>
+      <rect class="box" x="40" y="182" width="150" height="42" rx="5"/>
+      <text class="ts" x="54" y="200">租户 A 的用户</text>
+      <rect class="box-a" x="250" y="182" width="230" height="42" rx="5"/>
+      <text class="ts" x="264" y="200">网关：只做认证</text>
+      <text class="tm" x="264" y="216">结论「这是租户 A 的用户 7」往下传</text>
+      <rect class="box-g" x="540" y="182" width="180" height="42" rx="5"/>
+      <text class="ts" x="554" y="200">报表服务</text>
+      <text class="tg" x="554" y="216">它知道 993 属于租户 B</text>
+      <rect class="box-g" x="770" y="182" width="150" height="42" rx="5"/>
+      <text class="tg" x="784" y="204">403 拒绝 + 告警</text>
+      <path class="ln-a" d="M190 203 H242"/><path class="ar-a" d="M242 198 l8 5 -8 5 z"/>
+      <path class="ln-a" d="M480 203 H532"/><path class="ar-a" d="M532 198 l8 5 -8 5 z"/>
+      <path class="ln-g" d="M720 203 H762"/><path class="ar-g" d="M762 198 l8 5 -8 5 z"/>
+    </svg>
+    <figcaption>图 2 · 差别在于「谁知道报表 993 属于谁」。网关不知道，所以它做不了这个判断——这是结构性的，不是配置问题。</figcaption>
+  </div>
+
+  <div class="box attack">
+    上图那种漏洞在 OWASP 里叫 IDOR（Insecure Direct Object Reference），至今是 API 安全里被利用最多的一类——<strong>因为它不需要任何技巧，改一个 URL 里的数字就行。</strong>它也特别难被测试发现：功能测试用的是自己的数据，永远不会构造出「访问别人的 ID」这种用例。<br>
+    对应的测试必须显式写：<strong>用租户 A 的凭据去访问租户 B 的资源 ID，断言 403。</strong>这条测试要覆盖每一个暴露资源 ID 的接口。
+  </div>
+
+  <h3 id="s3-2">3.2 JWT 当 session 用会怎样</h3>
+
+  <p>JWT 的卖点是「无状态」：令牌自带签名，任何服务本地验签就能确认身份，不用查中心。这个特性在服务间调用里非常好用；但把它直接用作<strong>用户会话</strong>，会撞上一个结构性问题——</p>
+
+  <div class="box attack">
+    <strong>签发出去的 JWT 在过期之前无法撤销。</strong>用户改了密码、管理员踢了他、账号被停用、权限被回收——这些都改不了已经在攻击者手里的那个令牌。它会一直有效到 <code>exp</code>。<br>
+    如果 <code>exp</code> 设成 24 小时（很常见，因为要少让用户登录），那么一次令牌泄露就是<strong>24 小时的完全访问权</strong>，而且这段时间里你在服务端做任何操作都没用。
+  </div>
+
+  <p>常见的三种「解决」方式，前两种其实没解决问题：</p>
+
+  <table>
+    <thead><tr><th>做法</th><th>实际效果</th></tr></thead>
+    <tbody>
+      <tr><td class="bad-cell">缩短过期时间到 15 分钟</td><td>把窗口从 24 小时缩到 15 分钟，<strong>但没有消除窗口</strong>；而且要配 refresh token，于是 refresh token 成了新的长期凭据，问题被搬了个家</td></tr>
+      <tr><td class="bad-cell">每次请求查一下黑名单</td><td class="bad-cell">这时候它已经<strong>不是无状态的了</strong>——每次都要查中心，那 JWT 相比一个随机 session id 就只剩下「体积更大」这个缺点</td></tr>
+      <tr class="good-cell"><td><strong>分场景用不同机制</strong></td><td class="good-cell">见下面的 ADR-001。用户会话用不透明令牌 + 中心校验，服务间调用用短寿命 JWT</td></tr>
+    </tbody>
+  </table>
+
+  <div class="box arch">
+    第二行值得展开，因为它是一个很常见的思维陷阱：<strong>为了保留「无状态」这个卖点，人们会去掉撤销能力；发现不行之后加回中心校验，却仍然坚持用 JWT。</strong>此时 JWT 相比一个 128 位随机串已经没有任何优势——体积大了十几倍、有一堆解析和算法混淆的坑（<code>alg: none</code>、HS256/RS256 混淆）、而无状态的好处一个都没了。<br><br>
+    <strong>选技术时要盯住「我为什么选它」那个理由是否还成立。</strong>理由被自己的后续决策抵消掉了，就该换回更简单的方案。
+  </div>
+
+  <h3 id="s3-3">3.3 令牌撤销的三种做法</h3>
+
+  <div class="grid-3">
+    <div class="panel good">
+      <h4>不透明令牌 + 中心校验</h4>
+      <p>令牌就是一个随机串，本身不含信息。网关拿它去身份服务换身份，<strong>撤销 = 删一条记录，立即生效</strong>。<br>代价：每次请求一次中心查询——但可以在网关侧缓存几秒，撤销延迟就是缓存 TTL。</p>
+    </div>
+    <div class="panel mid">
+      <h4>短寿命 JWT + 刷新</h4>
+      <p>access token 5 分钟，refresh token 在中心可撤销。<strong>撤销延迟 ≤ 5 分钟。</strong><br>代价：refresh 流程本身的复杂度（并发刷新、轮转、重放检测），以及那 5 分钟窗口。</p>
+    </div>
+    <div class="panel mid">
+      <h4>JWT + 撤销位图</h4>
+      <p>令牌带一个递增的 <code>sid</code>，服务本地缓存一份「已撤销 sid」的布隆过滤器，由中心推送。<br>适合<strong>服务间</strong>场景：撤销量小、推送可控。用户会话场景下位图会长得很快。</p>
+    </div>
+  </div>
+
+  <h3 id="s3-4">3.4 ADR-001 会话与令牌的选型</h3>
+
+  <div class="adr">
+    <div class="adr-head"><span class="adr-id">ADR-001</span><span class="adr-title">用户会话用不透明令牌 + 网关侧 5 秒缓存；服务间调用用 5 分钟 JWT</span><span class="adr-status">已接受</span></div>
+    <div class="adr-row"><div class="k">背景</div><div>多租户 SaaS 必须支持「立即踢出用户 / 停用账号 / 回收权限」，而 JWT 在过期前无法撤销。同时服务间调用量大（内部 QPS 是外部的十几倍），每次都查中心不现实。</div></div>
+    <div class="adr-row"><div class="k">候选</div><div>① 全部用长寿命 JWT ② 全部用不透明令牌 + 中心校验 ③ 分场景：用户侧不透明、服务间 JWT</div></div>
+    <div class="adr-row"><div class="k">决策</div><div>选 ③。<strong>用户会话</strong>用 128 位随机不透明令牌，网关换取身份并缓存 5 秒——撤销延迟上界就是这 5 秒，且可解释给客户。<strong>服务间调用</strong>用 5 分钟有效期的 JWT，由工作负载身份签发（§5），不需要撤销机制——过期就没了。</div></div>
+    <div class="adr-row"><div class="k">后果</div><div><span class="win">得到</span>：用户侧撤销 5 秒内生效，满足「停用账号立即失效」的合规要求；服务间调用零中心依赖，身份服务不在关键路径上。<br><span class="lose">付出</span>：两套机制、两份文档、两个可能出 bug 的地方；网关的令牌缓存是一个新的状态（要处理多网关实例间的不一致——5 秒 TTL 让这个不一致有界，可接受）。</div></div>
+    <div class="adr-row"><div class="k">何时重议</div><div>若外部请求量涨到身份服务扛不住，缓存 TTL 要放宽，撤销延迟随之变大——那时需要引入主动推送的撤销通道，而不是简单调大 TTL。</div></div>
+  </div>
+</section>
+
+<!-- =========================================================== -->
+<section class="chapter" id="s4">
+  <div class="ch-head">
+    <div class="num">04</div>
+    <div class="t">
+      <h2>授权模型：ACL / RBAC / ABAC / ReBAC</h2>
+      <div class="sub">选模型就是在选「规则会长成什么样」</div>
+    </div>
+  </div>
+
+  <h3 id="s4-1">4.1 四种模型与它们的成本</h3>
+
+  <table>
+    <thead><tr><th>模型</th><th>规则形态</th><th>擅长</th><th>会在什么地方崩</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><strong>ACL</strong> 访问控制表</td>
+        <td>每个资源挂一张「谁能做什么」的表</td>
+        <td>资源少、规则简单</td>
+        <td class="bad-cell">资源多了之后表本身成为数据量问题；「给所有新员工加只读权限」要遍历全部资源</td>
+      </tr>
+      <tr>
+        <td><strong>RBAC</strong> 基于角色</td>
+        <td>用户 → 角色 → 权限</td>
+        <td class="good-cell">组织结构稳定、权限粒度粗。<strong>绝大多数系统的起点</strong></td>
+        <td class="bad-cell"><strong>角色爆炸</strong>：为了表达「华东区的销售经理能看华东区的报表」，要造出「华东区销售经理」这个角色，于是角色数 = 维度的笛卡尔积</td>
+      </tr>
+      <tr>
+        <td><strong>ABAC</strong> 基于属性</td>
+        <td>规则是表达式：<code>user.region == resource.region &amp;&amp; user.level >= 3</code></td>
+        <td class="good-cell">多维度条件、动态上下文（时间、IP、设备）</td>
+        <td>规则可读性差、难以回答「谁能访问 X」这个反向问题；调试困难</td>
+      </tr>
+      <tr>
+        <td><strong>ReBAC</strong> 基于关系</td>
+        <td>图：<code>user 是 folder 的 editor</code>，权限沿关系继承</td>
+        <td class="good-cell">层级资源与共享（文档、文件夹、项目）。Google Zanzibar 是代表</td>
+        <td class="bad-cell">要维护一个关系图并保证查询快；一致性问题（权限刚撤销，缓存里还是旧的）</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="box arch">
+    实践中的答案通常是<strong>混合</strong>，而且演进路径很固定：先 RBAC 管粗粒度（「这个人是管理员还是普通用户」），遇到角色爆炸时给关键维度加 ABAC 条件（<strong>不要把租户维度做成角色</strong>——那是角色爆炸最常见的起因），有共享/层级需求时再局部引入 ReBAC。<br><br>
+    真正要早做的决策不是选哪个模型，而是<strong>把授权判断收拢到一个地方</strong>（下一节）。模型可以换，散落在几十个 <code>if</code> 里的判断换不动。
+  </div>
+
+  <h3 id="s4-2">4.2 授权决策放在哪一层</h3>
+
+  <p>业界的标准分法是把授权拆成两个角色，这个拆分很有用，因为它把「策略」和「执行点」解耦了：</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 940 260" style="min-width:740px;height:auto" role="img" aria-label="授权的执行点与决策点分离图：业务服务里的执行点PEP拦截请求，带上身份资源动作三元组去问决策点PDP，PDP根据集中管理的策略返回允许或拒绝；策略集中在一处便于审计和变更，而执行点分散在每个服务里靠近资源">
+      <rect class="box-a" x="20" y="60" width="220" height="100" rx="9"/>
+      <text class="tb" x="36" y="84">业务服务（报表服务）</text>
+      <rect class="box-y" x="36" y="98" width="188" height="46" rx="5"/>
+      <text class="tb" x="50" y="118">PEP · 执行点</text>
+      <text class="tm" x="50" y="134">拦下请求，问一句，照做</text>
+      <text class="tm" x="36" y="180">分散在每个服务里，靠近资源</text>
+
+      <rect class="box-p" x="380" y="60" width="220" height="100" rx="9"/>
+      <text class="tb" x="396" y="84">PDP · 决策点</text>
+      <text class="ts" x="396" y="104">输入：身份 + 资源 + 动作 + 上下文</text>
+      <text class="ts" x="396" y="122">输出：允许 / 拒绝 + 原因</text>
+      <text class="tm" x="396" y="144">可以是本地库，也可以是独立服务</text>
+      <text class="tm" x="380" y="180">集中一处，便于审计与变更</text>
+
+      <rect class="box-g" x="720" y="46" width="200" height="56" rx="8"/>
+      <text class="tb" x="736" y="70">策略仓库</text>
+      <text class="tm" x="736" y="88">版本化 · 可评审 · 可回滚</text>
+      <rect class="box-g" x="720" y="118" width="200" height="56" rx="8"/>
+      <text class="tb" x="736" y="142">关系 / 属性数据</text>
+      <text class="tm" x="736" y="160">谁属于哪个租户、哪个组</text>
+
+      <path class="ln-a" d="M240 110 H372"/><path class="ar-a" d="M372 105 l8 5 -8 5 z"/>
+      <text class="ta" x="256" y="102">can(user, "read", report:993)?</text>
+      <path class="ln-g" d="M372 130 H240"/><path class="ar-g" d="M240 125 l-8 5 8 5 z"/>
+      <text class="tg" x="262" y="148">allow / deny</text>
+      <path class="ln-d" d="M600 90 H712"/><path class="ln-d" d="M600 130 H712 V146"/>
+
+      <text class="ts" x="20" y="216">这样拆的价值：策略变更不用改代码、不用发版；「谁能访问 X」可以离线回答；授权决策可以被完整审计。</text>
+      <text class="ts" x="20" y="236">代价：PDP 在请求关键路径上（要么本地嵌入 + 策略热更新，要么独立服务 + 缓存），以及关系数据的一致性延迟。</text>
+    </svg>
+    <figcaption>图 3 · PEP / PDP 分离。注意 PEP 必须<strong>在每个服务里</strong>——放在网关就退化成 §3.1 那个 IDOR 陷阱。</figcaption>
+  </div>
+
+  <h3 id="s4-3">4.3 多租户的隔离必须在数据层兜底</h3>
+
+  <p>回到 §1.3 那个最重要的威胁：租户 A 读到租户 B 的数据。授权层能挡住它，但<strong>授权层是代码，代码会有 bug</strong>——一个新写的查询忘了加租户条件，就是一次跨租户泄露。</p>
+
+  <p>所以租户隔离不能只有一层。三层防护，从弱到强：</p>
+
+  <table>
+    <thead><tr><th>层</th><th>做法</th><th>强度</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>① 应用层过滤</td>
+        <td>每个查询手动加 <code>WHERE tenant_id = ?</code></td>
+        <td class="bad-cell">最弱。<strong>取决于每一个写查询的人都没忘</strong>，而这是概率问题，不是设计问题</td>
+      </tr>
+      <tr>
+        <td>② ORM / 数据访问层强制注入</td>
+        <td>在数据访问层统一注入租户条件，业务代码拿不到「不带租户」的查询入口</td>
+        <td class="mid-cell">好很多。但绕过路径仍然存在：原生 SQL、批处理任务、运维脚本</td>
+      </tr>
+      <tr class="good-cell">
+        <td>③ 数据库强制（RLS）</td>
+        <td>PostgreSQL 的 Row Level Security：连接上设置 <code>app.tenant_id</code>，数据库<strong>自己</strong>过滤，绕不过去</td>
+        <td class="good-cell">最强。<strong>即使应用层完全写错，数据库也不会返回别人的行</strong></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="box arch">
+    这三层的关系不是「选一个」，而是<strong>②做主、③兜底、①禁止</strong>。为什么还要留②：RLS 每行都要跑一遍策略判断，在大表全扫时有可观开销，而②能让绝大多数查询在到达数据库之前就已经带上了索引友好的租户条件。<strong>②管性能，③管正确性。</strong><br><br>
+    更重要的是，③把「租户隔离」从一个<strong>需要靠纪律维持</strong>的属性，变成了一个<strong>结构上成立</strong>的属性。这是安全设计里最值钱的一种转换：<strong>凡是靠「每个人都别忘了」维持的安全属性，迟早会失效——把它下沉到一个不需要人记得的地方。</strong>
+  </div>
+
+  <div class="box attack">
+    RLS 有一个必须堵住的口子：<strong>建表者和超级用户默认绕过 RLS</strong>。如果应用连的是表的 owner 或带 <code>BYPASSRLS</code> 的角色，策略形同虚设——而「应用用 owner 账号连库」恰恰是最常见的默认配置。
+  </div>
+
+<pre><code><span class="cm">-- ① 应用用一个专门的、非 owner 的低权限角色。这一步最容易被跳过，</span>
+<span class="cm">--    而跳过它之后下面所有配置都不生效 —— owner 默认绕过 RLS。</span>
+<span class="kw">CREATE ROLE</span> app_rw <span class="kw">LOGIN</span>;                <span class="cm">-- 注意：不给 BYPASSRLS，也不是表的 owner</span>
+<span class="kw">GRANT SELECT</span>, <span class="kw">INSERT</span>, <span class="kw">UPDATE</span>, <span class="kw">DELETE</span> <span class="kw">ON</span> reports <span class="kw">TO</span> app_rw;
+
+<span class="cm">-- ② 开启并「强制」。只写 ENABLE 的话 owner 仍然绕过；FORCE 才是对所有人生效。</span>
+<span class="kw">ALTER TABLE</span> reports <span class="kw">ENABLE ROW LEVEL SECURITY</span>;
+<span class="kw">ALTER TABLE</span> reports <span class="kw">FORCE ROW LEVEL SECURITY</span>;
+
+<span class="cm">-- ③ 策略：租户 id 从连接级的运行时参数读，不从 SQL 参数读。</span>
+<span class="cm">--    这一点是关键 —— 业务 SQL 里根本没有 tenant_id 这个可以被写错或遗漏的地方。</span>
+<span class="kw">CREATE POLICY</span> tenant_isolation <span class="kw">ON</span> reports
+  <span class="kw">USING</span>       (tenant_id = <span class="fn">current_setting</span>(<span class="str">'app.tenant_id'</span>)::uuid)   <span class="cm">-- 读</span>
+  <span class="kw">WITH CHECK</span>  (tenant_id = <span class="fn">current_setting</span>(<span class="str">'app.tenant_id'</span>)::uuid);  <span class="cm">-- 写，防止写进别人的租户</span>
+
+<span class="cm">-- ④ 应用侧：从连接池取出连接后、执行业务 SQL 前设置。</span>
+<span class="cm">--    用 set_config(..., true) 让它随事务结束自动清除，</span>
+<span class="cm">--    否则连接归还池子后残留的 tenant_id 会被下一个请求用上 —— 这是最危险的一种 bug。</span>
+<span class="kw">SELECT</span> <span class="fn">set_config</span>(<span class="str">'app.tenant_id'</span>, $1, <span class="kw">true</span>);
+</code></pre>
+
+  <div class="box arch">
+    第 ③ 步是这套配置里最值钱的设计：<strong>租户条件不再是业务 SQL 的一部分。</strong>写查询的人根本没有「忘记加 <code>tenant_id</code>」这个选项——他写不写都一样。这就是 §4.3 开头说的那个转换：把靠纪律维持的属性，变成结构上成立的属性。<br><br>
+    第 ④ 步的 <code>true</code>（事务级）不能漏。用连接级设置的话，连接归还连接池后 <code>app.tenant_id</code> 还在，下一个请求如果因为某条代码路径没设置就直接查，<strong>它会用上一个租户的身份</strong>——这个 bug 只在高并发下偶发，几乎不可能靠人工测试发现。
+  </div>
+
+  <p>配完之后必须<strong>写一个测试来验证它真的生效</strong>：用租户 A 的连接去查租户 B 的行，断言返回 0 条。没有这个测试，你不知道 RLS 是不是在某次迁移中被关掉了——<code>ALTER TABLE</code> 加字段、重建表、或者一次 <code>pg_dump</code> 还原，都可能把策略丢掉，而且<strong>丢掉之后系统功能完全正常</strong>。</p>
+</section>
+
+<!-- =========================================================== -->
+<section class="chapter" id="s5">
+  <div class="ch-head">
+    <div class="num">05</div>
+    <div class="t">
+      <h2>服务间身份：从共享密钥到 SPIFFE</h2>
+      <div class="sub">「集群内部是可信的」这个假设，是横向移动的全部前提</div>
+    </div>
+  </div>
+
+  <h3 id="s5-1">5.1 三代做法与各自的失效点</h3>
+
+  <p>12 个服务互相调用，凭什么相信对方是它声称的那个服务？</p>
+
+  <table>
+    <thead><tr><th>代</th><th>做法</th><th>失效点</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><strong>0 代</strong></td>
+        <td>不认证。「都在集群里，内网是安全的」</td>
+        <td class="bad-cell">任何一个服务被攻破（比如 §2.3 那个解析器 RCE），攻击者就能<strong>以任意服务的身份</strong>调用任何接口。这就是横向移动，也是绝大多数大型泄露事件的中间步骤</td>
+      </tr>
+      <tr>
+        <td><strong>1 代</strong></td>
+        <td>共享密钥 / API key：每个服务配一个静态密钥</td>
+        <td class="bad-cell">密钥在配置里、在环境变量里、在镜像里、在有人的笔记本上。<strong>轮换需要同时改所有调用方</strong>，于是从来不轮换。而且它只证明「持有密钥」，不证明「是那个服务」</td>
+      </tr>
+      <tr class="good-cell">
+        <td><strong>2 代</strong></td>
+        <td>mTLS + 短寿命证书：每个工作负载一张证书，双向验证</td>
+        <td class="good-cell">强。身份绑定到工作负载而非密钥文件，证书短寿命（小时级）自动轮换，泄露窗口有界</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p>SPIFFE 是 2 代做法的标准化：它定义了一种身份格式（<code>spiffe://example.org/ns/prod/sa/report-svc</code>）和一套签发流程（SPIRE 是它的实现，Istio 的身份体系也遵循它）。价值在于<strong>身份是可移植的</strong>——跨集群、跨云、跨 K8s 与虚拟机，用同一套身份语义。</p>
+
+  <h3 id="s5-2">5.2 身份的自举问题</h3>
+
+  <p>这是整章最有意思的一个问题，也是最容易被跳过的：<strong>一个刚启动的 Pod，凭什么向签发方证明「我是 report-svc」，从而拿到它的第一张证书？</strong></p>
+
+  <div class="box attack">
+    如果答案是「它带着一个密钥去换证书」，那问题只是被推了一层——那个密钥怎么安全地到达它？这就是<strong>秘密的零号问题</strong>（secret zero）：你总需要<strong>一个</strong>初始凭据，而它不能用同一套机制来保护。
+  </div>
+
+  <p>可行的答案都依赖<strong>一个比应用更可信的东西来做见证</strong>：</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 940 290" style="min-width:740px;height:auto" role="img" aria-label="身份自举的信任链图：Pod 启动后向签发方申请证书，但它本身无法自证身份；kubelet 作为见证者给它挂载一个由 API Server 签名的短寿命 token，签发方验证这个 token 从而确认 Pod 的身份，再签发工作负载证书；信任根是控制平面而不是任何存放在应用里的密钥">
+      <rect class="box" x="20" y="60" width="170" height="66" rx="8"/>
+      <text class="tb" x="34" y="84">刚启动的 Pod</text>
+      <text class="tr" x="34" y="102">无法自证「我是谁」</text>
+      <text class="tm" x="34" y="118">身上没有任何密钥</text>
+
+      <rect class="box-p" x="260" y="46" width="200" height="94" rx="8"/>
+      <text class="tb" x="274" y="70">见证者</text>
+      <text class="ts" x="274" y="90">kubelet / 云 IMDS / TPM</text>
+      <text class="tg" x="274" y="110">它<tspan class="tg">本来就知道</tspan>答案：</text>
+      <text class="tm" x="274" y="128">是它把这个 Pod 启动起来的</text>
+
+      <rect class="box-a" x="530" y="60" width="180" height="66" rx="8"/>
+      <text class="tb" x="544" y="84">签发方 SPIRE</text>
+      <text class="tm" x="544" y="102">验见证 → 签证书</text>
+      <text class="tm" x="544" y="118">有效期 1 小时</text>
+
+      <rect class="box-g" x="780" y="60" width="140" height="66" rx="8"/>
+      <text class="tb" x="794" y="84">工作负载证书</text>
+      <text class="tm" x="794" y="102">spiffe://…/sa/</text>
+      <text class="tm" x="794" y="118">report-svc</text>
+
+      <path class="ln-a" d="M190 84 H252"/><path class="ar-a" d="M252 79 l8 5 -8 5 z"/>
+      <text class="tm" x="196" y="76">① 我要身份</text>
+      <path class="ln-p" stroke="var(--accent-2)" stroke-width="1.7" fill="none" d="M252 104 H190"/>
+      <path class="ar-a" d="M190 99 l-8 5 8 5 z" fill="var(--accent-2)"/>
+      <text class="tp" x="196" y="122">② 挂一个签名 token</text>
+      <path class="ln-a" d="M460 93 H522"/><path class="ar-a" d="M522 88 l8 5 -8 5 z"/>
+      <text class="tm" x="464" y="85">③ 拿 token 去换</text>
+      <path class="ln-g" d="M710 93 H772"/><path class="ar-g" d="M772 88 l8 5 -8 5 z"/>
+      <text class="tg" x="716" y="85">④</text>
+
+      <rect class="box-r" x="20" y="168" width="900" height="46" rx="7"/>
+      <text class="tb" x="36" y="190">秘密的零号问题</text>
+      <text class="ts" x="36" y="208">如果 ② 换成「Pod 里预置一个密钥」，问题只是被推了一层——那个密钥又怎么安全地到达它？</text>
+
+      <text class="ts" x="20" y="242">三种见证者的信任根不同：kubelet → 控制平面 · 云 IMDS → 云平台 · TPM → 硬件。共同结构是「委托给一个已经知道答案的更底层组件」。</text>
+      <text class="ts" x="20" y="266">反过来说：<tspan class="tr">架构里如果找不到这样一个见证者，服务身份就只能退回静态密钥</tspan>——这时不要假装自己做了零信任。</text>
+    </svg>
+    <figcaption>图 4 · 身份自举。整条链上唯一不需要被「安全地送达」的东西，是见证者本来就掌握的事实。</figcaption>
+  </div>
+
+  <div class="grid-3">
+    <div class="panel good">
+      <h4>平台见证</h4>
+      <p>K8s 的 <strong>Projected ServiceAccount Token</strong>：kubelet 给 Pod 挂一个短寿命、带受众限制的 JWT，由 API Server 签名。签发方验它，就知道「这确实是 <code>ns/prod</code> 里 <code>sa/report-svc</code> 起的 Pod」。<br><strong>信任根是控制平面</strong>。</p>
+    </div>
+    <div class="panel good">
+      <h4>云厂商见证</h4>
+      <p>实例元数据服务（IMDS）签发的身份文档。<strong>信任根是云平台</strong>。<br>注意 IMDS 本身要防 SSRF——v1 版本能被一个 SSRF 漏洞直接读走，必须用 IMDSv2。</p>
+    </div>
+    <div class="panel mid">
+      <h4>硬件见证</h4>
+      <p>TPM / 安全芯片做远程证明。<strong>信任根是硬件</strong>，最强，但只在自有物理机上可行。</p>
+    </div>
+  </div>
+
+  <div class="box arch">
+    这三种的共同结构值得记住：<strong>把「证明我是谁」这件事，委托给一个已经知道答案的、更底层的组件。</strong>kubelet 知道它启动的是哪个 Pod，云平台知道这台机器是谁的，TPM 知道跑的是不是被篡改过的镜像。<br><br>
+    反过来说，<strong>如果你的架构里找不到这样一个「更底层的见证者」，那服务身份就只能退回到静态密钥</strong>——这时候不要假装自己做了零信任。识别出这一点，比部署一套 mTLS 更重要。
+  </div>
+
+  <h3 id="s5-3">5.3 ADR-002 工作负载身份</h3>
+
+  <div class="adr">
+    <div class="adr-head"><span class="adr-id">ADR-002</span><span class="adr-title">服务间用 mTLS，身份由 SPIRE 签发，自举依赖 K8s Projected SA Token</span><span class="adr-status">已接受</span></div>
+    <div class="adr-row"><div class="k">背景</div><div>§2.3 已把「导入服务被 RCE」列为需要缓解的威胁，其影响之所以是「高」，正是因为当前内部调用不做认证，一个服务被攻破即可横向移动到全部服务与数据。</div></div>
+    <div class="adr-row"><div class="k">候选</div><div>① 维持内网信任 ② 每服务一个静态 API key ③ SPIRE + mTLS ④ 服务网格（Istio）自带的 mTLS</div></div>
+    <div class="adr-row"><div class="k">决策</div><div>选 ③。证书有效期 1 小时、自动轮换；身份自举用 K8s 的 Projected ServiceAccount Token（受众限定为 SPIRE，有效期 10 分钟）。<strong>没有选 ④</strong> 是因为团队暂时不打算引入服务网格的完整复杂度（sidecar 的资源、升级、调试成本），而 SPIRE 可以先单独用起来，将来接入网格时身份体系不用重做。</div></div>
+    <div class="adr-row"><div class="k">后果</div><div><span class="win">得到</span>：横向移动的门槛从「攻破任一服务」提高到「攻破任一服务并在 1 小时内利用其身份」，且每次调用都留下可归因的身份；静态密钥从代码库和配置里彻底消失。<br><span class="lose">付出</span>：SPIRE 本身成为一个必须高可用的关键依赖（它挂了新 Pod 起不来，但已有连接不受影响——这个失败模式要写进运维手册）；调试变难，抓包看不到明文；本地开发需要一套绕过机制，<strong>而这个绕过机制本身是个风险，必须保证它无法在生产启用</strong>。</div></div>
+    <div class="adr-row"><div class="k">依赖</div><div>本决策依赖运行在 K8s 上。若将来有工作负载跑到 K8s 之外（虚拟机、边缘节点），需要为它们配置另一种自举方式（云 IMDS 或 join token），这是<strong>已知的扩展点</strong>而非遗漏。</div></div>
+  </div>
+</section>
+
+<!-- =========================================================== -->
+<section class="chapter" id="s6">
+  <div class="ch-head">
+    <div class="num">06</div>
+    <div class="t">
+      <h2>密钥：三个生命周期问题</h2>
+      <div class="sub">「放进环境变量」不是答案，它只是换了个地方放</div>
+    </div>
+  </div>
+
+  <p>系统里的密钥远比想象中多：数据库口令、对象存储凭据、第三方 API key、加密数据用的主密钥、签 JWT 的私钥、TLS 证书私钥。每一个都要回答三个问题——<strong>从哪来、怎么换、泄了怎么办</strong>。</p>
+
+  <h3 id="s6-1">6.1 从哪来：不能是配置文件</h3>
+
+  <table>
+    <thead><tr><th>方式</th><th>问题</th></tr></thead>
+    <tbody>
+      <tr><td class="bad-cell">代码里硬编码</td><td>进了 git 历史就永远在那里。<strong>删掉那一行不算修复，必须轮换。</strong></td></tr>
+      <tr><td class="bad-cell">配置文件 + 部署时注入</td><td>密钥落在磁盘上、进了镜像层、出现在 CI 日志里；谁有部署权限谁就有全部密钥</td></tr>
+      <tr><td class="mid-cell">环境变量</td><td>比文件好一点，但 <code>/proc/&lt;pid&gt;/environ</code> 可读、崩溃转储里有、很多框架会把整个 env 打进启动日志</td></tr>
+      <tr><td class="mid-cell">K8s Secret</td><td>默认<strong>只是 base64，不是加密</strong>；etcd 里明文存储（除非开了 encryption at rest）；有 namespace 读权限的人能看到全部</td></tr>
+      <tr class="good-cell"><td><strong>密钥管理服务 + 工作负载身份换取</strong></td><td class="good-cell">进程启动时用 §5 的身份去 Vault / KMS 换一个短寿命凭据。<strong>密钥不落盘、不进镜像、不进 CI</strong>，且每次获取都有审计记录</td></tr>
+    </tbody>
+  </table>
+
+  <div class="box arch">
+    最后一行之所以成立，是因为 §5 已经解决了自举问题。<strong>工作负载身份是密钥管理的前置条件</strong>——没有可信的服务身份，密钥管理服务就无法判断「谁在申请这个密钥」，只能退回到用另一个密钥来认证，回到原点。<br>
+    这也是 ADR-002 的一个附带价值：它不只是防横向移动，它还让「密钥不落盘」成为可能。<strong>两个安全决策互相支撑，单独做任何一个价值都会打折。</strong>
+  </div>
+
+  <p>更进一步的做法是<strong>动态凭据</strong>：应用不再持有固定的数据库口令，而是每次启动时向 Vault 申请一个<strong>为它临时创建的数据库账号</strong>，有效期几小时，到期自动删除。这样「数据库口令泄露」这个威胁基本消失了——泄露的是一个几小时后就不存在的账号。代价是数据库要能承受频繁的建号删号，以及连接池的生命周期要和凭据对齐。</p>
+
+  <h3 id="s6-2">6.2 怎么轮换：双密钥窗口</h3>
+
+  <p>轮换的难点从来不是「生成一个新密钥」，而是<strong>切换的那一刻不能有请求失败</strong>。所有轮换方案的核心都是同一个结构：</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 940 280" style="min-width:740px;height:auto" role="img" aria-label="密钥轮换的双密钥窗口示意图：阶段一只有旧密钥；阶段二新密钥加入但只用于验证不用于签发，所有服务先具备验证新密钥的能力；阶段三切换签发方使用新密钥而旧密钥继续可验证；阶段四确认无旧密钥流量后彻底移除旧密钥">
+      <path class="ln" d="M60 200 H900"/>
+      <text class="tm" x="60" y="222">T0</text>
+      <text class="tm" x="270" y="222">T1</text>
+      <text class="tm" x="490" y="222">T2</text>
+      <text class="tm" x="710" y="222">T3</text>
+      <text class="ts" x="840" y="222">时间</text>
+
+      <rect class="box-y" x="60" y="60" width="200" height="34" rx="5"/>
+      <text class="t" x="74" y="82">① 只有旧密钥</text>
+      <rect class="box-a" x="270" y="60" width="212" height="34" rx="5"/>
+      <text class="t" x="284" y="82">② 新密钥「可验证」</text>
+      <rect class="box-g" x="490" y="60" width="212" height="34" rx="5"/>
+      <text class="t" x="504" y="82">③ 新密钥「用于签发」</text>
+      <rect class="box-g" x="710" y="60" width="190" height="34" rx="5"/>
+      <text class="t" x="724" y="82">④ 移除旧密钥</text>
+
+      <text class="tm" x="60" y="118">签发用：旧</text>
+      <text class="tm" x="60" y="136">验证受：旧</text>
+      <text class="tm" x="270" y="118">签发用：旧</text>
+      <text class="ta" x="270" y="136">验证受：旧 + <tspan class="ta">新</tspan></text>
+      <text class="tg" x="490" y="118">签发用：<tspan class="tg">新</tspan></text>
+      <text class="tm" x="490" y="136">验证受：旧 + 新</text>
+      <text class="tg" x="710" y="118">签发用：新</text>
+      <text class="tg" x="710" y="136">验证受：新</text>
+
+      <path class="ln-r" d="M270 152 V190"/>
+      <text class="tr" x="278" y="170">这一步必须等<tspan class="tr">全部</tspan>实例都拿到新密钥才能进入 ③</text>
+      <path class="ln-r" d="M710 152 V190"/>
+      <text class="tr" x="500" y="252">④ 之前必须确认「用旧密钥的流量已归零」——靠指标，不靠估算。</text>
+        <text class="ts" x="60" y="252">顺序反了（先切签发再让验证方认识新密钥）等于一次全站鉴权失败。</text>
+      <text class="ts" x="60" y="272">T1→T2 与 T2→T3 之间要留够时间：至少覆盖最长的令牌有效期与最慢的配置下发。</text>
+    </svg>
+    <figcaption>图 5 · 双密钥窗口。这个结构在 TLS 证书、JWT 签名密钥、API key、数据加密密钥上都是一样的。</figcaption>
+  </div>
+
+  <p>把它落成代码，关键是<strong>验证方要同时接受一组密钥，而签发方只用其中一个</strong>：</p>
+
+<pre><code><span class="cm">// 验证侧：接受一组密钥；签发侧：只用 active 那个。</span>
+<span class="cm">// 这个不对称是双密钥窗口的全部实现 —— 图 3 的四个阶段就是这两个集合的四种组合。</span>
+<span class="kw">class</span> <span class="type">KeyRing</span> {
+  <span class="type">std</span>::<span class="type">string</span> active_kid_;                       <span class="cm">// 当前用于签发的 key id</span>
+  <span class="type">std</span>::<span class="type">unordered_map</span>&lt;<span class="type">std</span>::<span class="type">string</span>, <span class="type">Key</span>&gt; verify_;  <span class="cm">// 所有仍被接受的密钥</span>
+
+ <span class="kw">public</span>:
+  <span class="cm">// 令牌里必须带 kid，否则验证方要逐个试 —— 那会把「多密钥」变成一个计时侧信道，</span>
+  <span class="cm">// 而且密钥多了之后每次验证的开销随之上升。</span>
+  <span class="type">bool</span> <span class="fn">verify</span>(<span class="type">std</span>::<span class="type">string_view</span> kid, <span class="type">std</span>::<span class="type">span</span>&lt;<span class="kw">const</span> <span class="type">uint8_t</span>&gt; msg,
+              <span class="type">std</span>::<span class="type">span</span>&lt;<span class="kw">const</span> <span class="type">uint8_t</span>&gt; sig) <span class="kw">const</span> {
+    <span class="kw">auto</span> it = verify_.<span class="fn">find</span>(<span class="type">std</span>::<span class="type">string</span>(kid));
+    <span class="kw">if</span> (it == verify_.<span class="fn">end</span>()) <span class="kw">return</span> <span class="kw">false</span>;
+    <span class="cm">// 必须用恒定时间比较：普通 memcmp 在第一个不同字节就返回，</span>
+    <span class="cm">// 攻击者可以按字节爆破签名。这是密码学代码里最经典的一个疏漏。</span>
+    <span class="kw">return</span> <span class="fn">verify_constant_time</span>(it-&gt;second, msg, sig);
+  }
+
+  <span class="type">Signature</span> <span class="fn">sign</span>(<span class="type">std</span>::<span class="type">span</span>&lt;<span class="kw">const</span> <span class="type">uint8_t</span>&gt; msg) <span class="kw">const</span> {
+    <span class="kw">return</span> <span class="fn">do_sign</span>(verify_.<span class="fn">at</span>(active_kid_), msg, active_kid_);
+  }
+
+  <span class="cm">// 阶段 ② ：只加进验证集，不动 active。全部实例都执行完这一步，才能进入阶段 ③。</span>
+  <span class="type">void</span> <span class="fn">stage_new</span>(<span class="type">std</span>::<span class="type">string</span> kid, <span class="type">Key</span> k) { verify_.<span class="fn">emplace</span>(<span class="type">std</span>::<span class="fn">move</span>(kid), <span class="type">std</span>::<span class="fn">move</span>(k)); }
+  <span class="cm">// 阶段 ③ ：切换签发方。旧密钥仍在 verify_ 里，在途令牌不受影响。</span>
+  <span class="type">void</span> <span class="fn">promote</span>(<span class="type">std</span>::<span class="type">string</span> kid) { active_kid_ = <span class="type">std</span>::<span class="fn">move</span>(kid); }
+  <span class="cm">// 阶段 ④ ：确认旧 kid 的验证计数已归零后，才移除。</span>
+  <span class="type">void</span> <span class="fn">retire</span>(<span class="type">std</span>::<span class="type">string_view</span> kid) { verify_.<span class="fn">erase</span>(<span class="type">std</span>::<span class="type">string</span>(kid)); }
+};
+</code></pre>
+
+  <div class="box arch">
+    代码里有个容易忽略的运维要求：<strong>要按 <code>kid</code> 打点统计验证次数</strong>，否则阶段 ④ 就只能靠估算「应该没人用旧的了吧」。有了这个指标，退役就变成一个有明确判据的动作——旧 kid 的计数连续 N 分钟为 0 才移除。<br>
+    <strong>「怎么知道可以安全地删掉它」这个问题，在设计的时候就要想好怎么回答</strong>；否则轮换永远停在阶段 ③，密钥集合只增不减。
+  </div>
+
+  <h3 id="s6-3">6.3 泄露了怎么办</h3>
+
+  <p>这一节的前提是：<strong>假设它一定会泄露。</strong>那么设计时要保证的是三件事：</p>
+
+  <div class="grid-3">
+    <div class="panel good">
+      <h4>能发现</h4>
+      <p>给密钥加<strong>可识别前缀</strong>（如 <code>tsk_live_</code>），GitHub 的 secret scanning 和各类扫描器就能自动识别并通知你。这是成本极低、收益极高的一步。</p>
+    </div>
+    <div class="panel good">
+      <h4>能快速换掉</h4>
+      <p>如果轮换需要停机或改二十处配置，那么泄露时你会犹豫——而犹豫就是延长暴露。<strong>轮换必须是一个演练过的、几分钟的常规操作。</strong></p>
+    </div>
+    <div class="panel good">
+      <h4>爆炸半径有界</h4>
+      <p>一个密钥不该能做所有事。按<strong>用途</strong>和<strong>租户</strong>拆分：导入服务的数据库凭据应当只读、只能访问导入相关的表。这样它泄露的后果是有限且可描述的。</p>
+    </div>
+  </div>
+
+  <h3 id="s6-4">6.4 ADR-003 密钥分发与轮换</h3>
+
+  <div class="adr">
+    <div class="adr-head"><span class="adr-id">ADR-003</span><span class="adr-title">密钥一律由工作负载身份向 Vault 换取，不落盘；签名密钥走双密钥窗口，90 天轮换</span><span class="adr-status">已接受</span></div>
+    <div class="adr-row"><div class="k">背景</div><div>当前密钥分散在 K8s Secret、CI 变量与部署配置里，无法回答「谁在什么时候拿过这个密钥」，也无法在不停机的情况下轮换。ADR-002 提供的工作负载身份使得更好的方案成为可能。</div></div>
+    <div class="adr-row"><div class="k">决策</div><div>① 应用启动时用 SPIFFE 身份向 Vault 换取凭据，全部在内存中，不写文件、不进环境变量；② 数据库凭据用 Vault 的动态凭据（临时账号，4 小时有效）；③ JWT 签名密钥走双密钥窗口，90 天轮换，按 <code>kid</code> 打点以判断何时可以退役旧密钥；④ 所有外发的长期凭据（客户的 API key）带 <code>tsk_live_</code> 前缀便于扫描器识别。</div></div>
+    <div class="adr-row"><div class="k">后果</div><div><span class="win">得到</span>：密钥不再出现在磁盘、镜像、CI 日志和 git 历史里；每次获取都有审计记录；数据库凭据泄露的价值降到「4 小时内的一个受限账号」。<br><span class="lose">付出</span>：Vault 成为启动路径上的强依赖（它挂了新 Pod 起不来——与 SPIRE 是同一类失败模式，要一起写进运维手册）；数据库要承受频繁建号删号；连接池的生命周期必须与凭据有效期对齐，<strong>这一条最容易被漏掉，表现是凭据过期后连接池里的老连接开始报错</strong>。</div></div>
+  </div>
+</section>
+
+<!-- =========================================================== -->
+<section class="chapter" id="s7">
+  <div class="ch-head">
+    <div class="num">07</div>
+    <div class="t">
+      <h2>纵深防御：每一层能挡住什么</h2>
+      <div class="sub">「多加几层」不是纵深防御，能说清每层挡什么才是</div>
+    </div>
+  </div>
+
+  <h3 id="s7-1">7.1 攻击链与防线的对应</h3>
+
+  <p>纵深防御容易被做成「层数竞赛」——加 WAF、加扫描、加审计，但说不清哪一层在挡什么。更有用的做法是<strong>沿着一条真实的攻击链</strong>排布防线，然后逐段确认：这一段被突破时，下一段能不能兜住。</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 960 330" style="min-width:780px;height:auto" role="img" aria-label="攻击链与防线对应图：攻击者依次经过侦察、初始突破、建立立足点、提权、横向移动、数据外泄六个阶段，每个阶段下方标出对应的防线以及该防线被突破后由谁兜住">
+      <text class="tb" x="20" y="24">攻击链（上）与防线（下）</text>
+
+      <rect class="box-r" x="20" y="40" width="140" height="40" rx="6"/><text class="t" x="46" y="65">① 侦察</text>
+      <rect class="box-r" x="176" y="40" width="140" height="40" rx="6"/><text class="t" x="192" y="65">② 初始突破</text>
+      <rect class="box-r" x="332" y="40" width="140" height="40" rx="6"/><text class="t" x="348" y="65">③ 建立立足点</text>
+      <rect class="box-r" x="488" y="40" width="140" height="40" rx="6"/><text class="t" x="522" y="65">④ 提权</text>
+      <rect class="box-r" x="644" y="40" width="150" height="40" rx="6"/><text class="t" x="668" y="65">⑤ 横向移动</text>
+      <rect class="box-r" x="806" y="40" width="134" height="40" rx="6"/><text class="t" x="826" y="65">⑥ 数据外泄</text>
+      <path class="ln-r" d="M160 60 H168"/><path class="ar-r" d="M168 55 l8 5 -8 5 z"/>
+      <path class="ln-r" d="M316 60 H324"/><path class="ar-r" d="M324 55 l8 5 -8 5 z"/>
+      <path class="ln-r" d="M472 60 H480"/><path class="ar-r" d="M480 55 l8 5 -8 5 z"/>
+      <path class="ln-r" d="M628 60 H636"/><path class="ar-r" d="M636 55 l8 5 -8 5 z"/>
+      <path class="ln-r" d="M794 60 H798"/><path class="ar-r" d="M798 55 l8 5 -8 5 z"/>
+
+      <path class="ln-d" d="M20 96 H940"/>
+
+      <rect class="box-g" x="20" y="110" width="140" height="80" rx="6"/>
+      <text class="ts" x="32" y="130">最小暴露面</text>
+      <text class="tm" x="32" y="148">不必要的端口</text>
+      <text class="tm" x="32" y="164">与接口不开</text>
+      <text class="tm" x="32" y="182">错误信息不泄露</text>
+
+      <rect class="box-g" x="176" y="110" width="140" height="80" rx="6"/>
+      <text class="ts" x="188" y="130">输入校验 · WAF</text>
+      <text class="tm" x="188" y="148">依赖更新（§8）</text>
+      <text class="tm" x="188" y="164">解析放沙箱</text>
+      <text class="tr" x="188" y="182">← 最可能被突破</text>
+
+      <rect class="box-g" x="332" y="110" width="140" height="80" rx="6"/>
+      <text class="ts" x="344" y="130">只读根文件系统</text>
+      <text class="tm" x="344" y="148">无 shell 的镜像</text>
+      <text class="tm" x="344" y="164">出网默认拒绝</text>
+      <text class="tm" x="344" y="182">运行时检测</text>
+
+      <rect class="box-g" x="488" y="110" width="140" height="80" rx="6"/>
+      <text class="ts" x="500" y="130">非 root 运行</text>
+      <text class="tm" x="500" y="148">drop 全部能力</text>
+      <text class="tm" x="500" y="164">seccomp 白名单</text>
+      <text class="tm" x="500" y="182">禁止特权升级</text>
+
+      <rect class="box-g" x="644" y="110" width="150" height="80" rx="6"/>
+      <text class="ts" x="656" y="130">mTLS 服务身份</text>
+      <text class="tm" x="656" y="148">网络策略默认拒绝</text>
+      <text class="tm" x="656" y="164">凭据按用途最小化</text>
+      <text class="ta" x="656" y="182">← ADR-002 在这里</text>
+
+      <rect class="box-g" x="806" y="110" width="134" height="80" rx="6"/>
+      <text class="ts" x="818" y="130">RLS 租户隔离</text>
+      <text class="tm" x="818" y="148">出网限制</text>
+      <text class="tm" x="818" y="164">大批量读告警</text>
+      <text class="ta" x="818" y="182">← §4.3 在这里</text>
+
+      <rect class="box-y" x="20" y="212" width="920" height="46" rx="7"/>
+      <text class="tb" x="34" y="232">贯穿全链：审计日志（§9）</text>
+      <text class="ts" x="34" y="250">它不阻止任何一步，但它决定了事后能不能知道发生了什么、影响了哪些租户——这是合规通报的前提。</text>
+
+      <text class="ts" x="20" y="284">读法：假设②被突破（解析器 RCE 是现实的），③④⑤⑥ 还剩四道。每一道都要能独立回答「它能不能挡住已经拿到代码执行的攻击者」。</text>
+      <text class="ts" x="20" y="304">如果某一段的答案是「不能」，那前后两段之间就是一条直通路径——这才是纵深防御要找的东西，不是层数。</text>
+    </svg>
+    <figcaption>图 6 · 沿攻击链排布防线。真正的问题不是「有几层」，而是「假设这一层没了，下一层能不能兜住」。</figcaption>
+  </div>
+
+  <h3 id="s7-2">7.2 「零信任」到底改变了什么</h3>
+
+  <p>这个词被用滥了，但它有一个精确的含义，就是<strong>否定一条具体的假设</strong>：</p>
+
+  <div class="grid-2">
+    <div class="panel bad">
+      <h4>传统边界模型</h4>
+      <p>「网络位置 = 信任级别」。内网可信、外网不可信，防线集中在边界（防火墙、VPN）。<br><strong>失效方式</strong>：一旦有人进到内网——通过 VPN 凭据泄露、供应链、或者一个 SSRF——他就获得了内网的全部信任。</p>
+    </div>
+    <div class="panel good">
+      <h4>零信任</h4>
+      <p>「网络位置不提供任何信任」。每次访问都要重新验证身份与授权，无论请求来自哪里。<br><strong>实际改变的三件事</strong>：服务间要互相认证（§5）、授权要在每个资源处判断（§4.2）、以及网络策略默认拒绝而非默认允许。</p>
+    </div>
+  </div>
+
+  <div class="box arch">
+    值得澄清的是：零信任<strong>不等于不要网络边界</strong>。防火墙和网络策略仍然有价值——它们是纵深防御的一层，只是不再是<strong>唯一</strong>的那层。<br><br>
+    判断一个系统有没有真的做到零信任，有一个很简单的检验：<strong>如果攻击者已经在集群里拿到了一个 Pod 的代码执行，他能做的事情比外部攻击者多多少？</strong>如果答案是「多很多」，那不管部署了什么产品，信任仍然建立在网络位置上。
+  </div>
+
+  <h3 id="s7-3">7.3 爆炸半径与最小权限的量化</h3>
+
+  <p>「最小权限」是句正确的废话，除非能量化。可操作的方法是<strong>对每个主体列出它被攻破后能做什么</strong>，然后逐条问「这是必要的吗」：</p>
+
+  <table>
+    <thead><tr><th>主体</th><th>当前能做什么</th><th>其中不必要的</th><th>收紧后的爆炸半径</th></tr></thead>
+    <tbody>
+      <tr class="bad-cell">
+        <td>导入服务</td>
+        <td>读写全部表、访问对象存储全部 bucket、出网无限制</td>
+        <td class="bad-cell">它只需要：写 <code>import_*</code> 表、读自己那个 bucket 前缀、<strong>完全不需要出网</strong></td>
+        <td class="good-cell">从「全库 + 全部文件 + 可外传」收到「几张表 + 一个前缀 + 出不去网」</td>
+      </tr>
+      <tr>
+        <td>报表服务</td>
+        <td>读写全部表</td>
+        <td>它只读不写</td>
+        <td>降级为只读账号，且受 RLS 约束</td>
+      </tr>
+      <tr class="mid-cell">
+        <td>CI 流水线</td>
+        <td class="bad-cell">部署到生产、读全部密钥</td>
+        <td class="bad-cell">构建阶段不需要生产密钥；部署应当是一个<strong>需要审批的独立主体</strong></td>
+        <td>构建与部署拆成两个主体，构建产物签名后由部署主体验证</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="box arch">
+    第一行里「不需要出网」这条最值得强调，因为它是<strong>投入产出比最高</strong>的一条：绝大多数攻击在拿到代码执行之后，下一步都是回连 C2 或者把数据传出去。一条默认拒绝的出网策略（<code>NetworkPolicy</code> egress deny + 需要出网的服务显式放行到具体域名）能把「RCE」和「数据外泄」之间切断。<br><br>
+    而它的成本几乎为零——大多数内部服务本来就不需要访问互联网。<strong>但默认配置是允许出网的，所以它需要被显式地做一次。</strong>这类「成本极低、默认关闭、需要有人想起来打开」的控制，正是安全评审清单存在的意义。
+  </div>
+</section>
+
+<!-- =========================================================== -->
+<section class="chapter" id="s8">
+  <div class="ch-head">
+    <div class="num">08</div>
+    <div class="t">
+      <h2>供应链与运行时</h2>
+      <div class="sub">你写的代码只占镜像里很小一部分</div>
+    </div>
+  </div>
+
+  <h3 id="s8-1">8.1 依赖是最大的攻击面</h3>
+
+  <div class="fig">
+    <svg viewBox="0 0 940 210" style="min-width:740px;height:auto" role="img" aria-label="镜像构成与安全投入的错配示意：一条横条表示镜像的代码构成，自研代码只占很小一段，其余是框架、传递依赖和基础镜像里的系统包；而代码审计、静态扫描、代码评审这些常规安全投入只覆盖自研代码那一小段">
+      <text class="tb" x="20" y="26">一个典型服务镜像里的代码构成</text>
+      <rect class="box-a" x="20" y="42" width="44" height="40" rx="3"/>
+      <rect class="box-y" x="64" y="42" width="180" height="40" rx="3"/>
+      <rect class="box-r" x="244" y="42" width="420" height="40" rx="3"/>
+      <rect class="box-p" x="664" y="42" width="256" height="40" rx="3"/>
+      <text class="ta" x="24" y="100">自研</text>
+      <text class="tm" x="24" y="116">&lt; 5%</text>
+      <text class="ty" x="78" y="67">直接依赖</text>
+      <text class="tr" x="360" y="67">传递依赖（中等项目轻松上千个）</text>
+      <text class="tp" x="700" y="67">运行时 + 基础镜像的系统包</text>
+
+      <path class="ln-d" d="M20 130 H920"/>
+      <text class="tb" x="20" y="152">常规安全投入覆盖的范围</text>
+      <rect class="box-g" x="20" y="162" width="44" height="26" rx="3"/>
+      <text class="tg" x="80" y="180">代码审计 · 静态扫描 · 代码评审 —— 全部落在这 5% 上</text>
+      <text class="tr" x="80" y="200">另外 95% 由几百个你没见过的人写，并且会自动更新（§8.3 的取舍就来自这一点）</text>
+    </svg>
+    <figcaption>图 7 · 安全投入与攻击面的错配。这不是说代码审计没用，而是说<strong>只做它是不够的</strong>。</figcaption>
+  </div>
+
+  <p>供应链的风险有三种形态，防法完全不同：</p>
+
+  <table>
+    <thead><tr><th>形态</th><th>例子</th><th>防法</th></tr></thead>
+    <tbody>
+      <tr><td><strong>已知漏洞</strong></td><td>依赖的某个版本有 CVE</td><td class="good-cell">相对好办：扫描 + 及时升级。难点是<strong>噪音</strong>——大量 CVE 其实不影响你的调用路径</td></tr>
+      <tr><td><strong>恶意包</strong></td><td>抢注（typosquatting）、维护者账号被盗后发布带后门的版本</td><td class="mid-cell">钉版本 + 锁文件 + 新依赖需人工评审；<strong>不要自动升级到最新</strong></td></tr>
+      <tr><td class="bad-cell"><strong>构建过程被污染</strong></td><td>CI 被攻破，产出的镜像和源码对不上</td><td class="bad-cell">最难：需要可复现构建 + 产物签名 + 部署时验签（SLSA 框架讲的就是这一层）</td></tr>
+    </tbody>
+  </table>
+
+  <div class="box attack">
+    第二行里「维护者账号被盗」是近年最现实的一类：攻击者不需要找漏洞，只需要拿到一个流行小库的 npm/PyPI 账号，发一个补丁版本，几小时内就会被成千上万个项目自动拉取。<strong>「自动升级到最新的补丁版本」这个看起来负责任的做法，恰恰是这条攻击链的传送带。</strong><br>
+    这就是「及时升级修 CVE」与「不要自动升级防投毒」之间的真实张力——它没有两全的答案，只有一个取舍点（见 ADR-004）。
+  </div>
+
+  <h3 id="s8-2">8.2 SBOM 解决什么、不解决什么</h3>
+
+  <p>SBOM（软件物料清单）就是一份「这个产物里到底有什么」的机器可读清单。它常被当成一个合规勾选项，但它真正的价值在一个具体场景：</p>
+
+  <div class="grid-2">
+    <div class="panel good">
+      <h4>✅ 它解决「我受影响吗」</h4>
+      <p>某个库爆出高危漏洞，问题是<strong>「我们的哪些服务、哪些版本用了它」</strong>。没有 SBOM，这个问题要靠人翻代码库，要几小时到几天；有 SBOM，是一次查询。<br><strong>而这几小时正是攻击者的窗口。</strong></p>
+    </div>
+    <div class="panel bad">
+      <h4>❌ 它不解决「我安全吗」</h4>
+      <p>SBOM 只是清单，不是评估。它不会告诉你哪个依赖有漏洞、漏洞是否可达、也不会阻止任何东西被引入。<br><strong>把 SBOM 当成安全措施是个常见误解</strong>——它是<strong>应急响应的基础设施</strong>，价值在事故发生那一刻兑现。</p>
+    </div>
+  </div>
+
+  <p>与之配套的是<strong>可达性分析</strong>：一个 CVE 在依赖里，但你的代码是否真的调到了那个函数？工具（如 Go 的 govulncheck、部分 SCA 产品）能做这个判断，它通常能把「需要处理的 CVE」数量降一个数量级——<strong>而降噪本身就是安全价值，因为一份两千条的告警列表等于没有告警列表。</strong></p>
+
+  <h3 id="s8-3">8.3 ADR-004 依赖钉版与准入</h3>
+
+  <div class="adr">
+    <div class="adr-head"><span class="adr-id">ADR-004</span><span class="adr-title">依赖全部钉版并提交锁文件；升级走定期批量 + 安全补丁快速通道；镜像签名后部署时验签</span><span class="adr-status">已接受</span></div>
+    <div class="adr-row"><div class="k">背景</div><div>「及时升级修 CVE」与「不自动升级防投毒」直接冲突（§8.1）。需要一个显式的取舍点，而不是让两种做法在不同项目里各行其是。</div></div>
+    <div class="adr-row"><div class="k">决策</div><div>① 依赖钉到精确版本，锁文件进版本库，CI 用 <code>--frozen-lockfile</code> 构建；② <strong>常规升级每两周批量做一次</strong>，有人 review 变更集；③ <strong>安全补丁走快速通道</strong>，但仍需一次人工确认（看 diff、看维护者是否变更），不设全自动合并；④ 新增依赖需评审，看维护活跃度、下载量、维护者数量；⑤ 构建产物用 cosign 签名，K8s 侧用准入控制器拒绝未签名镜像。</div></div>
+    <div class="adr-row"><div class="k">后果</div><div><span class="win">得到</span>：投毒版本不会在无人察觉时进入生产；产物可追溯到具体的构建；「我们受影响吗」有确定答案。<br><span class="lose">付出</span>：CVE 的平均修复时间比全自动升级长（两周窗口，安全补丁除外）——<strong>这是一个明确接受的取舍</strong>；两周一次的批量升级需要有人固定负责，没人负责它就会积压成一次几百个包的大升级，那时风险更高。</div></div>
+    <div class="adr-row"><div class="k">何时重议</div><div>若出现一次因为「升级不及时」导致的实际入侵，需要重新评估两周这个窗口；反之若可达性分析成熟到能自动判断「这个 CVE 对我们无影响」，人工确认的负担可以下降，快速通道能覆盖更多情况。</div></div>
+  </div>
+</section>
+
+<!-- =========================================================== -->
+<section class="chapter" id="s9">
+  <div class="ch-head">
+    <div class="num">09</div>
+    <div class="t">
+      <h2>检测与响应：假设已经被攻破</h2>
+      <div class="sub">前面八章都在防；这一章的前提是防线已经失败了</div>
+    </div>
+  </div>
+
+  <p>入侵的平均发现时间以<strong>周</strong>为单位，而且很多是被外部通报的。所以设计时必须假设「已经有人在里面」，然后问：<strong>我能发现吗？能知道他动了什么吗？能证明哪些租户受影响吗？</strong>最后一个问题在多租户 SaaS 里是合规通报的前提——答不出来，就只能按最坏情况通知全部 3000 家客户。</p>
+
+  <h3 id="s9-1">9.1 审计日志的三条硬要求</h3>
+
+  <div class="grid-3">
+    <div class="panel good">
+      <h4>① 只能追加，攻击者删不掉</h4>
+      <p>如果审计日志和应用写在同一个地方、用同一套凭据，那么拿到应用权限的人可以把自己的痕迹擦掉。<br><strong>做法</strong>：单向写入——应用只有 append 权限，没有 delete/update；日志实时推到<strong>另一个信任域</strong>（不同账号、不同集群）。</p>
+    </div>
+    <div class="panel good">
+      <h4>② 内容要能回答四个 W</h4>
+      <p><strong>谁</strong>（主体身份，不是 IP）、<strong>何时</strong>、<strong>对什么</strong>（资源 ID + 租户 ID）、<strong>结果</strong>（成功/拒绝）。<br><strong>拒绝也要记</strong>——一连串被拒绝的访问，正是探测行为的特征，而只记成功就完全看不到。</p>
+    </div>
+    <div class="panel good">
+      <h4>③ 和业务日志分开</h4>
+      <p>业务日志会因为降噪、成本、格式变更而被随意调整；审计日志有留存期要求，不能一起被砍掉。<br>而且业务日志里<strong>常常混进敏感数据</strong>，两者的访问权限要求不同。</p>
+    </div>
+  </div>
+
+  <div class="box attack">
+    有一个常被忽略的问题：<strong>审计日志本身可能泄露敏感数据。</strong>记录「谁查了什么」时，很容易把查询参数整个记下来——里面可能有客户的业务数据、手机号、甚至凭据。审计日志的访问权限通常比业务库宽（安全团队、合规、运维都要看），于是它成了一个新的泄露点。<br>
+    做法是记<strong>资源标识</strong>而不是<strong>资源内容</strong>：记 <code>report:993</code>，不记这个报表返回了什么。
+  </div>
+
+  <h3 id="s9-2">9.2 该告警什么</h3>
+
+  <p>安全告警最容易犯的错是<strong>告警太多</strong>——一天几百条，然后所有人都不看了。有效的告警集中在「正常业务不会产生」的模式上：</p>
+
+  <table>
+    <thead><tr><th>信号</th><th>为什么它有效</th></tr></thead>
+    <tbody>
+      <tr class="good-cell"><td><strong>跨租户访问被拒绝</strong></td><td class="good-cell">正常业务<strong>永远不会</strong>触发这个。一次都不该有——所以它是零噪音、高置信度的信号，出现即调查</td></tr>
+      <tr><td>单租户读取量突增（10 倍以上）</td><td>数据外泄的直接特征。要按租户各自的基线比，不是全局阈值</td></tr>
+      <tr class="good-cell"><td><strong>服务发起了预期之外的出网连接</strong></td><td class="good-cell">配合 §7.3 的默认拒绝出网，被拒绝的出网尝试同样是零噪音信号</td></tr>
+      <tr><td>凭据从异常地理位置/ASN 使用</td><td>凭据泄露的常见特征。对 API key 尤其有效——它们通常只从固定几个 IP 用</td></tr>
+      <tr><td>权限变更（授予管理员、改角色）</td><td>低频、高影响，适合逐条人工确认</td></tr>
+      <tr class="mid-cell"><td>容器内启动了 shell / 包管理器</td><td class="mid-cell">配合 §7.1 的无 shell 镜像，这个信号几乎没有误报。前提是运行时检测（如 Falco）</td></tr>
+    </tbody>
+  </table>
+
+  <div class="box arch">
+    这张表里最好的信号有一个共同特征：<strong>它们在正常运行时的发生次数是零。</strong>「跨租户访问被拒绝」「被拒绝的出网」「容器里起了 shell」——这些不是「超过阈值才告警」，而是<strong>出现一次就该看</strong>。<br><br>
+    找这类信号的方法是问：<strong>「有没有哪个事件，在系统健康时永远不会发生？」</strong>这样的事件不需要调阈值、不会随流量增长而误报、也不会因为扩容而失效。相比之下，「错误率超过 5%」这种阈值型告警，既要不断调参又容易被淹没。
+  </div>
+
+  <h3 id="s9-3">9.3 ADR-005 审计日志的独立性</h3>
+
+  <div class="adr">
+    <div class="adr-head"><span class="adr-id">ADR-005</span><span class="adr-title">审计日志写入独立信任域，应用只有追加权限；记资源标识不记资源内容，留存 1 年</span><span class="adr-status">已接受</span></div>
+    <div class="adr-row"><div class="k">背景</div><div>§1.3 的合规要求是审计留存 1 年；而 §2.3 已识别出「服务被 RCE」是需要缓解的威胁——如果审计日志与应用共用凭据与存储，攻击者可以擦掉痕迹，事后无法界定受影响的租户范围。</div></div>
+    <div class="adr-row"><div class="k">决策</div><div>审计事件经独立通道写入另一个云账号下的只追加存储，应用侧的凭据只有 <code>PutObject</code> 权限、无删除无覆盖；事件内容为「主体身份 + 时间 + 租户 ID + 资源标识 + 动作 + 结果」，<strong>不含请求体与响应体</strong>；成功与拒绝都记录。</div></div>
+    <div class="adr-row"><div class="k">后果</div><div><span class="win">得到</span>：即使应用被完全攻破，历史审计记录仍然可信；能按租户回答「他的数据被谁在什么时候访问过」，把合规通报的范围从「全部 3000 家」缩小到实际受影响的那几家。<br><span class="lose">付出</span>：跨账号写入的可用性要单独保障（写失败时是阻塞业务还是丢日志？——<strong>本例选择本地有界缓冲 + 缓冲满则阻塞</strong>，因为审计缺失在合规上不可接受）；1 年留存的存储成本；排查问题时要同时看两套日志。</div></div>
+    <div class="adr-row"><div class="k">权衡说明</div><div>「缓冲满则阻塞」是一个把可用性让给合规的选择，和 <a href="resilience_patterns.html#s9-1">弹性篇的反向判据</a>正好相反。<strong>之所以在这里成立，是因为审计缺失的后果（无法界定泄露范围）比短暂不可用更严重</strong>——这个前提如果不成立，就该改成丢弃 + 告警。</div></div>
+  </div>
+</section>
+
+<!-- =========================================================== -->
+<section class="chapter" id="s10">
+  <div class="ch-head">
+    <div class="num">10</div>
+    <div class="t">
+      <h2>速查与反向判据</h2>
+      <div class="sub">包括最容易被忽略的一节：什么时候不该加这层安全</div>
+    </div>
+  </div>
+
+  <h3 id="s10-1">10.1 五条 ADR 汇总</h3>
+
+  <table>
+    <thead><tr><th>编号</th><th>决策</th><th>核心理由</th><th>付出的代价</th></tr></thead>
+    <tbody>
+      <tr><td>ADR-001</td><td>用户会话用不透明令牌 + 5 秒缓存；服务间用 5 分钟 JWT</td><td>JWT 在过期前无法撤销，而合规要求「停用即失效」</td><td>两套机制、两份文档；网关侧多一份缓存状态</td></tr>
+      <tr><td>ADR-002</td><td>mTLS + SPIRE，自举用 K8s Projected SA Token</td><td>断掉横向移动；静态密钥从代码与配置里消失</td><td>SPIRE 成为启动路径上的强依赖；调试变难；本地开发的绕过机制本身是风险</td></tr>
+      <tr><td>ADR-003</td><td>密钥由工作负载身份向 Vault 换取、不落盘；签名密钥双密钥窗口 90 天轮换</td><td>密钥不再出现在磁盘、镜像、CI 与 git 历史里</td><td>Vault 成为启动路径依赖；连接池生命周期必须与凭据对齐</td></tr>
+      <tr><td>ADR-004</td><td>依赖钉版 + 两周批量升级 + 安全补丁快速通道；镜像签名与部署验签</td><td>「防投毒」优先于「最快修 CVE」，取舍显式化</td><td>CVE 平均修复时间变长；批量升级需要固定的人负责</td></tr>
+      <tr><td>ADR-005</td><td>审计日志写独立信任域、只追加、记标识不记内容</td><td>被攻破后仍能界定受影响租户范围</td><td>跨账号写入的可用性；缓冲满时阻塞业务</td></tr>
+    </tbody>
+  </table>
+
+  <h3 id="s10-2">10.2 设计评审清单</h3>
+
+  <table>
+    <thead><tr><th>#</th><th>问题</th><th>没答案意味着</th><th>见</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>要防谁？最坏能损失什么？</td><td>所有后续讨论没有取舍依据</td><td>§1.3</td></tr>
+      <tr><td>2</td><td>信任边界画在哪？跨界的箭头有几条？</td><td>威胁建模会退化成对着通用清单自问自答</td><td>§2.1</td></tr>
+      <tr><td>3</td><td>每条威胁的处置是缓解/转移/接受/消除中的哪个？</td><td class="bad-cell">既没缓解也没明确接受的威胁是悬着的</td><td>§2.3</td></tr>
+      <tr><td>4</td><td>授权判断在网关还是在资源处？</td><td class="bad-cell">在网关 = IDOR 漏洞，改 URL 里的数字就能越权</td><td>§3.1</td></tr>
+      <tr><td>5</td><td>令牌怎么撤销？延迟上界是多少？</td><td>「停用账号」这个功能其实不生效</td><td>§3.3</td></tr>
+      <tr><td>6</td><td>租户隔离在数据层有没有兜底？</td><td class="bad-cell">隔离靠「每个人写查询时都记得加条件」维持</td><td>§4.3</td></tr>
+      <tr><td>7</td><td>服务间凭什么互信？身份怎么自举？</td><td>找不到「更底层的见证者」就说明还是静态密钥</td><td>§5.2</td></tr>
+      <tr><td>8</td><td>密钥从哪来？怎么在不停机的情况下换掉？</td><td>轮换很痛 = 从不轮换 = 泄露窗口无限</td><td>§6.1、§6.2</td></tr>
+      <tr><td>9</td><td>每个主体被攻破后能做什么？其中哪些不必要？</td><td>「最小权限」停留在口号</td><td>§7.3</td></tr>
+      <tr><td>10</td><td>服务需要出网吗？默认拒绝了吗？</td><td class="bad-cell">成本几乎为零、能切断 RCE 到外泄这一步的控制被漏掉了</td><td>§7.3</td></tr>
+      <tr><td>11</td><td>「某库爆漏洞，我们哪些服务用了」多久能答出来？</td><td>应急响应的前几小时会花在翻代码上</td><td>§8.2</td></tr>
+      <tr><td>12</td><td>攻击者能不能删掉自己的审计痕迹？</td><td class="bad-cell">事后无法界定影响范围，只能按最坏情况通报</td><td>§9.1</td></tr>
+    </tbody>
+  </table>
+
+  <h3 id="s10-3">10.3 什么时候不该加这层安全</h3>
+
+  <p>安全措施不是免费的，它的成本体现在开发速度、调试难度、故障模式和运维负担上。加错地方会同时损失效率和可靠性，而<strong>并不换来安全</strong>：</p>
+
+  <table>
+    <thead><tr><th>如果……</th><th>那么哪条不值得</th><th>理由</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>单租户、内部工具、用户就是同事</td>
+        <td class="bad-cell">ADR-002 的 mTLS、§4.3 的 RLS</td>
+        <td>它们的收益来自「防范同一系统内的其它主体」，而这个场景里没有这类主体。付出的是启动依赖与调试难度</td>
+      </tr>
+      <tr>
+        <td>数据本身是公开的</td>
+        <td class="bad-cell">大部分机密性控制</td>
+        <td>该保护的是<strong>完整性与可用性</strong>（别被篡改、别被打挂），投在加密与隔离上是错配</td>
+      </tr>
+      <tr>
+        <td>团队没有能力运维它</td>
+        <td class="bad-cell">SPIRE、Vault、服务网格</td>
+        <td class="bad-cell"><strong>这是最重要的一条</strong>：一个没人会调、出问题只能整体重启的安全组件，会同时降低安全性和可用性——它成了新的故障源，而且没人敢碰</td>
+      </tr>
+      <tr>
+        <td>威胁模型里没有这个威胁</td>
+        <td>对应的控制</td>
+        <td>「别人都在做」不是理由。每一条控制都应该能指回 §2 的某条具体威胁</td>
+      </tr>
+      <tr>
+        <td>它会被绕过</td>
+        <td>那条控制</td>
+        <td>比如加了 WAF 但内网可以直连服务、要求代码评审但有紧急发布通道。<strong>有绕过路径的控制提供的是虚假的安心，比没有更危险</strong></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="box arch">
+    最后一行值得展开。安全里最危险的状态不是「没有防护」，而是<strong>「以为有防护」</strong>——前者会让人保持警惕并在决策时考虑风险，后者会让人把风险从心里划掉。<br><br>
+    所以每加一条控制，都要配一个问题：<strong>「怎么绕过它？」</strong>答不上来说明还没想清楚；答得上来就要么堵住那条路径，要么<strong>把它记进 ADR 的「后果」一栏</strong>——让后来者知道这条防线的边界在哪，而不是以为它是密不透风的。
+  </div>
+</section>
+
+<!-- =========================================================== -->
+<section class="chapter" id="s11">
+  <div class="ch-head">
+    <div class="num">11</div>
+    <div class="t">
+      <h2>高频面试题 · 安全架构</h2>
+      <div class="sub">12 道，按难度分三档</div>
+    </div>
+  </div>
+
+  <p class="qa-hint">点击每道题展开参考答案（先自测，再对照）。</p>
+
+  <h3 id="s11-1">11.1 基础（必答）</h3>
+
+  <ol class="qa-list">
+    <li><details class="qa">
+      <summary><span class="lvl basic">基础</span>认证和授权有什么区别？为什么不能都放在网关做？</summary>
+      <div class="ans">
+        <p><strong>认证</strong>回答「你是谁」，<strong>授权</strong>回答「你能对这个东西做这件事吗」。</p>
+        <div class="point good"><div class="label">关键差别在于结论的作用域</div><div><strong>认证的结论是全局的</strong>——「这是租户 42 的用户 7」在任何地方都成立，所以在网关做一次、往下游传结论是对的。<strong>授权的结论是局部的</strong>——「用户 7 能不能看报表 993」取决于报表 993 属于谁，而<strong>网关不知道报表 993 属于谁</strong>，它做不了这个判断。</div></div>
+        <div class="point bad"><div class="label">硬放在网关的后果：IDOR</div><div>网关只能按 URL 模式配规则（<code>/api/reports/* → 需要 report:read</code>），于是<strong>任何持有该权限的人都能访问任何报表，包括别的租户的</strong>。这类漏洞不需要任何技巧，改一下 URL 里的数字就行，至今是 API 安全里被利用最多的一类。</div></div>
+        <div class="point"><div class="label">正确结构</div><div>PEP（执行点）分散在每个服务里、靠近资源；PDP（决策点）集中管策略。这样策略可以集中审计和变更，而判断发生在知道资源归属的地方。</div></div>
+      </div>
+    </details></li>
+
+    <li><details class="qa">
+      <summary><span class="lvl basic">基础</span>用 JWT 做用户会话有什么问题？</summary>
+      <div class="ans">
+        <p><strong>签发出去的 JWT 在过期之前无法撤销。</strong>用户改密码、管理员踢人、账号停用、权限回收——这些都改不了已经在攻击者手里的那个令牌，它会一直有效到 <code>exp</code>。</p>
+        <div class="point bad"><div class="label">两种常见的「解决」其实没解决</div><div>① <strong>缩短过期时间</strong>：窗口从 24 小时缩到 15 分钟，但没消除；而且要配 refresh token，refresh token 又成了新的长期凭据，问题搬了个家。② <strong>每次查黑名单</strong>：这时它<strong>已经不是无状态的了</strong>，而无状态正是选 JWT 的唯一理由——此时它相比一个 128 位随机串只剩下体积大十几倍和一堆解析坑（<code>alg: none</code>、HS256/RS256 混淆）。</div></div>
+        <div class="point good"><div class="label">合理做法：分场景</div><div><strong>用户会话</strong>用不透明令牌 + 中心校验（网关缓存几秒，撤销延迟就是缓存 TTL）；<strong>服务间调用</strong>用短寿命 JWT（几分钟，过期就没了，不需要撤销机制）。</div></div>
+        <div class="point deep"><div class="label">背后的通用原则</div><div>选技术时要盯住「我为什么选它」那个理由是否还成立。<strong>理由被自己的后续决策抵消掉了，就该换回更简单的方案。</strong></div></div>
+      </div>
+    </details></li>
+
+    <li><details class="qa">
+      <summary><span class="lvl basic">基础</span>多租户系统怎么保证租户 A 看不到租户 B 的数据？</summary>
+      <div class="ans">
+        <p>关键是<strong>不能只有一层</strong>。授权层能挡住它，但授权层是代码，代码会有 bug——一个新写的查询忘了加租户条件就是一次跨租户泄露。三层，强度递增：</p>
+        <div class="point bad"><div class="label">① 应用层手动加 WHERE tenant_id</div><div>最弱。它取决于<strong>每一个写查询的人都没忘</strong>，这是概率问题不是设计问题。</div></div>
+        <div class="point"><div class="label">② 数据访问层强制注入</div><div>业务代码拿不到「不带租户条件」的查询入口。好很多，但绕过路径仍在：原生 SQL、批处理任务、运维脚本。</div></div>
+        <div class="point good"><div class="label">③ 数据库强制（PostgreSQL RLS）</div><div>连接上设 <code>app.tenant_id</code>，数据库自己过滤。<strong>即使应用层完全写错，也不会返回别人的行。</strong></div></div>
+        <div class="point deep"><div class="label">三者的关系是「②做主、③兜底、①禁止」</div><div>②管性能（让查询带上索引友好的条件），③管正确性。③把租户隔离从<strong>靠纪律维持</strong>变成<strong>结构上成立</strong>——这是安全设计里最值钱的一种转换。</div></div>
+        <div class="point warn"><div class="label">RLS 的坑</div><div>建表者和超级用户<strong>默认绕过 RLS</strong>。应用必须用非 owner 的低权限角色连接，并给表加 <code>FORCE ROW LEVEL SECURITY</code>。配完要写一个测试：用租户 A 的连接查租户 B 的行，断言返回 0 条——否则你不知道它是不是在某次迁移里被关掉了。</div></div>
+      </div>
+    </details></li>
+
+    <li><details class="qa">
+      <summary><span class="lvl basic">基础</span>密钥应该放在哪？环境变量行不行？</summary>
+      <div class="ans">
+        <p>环境变量比配置文件好一点，但仍然不行：<code>/proc/&lt;pid&gt;/environ</code> 可读、崩溃转储里有、很多框架会把整个 env 打进启动日志。</p>
+        <div class="point bad"><div class="label">各种做法的问题</div><div><strong>硬编码</strong>：进了 git 历史就永远在（删掉那一行不算修复，<strong>必须轮换</strong>）。<strong>K8s Secret</strong>：默认只是 base64 不是加密，etcd 里明文（除非开了 encryption at rest），有 namespace 读权限的人能看到全部。</div></div>
+        <div class="point good"><div class="label">正解：工作负载身份 + 密钥管理服务</div><div>进程启动时用自己的服务身份去 Vault/KMS 换一个短寿命凭据。<strong>密钥不落盘、不进镜像、不进 CI</strong>，且每次获取都有审计记录。更进一步是<strong>动态凭据</strong>——每次启动申请一个临时数据库账号，几小时后自动删除，「口令泄露」这个威胁基本消失。</div></div>
+        <div class="point deep"><div class="label">前提条件</div><div>这套做法依赖<strong>可信的服务身份</strong>。没有它，密钥服务无法判断「谁在申请」，只能用另一个密钥来认证，回到原点。所以工作负载身份是密钥管理的前置条件，两个决策互相支撑。</div></div>
+      </div>
+    </details></li>
+  </ol>
+
+  <h3 id="s11-2">11.2 中级（区分熟练度）</h3>
+
+  <ol class="qa-list" start="5">
+    <li><details class="qa">
+      <summary><span class="lvl mid">中级</span>怎么做威胁建模才不流于形式？</summary>
+      <div class="ans">
+        <div class="point good"><div class="label">从数据流图开始，不是从清单开始</div><div>拿 OWASP Top 10 逐条自问「我们有没有这个问题」，产出永远是「都考虑过了」——因为清单是通用的，威胁是具体的。<br>正确起点：画数据流图 + 标出<strong>信任边界</strong>，然后只对<strong>跨越边界的箭头</strong>问 STRIDE 六个问题。边界内部的调用不用逐个建模。</div></div>
+        <div class="point"><div class="label">STRIDE 的价值在于每类对应一组控制</div><div>Spoofing→认证、Tampering→TLS/签名/只追加日志、Repudiation→审计、Info Disclosure→授权+数据层兜底、DoS→限流隔离、Elevation→最小权限。问完六个问题，该做什么基本就清楚了。</div></div>
+        <div class="point good"><div class="label">必须定级，处置只有四种</div><div><strong>缓解 / 转移 / 接受 / 消除</strong>。产出四十条待办等于不会执行。<strong>「接受」是最被低估的动作</strong>——把「我们不防国家级 0day」显式写下来，比假装能防更负责任：后来者知道这是有意识的选择而不是遗漏。</div></div>
+        <div class="point bad"><div class="label">三个让它流于形式的原因</div><div>① <strong>做得太晚</strong>（上线后做，每条都要重构）→ 在写第一行代码前做粗的，之后每次信任边界变化时补；② <strong>由安全团队单独做</strong>（不了解业务、开发不认可）→ 由设计这个系统的人主持，安全的人参与提问；③ <strong>产出一份归档的表格</strong> → 每条缓解变成工单，每条接受写进 ADR。</div></div>
+      </div>
+    </details></li>
+
+    <li><details class="qa">
+      <summary><span class="lvl mid">中级</span>服务间调用要不要认证？怎么做？</summary>
+      <div class="ans">
+        <p>要。不做认证意味着<strong>任何一个服务被攻破，攻击者就能以任意服务的身份调用任何接口</strong>——这就是横向移动，是绝大多数大型泄露事件的中间步骤。</p>
+        <div class="point bad"><div class="label">静态 API key 不算解决</div><div>密钥在配置里、环境变量里、镜像里、有人的笔记本上；<strong>轮换需要同时改所有调用方，于是从来不轮换</strong>；而且它只证明「持有密钥」，不证明「是那个服务」。</div></div>
+        <div class="point good"><div class="label">mTLS + 短寿命证书</div><div>每个工作负载一张证书，双向验证，有效期小时级自动轮换。身份绑定到工作负载而非密钥文件，泄露窗口有界。SPIFFE 是这套做法的标准化，好处是身份可移植（跨集群、跨云、跨 K8s 与虚机）。</div></div>
+        <div class="point deep"><div class="label">真正的难点：身份自举</div><div>一个刚启动的 Pod 凭什么证明「我是 report-svc」从而拿到第一张证书？如果答案是「带一个密钥去换」，问题只是被推了一层——这就是<strong>秘密的零号问题</strong>。<br>可行答案都依赖<strong>一个比应用更可信的见证者</strong>：K8s 的 Projected SA Token（信任根是控制平面）、云厂商 IMDS（信任根是云平台，注意要用 v2 防 SSRF）、TPM 远程证明（信任根是硬件）。<br><strong>如果架构里找不到这样的见证者，那就只能退回静态密钥——这时不要假装做了零信任。</strong></div></div>
+      </div>
+    </details></li>
+
+    <li><details class="qa">
+      <summary><span class="lvl mid">中级</span>怎么在不中断服务的情况下轮换一个签名密钥？</summary>
+      <div class="ans">
+        <p><strong>双密钥窗口</strong>，四个阶段，顺序不能变：</p>
+        <div class="point"><div class="label">① 只有旧密钥 → ② 新密钥「可验证」</div><div>把新密钥加进<strong>验证集</strong>，但签发仍用旧的。<strong>必须等全部实例都完成这一步</strong>才能进入 ③。</div></div>
+        <div class="point"><div class="label">③ 新密钥「用于签发」 → ④ 移除旧密钥</div><div>切换签发方，旧密钥仍在验证集里，在途令牌不受影响。等旧密钥的验证流量归零后才移除。</div></div>
+        <div class="point bad"><div class="label">顺序反了会怎样</div><div>先切签发再让验证方认识新密钥 = <strong>一次全站鉴权失败</strong>。这是最常见的事故形态。</div></div>
+        <div class="point good"><div class="label">实现要点</div><div>验证方<strong>接受一组密钥</strong>、签发方<strong>只用其中一个</strong>——这个不对称就是双密钥窗口的全部实现。令牌里必须带 <code>kid</code>，否则验证方要逐个试，既是计时侧信道又让开销随密钥数上升。</div></div>
+        <div class="point deep"><div class="label">最容易漏的一步</div><div><strong>按 <code>kid</code> 打点统计验证次数</strong>，否则阶段 ④ 只能靠估算「应该没人用旧的了吧」。有了这个指标，退役才有明确判据。<strong>「怎么知道可以安全地删掉它」这个问题，设计时就要想好怎么回答</strong>，否则轮换永远停在阶段 ③，密钥集合只增不减。</div></div>
+        <div class="point warn"><div class="label">还有一处</div><div>签名比较必须用<strong>恒定时间</strong>。普通 <code>memcmp</code> 在第一个不同字节就返回，攻击者可以按字节爆破。</div></div>
+      </div>
+    </details></li>
+
+    <li><details class="qa">
+      <summary><span class="lvl mid">中级</span>RBAC 不够用了怎么办？</summary>
+      <div class="ans">
+        <p>RBAC 的典型崩塌是<strong>角色爆炸</strong>：为了表达「华东区的销售经理能看华东区的报表」，要造出「华东区销售经理」这个角色，于是<strong>角色数 = 各维度的笛卡尔积</strong>。</p>
+        <div class="point"><div class="label">三条演进路径</div><div><strong>ABAC</strong>（基于属性）：规则写成表达式 <code>user.region == resource.region &amp;&amp; user.level >= 3</code>，擅长多维度与动态上下文；代价是可读性差、难以回答「谁能访问 X」这个反向问题。<br><strong>ReBAC</strong>（基于关系）：权限沿关系图继承（Google Zanzibar），擅长层级资源与共享；代价是要维护关系图并保证查询快，以及权限撤销后的缓存一致性。<br><strong>混合</strong>：实践中的常见答案。</div></div>
+        <div class="point good"><div class="label">固定的演进顺序</div><div>先 RBAC 管粗粒度 → 遇到角色爆炸时给关键维度加 ABAC 条件 → 有共享/层级需求时局部引入 ReBAC。<strong>特别注意不要把租户维度做成角色</strong>，那是角色爆炸最常见的起因。</div></div>
+        <div class="point deep"><div class="label">但真正要早做的不是选模型</div><div>而是<strong>把授权判断收拢到一个地方</strong>（PEP/PDP 分离）。模型可以换，散落在几十个 <code>if</code> 里的判断换不动。</div></div>
+      </div>
+    </details></li>
+  </ol>
+
+  <h3 id="s11-3">11.3 高级（体现深度）</h3>
+
+  <ol class="qa-list" start="9">
+    <li><details class="qa">
+      <summary><span class="lvl adv">高级</span>「零信任」到底改变了什么？怎么判断一个系统真的做到了？</summary>
+      <div class="ans">
+        <p>它精确地否定一条假设：<strong>「网络位置 = 信任级别」</strong>。传统边界模型里内网可信、防线集中在边界；一旦有人进到内网（VPN 凭据泄露、供应链、SSRF），他就获得了内网的全部信任。</p>
+        <div class="point good"><div class="label">实际改变的三件事</div><div>① 服务间要互相认证（mTLS + 工作负载身份）；② 授权要在<strong>每个资源处</strong>判断，不能只在边缘；③ 网络策略<strong>默认拒绝</strong>而非默认允许。</div></div>
+        <div class="point warn"><div class="label">澄清</div><div>零信任<strong>不等于不要网络边界</strong>。防火墙和网络策略仍然是纵深防御的一层，只是不再是唯一的那层。</div></div>
+        <div class="point deep"><div class="label">一个很实用的检验</div><div><strong>「如果攻击者已经在集群里拿到了一个 Pod 的代码执行，他能做的事情比外部攻击者多多少？」</strong>如果答案是「多很多」，那不管部署了什么产品，信任仍然建立在网络位置上。</div></div>
+        <div class="point"><div class="label">投入产出比最高的一条</div><div><strong>默认拒绝出网。</strong>绝大多数攻击拿到代码执行后，下一步都是回连 C2 或外传数据；一条 egress deny 策略就能把「RCE」和「数据外泄」切断。成本几乎为零（多数内部服务本来就不需要访问互联网），但<strong>默认配置是允许的，需要有人显式做一次</strong>。</div></div>
+      </div>
+    </details></li>
+
+    <li><details class="qa">
+      <summary><span class="lvl adv">高级</span>供应链安全怎么做？SBOM 有什么用？</summary>
+      <div class="ans">
+        <p>先认清规模：<strong>一个典型镜像里自研代码通常不到 5%</strong>，其余是运行时、框架、传递依赖和基础镜像里的系统包。花在自研代码上的全部安全投入，覆盖的是攻击面的 5%。</p>
+        <div class="point"><div class="label">三种形态，防法不同</div><div><strong>已知漏洞</strong>（CVE）：扫描 + 升级，难点是噪音——大量 CVE 其实不在你的调用路径上。<strong>恶意包</strong>（抢注、维护者账号被盗）：钉版 + 锁文件 + 新依赖人工评审。<strong>构建过程被污染</strong>：最难，需要可复现构建 + 产物签名 + 部署验签（SLSA）。</div></div>
+        <div class="point bad"><div class="label">一个真实的张力</div><div>「及时升级修 CVE」与「不自动升级防投毒」直接冲突。<strong>「自动升级到最新补丁版本」这个看起来负责任的做法，恰恰是投毒攻击的传送带</strong>——攻击者拿到一个流行小库的账号，发个补丁版本，几小时内被成千上万项目自动拉取。<br>没有两全的答案，只有一个显式的取舍点：常规升级定期批量做（有人 review），安全补丁走快速通道但仍需一次人工确认。</div></div>
+        <div class="point good"><div class="label">SBOM 解决什么</div><div>它解决<strong>「我受影响吗」</strong>：某库爆漏洞时，「我们哪些服务、哪些版本用了它」是一次查询而不是几小时翻代码——<strong>而这几小时正是攻击者的窗口</strong>。</div></div>
+        <div class="point bad"><div class="label">SBOM 不解决什么</div><div>它<strong>不是安全措施</strong>，只是清单：不评估漏洞、不判断可达性、不阻止任何东西被引入。把它当安全措施是常见误解——它是<strong>应急响应的基础设施</strong>，价值在事故发生那一刻兑现。配套要做<strong>可达性分析</strong>，它通常能把需要处理的 CVE 降一个数量级，而降噪本身就是安全价值。</div></div>
+      </div>
+    </details></li>
+
+    <li><details class="qa">
+      <summary><span class="lvl adv">高级</span>假设系统已经被攻破，你的设计要保证什么？</summary>
+      <div class="ans">
+        <p>入侵的平均发现时间以<strong>周</strong>计，很多还是被外部通报的。所以要能回答三个问题：<strong>我能发现吗？能知道他动了什么吗？能证明哪些租户受影响吗？</strong>最后一个在多租户 SaaS 里是合规通报的前提——答不出来就只能按最坏情况通知全部客户。</p>
+        <div class="point good"><div class="label">审计日志的三条硬要求</div><div>① <strong>只能追加，攻击者删不掉</strong>：应用只有 append 权限，日志实时推到<strong>另一个信任域</strong>（不同账号、不同集群）。② <strong>能回答四个 W</strong>：谁（主体身份不是 IP）、何时、对什么（资源 ID + 租户 ID）、结果。<strong>拒绝也要记</strong>——一连串被拒绝的访问正是探测行为的特征。③ <strong>和业务日志分开</strong>：留存期要求不同，访问权限要求也不同。</div></div>
+        <div class="point warn"><div class="label">一个反直觉的风险</div><div><strong>审计日志本身可能泄露敏感数据。</strong>记「谁查了什么」时很容易把查询参数整个记下来，而审计日志的访问权限通常比业务库更宽（安全、合规、运维都要看），于是它成了新的泄露点。<strong>记资源标识，不记资源内容。</strong></div></div>
+        <div class="point good"><div class="label">怎么选告警信号</div><div>问一个问题：<strong>「有没有哪个事件，在系统健康时永远不会发生？」</strong>跨租户访问被拒绝、被拒绝的出网连接、容器里起了 shell——这些是<strong>零噪音、出现一次就该看</strong>的信号，不需要调阈值、不随流量增长误报、不因扩容失效。<br>相比之下「错误率超过 5%」这类阈值告警既要不断调参又容易被淹没。<strong>安全告警最容易犯的错是告警太多，然后所有人都不看了。</strong></div></div>
+      </div>
+    </details></li>
+
+    <li><details class="qa">
+      <summary><span class="lvl adv">高级</span>什么时候不该加安全措施？</summary>
+      <div class="ans">
+        <p>安全措施的成本体现在开发速度、调试难度、故障模式和运维负担上。加错地方会同时损失效率和可靠性，<strong>而并不换来安全</strong>。</p>
+        <div class="point"><div class="label">五条反向判据</div><div>① <strong>单租户、内部工具</strong>：mTLS 与 RLS 的收益来自「防范同一系统内的其它主体」，这个场景里没有这类主体。② <strong>数据本身公开</strong>：该保护的是完整性与可用性，投在机密性上是错配。③ <strong>威胁模型里没有这个威胁</strong>：「别人都在做」不是理由，每条控制都应能指回一条具体威胁。④ <strong>它会被绕过</strong>：加了 WAF 但内网能直连、要求代码评审但有紧急发布通道。</div></div>
+        <div class="point bad"><div class="label">⑤ 最重要的一条：团队没有能力运维它</div><div>一个没人会调、出问题只能整体重启的安全组件（SPIRE、Vault、服务网格），会<strong>同时降低安全性和可用性</strong>——它成了新的故障源，而且没人敢碰。</div></div>
+        <div class="point deep"><div class="label">最危险的状态</div><div>不是「没有防护」，而是<strong>「以为有防护」</strong>。前者会让人保持警惕、在决策时考虑风险；后者会让人把风险从心里划掉。<br>所以每加一条控制都要配一个问题：<strong>「怎么绕过它？」</strong>答不上来说明还没想清楚；答得上来就要么堵住那条路径，要么<strong>把它写进 ADR 的「后果」一栏</strong>——让后来者知道这条防线的边界在哪。</div></div>
+      </div>
+    </details></li>
+  </ol>
+</section>
+
+<div class="footer-nav">
+  <a href="architecture_methodology.html">← 架构方法论 · C4 / ATAM / ADR</a>
+  <a href="resilience_patterns.html">相关 · 限流 · 熔断 · 降级 · 隔离</a>
+  <a href="high_concurrency_gateway.html">相关 · IoT 接入网关（mTLS 与证书生命周期）</a>
+  <a href="cloud_native_kubernetes.html">相关 · 云原生与 Kubernetes</a>
+  <a href="../system/linux_security_model.html">相关 · Linux 安全模型（系统层）</a>
+  <a href="system_architecture_directory.html">目录</a>
+  <a href="../index.html">主页</a>
+</div>
+
+
+
+</main>
+</div>
+
+<script>
+(function () {
+  var sections = document.querySelectorAll('section.chapter');
+  var links = document.querySelectorAll('aside.toc nav a');
+  if (!sections.length || !links.length) return;
+  var obs = new IntersectionObserver(function (entries) {
+    entries.forEach(function (e) {
+      if (!e.isIntersecting) return;
+      var href = '#' + e.target.id;
+      links.forEach(function (a) { a.classList.toggle('active', a.getAttribute('href') === href); });
+    });
+  }, { rootMargin: '-30% 0px -60% 0px' });
+  sections.forEach(function (s) { obs.observe(s); });
+})();
+</script>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

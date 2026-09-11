@@ -1,0 +1,796 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>虚拟化与虚机 I/O · KVM / VM Exit / virtio / vhost / SR-IOV / 轻量 VM / 虚机上的低延迟 — Tech Notes</title>
+<meta name="description" content="容器讲透了，虚机是空白：KVM 靠硬件把「执行」变成几乎零开销、真正的成本全在 VM Exit；virtio 为什么比模拟设备快三个数量级，vhost 与 vhost-user 又各省掉哪一跳；SR-IOV 直通的代价是失去迁移；裸金属/虚机/容器的隔离强度与性能对照；以及在虚机上做低延迟必须处理的 steal time、时钟与 NUMA 拓扑">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<style>
+  body { overflow-x: hidden; }
+  main { min-width: 0; }
+  section.chapter > h2 { color: var(--accent); font-size: 1.5rem; margin: 0 0 1rem; padding-bottom: .5rem; border-bottom: 1px solid var(--border); }
+
+  .intuition{background:color-mix(in srgb,var(--accent) 8%,var(--bg-card));border-left:4px solid var(--accent-4);padding:14px 18px;border-radius:0 10px 10px 0;margin:14px 0;font-size:14px;line-height:1.7}
+  .intuition::before{content:"🎯 关键 · ";color:var(--accent-4);font-weight:700;font-size:13px}
+  .box.num { border-left: 4px solid var(--accent-3); background: color-mix(in srgb, var(--accent-3) 8%, var(--bg-card)); padding: 14px 18px; border-radius: 0 8px 8px 0; margin: 16px 0; }
+  .box.num::before { content: "🧮 算一下: "; color: var(--accent-3); font-weight: 700; }
+  .box.trap { border-left: 4px solid var(--danger); background: color-mix(in srgb, var(--danger) 8%, var(--bg-card)); padding: 14px 18px; border-radius: 0 8px 8px 0; margin: 16px 0; }
+  .box.trap::before { content: "💣 事故形态: "; color: var(--danger); font-weight: 700; }
+  .box.deep { border-left: 4px solid var(--accent-2); background: color-mix(in srgb, var(--accent-2) 8%, var(--bg-card)); padding: 14px 18px; border-radius: 0 8px 8px 0; margin: 16px 0; }
+  .box.deep::before { content: "⭐ 再深一层: "; color: var(--accent-2); font-weight: 700; }
+
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 16px 0; }
+  .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin: 16px 0; }
+  @media (max-width: 760px) { .grid-2, .grid-3 { grid-template-columns: 1fr; } }
+  .grid-2 > *, .grid-3 > * { min-width: 0; }
+  .panel { border: 1px solid var(--border); border-radius: 9px; padding: 12px 14px; background: var(--bg-card); min-width: 0; }
+  .panel > h4 { margin: 0 0 6px; font-size: 14px; }
+  .panel.good { border-left: 3px solid var(--accent-3); }
+  .panel.bad { border-left: 3px solid var(--danger); }
+  .panel.mid { border-left: 3px solid var(--accent-4); }
+  .panel.info { border-left: 3px solid var(--accent); }
+  .good-cell { background: color-mix(in srgb, var(--accent-3) 10%, transparent); }
+  .bad-cell { background: color-mix(in srgb, var(--danger) 10%, transparent); }
+  .mid-cell { background: color-mix(in srgb, var(--accent-4) 10%, transparent); }
+  .win { color: var(--accent-3); font-weight: 700; }
+  .lose { color: var(--danger); font-weight: 700; }
+
+  .fig { margin: 22px 0; overflow-x: auto; }
+  .fig svg { max-width: 100%; height: auto; }
+  .fig figcaption { font-size: 12.5px; color: var(--text-dim); margin-top: 8px; text-align: center; }
+  .fig .box   { fill: var(--bg-card-2); stroke: var(--border-2); stroke-width: 1.2; }
+  .fig .box-a { fill: color-mix(in srgb, var(--accent) 14%, var(--bg-card)); stroke: var(--accent); stroke-width: 1.2; }
+  .fig .box-g { fill: color-mix(in srgb, var(--accent-3) 14%, var(--bg-card)); stroke: var(--accent-3); stroke-width: 1.2; }
+  .fig .box-p { fill: color-mix(in srgb, var(--accent-2) 14%, var(--bg-card)); stroke: var(--accent-2); stroke-width: 1.2; }
+  .fig .box-y { fill: color-mix(in srgb, var(--accent-4) 14%, var(--bg-card)); stroke: var(--accent-4); stroke-width: 1.2; }
+  .fig .box-r { fill: color-mix(in srgb, var(--danger) 14%, var(--bg-card)); stroke: var(--danger); stroke-width: 1.2; }
+  .fig .t  { fill: var(--text); font-size: 12px; }
+  .fig .tb { fill: var(--text); font-size: 12.5px; font-weight: 700; }
+  .fig .ts { fill: var(--text-dim); font-size: 10.5px; }
+  .fig .tm { fill: var(--text-dim); font-size: 10.5px; font-family: var(--mono); }
+  .fig .ta { fill: var(--accent); font-size: 11.5px; font-weight: 700; }
+  .fig .tg { fill: var(--accent-3); font-size: 11px; font-weight: 600; }
+  .fig .ty { fill: var(--accent-4); font-size: 11px; font-weight: 600; }
+  .fig .tr { fill: var(--danger); font-size: 11px; font-weight: 600; }
+  .fig .tp { fill: var(--accent-2); font-size: 11px; font-weight: 600; }
+  .fig .ln   { stroke: var(--border-2); stroke-width: 1.4; fill: none; }
+  .fig .ln-a { stroke: var(--accent); stroke-width: 1.7; fill: none; }
+  .fig .ln-g { stroke: var(--accent-3); stroke-width: 1.7; fill: none; }
+  .fig .ln-r { stroke: var(--danger); stroke-width: 1.7; fill: none; }
+  .fig .ln-y { stroke: var(--accent-4); stroke-width: 1.7; fill: none; }
+  .fig .ln-d { stroke: var(--text-mute); stroke-width: 1.2; fill: none; stroke-dasharray: 4 3; }
+  .fig .ar-a { fill: var(--accent); }
+  .fig .ar-g { fill: var(--accent-3); }
+  .fig .ar-r { fill: var(--danger); }
+  .fig .grid { stroke: var(--border); stroke-width: .8; fill: none; }
+</style>
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav tn-shell-overlay ps">
+
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="linux_system_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 30 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="progress" id="progress"></div>
+
+<div class="layout">
+  <aside class="toc"><h2>虚拟化与虚机 I/O</h2><nav><ol>
+    <li><a href="#s1">虚拟化到底虚拟了什么</a>
+      <ol>
+        <li><a href="#s1-1">三样东西：CPU、内存、设备</a></li>
+        <li><a href="#s1-2">执行几乎免费，退出才要钱</a></li>
+      </ol>
+    </li>
+    <li><a href="#s2">VM Exit：所有开销的来源</a>
+      <ol>
+        <li><a href="#s2-1">一次退出的成本</a></li>
+        <li><a href="#s2-2">哪些操作会触发退出</a></li>
+        <li><a href="#s2-3">怎么观测</a></li>
+      </ol>
+    </li>
+    <li><a href="#s3">内存虚拟化：两层页表</a>
+      <ol>
+        <li><a href="#s3-1">EPT 与两维页表走查</a></li>
+        <li><a href="#s3-2">为什么虚机里更该用大页</a></li>
+        <li><a href="#s3-3">内存超卖的三种手段与代价</a></li>
+      </ol>
+    </li>
+    <li><a href="#s4">设备虚拟化：从模拟到直通</a>
+      <ol>
+        <li><a href="#s4-1">四档方案与它们省掉了什么</a></li>
+        <li><a href="#s4-2">virtio 快在哪</a></li>
+        <li><a href="#s4-3">vhost 与 vhost-user</a></li>
+        <li><a href="#s4-4">SR-IOV 的代价是失去迁移</a></li>
+      </ol>
+    </li>
+    <li><a href="#s5">裸金属 vs 虚机 vs 容器</a>
+      <ol>
+        <li><a href="#s5-1">隔离强度与性能对照</a></li>
+        <li><a href="#s5-2">轻量 VM 为什么出现</a></li>
+        <li><a href="#s5-3">怎么选</a></li>
+      </ol>
+    </li>
+    <li><a href="#s6">在虚机上做低延迟</a>
+      <ol>
+        <li><a href="#s6-1">steal time：看不见的抢占</a></li>
+        <li><a href="#s6-2">NUMA 拓扑必须穿透</a></li>
+        <li><a href="#s6-3">一张调优清单</a></li>
+      </ol>
+    </li>
+    <li><a href="#s7">排障与速查</a>
+      <ol>
+        <li><a href="#s7-1">症状 → 原因 → 命令</a></li>
+        <li><a href="#s7-2">参数速查</a></li>
+      </ol>
+    </li>
+    <li><a href="#s8">面试题（12 道）</a>
+      <ol>
+        <li><a href="#s8-1">8.1 基础</a></li>
+        <li><a href="#s8-2">8.2 中级</a></li>
+        <li><a href="#s8-3">8.3 高级</a></li>
+      </ol>
+    </li>
+  </ol></nav></aside>
+
+  <main>
+    <header class="hero">
+      <div class="badge">Linux System · Virtualization · 2026</div>
+      <h1>虚拟化与虚机 I/O</h1>
+      <p class="sub">
+        <a href="cgroup_namespace_containers.html">容器底层</a>那一篇把 namespace 和 cgroup 讲透了，虚机这一侧一直是空白。这一篇补上：KVM 的开销到底在哪（不在「执行」，在「退出」）、virtio 凭什么比模拟设备快三个数量级、SR-IOV 直通换走了什么、以及在虚机上跑低延迟服务必须处理的那几件事。
+      </p>
+      <div class="meta-row">
+        <span class="pill red">核心难度 ★★★★☆</span>
+        <span class="pill cyan">系统底层</span>
+        <span class="pill green">阅读时长 ~30 min</span>
+        <span class="pill amber">前置 内存管理 · 中断 · 容器</span>
+      </div>
+    </header>
+
+    <section class="chapter" id="s1">
+      <div class="ch-head"><div class="num">01</div><div class="t"><h2>虚拟化到底虚拟了什么</h2><div class="sub">三样东西，难度和开销完全不同</div></div></div>
+
+      <h3 id="s1-1">1.1 三样东西：CPU、内存、设备</h3>
+
+      <table>
+        <thead><tr><th>要虚拟的</th><th>难在哪</th><th>硬件怎么帮忙</th><th>剩下多少开销</th></tr></thead>
+        <tbody>
+          <tr class="good-cell">
+            <td><strong>CPU</strong></td>
+            <td>客户机以为自己有特权，但不能真的碰硬件</td>
+            <td>VT-x / AMD-V：给 CPU 加一个「客户机模式」，普通指令<strong>原生执行</strong>，只有特权操作才陷出</td>
+            <td class="good-cell">纯计算几乎为零（&lt; 2%）</td>
+          </tr>
+          <tr>
+            <td><strong>内存</strong></td>
+            <td>客户机的「物理地址」其实是宿主的虚拟地址，要翻译两次</td>
+            <td>EPT / NPT：硬件做两层页表走查</td>
+            <td class="mid-cell">TLB 命中时为零；<strong>miss 时页表走查从 4 次变 24 次</strong>（§3.1）</td>
+          </tr>
+          <tr class="bad-cell">
+            <td><strong>设备</strong></td>
+            <td class="bad-cell">网卡、磁盘是真实存在的，一份要给多个客户机用</td>
+            <td>没有通用的硬件方案——这是全部开销的所在</td>
+            <td class="bad-cell"><strong>从 3 个数量级到接近零</strong>，取决于用哪一档方案（§4）</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="intuition">
+        这张表的结论决定了整篇文章的重心：<strong>CPU 和内存的虚拟化已经被硬件解决得很好了，虚机慢，慢在 I/O。</strong>所以 §4 是全篇最长的一章，而「虚机性能调优」这件事，九成的工作是在选对设备虚拟化方案。
+      </div>
+
+      <h3 id="s1-2">1.2 执行几乎免费，退出才要钱</h3>
+
+      <p>KVM 的模型很简单：宿主上的 <code>qemu</code> 进程通过 <code>/dev/kvm</code> 请求内核把某个线程<strong>切换到客户机模式</strong>去跑。切进去之后，客户机的代码<strong>直接在物理 CPU 上执行</strong>——不是解释，不是翻译，就是原生指令。</p>
+
+      <div class="fig">
+        <svg viewBox="0 0 940 300" style="min-width:740px;height:auto" role="img" aria-label="KVM 的执行模型：vCPU 线程通过 ioctl 进入客户机模式后客户机代码原生执行开销接近零；遇到特权操作或外部中断时发生 VM Exit 切回宿主，由 KVM 内核模块处理或转给 QEMU 用户态处理，处理完再 VM Entry 回去；所有开销都集中在这个退出与返回的循环上">
+          <rect class="box-p" x="20" y="46" width="200" height="90" rx="8"/>
+          <text class="tb" x="34" y="70">QEMU 用户态</text>
+          <text class="ts" x="34" y="90">设备模拟、迁移、管理</text>
+          <text class="tr" x="34" y="112">处理一次退出：</text>
+          <text class="tr" x="34" y="128">数微秒到数十微秒</text>
+
+          <rect class="box-a" x="20" y="156" width="200" height="86" rx="8"/>
+          <text class="tb" x="34" y="180">KVM 内核模块</text>
+          <text class="ts" x="34" y="200">在内核里直接处理</text>
+          <text class="ty" x="34" y="222">大部分退出在这里就返回</text>
+          <text class="tm" x="34" y="238">约 1–3 μs</text>
+
+          <rect class="box-g" x="500" y="86" width="420" height="120" rx="10"/>
+          <text class="tb" x="516" y="110">客户机模式（Guest / non-root）</text>
+          <text class="tg" x="516" y="134">客户机代码<tspan class="tg">原生在物理 CPU 上执行</tspan></text>
+          <text class="ts" x="516" y="156">不是解释，不是二进制翻译</text>
+          <text class="tm" x="516" y="178">纯计算负载在这里跑，开销 &lt; 2%</text>
+          <text class="tm" x="516" y="196">——这也是为什么「虚机跑计算不慢」</text>
+
+          <path class="ln-r" d="M500 120 H240 V90"/><path class="ar-r" d="M235 90 l5 -8 5 8 z"/>
+          <text class="tr" x="300" y="112">VM Exit（特权操作 / 中断 / EPT 缺页）</text>
+          <path class="ln-g" d="M240 200 H460 V160 H492"/><path class="ar-g" d="M492 155 l8 5 -8 5 z"/>
+          <text class="tg" x="300" y="194">VM Entry（处理完，回去接着跑）</text>
+
+          <rect class="box-r" x="20" y="252" width="900" height="40" rx="7"/>
+          <text class="t" x="36" y="277">所以「虚拟化开销」这个说法不准确：<strong>执行是免费的，开销全在这个退出—处理—返回的循环上</strong>。要优化虚机性能，就是要<tspan class="ta">减少退出次数</tspan>。</text>
+        </svg>
+        <figcaption>图 1 · KVM 的执行模型。理解这一张图，后面所有的优化手段（virtio、vhost、SR-IOV、大页）都是同一个目标的不同做法：<strong>少退出</strong>。</figcaption>
+      </div>
+    </section>
+
+    <section class="chapter" id="s2">
+      <div class="ch-head"><div class="num">02</div><div class="t"><h2>VM Exit：所有开销的来源</h2><div class="sub">把它当成一次「特别贵的系统调用」来理解</div></div></div>
+
+      <h3 id="s2-1">2.1 一次退出的成本</h3>
+
+      <div class="box num">
+        一次 VM Exit + Entry 的往返，硬件部分（保存/恢复客户机状态、切页表根、刷新部分 TLB）大约 <strong>1000–2000 个周期</strong>，也就是 <strong>0.3–0.7 μs</strong>。再加上处理逻辑：<br><br>
+        · <strong>KVM 内核里就能处理完</strong>（比如访问虚拟 APIC）：合计约 <strong>1–3 μs</strong>；<br>
+        · <strong>要退到 QEMU 用户态处理</strong>（比如模拟一次 PIO 读）：还要再加一次内核到用户态的往返和设备模拟逻辑，合计 <strong>数微秒到数十微秒</strong>。<br><br>
+        对比：一次普通系统调用约 0.1–0.6 μs。<strong>退到 QEMU 的那种退出，比系统调用贵一到两个数量级。</strong>
+      </div>
+
+      <p>把这个单价乘上频率就知道问题在哪了。一个模拟的 e1000 网卡，收发一个包要访问好几次寄存器，每次都是一个 PIO/MMIO 退出——<strong>单包成本几十微秒</strong>，于是万兆网卡在虚机里只能跑出几万 pps。这就是 §4 存在的全部理由。</p>
+
+      <h3 id="s2-2">2.2 哪些操作会触发退出</h3>
+
+      <table>
+        <thead><tr><th>触发原因</th><th>频率</th><th>能不能消除</th></tr></thead>
+        <tbody>
+          <tr class="bad-cell"><td><strong>访问模拟设备的寄存器</strong>（PIO / MMIO）</td><td class="bad-cell">极高——每个 I/O 操作几次</td><td class="good-cell">能：换 virtio（批量化）或 SR-IOV（直通，完全不退出）</td></tr>
+          <tr><td><strong>EPT violation</strong>（客户机物理页还没建立映射）</td><td>启动时密集，之后收敛</td><td>能：预分配内存 + 大页（§3.2）</td></tr>
+          <tr><td><strong>外部中断</strong>（网卡、定时器）</td><td>中高</td><td>部分：中断合并、APICv/posted interrupt 让中断直接投递给客户机不退出</td></tr>
+          <tr><td><code>HLT</code>（客户机空闲）</td><td>取决于负载</td><td>可调：<code>halt_poll_ns</code> 让 vCPU 先自旋一会儿再真退出</td></tr>
+          <tr><td><code>CPUID</code>、访问某些 MSR</td><td>低</td><td>不用管</td></tr>
+          <tr class="mid-cell"><td><strong>自旋锁的 PLE</strong>（Pause-Loop Exiting）</td><td class="mid-cell">vCPU 超卖时很高</td><td>这是<strong>特性不是 bug</strong>：客户机在自旋等一把锁，而持锁的 vCPU 没被调度，退出让宿主去调度它（§6.1）</td></tr>
+        </tbody>
+      </table>
+
+      <div class="box deep">
+        最后一行值得展开，它是虚机上一个非常隐蔽的性能问题的根源：<strong>客户机内核的自旋锁假设「持锁者正在另一个 CPU 上跑」</strong>，所以自旋等待是划算的。但在虚机里，持锁的那个 vCPU 可能<strong>根本没有被宿主调度</strong>——它在 runqueue 里排队。此时其它 vCPU 的自旋是纯粹的浪费，而且它们还占着宿主的 CPU，让持锁者更难被调度到。<br><br>
+        这就是 <strong>Lock Holder Preemption</strong>，vCPU 超卖时它会让性能断崖式下跌。缓解手段是 PLE（自旋太久就退出，把 CPU 让给宿主去调度持锁者）和<strong>准虚拟化自旋锁</strong>（客户机知道自己在虚机里，自旋一会儿就直接让出而不是死等）。<br>
+        <strong>但最有效的还是不超卖 vCPU</strong>——这也是低延迟场景要独占物理核的原因之一（§6）。
+      </div>
+
+      <h3 id="s2-3">2.3 怎么观测</h3>
+
+      <table>
+        <thead><tr><th>命令</th><th>看什么</th></tr></thead>
+        <tbody>
+          <tr><td><code>kvm_stat</code> / <code>perf kvm stat live</code></td><td class="good-cell">最直接：按原因分类的退出次数与耗时。<strong>先看 <code>exits</code> 的绝对值和 top 原因</strong></td></tr>
+          <tr><td><code>perf kvm --host --guest record</code></td><td>同时采样宿主和客户机，看时间花在哪一侧</td></tr>
+          <tr><td><code>cat /sys/kernel/debug/kvm/*</code></td><td>各类计数器的原始值</td></tr>
+          <tr><td>客户机里 <code>vmstat 1</code> 的 <code>st</code> 列</td><td>steal time——从客户机视角看「我被抢走了多少」（§6.1）</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="chapter" id="s3">
+      <div class="ch-head"><div class="num">03</div><div class="t"><h2>内存虚拟化：两层页表</h2><div class="sub">TLB 命中时零开销，miss 时成本是原来的六倍</div></div></div>
+
+      <h3 id="s3-1">3.1 EPT 与两维页表走查</h3>
+
+      <p>客户机以为自己在操作物理内存，其实它的「物理地址」（GPA）还要再翻译一次才能得到宿主的物理地址（HPA）。硬件用 EPT（Intel）/ NPT（AMD）来做这层翻译，客户机的页表照常用，两层都由硬件走查。</p>
+
+      <div class="box num">
+        代价在 TLB miss 时暴露。裸机上一次四级页表走查是 <strong>4 次内存访问</strong>。<br>
+        虚机里，客户机页表的<strong>每一级</strong>都存在客户机物理地址里，而每一个 GPA 又都要过一遍 EPT 的四级走查：<br>
+        <code>(4 + 1) × 4 = <strong>20~24 次内存访问</strong></code>——<strong>大约 6 倍。</strong><br><br>
+        TLB 命中时这些全都不发生，所以对工作集小的负载完全无感；但对<strong>随机访问大内存</strong>的负载（数据库、大图、稀疏矩阵），TLB miss 频繁，这 6 倍就实实在在地出现了。
+      </div>
+
+      <h3 id="s3-2">3.2 为什么虚机里更该用大页</h3>
+
+      <p><a href="numa_memory_advanced.html">NUMA 与高级内存管理</a>那篇讲过大页减少 TLB miss 的道理。在虚机里这个收益<strong>被放大了</strong>，因为每一次 miss 的代价是裸机的 6 倍：</p>
+
+      <div class="grid-2">
+        <div class="panel good">
+          <h4>客户机内用大页</h4>
+          <p>减少客户机页表的层数与 TLB 压力。收益和裸机一样。</p>
+        </div>
+        <div class="panel good">
+          <h4>宿主给客户机内存用大页（更重要）</h4>
+          <p>让 <strong>EPT 那一层</strong>也用大页，把 <code>(4+1)×4</code> 里的第二个 4 降下来。<br>做法是宿主侧用 <code>hugetlbfs</code> 预分配客户机内存。<strong>顺带还消除了 EPT violation 的启动尖峰</strong>，因为内存是预先分配好的。</p>
+        </div>
+      </div>
+
+      <div class="intuition">
+        「宿主用大页」还有一个附带好处，对低延迟场景很关键：<strong>预分配的大页不会被换出、不会被 KSM 合并、也不会触发 THP 的 khugepaged 后台整理。</strong>这三样都是延迟毛刺的来源。<br>
+        代价是这块内存<strong>被这台虚机独占了</strong>，宿主不能再超卖——这正是下一节的取舍。
+      </div>
+
+      <h3 id="s3-3">3.3 内存超卖的三种手段与代价</h3>
+
+      <table>
+        <thead><tr><th>手段</th><th>怎么做</th><th>代价</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><strong>Ballooning</strong></td>
+            <td>客户机里装一个「气球」驱动，宿主让它申请内存并归还给宿主</td>
+            <td class="mid-cell">需要客户机配合；<strong>回收速度慢</strong>，救不了突发；客户机会以为自己内存变少了</td>
+          </tr>
+          <tr>
+            <td><strong>KSM</strong>（同页合并）</td>
+            <td>宿主扫描内存，把内容相同的页合并成一份写时复制</td>
+            <td class="bad-cell">扫描本身耗 CPU；<strong>写入时触发 CoW 造成延迟毛刺</strong>；而且它是一条已知的<strong>侧信道</strong>（通过写入延迟能推断别的虚机有没有同样的页）</td>
+          </tr>
+          <tr>
+            <td><strong>Swap</strong></td>
+            <td>宿主把客户机内存换出</td>
+            <td class="bad-cell">最糟：客户机完全不知道，它以为自己在访问「物理内存」。<strong>一次访问从纳秒变成毫秒</strong>，而客户机内部的所有调度和超时判断都没考虑这种可能</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="box trap">
+        宿主 swap 客户机内存是虚机性能问题里最难查的一类：<strong>客户机内部看不到任何异常</strong>——它的内存使用率正常、没有 swap、CPU 也不高，只是所有操作都莫名其妙地慢，而且慢得毫无规律。<br>
+        只有在宿主侧看 <code>vmstat</code> 的 <code>si/so</code> 才能发现。<strong>所以「虚机很慢但客户机内部什么都看不出来」时，第一个要问的是宿主的内存有没有超卖。</strong>
+      </div>
+    </section>
+
+    <section class="chapter" id="s4">
+      <div class="ch-head"><div class="num">04</div><div class="t"><h2>设备虚拟化：从模拟到直通</h2><div class="sub">虚机性能调优九成的工作在这一章</div></div></div>
+
+      <h3 id="s4-1">4.1 四档方案与它们省掉了什么</h3>
+
+      <div class="fig">
+        <svg viewBox="0 0 960 330" style="min-width:780px;height:auto" role="img" aria-label="设备虚拟化四档方案的数据路径对比：全模拟每次寄存器访问都要退出到QEMU；virtio用共享环形队列批量化把每包退出降到每批一次；vhost把后端搬进内核省掉到QEMU的那一跳；SR-IOV让虚机直接拥有一个硬件虚拟功能完全不经过宿主软件栈">
+          <rect class="box-r" x="20" y="34" width="920" height="62" rx="8"/>
+          <text class="tb" x="36" y="56">① 全模拟（e1000 / IDE）</text>
+          <rect class="box" x="230" y="44" width="100" height="24" rx="3"/><text class="ts" x="244" y="61">客户机驱动</text>
+          <rect class="box-r" x="342" y="44" width="120" height="24" rx="3"/><text class="ts" x="352" y="61">每次寄存器→退出</text>
+          <rect class="box-r" x="474" y="44" width="110" height="24" rx="3"/><text class="ts" x="486" y="61">QEMU 模拟</text>
+          <rect class="box" x="596" y="44" width="100" height="24" rx="3"/><text class="ts" x="610" y="61">宿主内核</text>
+          <text class="tr" x="716" y="61">单包几十 μs，几万 pps 封顶</text>
+          <text class="tm" x="36" y="84">优点：客户机不用装任何东西，什么系统都能跑。<tspan class="tr">缺点：慢三个数量级。</tspan>只该用于装机和兼容老系统。</text>
+
+          <rect class="box-y" x="20" y="106" width="920" height="62" rx="8"/>
+          <text class="tb" x="36" y="128">② virtio（准虚拟化）</text>
+          <rect class="box" x="230" y="116" width="100" height="24" rx="3"/><text class="ts" x="240" y="133">virtio 驱动</text>
+          <rect class="box-y" x="342" y="116" width="120" height="24" rx="3"/><text class="ts" x="352" y="133">共享环形队列</text>
+          <rect class="box-y" x="474" y="116" width="110" height="24" rx="3"/><text class="ts" x="486" y="133">QEMU 后端</text>
+          <rect class="box" x="596" y="116" width="100" height="24" rx="3"/><text class="ts" x="610" y="133">宿主内核</text>
+          <text class="ty" x="716" y="133">每<tspan class="ty">批</tspan>一次退出，快 100 倍</text>
+          <text class="tm" x="36" y="156">客户机知道自己在虚机里，不再假装操作硬件寄存器，而是往共享内存的队列里放描述符（§4.2）。</text>
+
+          <rect class="box-a" x="20" y="178" width="920" height="62" rx="8"/>
+          <text class="tb" x="36" y="200">③ vhost / vhost-user</text>
+          <rect class="box" x="230" y="188" width="100" height="24" rx="3"/><text class="ts" x="240" y="205">virtio 驱动</text>
+          <rect class="box-y" x="342" y="188" width="120" height="24" rx="3"/><text class="ts" x="352" y="205">共享环形队列</text>
+          <rect class="box" x="474" y="188" width="222" height="24" rx="3"/><text class="ts" x="500" y="205">内核线程 / DPDK 进程直接处理</text>
+          <text class="ta" x="716" y="205">省掉「到 QEMU」那一跳</text>
+          <text class="tm" x="36" y="228">后端从 QEMU 用户态搬到宿主内核（vhost）或另一个用户态进程（vhost-user，通常配 DPDK）。</text>
+
+          <rect class="box-g" x="20" y="250" width="920" height="62" rx="8"/>
+          <text class="tb" x="36" y="272">④ SR-IOV 直通</text>
+          <rect class="box" x="230" y="260" width="100" height="24" rx="3"/><text class="ts" x="238" y="277">原生网卡驱动</text>
+          <rect class="box-g" x="342" y="260" width="354" height="24" rx="3"/><text class="ts" x="440" y="277">直接 DMA 到硬件的一个虚拟功能（VF）</text>
+          <text class="tg" x="716" y="277">接近裸机，宿主完全不参与</text>
+          <text class="tr" x="36" y="300">代价：<tspan class="tr">失去热迁移</tspan>、绑定具体硬件型号、VF 数量有限、客户机要装厂商驱动（§4.4）</text>
+        </svg>
+        <figcaption>图 2 · 四档方案。每往下一档，数据路径上就少一层软件——而少的那一层正是上一档的性能瓶颈。</figcaption>
+      </div>
+
+      <h3 id="s4-2">4.2 virtio 快在哪</h3>
+
+      <p>virtio 的核心思路只有一句：<strong>放弃「假装自己是一块真网卡」。</strong>全模拟之所以慢，是因为客户机驱动以为在操作硬件寄存器，而每一次寄存器访问都是一次 VM Exit。virtio 让客户机<strong>知道自己在虚机里</strong>，于是可以用一个专为虚拟化设计的接口：</p>
+
+      <div class="grid-3">
+        <div class="panel good">
+          <h4>共享内存环形队列</h4>
+          <p>客户机和后端共享一块内存，里面是描述符环（vring）。<strong>放一个请求进去 = 一次内存写</strong>，不需要退出。</p>
+        </div>
+        <div class="panel good">
+          <h4>批量化 + 通知抑制</h4>
+          <p>攒一批再敲一次门（kick），<strong>N 个包共享一次退出</strong>。而且队列非空时后端可以关掉通知（类似 NAPI 的思路），进一步减少 kick。</p>
+        </div>
+        <div class="panel good">
+          <h4>零拷贝的可能</h4>
+          <p>描述符里放的是客户机物理地址，后端可以直接 DMA，不必逐字节搬运。</p>
+        </div>
+      </div>
+
+      <div class="box deep">
+        「批量化 + 通知抑制」这个组合眼熟吗？它和内核网络栈的 <strong>NAPI</strong>（中断来了就关中断转轮询，处理完一批再开）是同一个模式，也和<a href="../architect/high_concurrency_gateway.html#s4-3">接入网关那篇的 eventfd 聚合唤醒</a>（只在队列由空变非空时通知一次）是同一个模式。<br><br>
+        <strong>三个完全不同的场景，收敛到同一个解法：当「通知」比「数据」还贵时，就把通知摊薄到一批数据上。</strong>这是系统设计里复用率极高的一条模式，值得单独记住。
+      </div>
+
+      <h3 id="s4-3">4.3 vhost 与 vhost-user</h3>
+
+      <p>用了 virtio 之后，剩下的开销主要是<strong>「从 KVM 退到 QEMU 用户态」那一跳</strong>——每处理一批数据都要走一次内核到用户态的往返。vhost 就是把后端搬走：</p>
+
+      <table>
+        <thead><tr><th>方案</th><th>后端在哪</th><th>省掉了</th><th>适合</th></tr></thead>
+        <tbody>
+          <tr><td><code>virtio</code> + QEMU 后端</td><td>QEMU 用户态</td><td>—</td><td>通用，默认</td></tr>
+          <tr class="good-cell"><td><code>vhost-net</code> / <code>vhost-scsi</code></td><td class="good-cell">宿主<strong>内核线程</strong></td><td class="good-cell">到 QEMU 的那次用户态往返</td><td class="good-cell">大多数生产虚机的默认选择</td></tr>
+          <tr><td><code>vhost-user</code></td><td>另一个<strong>用户态进程</strong>（通常是 DPDK 或 OVS-DPDK）</td><td>内核网络栈整个跳过</td><td>NFV、高性能虚拟交换</td></tr>
+        </tbody>
+      </table>
+
+      <div class="intuition">
+        <code>vhost-user</code> 有一个容易被忽略的前提：<strong>它需要客户机内存对后端进程可见。</strong>所以客户机内存必须是共享的（<code>-object memory-backend-file,share=on</code>），通常配 hugetlbfs。<br>
+        这也意味着后端进程能读写整个客户机内存——<strong>它是一个信任边界上的组件</strong>，和 QEMU 同级，不是一个普通的用户态程序。
+      </div>
+
+      <h3 id="s4-4">4.4 SR-IOV 的代价是失去迁移</h3>
+
+      <p>SR-IOV 让一块物理网卡在硬件上呈现出多个「虚拟功能」（VF），每个 VF 可以直通给一台虚机。客户机用原生驱动直接操作它，<strong>数据路径完全不经过宿主软件栈</strong>，性能接近裸机。</p>
+
+      <p>但它换走的东西很实在：</p>
+
+      <table>
+        <thead><tr><th>失去什么</th><th>为什么</th></tr></thead>
+        <tbody>
+          <tr class="bad-cell"><td><strong>热迁移</strong></td><td class="bad-cell">虚机直接持有一个物理设备的状态，宿主不知道也复制不了。这通常是<strong>决定性的否决理由</strong>——失去迁移意味着宿主打补丁要停机</td></tr>
+          <tr><td>硬件无关性</td><td>客户机装的是厂商驱动，换机型可能要换驱动</td></tr>
+          <tr><td>灵活的网络策略</td><td>流量不过宿主，宿主上的安全组、流量镜像、QoS 都失效——这些要挪到网卡硬件里做（如果它支持）</td></tr>
+          <tr><td>密度</td><td>VF 数量由硬件决定（常见几十到上百个），比软件方案少得多</td></tr>
+        </tbody>
+      </table>
+
+      <div class="box deep">
+        近年出现的中间路线值得知道：<strong>vDPA</strong>（virtio Data Path Acceleration）。它让硬件直接实现 virtio 的数据面（所以性能接近 SR-IOV），但控制面仍然由宿主软件管——<strong>于是热迁移又回来了</strong>，因为迁移时可以把数据面从硬件切回软件 virtio。<br><br>
+        这是一个很典型的架构演进模式：<strong>把「快」和「可管理」拆到数据面和控制面两边</strong>，各取所长。和 <a href="../architect/high_concurrency_gateway.html#s10-3">OTA 那个控制面/数据面分离</a>是同一个思路，只是发生在硬件层。
+      </div>
+    </section>
+
+    <section class="chapter" id="s5">
+      <div class="ch-head"><div class="num">05</div><div class="t"><h2>裸金属 vs 虚机 vs 容器</h2><div class="sub">它们不是三个档位，是两个维度</div></div></div>
+
+      <h3 id="s5-1">5.1 隔离强度与性能对照</h3>
+
+      <table>
+        <thead><tr><th></th><th>裸金属</th><th>虚机</th><th>容器</th></tr></thead>
+        <tbody>
+          <tr><td>隔离边界</td><td>物理</td><td class="good-cell"><strong>硬件虚拟化 + 独立内核</strong></td><td class="mid-cell">共享宿主内核，靠 namespace + cgroup</td></tr>
+          <tr><td>攻击面</td><td>—</td><td class="good-cell">hypervisor（小，几十万行）</td><td class="bad-cell">整个宿主内核（几千万行）+ 全部系统调用</td></tr>
+          <tr><td>启动时间</td><td>分钟</td><td class="mid-cell">秒级（轻量 VM 可到百毫秒）</td><td class="good-cell">百毫秒</td></tr>
+          <tr><td>内存开销</td><td>0</td><td class="mid-cell">每台一个内核 + QEMU，约 100–200 MB</td><td class="good-cell">接近 0</td></tr>
+          <tr><td>计算性能</td><td>100%</td><td class="good-cell">98%+</td><td class="good-cell">~100%</td></tr>
+          <tr><td>I/O 性能</td><td>100%</td><td>virtio+vhost 约 80–90%，SR-IOV 接近 100%</td><td class="good-cell">~100%</td></tr>
+          <tr><td>能跑别的内核 / 内核模块</td><td class="good-cell">能</td><td class="good-cell">能</td><td class="bad-cell">不能</td></tr>
+          <tr><td>密度</td><td>1</td><td>几十</td><td class="good-cell">几百</td></tr>
+        </tbody>
+      </table>
+
+      <div class="intuition">
+        这张表里最重要的一行是<strong>「攻击面」</strong>。容器的隔离本质上是「同一个内核里的权限划分」——所有容器共享那几千万行内核代码，<strong>一个内核提权漏洞就能横穿全部容器</strong>。虚机的隔离是「不同的内核 + 硬件强制的地址空间隔离」，要突破得先攻破 hypervisor。<br><br>
+        所以判据不是「谁更快」，而是<strong>「你需要防谁」</strong>：跑自己团队的代码 → 容器完全够；跑<strong>不受信任的第三方代码</strong>（多租户 FaaS、CI runner、在线代码执行）→ 容器的隔离强度不够，这正是下一节那些东西出现的原因。
+      </div>
+
+      <h3 id="s5-2">5.2 轻量 VM 为什么出现</h3>
+
+      <p>上面那张表暴露了一个空档：<strong>需要虚机的隔离强度，但受不了它的启动时间和内存开销。</strong>典型场景是 FaaS——每个函数调用起一个沙箱，要求百毫秒级启动、每个几十 MB。</p>
+
+      <div class="grid-3">
+        <div class="panel good">
+          <h4>Firecracker</h4>
+          <p>把 QEMU 换成一个<strong>只有几万行、只支持极少设备</strong>（virtio-net / virtio-block / 串口）的 VMM。启动 ~125 ms，内存开销 &lt; 5 MB。<br><strong>做法是砍功能</strong>：不支持 PCI 热插拔、不支持图形、不支持 BIOS。</p>
+        </div>
+        <div class="panel good">
+          <h4>Kata Containers</h4>
+          <p>保持容器的接口（OCI、K8s 里像普通 Pod 一样用），但<strong>每个 Pod 跑在自己的轻量虚机里</strong>。<br>它换的是「容器的易用性 + 虚机的隔离」，代价是启动慢一些、内存多一些。</p>
+        </div>
+        <div class="panel mid">
+          <h4>gVisor</h4>
+          <p>另一条路：<strong>不用硬件虚拟化</strong>，而是在用户态实现一个内核，拦截容器的系统调用。<br>攻击面小了（不直接碰宿主内核），但<strong>系统调用密集的负载会明显变慢</strong>，且部分冷门系统调用不支持。</p>
+        </div>
+      </div>
+
+      <div class="box deep">
+        三者的差别可以归结为「在哪一层重新实现内核语义」：Firecracker 和 Kata <strong>用真内核 + 精简的 VMM</strong>（兼容性最好），gVisor <strong>在用户态重写内核</strong>（兼容性打折，但不依赖硬件虚拟化，嵌套虚拟化环境里也能用）。<br><br>
+        选择的判据是<strong>兼容性要求</strong>：跑标准的 Linux 负载 → 前两者；跑受控的、系统调用面窄的负载 → gVisor 的开销可以接受。
+      </div>
+
+      <h3 id="s5-3">5.3 怎么选</h3>
+
+      <table>
+        <thead><tr><th>如果……</th><th>选</th></tr></thead>
+        <tbody>
+          <tr><td>跑自己团队的代码，追求密度和启动速度</td><td class="good-cell">容器</td></tr>
+          <tr><td>跑<strong>不受信任的第三方代码</strong></td><td class="good-cell">轻量 VM（Firecracker / Kata）</td></tr>
+          <tr><td>需要不同的内核版本、或要加载内核模块</td><td>虚机（容器做不到）</td></tr>
+          <tr><td>需要把整台机器交给一个租户 / 极致性能</td><td>裸金属</td></tr>
+          <tr><td>需要热迁移来做宿主维护</td><td class="mid-cell">虚机，且<strong>不能用 SR-IOV</strong>（§4.4）</td></tr>
+          <tr><td>低延迟、抖动敏感</td><td class="bad-cell">裸金属优先；必须用虚机的话看 §6</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="chapter" id="s6">
+      <div class="ch-head"><div class="num">06</div><div class="t"><h2>在虚机上做低延迟</h2><div class="sub">默认配置下虚机的抖动比裸机大一个数量级</div></div></div>
+
+      <h3 id="s6-1">6.1 steal time：看不见的抢占</h3>
+
+      <div class="box trap">
+        宿主把 CPU 分给了别的虚机，你的 vCPU 有一段时间根本没在跑。但<strong>客户机的时钟继续走</strong>——于是表现为「明明什么都没做，测出来花了 20 ms」。<br><br>
+        这类问题在客户机内部<strong>几乎无法归因</strong>：CPU 使用率不高、没有 IO 等待、代码逻辑也没问题。唯一的线索是 <code>vmstat</code> 的 <code>st</code> 列，而很多监控面板压根不采集这一列。
+      </div>
+
+      <p>它对性能分析的破坏性在于：<strong>它让「墙上时间」和「实际执行时间」脱钩。</strong>用 <code>CLOCK_MONOTONIC</code> 测出一段代码 20 ms，可能 18 ms 是 vCPU 被抢走了。区分方法是同时测 <code>CLOCK_PROCESS_CPUTIME_ID</code>（只算本进程真正占用的 CPU），两者差得多就说明时间花在等待上——详见<a href="time_and_clocks.html#s7-3">时间与时钟 · 虚机的时钟问题</a>。</p>
+
+      <p>消除它只有一个办法：<strong>不超卖，且把 vCPU 钉在专属的物理核上</strong>（CPU pinning）。这也顺带解决了 §2.2 那个 Lock Holder Preemption。</p>
+
+      <h3 id="s6-2">6.2 NUMA 拓扑必须穿透</h3>
+
+      <div class="fig">
+        <svg viewBox="0 0 940 290" style="min-width:740px;height:auto" role="img" aria-label="虚机 NUMA 拓扑的两种情况对比：默认配置下客户机看到的是一个平坦的单 NUMA 节点，而它的 vCPU 和内存实际散落在宿主的两个 socket 上，客户机内核完全无法做正确的调度和内存分配决策；配置了 vNUMA 并做了绑定之后，客户机看到的拓扑与宿主真实拓扑一致，它自己的 NUMA 优化才能生效">
+          <rect class="box-r" x="20" y="34" width="440" height="200" rx="9"/>
+          <text class="tb" x="36" y="56">❌ 默认：客户机看到一个平坦的节点</text>
+          <rect class="box" x="40" y="70" width="400" height="46" rx="5"/>
+          <text class="t" x="54" y="90">客户机视角：1 个 NUMA 节点，8 个 CPU</text>
+          <text class="tm" x="54" y="108">「所有内存访问代价一样」——于是它不做任何 NUMA 优化</text>
+          <path class="ln-r" d="M240 116 V132"/><path class="ar-r" d="M235 132 l5 8 5 -8 z"/>
+          <rect class="box-r" x="40" y="140" width="190" height="80" rx="5"/>
+          <text class="ts" x="54" y="160">宿主 Socket 0</text>
+          <text class="tm" x="54" y="180">vCPU 0-3</text>
+          <text class="tm" x="54" y="198">一半内存</text>
+          <rect class="box-r" x="250" y="140" width="190" height="80" rx="5"/>
+          <text class="ts" x="264" y="160">宿主 Socket 1</text>
+          <text class="tm" x="264" y="180">vCPU 4-7</text>
+          <text class="tm" x="264" y="198">另一半内存</text>
+          <text class="tr" x="54" y="216">实际是跨 socket 的，访问代价差 1.5–2 倍</text>
+
+          <rect class="box-g" x="480" y="34" width="440" height="200" rx="9"/>
+          <text class="tb" x="496" y="56">✅ 配 vNUMA + 绑定</text>
+          <rect class="box-g" x="500" y="70" width="190" height="46" rx="5"/>
+          <text class="ts" x="514" y="90">客户机节点 0</text>
+          <text class="tm" x="514" y="108">CPU 0-3 + 本地内存</text>
+          <rect class="box-g" x="710" y="70" width="190" height="46" rx="5"/>
+          <text class="ts" x="724" y="90">客户机节点 1</text>
+          <text class="tm" x="724" y="108">CPU 4-7 + 本地内存</text>
+          <path class="ln-g" d="M595 116 V138"/><path class="ar-g" d="M590 138 l5 8 5 -8 z"/>
+          <path class="ln-g" d="M805 116 V138"/><path class="ar-g" d="M800 138 l5 8 5 -8 z"/>
+          <rect class="box-g" x="500" y="146" width="190" height="74" rx="5"/>
+          <text class="ts" x="514" y="166">宿主 Socket 0</text>
+          <text class="tg" x="514" y="186">一一对应，pin 住</text>
+          <rect class="box-g" x="710" y="146" width="190" height="74" rx="5"/>
+          <text class="ts" x="724" y="166">宿主 Socket 1</text>
+          <text class="tg" x="724" y="186">一一对应，pin 住</text>
+          <text class="tg" x="514" y="212">客户机的 NUMA 优化这时才有意义</text>
+
+          <text class="ts" x="20" y="262">左边最坏的地方不是「跨 socket 慢」，而是<tspan class="tr">客户机被骗了</tspan>：它以为内存是均匀的，于是所有 first-touch、绑核、</text>
+          <text class="ts" x="20" y="282">本地分配的优化都建立在错误的前提上——<tspan class="ta">做了还不如不做，因为它会自信地把线程和内存放到错误的地方</tspan>。</text>
+        </svg>
+        <figcaption>图 3 · vNUMA。<a href="numa_memory_advanced.html">NUMA 那一篇</a>讲的所有优化，在虚机里都以「客户机能看到真实拓扑」为前提。</figcaption>
+      </div>
+
+      <h3 id="s6-3">6.3 一张调优清单</h3>
+
+      <table>
+        <thead><tr><th>#</th><th>做什么</th><th>解决什么</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td><strong>vCPU pinning</strong>，不超卖</td><td class="good-cell">steal time、Lock Holder Preemption、调度抖动</td></tr>
+          <tr><td>2</td><td>宿主侧 <strong>isolcpus / cpuset</strong> 把这些核隔离出来，别让宿主的其它任务用</td><td>邻居干扰</td></tr>
+          <tr><td>3</td><td>宿主用 <strong>hugetlbfs 预分配</strong>客户机内存</td><td>EPT 走查开销、启动尖峰、换出、KSM 毛刺（§3.2）</td></tr>
+          <tr><td>4</td><td>配 <strong>vNUMA</strong> 并与宿主拓扑一一对应</td><td>让客户机的 NUMA 优化有正确的前提（§6.2）</td></tr>
+          <tr><td>5</td><td>网络用 <strong>vhost 或 SR-IOV</strong>，别用模拟设备</td><td>I/O 路径上的 VM Exit（§4）</td></tr>
+          <tr><td>6</td><td>确认 clocksource 是 <strong><code>kvm-clock</code></strong></td><td>迁移后时间跳变（<a href="time_and_clocks.html#s7-3">时间与时钟 §7.3</a>）</td></tr>
+          <tr><td>7</td><td>中断亲和性：把 VF / vhost 的中断绑到 vCPU 所在的核</td><td>跨核收包</td></tr>
+          <tr><td>8</td><td>调 <code>halt_poll_ns</code></td><td>空闲 vCPU 唤醒延迟（用一点 CPU 换低延迟）</td></tr>
+          <tr class="mid-cell"><td>9</td><td><strong>把 steal time 纳入监控</strong></td><td class="mid-cell">不是优化，是让这类问题可归因——<strong>成本最低、最该先做的一条</strong></td></tr>
+        </tbody>
+      </table>
+
+      <div class="intuition">
+        这九条里 1–4 是一组：它们本质上都是<strong>「放弃超卖，换确定性」</strong>。虚拟化的核心卖点是资源复用，而低延迟场景要的恰恰是不复用——<strong>所以「在虚机上做低延迟」多少有点自相矛盾</strong>，做到最后你会发现这台虚机独占了它的核和内存，除了多一层 hypervisor 之外和裸金属没什么区别。<br><br>
+        这时候值得回头问一句：<strong>还留着虚拟化是为了什么？</strong>如果答案是「热迁移」「统一的管理接口」「快速重建」，那它是划算的；如果答案是「因为公司只有虚机」，那就该去争取裸金属。
+      </div>
+    </section>
+
+    <section class="chapter" id="s7">
+      <div class="ch-head"><div class="num">07</div><div class="t"><h2>排障与速查</h2><div class="sub">按症状查</div></div></div>
+
+      <h3 id="s7-1">7.1 症状 → 原因 → 命令</h3>
+
+      <table>
+        <thead><tr><th>症状</th><th>八成是</th><th>敲什么</th></tr></thead>
+        <tbody>
+          <tr class="bad-cell"><td>虚机很慢，但客户机内部什么都看不出来</td><td class="bad-cell">宿主内存超卖，客户机内存被换出（§3.3）</td><td>宿主侧 <code>vmstat 1</code> 看 <code>si/so</code>；<code>free -h</code></td></tr>
+          <tr><td>「什么都没做却花了 20 ms」</td><td>steal time（§6.1）</td><td>客户机 <code>vmstat 1</code> 的 <code>st</code> 列；同时测 <code>CLOCK_PROCESS_CPUTIME_ID</code> 对比</td></tr>
+          <tr><td>网络吞吐上不去、pps 卡在几万</td><td class="bad-cell">用的是模拟网卡（e1000）而不是 virtio</td><td>客户机 <code>lspci</code> / <code>ethtool -i eth0</code> 看驱动名</td></tr>
+          <tr><td>CPU 高但客户机里找不到热点</td><td>VM Exit 过多</td><td class="good-cell">宿主 <code>perf kvm stat live</code> 看退出原因分布</td></tr>
+          <tr><td>vCPU 多了反而更慢</td><td class="bad-cell">Lock Holder Preemption（§2.2）</td><td>看宿主的 vCPU 超卖比；<code>kvm_stat</code> 里的 PLE 退出</td></tr>
+          <tr><td>迁移后时间跳变、超时逻辑异常</td><td>clocksource 不是 kvm-clock</td><td><code>cat /sys/devices/system/clocksource/clocksource0/current_clocksource</code></td></tr>
+          <tr><td>随机访问大内存的负载特别慢</td><td>EPT 两维走查 + 没用大页（§3.1）</td><td><code>perf stat -e dtlb_load_misses.walk_active</code>；确认宿主是否用了 hugetlbfs</td></tr>
+          <tr><td>配了 NUMA 优化但没效果</td><td class="bad-cell">客户机看到的是平坦拓扑（§6.2）</td><td>客户机 <code>numactl -H</code> 对比宿主的真实拓扑</td></tr>
+        </tbody>
+      </table>
+
+      <h3 id="s7-2">7.2 参数速查</h3>
+
+      <table>
+        <thead><tr><th>项</th><th>量级</th><th>说明</th></tr></thead>
+        <tbody>
+          <tr><td>VM Exit 往返（硬件部分）</td><td>0.3–0.7 μs</td><td>1000–2000 周期</td></tr>
+          <tr><td>KVM 内核内处理完的退出</td><td>1–3 μs</td><td>大部分退出属于这类</td></tr>
+          <tr><td>退到 QEMU 处理的退出</td><td>数 μs – 数十 μs</td><td>比系统调用贵一到两个数量级</td></tr>
+          <tr><td>裸机页表走查</td><td>4 次内存访问</td><td>四级页表</td></tr>
+          <tr><td>虚机页表走查（TLB miss）</td><td class="bad-cell">20–24 次</td><td>约 6 倍（§3.1）</td></tr>
+          <tr><td>纯计算的虚拟化开销</td><td class="good-cell">&lt; 2%</td><td>硬件辅助之后基本可忽略</td></tr>
+          <tr><td>Firecracker 启动 / 内存开销</td><td>~125 ms / &lt; 5 MB</td><td>对比完整 QEMU 虚机的秒级 / 100–200 MB</td></tr>
+          <tr><td>模拟网卡 vs virtio</td><td>约 100 倍</td><td>单包几十 μs vs 每批一次退出</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="chapter" id="s8">
+      <div class="ch-head"><div class="num">08</div><div class="t"><h2>面试题（12 道）</h2><div class="sub">按难度分三档</div></div></div>
+
+      <p class="qa-hint">点击每道题展开参考答案（先自测，再对照）。</p>
+
+      <h3 id="s8-1">8.1 基础</h3>
+
+      <ol class="qa-list">
+        <li><details class="qa">
+          <summary><span class="lvl basic">基础</span>KVM 的虚拟化开销主要在哪？</summary>
+          <div class="ans">
+            <p><strong>不在「执行」，在「退出」。</strong>客户机代码进入客户机模式后是<strong>原生在物理 CPU 上执行</strong>的——不是解释，不是二进制翻译。所以纯计算负载的开销 &lt; 2%。</p>
+            <div class="point"><div class="label">开销全在 VM Exit</div><div>遇到特权操作、外部中断、EPT 缺页时会切回宿主处理。一次往返硬件部分约 1000–2000 周期（0.3–0.7 μs）；<strong>KVM 内核里处理完约 1–3 μs，要退到 QEMU 用户态的则是数微秒到数十微秒</strong>——比一次普通系统调用贵一到两个数量级。</div></div>
+            <div class="point good"><div class="label">推论</div><div>所有虚机优化手段（virtio、vhost、SR-IOV、大页）本质上都是<strong>同一个目标的不同做法：减少退出次数</strong>。</div></div>
+            <div class="point"><div class="label">怎么观测</div><div><code>perf kvm stat live</code> 或 <code>kvm_stat</code>，看按原因分类的退出次数与耗时。</div></div>
+          </div>
+        </details></li>
+
+        <li><details class="qa">
+          <summary><span class="lvl basic">基础</span>virtio 比模拟网卡快在哪？</summary>
+          <div class="ans">
+            <p>核心思路一句话：<strong>放弃「假装自己是一块真网卡」。</strong></p>
+            <div class="point bad"><div class="label">全模拟为什么慢</div><div>客户机驱动以为在操作硬件寄存器，<strong>每一次寄存器访问都是一次 VM Exit</strong>。收发一个包要访问好几次，单包成本几十微秒——万兆网卡在虚机里只能跑几万 pps。</div></div>
+            <div class="point good"><div class="label">virtio 的三件事</div><div>① <strong>共享内存环形队列</strong>：放一个请求 = 一次内存写，不退出；② <strong>批量化 + 通知抑制</strong>：攒一批敲一次门，N 个包共享一次退出，队列非空时后端还能关掉通知；③ 描述符里放客户机物理地址，后端可以<strong>直接 DMA</strong>。</div></div>
+            <div class="point deep"><div class="label">加分：这个模式眼熟</div><div>「批量化 + 通知抑制」和内核网络栈的 <strong>NAPI</strong>（中断来了关中断转轮询）是同一个模式。<strong>当「通知」比「数据」还贵时，就把通知摊薄到一批数据上</strong>——这是系统设计里复用率极高的一条模式。</div></div>
+          </div>
+        </details></li>
+
+        <li><details class="qa">
+          <summary><span class="lvl basic">基础</span>虚机和容器的隔离差在哪？该怎么选？</summary>
+          <div class="ans">
+            <div class="point"><div class="label">本质差别是攻击面</div><div><strong>容器</strong>共享宿主内核，隔离是「同一个内核里的权限划分」——攻击面是<strong>整个宿主内核（几千万行）+ 全部系统调用</strong>，一个内核提权漏洞就能横穿所有容器。<br><strong>虚机</strong>是「不同的内核 + 硬件强制的地址空间隔离」，攻击面是 hypervisor（几十万行），要突破得先攻破它。</div></div>
+            <div class="point good"><div class="label">判据不是「谁更快」，是「你需要防谁」</div><div>跑自己团队的代码 → 容器完全够。跑<strong>不受信任的第三方代码</strong>（多租户 FaaS、CI runner、在线代码执行）→ 容器的隔离强度不够。</div></div>
+            <div class="point"><div class="label">其它维度</div><div>容器启动百毫秒、内存开销接近零、密度几百；虚机启动秒级、每台多 100–200 MB（内核 + QEMU）、密度几十。但<strong>虚机能跑不同内核版本、能加载内核模块</strong>，容器不能。</div></div>
+          </div>
+        </details></li>
+
+        <li><details class="qa">
+          <summary><span class="lvl basic">基础</span>什么是 steal time？为什么它难查？</summary>
+          <div class="ans">
+            <p>宿主把 CPU 分给了别的虚机，你的 vCPU 有一段时间根本没在跑，但<strong>客户机的时钟继续走</strong>——表现为「明明什么都没做，测出来花了 20 ms」。</p>
+            <div class="point bad"><div class="label">为什么难查</div><div>在客户机内部<strong>几乎无法归因</strong>：CPU 使用率不高、没有 IO 等待、代码逻辑也没问题。唯一的线索是 <code>vmstat</code> 的 <code>st</code> 列，而<strong>很多监控面板压根不采集这一列</strong>。</div></div>
+            <div class="point deep"><div class="label">它对性能分析的破坏性</div><div>它让<strong>墙上时间和实际执行时间脱钩</strong>。用 <code>CLOCK_MONOTONIC</code> 测出一段代码 20 ms，可能 18 ms 是 vCPU 被抢走了。<br>区分方法：同时测 <code>CLOCK_PROCESS_CPUTIME_ID</code>（只算本进程真正占用的 CPU），两者差得多说明时间花在等待上。</div></div>
+            <div class="point good"><div class="label">消除它只有一个办法</div><div>不超卖 + vCPU pinning。<strong>但最该先做的是把 steal time 纳入监控</strong>——那不是优化，是让这类问题可归因，成本几乎为零。</div></div>
+          </div>
+        </details></li>
+      </ol>
+
+      <h3 id="s8-2">8.2 中级</h3>
+
+      <ol class="qa-list" start="5">
+        <li><details class="qa">
+          <summary><span class="lvl mid">中级</span>为什么虚机里 TLB miss 的代价特别高？</summary>
+          <div class="ans">
+            <p>因为要走<strong>两层页表</strong>。客户机以为自己在操作物理内存，但它的「物理地址」（GPA）还要经 EPT 再翻译一次才得到宿主物理地址（HPA）。</p>
+            <div class="point"><div class="label">算一下</div><div>裸机一次四级页表走查是 <strong>4 次内存访问</strong>。虚机里，客户机页表的<strong>每一级</strong>都存在 GPA 里，每个 GPA 又要过一遍 EPT 的四级走查：<code>(4+1)×4 = <strong>20~24 次</strong></code>，<strong>约 6 倍</strong>。</div></div>
+            <div class="point good"><div class="label">对策：两层都用大页</div><div><strong>客户机内用大页</strong>（收益和裸机一样）+ <strong>宿主用 hugetlbfs 预分配客户机内存</strong>（让 EPT 那一层也用大页，把公式里第二个 4 降下来）。<br>后者更重要，而且<strong>顺带消除了 EPT violation 的启动尖峰</strong>。</div></div>
+            <div class="point deep"><div class="label">预分配大页的附带好处</div><div>它<strong>不会被换出、不会被 KSM 合并、不会触发 THP 的 khugepaged 整理</strong>——这三样都是延迟毛刺的来源。代价是这块内存被这台虚机独占，宿主不能再超卖。</div></div>
+            <div class="point warn"><div class="label">注意适用范围</div><div>TLB 命中时这些全都不发生。所以对工作集小的负载完全无感，只有<strong>随机访问大内存</strong>的负载（数据库、大图、稀疏矩阵）才会真的感受到这 6 倍。</div></div>
+          </div>
+        </details></li>
+
+        <li><details class="qa">
+          <summary><span class="lvl mid">中级</span>vhost 和 vhost-user 分别省掉了什么？</summary>
+          <div class="ans">
+            <p>用了 virtio 之后，剩下的主要开销是<strong>「从 KVM 退到 QEMU 用户态」那一跳</strong>——每处理一批数据都要走一次内核到用户态的往返。vhost 就是把后端搬走。</p>
+            <div class="point"><div class="label">vhost-net / vhost-scsi</div><div>后端搬进<strong>宿主内核线程</strong>，省掉到 QEMU 的那次用户态往返。这是<strong>大多数生产虚机的默认选择</strong>。</div></div>
+            <div class="point"><div class="label">vhost-user</div><div>后端搬到<strong>另一个用户态进程</strong>（通常是 DPDK 或 OVS-DPDK），<strong>整个宿主内核网络栈都跳过</strong>。适合 NFV 和高性能虚拟交换。</div></div>
+            <div class="point warn"><div class="label">vhost-user 的一个前提容易被忽略</div><div>它需要<strong>客户机内存对后端进程可见</strong>，所以客户机内存必须共享（<code>memory-backend-file,share=on</code>，通常配 hugetlbfs）。<br>这也意味着<strong>后端进程能读写整个客户机内存</strong>——它是信任边界上的组件，和 QEMU 同级，不是普通的用户态程序。</div></div>
+          </div>
+        </details></li>
+
+        <li><details class="qa">
+          <summary><span class="lvl mid">中级</span>SR-IOV 性能最好，为什么不都用它？</summary>
+          <div class="ans">
+            <p>因为它换走的东西很实在，其中一条通常是决定性的。</p>
+            <div class="point bad"><div class="label">失去热迁移（通常是否决理由）</div><div>虚机直接持有一个物理设备的状态，<strong>宿主不知道也复制不了</strong>。失去迁移意味着宿主打补丁要停机——对大规模运维来说这个代价往往超过性能收益。</div></div>
+            <div class="point"><div class="label">其它三项</div><div><strong>硬件相关</strong>：客户机装厂商驱动，换机型可能要换驱动；<strong>网络策略失效</strong>：流量不过宿主，安全组、流量镜像、QoS 都要挪到网卡硬件里做（如果它支持）；<strong>密度低</strong>：VF 数量由硬件决定，常见几十到上百个。</div></div>
+            <div class="point good"><div class="label">加分：中间路线 vDPA</div><div>硬件直接实现 virtio 的<strong>数据面</strong>（性能接近 SR-IOV），控制面仍由宿主软件管——<strong>于是热迁移又回来了</strong>，迁移时可以把数据面从硬件切回软件 virtio。<br>这是一个典型的架构模式：<strong>把「快」和「可管理」拆到数据面和控制面两边。</strong></div></div>
+          </div>
+        </details></li>
+
+        <li><details class="qa">
+          <summary><span class="lvl mid">中级</span>虚机的内存超卖有哪几种手段？各自的代价？</summary>
+          <div class="ans">
+            <div class="point"><div class="label">Ballooning</div><div>客户机装气球驱动，宿主让它申请内存并归还。需要客户机配合，<strong>回收速度慢救不了突发</strong>，且客户机会以为自己内存变少了。</div></div>
+            <div class="point warn"><div class="label">KSM（同页合并）</div><div>宿主扫描内存合并相同页为写时复制。代价：扫描耗 CPU、<strong>写入时触发 CoW 造成延迟毛刺</strong>、而且它是一条已知的<strong>侧信道</strong>——通过写入延迟能推断别的虚机有没有同样的页。</div></div>
+            <div class="point bad"><div class="label">Swap（最糟）</div><div>宿主把客户机内存换出。<strong>客户机完全不知道</strong>，它以为自己在访问物理内存，一次访问从纳秒变成毫秒，而客户机内部所有的调度和超时判断都没考虑这种可能。</div></div>
+            <div class="point deep"><div class="label">为什么 swap 那条最难查</div><div><strong>客户机内部看不到任何异常</strong>：内存使用率正常、没有 swap、CPU 不高，只是所有操作莫名其妙地慢且毫无规律。只有在宿主侧看 <code>vmstat</code> 的 <code>si/so</code> 才能发现。<br><strong>「虚机很慢但客户机内部什么都看不出来」时，第一个要问的就是宿主内存有没有超卖。</strong></div></div>
+          </div>
+        </details></li>
+      </ol>
+
+      <h3 id="s8-3">8.3 高级</h3>
+
+      <ol class="qa-list" start="9">
+        <li><details class="qa">
+          <summary><span class="lvl adv">高级</span>为什么给虚机加 vCPU 反而可能变慢？</summary>
+          <div class="ans">
+            <p><strong>Lock Holder Preemption。</strong>客户机内核的自旋锁假设「持锁者正在另一个 CPU 上跑」，所以自旋等待是划算的。</p>
+            <div class="point bad"><div class="label">但在虚机里这个假设不成立</div><div>持锁的那个 vCPU 可能<strong>根本没有被宿主调度</strong>——它在宿主的 runqueue 里排队。此时其它 vCPU 的自旋是纯粹的浪费，<strong>而且它们还占着宿主的 CPU，让持锁者更难被调度到</strong>——这是一个正反馈。vCPU 超卖时性能会断崖式下跌。</div></div>
+            <div class="point"><div class="label">缓解手段</div><div><strong>PLE（Pause-Loop Exiting）</strong>：自旋太久就 VM Exit，把 CPU 让给宿主去调度持锁者。<strong>准虚拟化自旋锁</strong>：客户机知道自己在虚机里，自旋一会儿就直接让出而不是死等。</div></div>
+            <div class="point good"><div class="label">但最有效的还是不超卖</div><div>vCPU pinning + 不超卖，从根上消除这个问题。这也是低延迟场景要独占物理核的原因之一。</div></div>
+            <div class="point deep"><div class="label">怎么确认是这个问题</div><div><code>kvm_stat</code> 里看 PLE 相关的退出次数；以及宿主的 vCPU 超卖比。<strong>症状很有辨识度：vCPU 数量增加而吞吐下降，且宿主 CPU 使用率很高但都是「自旋」。</strong></div></div>
+          </div>
+        </details></li>
+
+        <li><details class="qa">
+          <summary><span class="lvl adv">高级</span>在虚机上跑低延迟服务要做什么？</summary>
+          <div class="ans">
+            <p>默认配置下虚机的抖动比裸机大一个数量级。九条清单，前四条是一组：</p>
+            <div class="point good"><div class="label">1–4：放弃超卖，换确定性</div><div>① <strong>vCPU pinning 不超卖</strong>（消除 steal time 和 Lock Holder Preemption）；② 宿主 <strong>isolcpus / cpuset</strong> 隔离这些核（消除邻居干扰）；③ 宿主 <strong>hugetlbfs 预分配</strong>内存（EPT 开销、启动尖峰、换出、KSM 毛刺一起解决）；④ 配 <strong>vNUMA</strong> 并与宿主拓扑一一对应。</div></div>
+            <div class="point"><div class="label">5–8：路径与时钟</div><div>⑤ 网络用 vhost 或 SR-IOV；⑥ 确认 clocksource 是 <code>kvm-clock</code>；⑦ 中断亲和性绑到 vCPU 所在的核；⑧ 调 <code>halt_poll_ns</code>（用一点 CPU 换唤醒延迟）。</div></div>
+            <div class="point deep"><div class="label">④ 为什么关键：客户机会被骗</div><div>默认配置下客户机看到一个<strong>平坦的单 NUMA 节点</strong>，而它的 vCPU 和内存实际散落在宿主两个 socket 上。<br>最坏的不是「跨 socket 慢」，而是<strong>客户机以为内存是均匀的</strong>——于是所有 first-touch、绑核、本地分配的优化都建立在错误前提上，<strong>做了还不如不做</strong>，因为它会自信地把线程和内存放到错误的地方。</div></div>
+            <div class="point warn"><div class="label">做完之后该回头问一句</div><div>1–4 本质上都是「放弃资源复用」。而虚拟化的核心卖点就是复用——<strong>做到最后这台虚机独占了它的核和内存，除了多一层 hypervisor 之外和裸金属没什么区别</strong>。<br>此时要问：<strong>还留着虚拟化是为了什么？</strong>如果是热迁移、统一管理接口、快速重建，那划算；如果是「因为公司只有虚机」，那就该去争取裸金属。</div></div>
+          </div>
+        </details></li>
+
+        <li><details class="qa">
+          <summary><span class="lvl adv">高级</span>Firecracker、Kata、gVisor 各解决什么问题？</summary>
+          <div class="ans">
+            <p>它们填的是同一个空档：<strong>需要虚机的隔离强度，但受不了它的启动时间和内存开销。</strong>典型场景是 FaaS——每次调用起一个沙箱，要百毫秒启动、几十 MB。</p>
+            <div class="point"><div class="label">Firecracker</div><div>把 QEMU 换成一个<strong>只有几万行、只支持极少设备</strong>（virtio-net / virtio-block / 串口）的 VMM。启动 ~125 ms，内存开销 &lt; 5 MB。<strong>做法是砍功能</strong>：不支持 PCI 热插拔、图形、BIOS。</div></div>
+            <div class="point"><div class="label">Kata Containers</div><div>保持容器的接口（OCI、在 K8s 里像普通 Pod 一样用），但<strong>每个 Pod 跑在自己的轻量虚机里</strong>。换的是「容器的易用性 + 虚机的隔离」。</div></div>
+            <div class="point"><div class="label">gVisor（另一条路）</div><div><strong>不用硬件虚拟化</strong>，在用户态实现一个内核，拦截容器的系统调用。攻击面小了（不直接碰宿主内核），但<strong>系统调用密集的负载会明显变慢</strong>，且部分冷门系统调用不支持。</div></div>
+            <div class="point deep"><div class="label">归纳：在哪一层重新实现内核语义</div><div>Firecracker / Kata 用<strong>真内核 + 精简 VMM</strong>（兼容性最好）；gVisor <strong>在用户态重写内核</strong>（兼容性打折，但不依赖硬件虚拟化，嵌套虚拟化环境里也能用）。<br>判据是<strong>兼容性要求</strong>：跑标准 Linux 负载选前两者，跑受控的、系统调用面窄的负载可以接受 gVisor 的开销。</div></div>
+          </div>
+        </details></li>
+
+        <li><details class="qa">
+          <summary><span class="lvl adv">高级</span>一台虚机的网络吞吐上不去，怎么系统地排查？</summary>
+          <div class="ans">
+            <p>按数据路径从上到下走一遍，每一层都有明确的判据：</p>
+            <div class="point"><div class="label">① 先确认用的是哪一档方案</div><div>客户机里 <code>lspci</code> / <code>ethtool -i eth0</code> 看驱动名。<strong>如果是 e1000 之类的模拟设备，别的都不用查了</strong>——单包几十微秒，几万 pps 就是上限。换 virtio 能快 100 倍。</div></div>
+            <div class="point"><div class="label">② 确认后端是不是 vhost</div><div>宿主上看有没有 <code>vhost-$pid</code> 内核线程。没有的话数据要绕一次 QEMU 用户态。</div></div>
+            <div class="point"><div class="label">③ 看 VM Exit 分布</div><div><code>perf kvm stat live</code>。如果退出次数和包数是同一个量级，说明批量化没生效（可能是队列太小，或者中断合并没配）。</div></div>
+            <div class="point"><div class="label">④ 看中断与核的对应</div><div>VF / vhost 的中断有没有绑到 vCPU 所在的核。没绑的话每个包都要跨核，对小包场景影响很大。</div></div>
+            <div class="point good"><div class="label">⑤ 最后才是「是不是被抢了」</div><div>客户机 <code>vmstat</code> 的 <code>st</code> 列 + 宿主的超卖比。<strong>这一步放最后，是因为前四步的问题更常见、更容易确认、修起来收益也更大。</strong></div></div>
+            <div class="point deep"><div class="label">排查顺序本身是有讲究的</div><div>按<strong>「单项收益 × 确认成本」</strong>排序，不是按「从底层往上」排。①一条命令确认、修好快 100 倍，所以它必须第一个；⑤要跨宿主和客户机两侧看，且修起来涉及资源规划，所以放最后。</div></div>
+          </div>
+        </details></li>
+      </ol>
+    </section>
+
+    <div class="footer-nav">
+      <a href="cgroup_namespace_containers.html">← 容器底层原理</a>
+      <a href="numa_memory_advanced.html">NUMA 与高级内存管理</a>
+      <a href="time_and_clocks.html">时间与时钟（虚机时钟问题）</a>
+      <a href="kernel_network_stack.html">内核网络栈</a>
+      <a href="linux_security_model.html">Linux 安全模型</a>
+      <a href="linux_system_directory.html">目录</a>
+      <a href="../index.html">主页</a>
+    </div>
+
+
+  </main>
+</div>
+
+<script>
+(function(){var b=document.getElementById('progress');function u(){var h=document.documentElement;b.style.width=(h.scrollTop/(h.scrollHeight-h.clientHeight)*100)+'%'}window.addEventListener('scroll',u,{passive:true});u();})();
+(function(){var l=document.querySelectorAll('aside.toc nav>ol>li>a');var s=Array.from(document.querySelectorAll('section.chapter'));if(!l.length||!s.length)return;function u(){var y=window.scrollY+100;var c=s[0];for(var i=0;i<s.length;i++)if(s[i].offsetTop<=y)c=s[i];l.forEach(function(a){a.classList.toggle('active',a.getAttribute('href')==='#'+c.id)})}window.addEventListener('scroll',u,{passive:true});u();})();
+</script>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>
