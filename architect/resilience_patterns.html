@@ -5,8 +5,8 @@
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>限流 · 熔断 · 降级 · 隔离 — 弹性与过载保护 — Tech Notes</title>
-<meta name="description" content="限流：过载保护与弹性设计：令牌桶/漏桶限流 · 熔断三态机 · 优雅降级 · 舱壁隔离 · 超时重试 · 自适应负载脱落">
+<title>限流 · 熔断 · 降级 · 隔离 — 弹性与过载保护 · 参数怎么定 · 反向判据 — Tech Notes</title>
+<meta name="description" content="弹性与过载保护：先把雪崩的传导算出来（下游 RT 涨 100 倍，你的吞吐掉 100 倍，线程池 2 秒打满），再逐个拆开限流四算法的行为差异、熔断为什么必须统计慢调用、线程池隔离与信号量隔离的本质区别、超时预算沿链路递减、重试与熔断的嵌套顺序、CoDel 式自适应脱载，最后给出全部参数的取值依据、3 条 ADR 与反向判据">
 <link rel="stylesheet" href="../assets/guide-theme.css">
 <link rel="stylesheet" href="../assets/page-shell.css">
 <style>
@@ -29,6 +29,71 @@
   .st.open{border-left:4px solid var(--red);}
   .st.half{border-left:4px solid var(--orange);}
   .st p{font-size:12.5px;color:var(--text-dim);line-height:1.6;margin:4px 0;}
+
+  /* ===== 本次补厚新增的组件 ===== */
+  .box.num{border-left:4px solid var(--accent-3);background:color-mix(in srgb, var(--accent-3) 8%, var(--bg-card));padding:14px 18px;border-radius:0 8px 8px 0;margin:16px 0;}
+  .box.num::before{content:"🧮 算一下: ";color:var(--accent-3);font-weight:700;}
+  .box.arch{border-left:4px solid var(--accent-2);background:color-mix(in srgb, var(--accent-2) 8%, var(--bg-card));padding:14px 18px;border-radius:0 8px 8px 0;margin:16px 0;}
+  .box.arch::before{content:"⭐ 架构师视角: ";color:var(--accent-2);font-weight:700;}
+  .box.bad{border-left:4px solid var(--danger);background:color-mix(in srgb, var(--danger) 8%, var(--bg-card));padding:14px 18px;border-radius:0 8px 8px 0;margin:16px 0;}
+  .box.bad::before{content:"⚠️ 反模式: ";color:var(--danger);font-weight:700;}
+
+  .adr{border:1px solid color-mix(in srgb, var(--accent-2) 40%, var(--border));border-radius:12px;margin:20px 0;overflow:hidden;background:var(--bg-card);}
+  .adr-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:12px 16px;background:color-mix(in srgb, var(--accent-2) 10%, var(--bg-card));border-bottom:1px solid color-mix(in srgb, var(--accent-2) 30%, var(--border));}
+  .adr-id{font-family:var(--mono);font-size:12px;font-weight:700;letter-spacing:.06em;padding:3px 9px;border-radius:5px;background:var(--accent-2);color:var(--bg);}
+  .adr-title{font-weight:700;color:var(--text);flex:1 1 260px;min-width:0;}
+  .adr-status{font-family:var(--mono);font-size:11px;padding:2px 8px;border-radius:99px;border:1px solid var(--accent-3);color:var(--accent-3);}
+  .adr-row{display:grid;grid-template-columns:92px 1fr;gap:14px;padding:11px 16px;border-bottom:1px solid var(--border);font-size:14px;}
+  .adr-row:last-child{border-bottom:none;}
+  .adr-row>div{min-width:0;}
+  .adr-row .k{color:var(--accent);font-weight:600;font-family:var(--mono);font-size:12.5px;}
+  @media (max-width:760px){.adr-row{grid-template-columns:1fr;gap:4px;}}
+
+  .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:16px 0;}
+  .grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin:16px 0;}
+  @media (max-width:760px){.grid-2,.grid-3{grid-template-columns:1fr;}}
+  .grid-2>*,.grid-3>*{min-width:0;}
+  .panel{border:1px solid var(--border);border-radius:9px;padding:12px 14px;background:var(--bg-card);min-width:0;}
+  .panel>h4{margin:0 0 6px;font-size:14px;}
+  .panel.good{border-left:3px solid var(--accent-3);}
+  .panel.warnp{border-left:3px solid var(--accent-4);}
+  .panel.badp{border-left:3px solid var(--danger);}
+  .panel.info{border-left:3px solid var(--accent);}
+  .good-cell{background:color-mix(in srgb, var(--accent-3) 10%, transparent);}
+  .bad-cell{background:color-mix(in srgb, var(--danger) 10%, transparent);}
+  .mid-cell{background:color-mix(in srgb, var(--accent-4) 10%, transparent);}
+  .win{color:var(--accent-3);font-weight:700;}
+  .lose{color:var(--danger);font-weight:700;}
+
+  .fig{margin:22px 0;overflow-x:auto;}
+  .fig svg{max-width:100%;height:auto;}
+  .fig figcaption{font-size:12.5px;color:var(--text-dim);margin-top:8px;text-align:center;}
+  .fig .box{fill:var(--bg-card-2);stroke:var(--border-2);stroke-width:1.2;}
+  .fig .box-a{fill:color-mix(in srgb, var(--accent) 14%, var(--bg-card));stroke:var(--accent);stroke-width:1.2;}
+  .fig .box-g{fill:color-mix(in srgb, var(--accent-3) 14%, var(--bg-card));stroke:var(--accent-3);stroke-width:1.2;}
+  .fig .box-p{fill:color-mix(in srgb, var(--accent-2) 14%, var(--bg-card));stroke:var(--accent-2);stroke-width:1.2;}
+  .fig .box-y{fill:color-mix(in srgb, var(--accent-4) 14%, var(--bg-card));stroke:var(--accent-4);stroke-width:1.2;}
+  .fig .box-r{fill:color-mix(in srgb, var(--danger) 14%, var(--bg-card));stroke:var(--danger);stroke-width:1.2;}
+  .fig .t{fill:var(--text);font-size:12px;}
+  .fig .tb{fill:var(--text);font-size:12.5px;font-weight:700;}
+  .fig .ts{fill:var(--text-dim);font-size:10.5px;}
+  .fig .tm{fill:var(--text-dim);font-size:10.5px;font-family:var(--mono);}
+  .fig .ta{fill:var(--accent);font-size:11.5px;font-weight:700;}
+  .fig .tg{fill:var(--accent-3);font-size:11px;font-weight:600;}
+  .fig .ty{fill:var(--accent-4);font-size:11px;font-weight:600;}
+  .fig .tr{fill:var(--danger);font-size:11px;font-weight:600;}
+  .fig .tp{fill:var(--accent-2);font-size:11px;font-weight:600;}
+  .fig .ln{stroke:var(--border-2);stroke-width:1.4;fill:none;}
+  .fig .ln-a{stroke:var(--accent);stroke-width:1.7;fill:none;}
+  .fig .ln-g{stroke:var(--accent-3);stroke-width:1.7;fill:none;}
+  .fig .ln-r{stroke:var(--danger);stroke-width:1.7;fill:none;}
+  .fig .ln-y{stroke:var(--accent-4);stroke-width:1.7;fill:none;}
+  .fig .ln-p{stroke:var(--accent-2);stroke-width:1.7;fill:none;}
+  .fig .ln-d{stroke:var(--text-mute);stroke-width:1.2;fill:none;stroke-dasharray:4 3;}
+  .fig .ar-a{fill:var(--accent);}
+  .fig .ar-g{fill:var(--accent-3);}
+  .fig .ar-r{fill:var(--danger);}
+  .fig .grid{stroke:var(--border);stroke-width:.8;fill:none;}
 </style>
 <link rel="stylesheet" href="../assets/site-tokens.css">
 <link rel="stylesheet" href="../assets/article.css">
@@ -43,7 +108,7 @@
       <a class="tn-home" href="../index.html">← 主页</a>
       <a href="system_architecture_directory.html">目录</a>
       <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
-      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 10 min</span>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 55 min</span>
       <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
     </div>
   </div>
@@ -56,15 +121,78 @@
     <h2>弹性与过载保护 · Roadmap</h2>
     <nav>
       <ol>
-        <li><a href="#s1">为什么会雪崩</a></li>
-        <li><a href="#s2">限流（Rate Limiting）</a></li>
-        <li><a href="#s3">熔断（Circuit Breaker）</a></li>
-        <li><a href="#s4">降级（Fallback）</a></li>
-        <li><a href="#s5">隔离（Bulkhead）</a></li>
-        <li><a href="#s6">超时与重试</a></li>
-        <li><a href="#s7">负载脱落与自适应</a></li>
-        <li><a href="#s8">组合成防线</a></li>
-        <li><a href="#s9">take-aways</a></li>
+        <li><a href="#s1">雪崩：把传导过程算出来</a>
+          <ol>
+            <li><a href="#s1-1">场景与它的五个下游</a></li>
+            <li><a href="#s1-2">下游 RT 涨 100 倍，你的吞吐掉 100 倍</a></li>
+            <li><a href="#s1-3">从变慢到打满，只有两秒</a></li>
+            <li><a href="#s1-4">四类手段各管一段</a></li>
+          </ol>
+        </li>
+        <li><a href="#s2">限流：控制入口水位</a>
+          <ol>
+            <li><a href="#s2-1">四种算法在同一波突发下的行为</a></li>
+            <li><a href="#s2-2">桶容量是个真正的架构参数</a></li>
+            <li><a href="#s2-3">单机 vs 分布式：三笔代价</a></li>
+            <li><a href="#s2-4">限流器自己故障时怎么办</a></li>
+          </ol>
+        </li>
+        <li><a href="#s3">熔断：给故障下游喘息</a>
+          <ol>
+            <li><a href="#s3-1">三态状态机</a></li>
+            <li><a href="#s3-2">慢调用必须计入失败率</a></li>
+            <li><a href="#s3-3">错误率怎么统计才对</a></li>
+            <li><a href="#s3-4">三个反模式</a></li>
+          </ol>
+        </li>
+        <li><a href="#s4">降级：优雅退化</a>
+          <ol>
+            <li><a href="#s4-1">先分级，再谈降级</a></li>
+            <li><a href="#s4-2">兜底数据从哪来</a></li>
+            <li><a href="#s4-3">降级开关不能依赖会一起挂的东西</a></li>
+          </ol>
+        </li>
+        <li><a href="#s5">隔离：限制爆炸半径</a>
+          <ol>
+            <li><a href="#s5-1">线程池与信号量的本质区别</a></li>
+            <li><a href="#s5-2">隔离要隔干净</a></li>
+            <li><a href="#s5-3">什么时候合并反而更好</a></li>
+          </ol>
+        </li>
+        <li><a href="#s6">超时与重试</a>
+          <ol>
+            <li><a href="#s6-1">超时值该由什么决定</a></li>
+            <li><a href="#s6-2">deadline 沿链路递减</a></li>
+            <li><a href="#s6-3">重试与熔断谁包着谁</a></li>
+          </ol>
+        </li>
+        <li><a href="#s7">负载脱落与自适应</a>
+          <ol>
+            <li><a href="#s7-1">静态阈值一周就过期</a></li>
+            <li><a href="#s7-2">三种反馈信号，只有一种够快</a></li>
+            <li><a href="#s7-3">优先级必须在入口就打上</a></li>
+          </ol>
+        </li>
+        <li><a href="#s8">组合成一条防线</a>
+          <ol>
+            <li><a href="#s8-1">七道防线与它们的顺序</a></li>
+            <li><a href="#s8-2">全部参数与取值依据</a></li>
+            <li><a href="#s8-3">三条 ADR</a></li>
+          </ol>
+        </li>
+        <li><a href="#s9">反向判据与 take-aways</a>
+          <ol>
+            <li><a href="#s9-1">什么时候不要用这些模式</a></li>
+            <li><a href="#s9-2">一页速记</a></li>
+          </ol>
+        </li>
+        <li><a href="#s10">高频面试题 · 弹性与过载保护</a>
+          <ol>
+            <li><a href="#s10-1">基础（必答）</a></li>
+            <li><a href="#s10-2">中级（区分熟练度）</a></li>
+            <li><a href="#s10-3">高级（体现深度）</a></li>
+          </ol>
+        </li>
       </ol>
     </nav>
   </aside>
@@ -74,202 +202,1066 @@
     <header class="hero">
       <div class="badge">Architecture · Resilience · 2026</div>
       <h1>限流 · 熔断 · 降级 · 隔离</h1>
-      <p class="sub">过载保护与弹性设计：令牌桶/漏桶限流 · 熔断三态机 · 优雅降级 · 舱壁隔离 · 超时重试 · 自适应负载脱落</p>
+      <p class="sub">这些模式的名字大家都知道，难的是<strong>参数怎么定</strong>、<strong>顺序怎么排</strong>、<strong>什么时候不该用</strong>。这一篇用一个下单服务把雪崩的传导算出来，再逐个拆开每个模式里那些「配错了等于没配」的细节。</p>
       <div class="meta-row">
         <span class="pill red">核心难度 ★★★★☆</span>
         <span class="pill cyan">高可用</span>
-        <span class="pill green">阅读时长 ~10 min</span>
+        <span class="pill green">阅读时长 ~55 min</span>
         <span class="pill amber">前置 分布式基础</span>
       </div>
     </header>
 
     <section class="chapter" id="s1">
-      <div class="ch-head"><div class="num">01</div><div class="t"><h2>为什么会雪崩</h2><div class="sub">局部故障如何演变成全站崩溃</div></div></div>
-      <p>分布式系统里，一个慢服务能拖垮整条链路：A 调 B，B 变慢 → A 的线程/连接被 B 的请求占满等待 → A 也变慢 → 调 A 的 C 也被拖垮……<strong>故障沿调用链逐级放大</strong>，这就是<strong>级联失败（cascading failure）/ 雪崩</strong>。弹性设计的目标不是「永不失败」，而是<strong>让失败被控制在局部、快速失败、优雅退化</strong>。</p>
+      <div class="ch-head"><div class="num">01</div><div class="t"><h2>雪崩：把传导过程算出来</h2><div class="sub">「一个慢服务拖垮整条链路」是一句正确但没用的话，要的是数字</div></div></div>
+
+      <h3 id="s1-1">1.1 场景与它的五个下游</h3>
+
+      <p>全篇用一个具体的服务做锚点：电商的下单服务 <code>order-svc</code>。</p>
+
+      <div class="grid-2">
+        <div class="panel info">
+          <h4>规模</h4>
+          <p>稳态 8000 QPS，大促峰值 5 万 QPS（6 倍）。部署 40 个实例，每实例 200 个工作线程。SLA：下单成功率 ≥ 99.95%，端到端 P99 &lt; 500 ms。</p>
+        </div>
+        <div class="panel info">
+          <h4>依赖</h4>
+          <p>一次下单串行调五个下游：<strong>库存</strong>（20 ms）、<strong>优惠券</strong>（10 ms）、<strong>风控</strong>（15 ms）、<strong>支付预下单</strong>（30 ms）、<strong>推荐</strong>（非核心，5 ms）。加上本地逻辑，正常单次 <strong>50 ms</strong>。</p>
+        </div>
+      </div>
+
       <div class="analogy">
         <div class="at">生活类比：电路保险丝 + 泄洪闸</div>
         <p>家里电流过大时，<strong>保险丝</strong>会先熔断，牺牲一路电保住整栋楼不着火（熔断）。水库水位过高时，<strong>泄洪闸</strong>主动放掉一部分水，避免大坝整体溃堤（限流 + 负载脱落）。系统的弹性组件就是这些「主动牺牲局部换取整体存活」的机制——<strong>宁可拒绝部分请求，也不要全盘崩溃</strong>。</p>
         <div class="map">映射：<b>保险丝</b>=熔断 · <b>泄洪</b>=限流/脱落 · <b>分区断电</b>=隔离 · <b>保住整栋楼</b>=系统可用</div>
       </div>
-      <div class="card">
-        <div class="card-title">🧩 四类核心手段</div>
-        <ul>
-          <li><strong>限流</strong>：控制入口流量，超出容量的请求拒绝/排队——防被打垮。</li>
-          <li><strong>熔断</strong>：下游故障时快速失败、停止调用，给它恢复时间——防被拖垮。</li>
-          <li><strong>降级</strong>：核心不可用时返回兜底结果，保证基本可用——保体验。</li>
-          <li><strong>隔离</strong>：把资源分池，一个依赖出问题不波及其它——限爆炸半径。</li>
-        </ul>
+
+      <h3 id="s1-2">1.2 下游 RT 涨 100 倍，你的吞吐掉 100 倍</h3>
+
+      <p>现在库存服务出问题：不报错，只是变慢，RT 从 20 ms 涨到 2000 ms。注意<strong>它没有失败</strong>——所有请求最终都成功返回，只是慢。很多熔断配置在这种情况下不会触发（§3.2 会说明为什么）。</p>
+
+      <div class="box num">
+        并发度固定时，吞吐与响应时间成反比——这是 Little's Law 的直接推论（<a href="capacity_backpressure_design.html#s2">λ = L / W</a>）。<br><br>
+        <strong>正常</strong>：单实例 200 线程 ÷ 0.05 s = 4000 QPS，40 实例 = <strong>16 万 QPS</strong>，稳态 8000 QPS 只用了 5% 的容量。<br>
+        <strong>库存变慢后</strong>：单次 RT 变成 2030 ms，单实例 200 ÷ 2.03 = <strong>98 QPS</strong>，40 实例 = <strong>3940 QPS</strong>。<br><br>
+        流入 8000 QPS，流出 3940 QPS。<strong>本来富余 20 倍的容量，现在连稳态流量的一半都扛不住。</strong>
       </div>
+
+      <p>这个算术里有一条容易被忽略的推论：<strong>你的容量不是你自己的，它由最慢的那个依赖决定。</strong>压测时测出来的「16 万 QPS」是在所有依赖都健康的前提下得到的，它没有告诉你任何关于故障时的信息。而故障时才是你最需要知道容量的时候。</p>
+
+      <h3 id="s1-3">1.3 从变慢到打满，只有两秒</h3>
+
+      <div class="fig">
+        <svg viewBox="0 0 940 320" style="min-width:740px;height:auto" role="img" aria-label="雪崩传导时序图：库存服务在零秒变慢，下单服务的响应时间随之上升，在途请求数从四百迅速爬升，两秒后八千个线程槽位全部被占满，此后新请求连线程都拿不到于是连降级逻辑都执行不了，第三秒起上游服务开始超时并重试，流量进一步放大">
+          <path class="grid" d="M70 60 H900 M70 110 H900 M70 160 H900 M70 210 H900"/>
+          <path class="ln" d="M70 40 V240 H900"/>
+          <text class="tm" x="6" y="64">8000</text>
+          <text class="tm" x="6" y="164">4000</text>
+          <text class="tm" x="40" y="242">0</text>
+          <text class="tm" x="66" y="262">0 s</text>
+          <text class="tm" x="240" y="262">1 s</text>
+          <text class="tm" x="420" y="262">2 s</text>
+          <text class="tm" x="600" y="262">3 s</text>
+          <text class="tm" x="790" y="262">4 s</text>
+          <text class="tb" x="70" y="30">order-svc 被占用的线程槽位（共 40 × 200 = 8000）</text>
+
+          <path class="ln-r" d="M70 60 H900" stroke-dasharray="5 4"/>
+          <text class="tr" x="790" y="54">线程池上限 8000</text>
+
+          <path class="ln-a" d="M70 236 L80 235 C 160 214, 260 150, 420 62 L900 60"/>
+          <path class="ln-d" d="M420 40 V240"/>
+          <text class="ta" x="120" y="200">净积压 4080 个/s</text>
+          <text class="tr" x="430" y="80">← 2.0 s：线程全部占满</text>
+
+          <rect class="box-y" x="70" y="278" width="340" height="34" rx="5"/>
+          <text class="t" x="84" y="300">① 0–2 s：还能服务，只是变慢</text>
+          <rect class="box-r" x="418" y="278" width="200" height="34" rx="5"/>
+          <text class="t" x="432" y="300">② 2 s：线程耗尽</text>
+          <rect class="box-r" x="626" y="278" width="274" height="34" rx="5"/>
+          <text class="t" x="640" y="300">③ 上游超时 + 重试，流量再放大</text>
+
+          <text class="tr" x="430" y="112">此后新请求连线程都拿不到</text>
+          <text class="tr" x="430" y="130">→ 连「降级返回兜底」这段代码都没机会执行</text>
+          <text class="tm" x="430" y="150">→ 熔断器统计不到样本，因为请求根本没进来</text>
+        </svg>
+        <figcaption>图 1 · 两秒。这就是为什么弹性必须是自动的——任何依赖人工介入的预案在这个时间尺度上都无效。</figcaption>
+      </div>
+
+      <div class="box num">
+        流入 8000/s，流出 3940/s，净积压 4060/s。线程槽位共 8000 个，正常占用约 400 个（8000 QPS × 0.05 s）。<br>
+        <code>(8000 − 400) / 4060 ≈ <strong>1.9 秒</strong></code>
+      </div>
+
+      <p>图里第②段那三行注释是这一节真正想说的：<strong>线程耗尽之后，你写的所有降级代码都不会被执行。</strong>因为「返回兜底结果」也是一段需要在某个线程上跑的代码，而线程已经没了。同理，熔断器也统计不到样本——请求连进入业务逻辑的机会都没有。</p>
+
+      <div class="box arch">
+        这条推论决定了所有弹性手段的<strong>位置</strong>：它们必须在「占用稀缺资源之前」生效，而不是在业务逻辑里。限流要在网关或线程分配之前，隔离要在拿到工作线程之前，脱载要在排队之前。<strong>一个写在 service 方法开头的「如果过载就返回兜底」，在真正过载时是执行不到的</strong>——因为它已经在稀缺资源的下游了。这是很多弹性代码看起来齐全、真出事时却完全没生效的根本原因。
+      </div>
+
+      <h3 id="s1-4">1.4 四类手段各管一段</h3>
+
+      <table class="cmp">
+        <thead><tr><th>手段</th><th>拦在哪一步</th><th>它防的是</th><th>它防不了的</th></tr></thead>
+        <tbody>
+          <tr><td><strong>限流</strong></td><td>入口，占用任何资源之前</td><td>流入超过容量</td><td class="bad-cell">容量本身变小（本例就是）——阈值是按健康时的容量设的</td></tr>
+          <tr><td><strong>隔离</strong></td><td>分配资源时</td><td>一个依赖吃光全部资源</td><td>被隔离的那个依赖自己的请求还是会失败</td></tr>
+          <tr><td><strong>熔断</strong></td><td>调下游之前</td><td>持续给已经挂了的下游发请求</td><td class="bad-cell">首次故障的那一批（要先攒够样本才跳闸）</td></tr>
+          <tr><td><strong>降级</strong></td><td>失败之后</td><td>失败直接暴露给用户</td><td>核心链路——核心是不能降的</td></tr>
+        </tbody>
+      </table>
+
+      <p>第一行的「防不了」是本例的关键：<strong>静态限流阈值挡不住「容量变小」这种故障。</strong>阈值是按 16 万 QPS 的健康容量设的，比如设在 5 万；而故障时真实容量只有 3940，8000 QPS 的正常流量在限流器看来完全合规，一个都不会被拦。这正是 §7 自适应脱载存在的理由。</p>
     </section>
 
     <section class="chapter" id="s2">
-      <div class="ch-head"><div class="num">02</div><div class="t"><h2>限流：控制入口水位</h2><div class="sub">令牌桶 / 漏桶 / 滑动窗口</div></div></div>
-      <p>限流保护系统不被超出其容量的流量打垮。四种经典算法：</p>
+      <div class="ch-head"><div class="num">02</div><div class="t"><h2>限流：控制入口水位</h2><div class="sub">四种算法的差别不在「精度」，在它们放行突发的方式</div></div></div>
+
+      <h3 id="s2-1">2.1 四种算法在同一波突发下的行为</h3>
+
+      <p>四种算法的教科书描述大家都熟，但那些描述看不出它们真正的差别。把同一波流量（前 900 ms 空闲，第 900 ms 到 1100 ms 之间涌入 200 个请求）喂给四个限流器（都配置成 100 QPS），放行曲线是这样的：</p>
+
+      <div class="fig">
+        <svg viewBox="0 0 960 330" style="min-width:760px;height:auto" role="img" aria-label="四种限流算法在同一波突发下的放行曲线对比：固定窗口在窗口交界处放行两百个形成瞬时一千QPS的突刺；滑动窗口把突刺削平到一百；漏桶完全平滑输出但空闲期攒下的容量全部浪费；令牌桶允许一次可控的突发后回落到匀速">
+          <text class="tb" x="20" y="24">输入：前 900 ms 空闲，900–1100 ms 之间涌入 200 个请求。四个限流器都配 100 QPS。</text>
+
+          <text class="t" x="20" y="66">固定窗口</text>
+          <path class="ln" d="M120 78 H930"/>
+          <path class="ln-d" d="M480 46 V78"/>
+          <text class="tm" x="452" y="44">窗口边界</text>
+          <rect class="box-r" x="440" y="50" width="40" height="28" rx="2"/>
+          <rect class="box-r" x="480" y="50" width="40" height="28" rx="2"/>
+          <text class="tr" x="536" y="70">0.2 s 内放行 200 个 = 瞬时 <tspan class="tr">1000 QPS</tspan>，是配置值的 10 倍</text>
+
+          <text class="t" x="20" y="130">滑动窗口</text>
+          <path class="ln" d="M120 142 H930"/>
+          <rect class="box-y" x="440" y="122" width="40" height="20" rx="2"/>
+          <rect class="box-y" x="480" y="128" width="40" height="14" rx="2"/>
+          <text class="ty" x="536" y="136">削平到约 100，代价是内存 ×N（N 个小格）</text>
+
+          <text class="t" x="20" y="194">漏桶</text>
+          <path class="ln" d="M120 206 H930"/>
+          <rect class="box-a" x="440" y="196" width="14" height="10" rx="1"/>
+          <rect class="box-a" x="470" y="196" width="14" height="10" rx="1"/>
+          <rect class="box-a" x="500" y="196" width="14" height="10" rx="1"/>
+          <rect class="box-a" x="530" y="196" width="14" height="10" rx="1"/>
+          <rect class="box-a" x="560" y="196" width="14" height="10" rx="1"/>
+          <rect class="box-a" x="590" y="196" width="14" height="10" rx="1"/>
+          <text class="ta" x="626" y="204">完全匀速，但前 900 ms 的空闲容量<tspan class="tr">全部作废</tspan></text>
+
+          <text class="t" x="20" y="258">令牌桶</text>
+          <path class="ln" d="M120 270 H930"/>
+          <rect class="box-g" x="440" y="248" width="46" height="22" rx="2"/>
+          <rect class="box-g" x="500" y="260" width="14" height="10" rx="1"/>
+          <rect class="box-g" x="530" y="260" width="14" height="10" rx="1"/>
+          <rect class="box-g" x="560" y="260" width="14" height="10" rx="1"/>
+          <rect class="box-g" x="590" y="260" width="14" height="10" rx="1"/>
+          <text class="tg" x="626" y="268">先放一批（桶里攒的），然后回落到匀速</text>
+          <text class="tm" x="626" y="284">这一批有多大，由<tspan class="ta">桶容量</tspan>决定 —— 见 §2.2</text>
+
+          <text class="ts" x="20" y="316">同样是「100 QPS」，四个限流器在这一波流量下的实际行为差 10 倍。选算法就是在选「你想放行什么形状的突发」。</text>
+        </svg>
+        <figcaption>图 2 · 固定窗口那一行是真实事故的常见来源：<strong>限流器本身成了突发的制造者。</strong></figcaption>
+      </div>
+
       <table class="cmp">
-        <thead><tr><th>算法</th><th>原理</th><th>特点</th></tr></thead>
+        <thead><tr><th>算法</th><th>突发行为</th><th>适用</th><th>别用在</th></tr></thead>
         <tbody>
-          <tr><td>固定窗口计数</td><td>每窗口计数，超阈值拒绝</td><td>简单；<strong>临界点</strong>问题（窗口交界可 2 倍突发）</td></tr>
-          <tr><td>滑动窗口</td><td>细分小窗口滑动统计</td><td>平滑临界问题，精度高，开销略大</td></tr>
-          <tr><td>漏桶（Leaky Bucket）</td><td>请求入桶，恒定速率流出</td><td><strong>强制平滑</strong>输出，不允许突发；多余请求溢出</td></tr>
-          <tr><td>令牌桶（Token Bucket）</td><td>匀速产令牌，取到令牌才放行</td><td><strong>允许突发</strong>（桶里攒的令牌），最常用</td></tr>
+          <tr><td>固定窗口</td><td class="bad-cell">窗口交界可放行 2 倍</td><td>只在乎「一小时内不超过 N 次」这类配额语义</td><td class="bad-cell">保护下游容量——那正是它会击穿的地方</td></tr>
+          <tr><td>滑动窗口</td><td>平滑，精度由格数决定</td><td>需要准确计数的场景（计费、配额）</td><td>超高频路径（每个 key 要维护 N 个计数器）</td></tr>
+          <tr><td>漏桶</td><td class="mid-cell">完全不允许突发</td><td>保护对突发极敏感的下游（老式第三方接口、写数据库）</td><td class="bad-cell">用户交互路径——空闲了很久也不给攒，体验很差</td></tr>
+          <tr class="good-cell"><td>令牌桶</td><td class="good-cell">允许可控突发</td><td>绝大多数业务限流</td><td>下游完全不能接受突发时</td></tr>
         </tbody>
       </table>
-      <div class="analogy">
-        <div class="at">漏桶 vs 令牌桶</div>
-        <p><strong>漏桶</strong>像一个底部有小孔的水桶：不管你倒水多快，出水永远匀速——适合需要<strong>平滑限速</strong>（如保护下游第三方）。<strong>令牌桶</strong>像停车场匀速发号，攒着的号可以一次放一批车进——允许<strong>合理突发</strong>（如用户偶尔的操作峰值）。大多数业务限流用令牌桶，因为完全不允许突发的体验太差。</p>
-        <div class="map">映射：<b>漏桶</b>=恒定输出 · <b>令牌桶</b>=允许攒突发 · <b>令牌数</b>=突发上限</div>
+
+      <h3 id="s2-2">2.2 桶容量是个真正的架构参数</h3>
+
+      <p>令牌桶有两个参数：<strong>速率</strong> r 和<strong>桶容量</strong> b。几乎所有人都认真设 r，然后把 b 随手设成 <code>r × 1 秒</code>——因为大部分库的默认值就是这样。但 b 的含义完全独立：</p>
+
+      <div class="box num">
+        <strong>r 决定长期平均放行速率；b 决定单次能放行多大的突发。</strong><br><br>
+        r = 1000/s、b = 1000：空闲一秒后能瞬间放行 1000 个。如果下游的实际瞬时承受能力只有 300，这一下就打穿了——<strong>而限流器会告诉你「没有超限」。</strong><br>
+        r = 1000/s、b = 200：瞬时最多放 200 个，之后按 1000/s 匀速。长期吞吐一样，但瞬时冲击小 5 倍。
       </div>
-      <div class="card">
-        <div class="card-title">🏗️ 单机 vs 分布式限流</div>
-        <ul>
-          <li><strong>单机限流</strong>：本地令牌桶（如 Guava RateLimiter / Sentinel），无网络开销、无单点，但只管本实例。</li>
-          <li><strong>分布式限流</strong>：Redis + Lua 脚本原子计数，做<strong>全局配额</strong>；代价是每次请求一次 Redis 往返 + 单点风险。</li>
-          <li><strong>两级方案</strong>：本地粗粒度挡大流量 + 中心细粒度控全局配额，兼顾性能与准确。</li>
-          <li><strong>维度</strong>：可按 全局 / 接口 / 用户 / 租户 / IP 分层限流。</li>
-        </ul>
+
+      <p>所以 b 的取值依据是<strong>下游能吸收的瞬时突发</strong>，而不是「一秒的量」。怎么知道下游能吸收多少？看它的队列深度和并发上限——如果下游是 40 个实例 × 200 线程，那么瞬间 8000 个请求它接得住；如果下游是一个连接池只有 50 的数据库，b 就不该超过几十。</p>
+
+      <p>另外，限流器本身在热路径上。8000 QPS × 40 实例意味着每秒 8000 次限流判断，如果实现里有一把锁，它就是一个跨核争抢点（同<a href="high_concurrency_gateway.html#s6-4">网关篇 §6.4</a>）。令牌桶可以做成完全无锁的：</p>
+
+<pre><code><span class="cm">// 把「令牌数」和「上次补充时刻」打包进一个 64 位原子量，用一次 CAS 同时更新两者。</span>
+<span class="cm">// 这样限流判断在热路径上没有锁、没有 cache line 上的写写争抢（只有失败重试时才重读）。</span>
+<span class="kw">class</span> <span class="type">TokenBucket</span> {
+  <span class="kw">static</span> <span class="kw">constexpr</span> <span class="type">int</span> kTokShift = <span class="num">24</span>;          <span class="cm">// 低 24 位放令牌（定点数，×1024）</span>
+  <span class="kw">alignas</span>(<span class="num">64</span>) <span class="type">std</span>::<span class="type">atomic</span>&lt;<span class="type">uint64_t</span>&gt; state_;      <span class="cm">// 高 40 位放毫秒时间戳</span>
+  <span class="kw">const</span> <span class="type">uint32_t</span> rate_per_ms_, burst_;          <span class="cm">// r 与 b，都是定点数</span>
+
+ <span class="kw">public</span>:
+  <span class="type">bool</span> <span class="fn">try_acquire</span>(<span class="type">uint32_t</span> n = <span class="num">1024</span>) <span class="kw">noexcept</span> {
+    <span class="type">uint64_t</span> now_ms = <span class="fn">coarse_now_ms</span>();   <span class="cm">// CLOCK_MONOTONIC_COARSE，比精确时钟便宜一个量级</span>
+    <span class="type">uint64_t</span> cur = state_.<span class="fn">load</span>(<span class="type">std</span>::memory_order_relaxed);
+    <span class="kw">for</span> (;;) {
+      <span class="type">uint64_t</span> last_ms = cur &gt;&gt; kTokShift;
+      <span class="type">uint64_t</span> tokens  = cur &amp; ((<span class="num">1</span>ull &lt;&lt; kTokShift) - <span class="num">1</span>);
+      <span class="cm">// 按经过的时间补充令牌，但不超过桶容量 —— 这一步就是「b 限制突发」的全部实现</span>
+      tokens = <span class="type">std</span>::<span class="fn">min</span>&lt;<span class="type">uint64_t</span>&gt;(burst_, tokens + (now_ms - last_ms) * rate_per_ms_);
+      <span class="kw">if</span> (tokens &lt; n) <span class="kw">return</span> <span class="kw">false</span>;             <span class="cm">// 拒绝路径零副作用，不写共享状态</span>
+      <span class="type">uint64_t</span> next = (now_ms &lt;&lt; kTokShift) | (tokens - n);
+      <span class="kw">if</span> (state_.<span class="fn">compare_exchange_weak</span>(cur, next, <span class="type">std</span>::memory_order_relaxed))
+        <span class="kw">return</span> <span class="kw">true</span>;
+      <span class="cm">// CAS 失败说明有并发放行，cur 已被更新为最新值，直接重试</span>
+    }
+  }
+};
+</code></pre>
+
+      <div class="box tip">
+        <code>coarse_now_ms()</code> 那一行值得注意：<code>CLOCK_MONOTONIC_COARSE</code> 直接读内核维护的一个变量，比 <code>CLOCK_MONOTONIC</code> 便宜一个数量级，精度是一个时钟节拍（通常 1–4 ms）。<strong>限流器不需要纳秒精度</strong>——毫秒级的补充粒度对 1000 QPS 的速率来说完全够用。在每秒调用上万次的热路径上，选对时钟源本身就是一次可观的优化。
       </div>
-      <p>算法与集中式实现细节见面试题 <a href="../interview/backend_system_design.html#sd2">分布式限流器设计</a>。</p>
+
+      <h3 id="s2-3">2.3 单机 vs 分布式：三笔代价</h3>
+
+      <p>本地令牌桶只管本实例，40 个实例各限 200 QPS 才等于全局 8000。问题是流量不均：某个实例被路由到 400 QPS 时它会拒绝一半，而别的实例还闲着。分布式限流（Redis + Lua 原子计数）能做全局配额，但要付三笔代价：</p>
+
+      <div class="grid-3">
+        <div class="panel warnp">
+          <h4>① 延迟</h4>
+          <p>每个请求一次 Redis 往返，同机房约 0.3–1 ms。<strong>放进 P99 500 ms 的预算里不算多，但它在每个请求上都发生</strong>，而且 Redis 抖动会直接变成业务抖动。</p>
+        </div>
+        <div class="panel warnp">
+          <h4>② 新的单点</h4>
+          <p>Redis 挂了，限流怎么办？这必须是一个<strong>显式决策</strong>（§2.4），不能等到出事时才发现代码里是抛异常。</p>
+        </div>
+        <div class="panel badp">
+          <h4>③ 它自己会成为瓶颈</h4>
+          <p>8000 QPS × 每请求 1 次 = Redis 8000 QPS，还只是这一个限流维度。<strong>按用户/租户/接口多维度限流时，请求数是乘出来的。</strong></p>
+        </div>
+      </div>
+
+      <p>实践中的解法是<strong>两级</strong>：本地令牌桶按「全局配额 ÷ 实例数」分配，中心侧每隔几秒根据各实例的实际用量重新分配配额。这样热路径上没有网络调用，全局配额的准确性由低频的校正保证。</p>
+
+      <div class="box arch">
+        两级方案有两个必须处理的边界，它们决定了这套东西能不能真的上线：<br>
+        <strong>① 实例数变化。</strong>扩缩容时配额要重分配。如果用「全局 ÷ 当前实例数」，那么滚动升级期间实例数短暂翻倍，每个实例的配额减半，可能误杀正常流量。做法是让中心侧按<strong>实际用量</strong>而不是实例数分配。<br>
+        <strong>② 长尾实例的配额浪费。</strong>如果 39 个实例各用 50 QPS、1 个用 400 QPS，均分配额会让那一个被限死而全局远未达标。做法是允许实例向中心「借」配额，借不到再拒绝。<br><br>
+        这两条一加，两级限流就不是「本地桶 + 定时同步」那么简单了。<strong>如果流量本来就均匀（前面有一个好的负载均衡），单机限流 + 稍微放宽的阈值往往是更划算的选择。</strong>
+      </div>
+
+      <h3 id="s2-4">2.4 限流器自己故障时怎么办</h3>
+
+      <p>这是分布式限流最容易被跳过的一个设计点，而它是个<strong>二选一的决策，没有中间答案</strong>：</p>
+
+      <table class="cmp">
+        <thead><tr><th>策略</th><th>Redis 挂了</th><th>风险</th><th>适用</th></tr></thead>
+        <tbody>
+          <tr><td class="good-cell"><strong>fail-open</strong>（放行）</td><td>限流失效，全部放行</td><td class="mid-cell">如果此时正好有流量洪峰，系统会被打垮</td><td class="good-cell">绝大多数业务：限流是保护措施，不该比被保护的东西还脆弱</td></tr>
+          <tr><td><strong>fail-close</strong>（拒绝）</td><td>全部拒绝</td><td class="bad-cell">限流器的可用性直接变成业务的可用性——Redis 一抖，全站 429</td><td>配额有强合规要求时（计费、外部 API 配额）</td></tr>
+        </tbody>
+      </table>
+
+      <p>推荐 fail-open，但要配一条兜底：<strong>中心限流失效时自动退回本地令牌桶</strong>，阈值取「全局配额 ÷ 实例数 × 1.5」的宽松值。这样既不会因为限流器故障而拒绝正常流量，也不会完全裸奔。</p>
+
+      <div class="box bad">
+        比 fail-open / fail-close 选错更常见的，是<strong>根本没选</strong>——代码里 Redis 调用抛异常，异常往上冒，被某个 catch 块捕获后返回 500。于是限流器故障表现为「下单接口大面积 500」，排查时谁也想不到根因在限流器上。<strong>任何「保护性组件」都必须显式定义自己故障时的行为，并且写进代码注释和 ADR。</strong>
+      </div>
     </section>
 
     <section class="chapter" id="s3">
-      <div class="ch-head"><div class="num">03</div><div class="t"><h2>熔断：给故障下游喘息</h2><div class="sub">三态状态机</div></div></div>
-      <p>当下游持续失败/超时，继续调用只会浪费资源、拖慢自己、还妨碍下游恢复。<strong>熔断器</strong>像保险丝：错误率超阈值就「跳闸」，一段时间内快速失败不再真正调用，给下游恢复窗口。</p>
+      <div class="ch-head"><div class="num">03</div><div class="t"><h2>熔断：给故障下游喘息</h2><div class="sub">配置里漏掉一项，它在最需要的时候就不会跳闸</div></div></div>
+
+      <h3 id="s3-1">3.1 三态状态机</h3>
+
+      <p>下游持续失败时继续调用有三重浪费：占着自己的线程和连接、给下游雪上加霜、以及让用户等一个注定失败的结果。熔断器的作用是<strong>快速失败</strong>——不再真正发起调用，直接走降级。</p>
+
       <div class="states">
-        <div class="st closed"><h5>🟢 Closed（关闭）</h5><p>正常放行，统计失败率。失败率/慢调用超阈值 → 转 Open。</p></div>
-        <div class="st open"><h5>🔴 Open（打开）</h5><p>直接快速失败（走降级），不调下游。等待冷却时间 → 转 Half-Open。</p></div>
-        <div class="st half"><h5>🟡 Half-Open（半开）</h5><p>放少量探测请求：成功够多 → 回 Closed；仍失败 → 退回 Open。</p></div>
+        <div class="st closed"><h5>🟢 Closed（关闭）</h5><p>正常放行，统计失败率与慢调用率。任一超阈值且样本量足够 → 转 Open。</p></div>
+        <div class="st open"><h5>🔴 Open（打开）</h5><p>直接快速失败（走降级），不调下游。冷却时间到 → 转 Half-Open。</p></div>
+        <div class="st half"><h5>🟡 Half-Open（半开）</h5><p><strong>并发限制</strong>为 N 的探测：连续成功够多 → 回 Closed；任一失败 → 立刻退回 Open。</p></div>
       </div>
-      <div class="card">
-        <div class="card-title">🎛️ 关键参数与要点</div>
-        <ul>
-          <li><strong>触发条件</strong>：错误率阈值（如 50%）+ 最小请求数（样本太少不熔断，避免误判）+ 慢调用比例。</li>
-          <li><strong>冷却时间</strong>：Open 持续多久后试探（如 5s）。太短下游没缓过来，太长影响可用。</li>
-          <li><strong>半开探测</strong>：只放几个请求验证，避免恢复瞬间又被打垮。</li>
-          <li>熔断必须配<strong>降级</strong>：跳闸后返回什么？见下一节。Hystrix（已停更）/ Resilience4j / Sentinel 是常见实现。</li>
-        </ul>
+
+      <div class="fig">
+        <svg viewBox="0 0 940 250" style="min-width:740px;height:auto" role="img" aria-label="熔断器三态状态机图：关闭态在失败率或慢调用率超阈值且样本足够时转为打开态；打开态在冷却时间到期后转为半开态；半开态在探测连续成功达到阈值时回到关闭态，任一探测失败则立刻退回打开态并重新计时">
+          <rect class="box-g" x="60" y="70" width="180" height="80" rx="12"/>
+          <text class="tb" x="98" y="102">🟢 Closed</text>
+          <text class="ts" x="76" y="124">正常放行 + 统计</text>
+          <text class="tm" x="76" y="140">窗口内失败率 / 慢调用率</text>
+
+          <rect class="box-r" x="380" y="70" width="180" height="80" rx="12"/>
+          <text class="tb" x="422" y="102">🔴 Open</text>
+          <text class="ts" x="396" y="124">全部快速失败</text>
+          <text class="tm" x="396" y="140">冷却计时中</text>
+
+          <rect class="box-y" x="700" y="70" width="180" height="80" rx="12"/>
+          <text class="tb" x="728" y="102">🟡 Half-Open</text>
+          <text class="ts" x="716" y="124">最多 N 个并发探测</text>
+          <text class="tm" x="716" y="140">注意是并发上限，不是总数</text>
+
+          <path class="ln-r" d="M240 100 H372"/><path class="ar-r" d="M372 95 l8 5 -8 5 z"/>
+          <text class="tr" x="248" y="92">失败率 &gt; 50%</text>
+          <text class="tr" x="248" y="76">或慢调用率 &gt; 50%</text>
+          <text class="tm" x="248" y="120">且样本 ≥ 20</text>
+
+          <path class="ln-y" d="M560 100 H692"/><path class="ar-a" d="M692 95 l8 5 -8 5 z"/>
+          <text class="ty" x="586" y="92">冷却 5 s 到期</text>
+
+          <path class="ln-g" d="M790 70 C 790 30, 200 24, 150 62"/><path class="ar-g" d="M145 58 l1 10 8 -6 z"/>
+          <text class="tg" x="420" y="34">连续成功 ≥ 5 → 回 Closed</text>
+
+          <path class="ln-r" d="M790 150 C 790 196, 500 206, 470 158"/><path class="ar-r" d="M465 162 l1 -10 8 6 z"/>
+          <text class="tr" x="540" y="200">任一探测失败 → 立刻回 Open 并重新计时</text>
+
+          <text class="ts" x="60" y="234">半开态的「N」是<tspan class="tr">并发上限</tspan>而不是「放 N 个然后关门」：后者会让 N 个请求同时打进去、同时超时，等于又捶了下游一次。</text>
+        </svg>
+        <figcaption>图 3 · 三态机。图里标注的那几个参数值不是通用推荐，它们的推导见 §8.2。</figcaption>
       </div>
+
+      <h3 id="s3-2">3.2 慢调用必须计入失败率</h3>
+
+      <p>回到 §1.2 的场景：<strong>库存服务没有失败，它只是从 20 ms 变成了 2000 ms。</strong>如果熔断器只统计「抛异常 / 返回错误码」，那么失败率是 0%，熔断器<strong>永远不会跳闸</strong>——而这恰恰是最危险的一类故障（§1.3 的两秒线程耗尽就是它造成的）。</p>
+
+      <div class="box num">
+        对比两种故障对上游的伤害：<br>
+        <strong>下游直接报错</strong>（RT 5 ms）：单实例吞吐 200 ÷ 0.035 = 5714 QPS。上游资源几乎不受影响，只是业务失败。<br>
+        <strong>下游变慢不报错</strong>（RT 2000 ms）：单实例吞吐 98 QPS。<span class="lose">上游被拖垮。</span><br><br>
+        <strong>「慢」比「错」危险得多</strong>，因为「错」会立刻释放资源，「慢」会一直占着。而默认的熔断配置往往只看「错」。
+      </div>
+
+      <p>所以熔断器必须有两个独立的触发条件，两者是「或」的关系：</p>
+
+      <ul>
+        <li><strong>失败率</strong>：窗口内失败请求 ÷ 总请求 &gt; 阈值（如 50%）</li>
+        <li><strong>慢调用率</strong>：窗口内 RT 超过「慢调用阈值」的请求占比 &gt; 阈值（如 50%）。<strong>慢调用阈值该设多少？</strong>不是超时值，而是「明显偏离正常」的值——比如 P99 的 2 倍。本例库存正常 P99 是 50 ms，慢调用阈值设 100 ms，2000 ms 的请求会被全部计为慢。</li>
+      </ul>
+
+      <div class="box arch">
+        注意慢调用阈值和超时值是<strong>两个不同的数</strong>，很容易被混为一谈。超时（比如 500 ms）决定「等多久放弃」，慢调用阈值（100 ms）决定「多慢算不健康」。<strong>后者必须明显小于前者</strong>，否则熔断器要等到请求超时才认为它慢，而那时资源已经被占了 500 ms——熔断器的响应就晚了 5 倍。<br><br>
+        Resilience4j 和 Sentinel 都支持慢调用率，但<strong>默认是关闭的</strong>。这大概是弹性配置里最值得单独检查的一项。
+      </div>
+
+      <h3 id="s3-3">3.3 错误率怎么统计才对</h3>
+
+      <table class="cmp">
+        <thead><tr><th>统计方式</th><th>行为</th><th>问题</th></tr></thead>
+        <tbody>
+          <tr><td>累计计数（自启动以来）</td><td>永不遗忘</td><td class="bad-cell">下游恢复后失败率仍然很高，熔断器迟迟回不到 Closed；跑得越久越迟钝</td></tr>
+          <tr class="good-cell"><td><strong>滑动窗口</strong>（时间或计数）</td><td>只看最近 N 秒 / N 次</td><td class="good-cell">推荐。窗口大小是个取舍：太小容易被抖动误触发，太大反应慢</td></tr>
+          <tr><td>指数衰减</td><td>老数据权重递减</td><td>平滑且省内存，但「失败率 50%」的直观含义没了，调参更靠感觉</td></tr>
+        </tbody>
+      </table>
+
+      <p><strong>最小样本数</strong>是另一个必须设的门槛。没有它，凌晨低峰期只有 3 个请求、错了 2 个 = 66% 失败率，熔断器跳闸——而实际上什么事都没有。样本数应该覆盖「一个窗口内的正常请求量」的下界，比如窗口 10 s、低峰 QPS 是 5，那最小样本设 20 就意味着熔断器在低峰期基本不工作（这通常是对的，低峰期本来就不需要保护）。</p>
+
+      <h3 id="s3-4">3.4 三个反模式</h3>
+
+      <div class="grid-3">
+        <div class="panel badp">
+          <h4>① 粒度太粗</h4>
+          <p>整个下游服务共用一个熔断器。库存服务的 <code>/query</code> 慢了，把 <code>/deduct</code> 一起熔断——而后者完全健康。<strong>粒度应该到 (服务, 接口)</strong>，有分片的话还要到分片：一个分片的慢不该影响其它分片。</p>
+        </div>
+        <div class="panel badp">
+          <h4>② 熔断了但没降级</h4>
+          <p>跳闸后抛 <code>CircuitBreakerOpenException</code>，一路冒到最外层变成 500。用户看到的从「慢」变成「立刻报错」，<strong>体验反而更差</strong>。熔断的价值在于「省下资源去做兜底」，没有兜底就只剩下省资源。</p>
+        </div>
+        <div class="panel badp">
+          <h4>③ 参数互相矛盾</h4>
+          <p>超时 5 s、统计窗口 10 s、冷却 3 s。慢请求要 5 s 才被计入统计，窗口内攒不够样本；好不容易跳闸，3 s 冷却又到了。<strong>结果是熔断器一直在 Closed 和 Half-Open 之间抖动，从没真正保护过什么。</strong></p>
+        </div>
+      </div>
+
+      <p>第三个反模式指向一个通用要求：<strong>这些参数之间有约束关系，不能各自独立地拍。</strong>大致的不等式是 <code>慢调用阈值 &lt; 超时 &lt; 统计窗口 &lt; 冷却时间 × k</code>。§8.2 会把本例的全部参数按这个约束推一遍。</p>
     </section>
 
     <section class="chapter" id="s4">
-      <div class="ch-head"><div class="num">04</div><div class="t"><h2>降级：优雅退化</h2><div class="sub">保住核心，牺牲非核心</div></div></div>
-      <p>降级是「<strong>系统压力大或依赖不可用时，主动降低服务质量以保证核心可用</strong>」。它是熔断跳闸后的兜底，也是大促预案的核心。</p>
+      <div class="ch-head"><div class="num">04</div><div class="t"><h2>降级：优雅退化</h2><div class="sub">大部分降级预案在真实故障时不生效，原因很一致</div></div></div>
+
+      <h3 id="s4-1">4.1 先分级，再谈降级</h3>
+
+      <p>降级的前提是<strong>知道什么可以牺牲</strong>。没有分级的降级只会变成「出事时临时开会讨论关哪个功能」。把下单链路的五个依赖按「不可用时会怎样」排一遍：</p>
+
       <table class="cmp">
-        <thead><tr><th>降级方式</th><th>示例</th></tr></thead>
+        <thead><tr><th>依赖</th><th>不可用时</th><th>等级</th><th>降级策略</th></tr></thead>
         <tbody>
-          <tr><td>返回默认值 / 缓存</td><td>推荐服务挂了，返回热门榜兜底；实时价挂了用缓存价。</td></tr>
-          <tr><td>关闭非核心功能</td><td>大促时关掉「猜你喜欢」「评论」，保住下单支付主链路。</td></tr>
-          <tr><td>异步化 / 延迟处理</td><td>写操作先入队，稍后处理，返回「处理中」。</td></tr>
-          <tr><td>降低精度</td><td>用近似统计（HyperLogLog）代替精确去重。</td></tr>
+          <tr class="bad-cell"><td>支付预下单</td><td>下单流程走不完</td><td><strong>L0 核心</strong></td><td class="bad-cell">不可降。它挂了就是下单挂了，只能靠自身高可用</td></tr>
+          <tr class="bad-cell"><td>库存</td><td>可能超卖</td><td><strong>L0 核心</strong></td><td>不可降。但可以<strong>换实现</strong>：主链路挂了走本地预扣库存 + 异步对账（这是容错不是降级）</td></tr>
+          <tr class="mid-cell"><td>风控</td><td>放过一些欺诈订单</td><td><strong>L1 可有条件降</strong></td><td>按金额分档：小额放行、大额仍然强依赖。<strong>降级不是全有全无</strong></td></tr>
+          <tr><td>优惠券</td><td>用户少省了钱</td><td><strong>L1</strong></td><td>按原价下单 + 事后补偿。要能<strong>解释给用户</strong>，不能默默不用券</td></tr>
+          <tr class="good-cell"><td>推荐</td><td>页面少一个模块</td><td><strong>L2 随时可降</strong></td><td class="good-cell">返回静态热门榜，或直接不展示</td></tr>
         </tbody>
       </table>
-      <div class="card">
-        <div class="card-title">🎯 降级设计原则</div>
-        <ul>
-          <li><strong>先分级</strong>：明确哪些是核心链路（下单/支付）绝不能降，哪些可降。</li>
-          <li><strong>自动 + 手动</strong>：熔断触发自动降级；大促用<strong>降级开关</strong>手动一键切。</li>
-          <li><strong>兜底要有意义</strong>：返回的默认值要业务可接受，别返回空导致前端崩。</li>
-          <li>降级也要<strong>可观测 + 可恢复</strong>：降级期间打点告警，压力过后自动/手动恢复。</li>
-        </ul>
+
+      <div class="box arch">
+        风控那一行是这张表里最有价值的：<strong>降级不必是「用」或「不用」的二选一，它可以是一个连续谱。</strong>「小额放行、大额强依赖」把风控从一个 L0 依赖变成了 L1——代价是接受小额欺诈的损失，而这个损失是<strong>可以量化并和风控故障的损失作比较</strong>的。<br><br>
+        很多依赖被标成「核心不可降」，只是因为没人花时间去想「部分降级」的方案。<strong>每加一条可降级路径，就少一个能让全站挂掉的单点。</strong>
+      </div>
+
+      <h3 id="s4-2">4.2 兜底数据从哪来</h3>
+
+      <p>降级要返回点什么。三个来源，各有各的过期语义，选错了会从「降级」变成「返回错误数据」：</p>
+
+      <div class="grid-3">
+        <div class="panel good">
+          <h4>静态默认值</h4>
+          <p>推荐位返回运营配好的热门榜。<strong>永不过期、永远可用</strong>，但和用户无关。适合 L2。</p>
+        </div>
+        <div class="panel warnp">
+          <h4>本地缓存的上次结果</h4>
+          <p>用上一次成功的响应。个性化保住了，但<strong>数据可能很旧</strong>——必须带上时间戳并定义「多旧就不能用了」。价格、库存这类不能用旧值。</p>
+        </div>
+        <div class="panel badp">
+          <h4>另一个数据源</h4>
+          <p>主库挂了读从库、实时算不出来读离线表。看起来最完美，但<strong>它是一条平时不跑的代码路径</strong>——真出事时大概率也是坏的。必须常态化演练（见 A3 那一篇的主题）。</p>
+        </div>
+      </div>
+
+      <p>无论用哪种，兜底结果都要<strong>带一个标记</strong>告诉上游「这是降级数据」。否则前端无法区分「真的没有推荐」和「推荐服务挂了」，监控也无法把降级期间的成功率单独算出来——那段时间的「成功率 99.9%」是假的，因为里面有一半返回的是兜底值。</p>
+
+      <h3 id="s4-3">4.3 降级开关不能依赖会一起挂的东西</h3>
+
+      <div class="box bad">
+        最常见的失效方式：降级开关放在配置中心，而配置中心和业务服务在同一个机房、共用同一套网络或注册中心。机房网络出问题 → 业务需要降级 → <strong>但配置中心也连不上，开关推不下去</strong>。预案写得再详细也没用。
+      </div>
+
+      <p>三条要求，缺一条这套开关在真出事时就是摆设：</p>
+
+      <ul>
+        <li><strong>本地有兜底副本。</strong>配置拉取成功后写本地文件，配置中心不可用时用本地最后一份。<strong>启动时也要能只靠本地文件起来</strong>——否则配置中心挂了连重启都做不到。</li>
+        <li><strong>自动降级不依赖开关。</strong>熔断触发的降级是本地判断，全程不需要外部输入。手动开关只用于「预判性降级」（大促前主动关掉非核心），是自动降级的补充而不是主路径。</li>
+        <li><strong>开关的推送路径要和业务流量路径分开。</strong>如果开关走的是同一个服务网格、同一个注册中心，那它们会一起挂。</li>
+      </ul>
+
+      <div class="box tip">
+        降级开关还要考虑<strong>怎么恢复</strong>。自动降级应该能自动恢复（熔断器回到 Closed）；手动开关必须有人负责关掉——而「大促结束后忘记关掉降级开关」是个真实且常见的问题，表现为几周后有人发现某个功能一直没生效。给手动开关加一个<strong>过期时间</strong>，到期自动失效并告警，比依赖流程可靠。
       </div>
     </section>
 
     <section class="chapter" id="s5">
-      <div class="ch-head"><div class="num">05</div><div class="t"><h2>隔离：限制爆炸半径</h2><div class="sub">舱壁模式（Bulkhead）</div></div></div>
-      <p>隔离把资源（线程池、连接、实例）<strong>分舱</strong>，让一个依赖的故障不耗尽全局资源、不波及其它依赖。</p>
+      <div class="ch-head"><div class="num">05</div><div class="t"><h2>隔离：限制爆炸半径</h2><div class="sub">两种隔离方式的差别，在于能不能隔离「慢」</div></div></div>
+
+      <p>隔离把资源分舱，让一个依赖的故障不耗尽全局资源。回到 §1.2：如果库存调用用的是独立资源池，它变慢只会耗尽<strong>它自己那 40 个线程</strong>，剩下 160 个线程照常服务其它依赖——整体吞吐从 4000 QPS 降到 3200 QPS，而不是 98 QPS。</p>
+
       <div class="analogy">
         <div class="at">生活类比：轮船的水密隔舱</div>
-        <p>大船船体分成多个<strong>水密隔舱</strong>：即使一个舱破洞进水，水也被封在这个舱里，其它舱照常浮起，船不沉。系统给每个下游依赖分配<strong>独立的线程池/连接池</strong>：即使「支付服务」变慢占满它自己的池，「商品服务」的池不受影响，整体不被一个慢依赖拖垮。</p>
+        <p>大船船体分成多个<strong>水密隔舱</strong>：即使一个舱破洞进水，水也被封在这个舱里，其它舱照常浮起，船不沉。系统给每个下游依赖分配<strong>独立的资源池</strong>：即使「库存服务」变慢占满它自己的池，「优惠券」的池不受影响。</p>
         <div class="map">映射：<b>隔舱</b>=独立资源池 · <b>一舱进水</b>=一个依赖故障 · <b>船不沉</b>=系统整体存活</div>
       </div>
-      <div class="card">
-        <div class="card-title">🧱 隔离粒度</div>
-        <ul>
-          <li><strong>线程池隔离</strong>：每个下游依赖一个线程池（Hystrix 经典做法），强隔离但线程开销大。</li>
-          <li><strong>信号量隔离</strong>：用计数器限并发，轻量无额外线程，但不能隔离超时（调用方线程仍会等）。</li>
-          <li><strong>实例/集群隔离</strong>：核心业务与非核心部署到不同集群，故障域彻底分开。</li>
-          <li><strong>租户隔离</strong>：大客户与普通客户资源分池，防单租户打爆全局（noisy neighbor）。</li>
-        </ul>
+
+      <h3 id="s5-1">5.1 线程池与信号量的本质区别</h3>
+
+      <p>两种隔离方式经常被并列介绍成「一个重一个轻」，但它们真正的差别只有一条：<strong>调用是否在调用方的线程上执行。</strong>这一条决定了能不能隔离「慢」。</p>
+
+      <div class="fig">
+        <svg viewBox="0 0 960 300" style="min-width:760px;height:auto" role="img" aria-label="线程池隔离与信号量隔离的时序对比：线程池隔离下调用在独立线程执行，调用方线程等到超时就可以放弃并去处理别的请求，慢调用被限制在独立线程池里；信号量隔离下调用在调用方线程上执行，只是限制了并发数，调用方线程仍然被卡满两秒，慢没有被隔离住">
+          <rect class="box-g" x="20" y="34" width="920" height="118" rx="9"/>
+          <text class="tb" x="36" y="56">✅ 线程池隔离：调用在独立线程上，调用方可以放弃</text>
+          <text class="tm" x="36" y="80">调用方线程</text>
+          <rect class="box-a" x="150" y="68" width="120" height="20" rx="3"/><text class="ts" x="162" y="83">等待 200 ms</text>
+          <rect class="box-y" x="270" y="68" width="90" height="20" rx="3"/><text class="ts" x="278" y="83">超时放弃</text>
+          <rect class="box-g" x="362" y="68" width="200" height="20" rx="3"/><text class="ts" x="374" y="83">去服务下一个请求 ✔</text>
+          <text class="tm" x="36" y="110">库存专用池（40 线程）</text>
+          <rect class="box-r" x="150" y="98" width="640" height="20" rx="3"/><text class="ts" x="380" y="113">这个调用还卡着 2000 ms，但它只占「专用池」的一个槽</text>
+          <text class="tg" x="36" y="140">结果：慢被关在专用池里。调用方最多损失 200 ms，其它依赖完全不受影响。</text>
+
+          <rect class="box-r" x="20" y="166" width="920" height="118" rx="9"/>
+          <text class="tb" x="36" y="188">❌ 信号量隔离：调用就在调用方线程上，只是限了并发数</text>
+          <text class="tm" x="36" y="212">调用方线程</text>
+          <rect class="box-r" x="150" y="200" width="640" height="20" rx="3"/><text class="ts" x="400" y="215">被同一个调用卡满 2000 ms —— 无处可去</text>
+          <text class="tm" x="36" y="244">信号量（上限 40）</text>
+          <rect class="box-y" x="150" y="232" width="640" height="20" rx="3"/><text class="ts" x="330" y="247">确实挡住了第 41 个请求，但前 40 个线程已经被占死</text>
+          <text class="tr" x="36" y="274">结果：并发被限住了，「慢」没有被隔离住。它省的是「不让更多线程陷进去」，不是「把陷进去的捞出来」。</text>
+        </svg>
+        <figcaption>图 4 · 一句话概括：<strong>线程池隔离能隔离超时，信号量隔离不能。</strong></figcaption>
       </div>
+
+      <table class="cmp">
+        <thead><tr><th>维度</th><th>线程池隔离</th><th>信号量隔离</th></tr></thead>
+        <tbody>
+          <tr><td>能否隔离「慢」</td><td class="good-cell">能——调用方可超时放弃</td><td class="bad-cell">不能——调用方线程被一起卡住</td></tr>
+          <tr><td>每次调用开销</td><td>一次线程切换，约 5–10 μs</td><td class="good-cell">一次原子操作，几十纳秒</td></tr>
+          <tr><td>上下文传递</td><td class="bad-cell">跨线程，<code>ThreadLocal</code> / trace context / 事务上下文都要手动传</td><td class="good-cell">同线程，什么都不用管</td></tr>
+          <tr><td>资源开销</td><td>每个依赖一个池，N 个依赖 N 组线程</td><td class="good-cell">一个计数器</td></tr>
+          <tr><td>适用</td><td class="good-cell">调用耗时长（&gt; 1 ms）、不可信、可能卡住的<strong>远程</strong>依赖</td><td class="good-cell">调用极快（本地缓存、内存计算）且几乎不可能卡住的</td></tr>
+        </tbody>
+      </table>
+
+      <p>判据可以简化成一句：<strong>如果这个依赖有可能「卡住而不是失败」，就必须用线程池隔离。</strong>本例的五个下游全是远程调用，全都可能卡住，所以核心三个（库存、支付、风控）用独立线程池；推荐是 L2 且可以直接不调，用信号量足够。</p>
+
+      <div class="box tip">
+        在协程 / 异步模型里这个取舍会变形。C++ 协程或 <code>io_uring</code> 下，「等待」不占线程——一个卡住的调用只占一个协程（几 KB），不占执行单元。此时<strong>线程池隔离的主要收益消失了</strong>，因为信号量隔离已经能达到同样效果（限制并发协程数 + 超时取消）。<br>
+        所以这条判据的准确表述是：<strong>「等待」是否占用稀缺的执行资源。</strong>线程模型下占，协程模型下不占。这也是<a href="high_concurrency_gateway.html#s4">网关篇选 shared-nothing + 协程</a>之后，很多传统弹性手段可以简化的原因。
+      </div>
+
+      <h3 id="s5-2">5.2 隔离要隔干净</h3>
+
+      <div class="box bad">
+        只隔离了最显眼的那个资源（通常是线程），剩下任何一个共享资源都足以让两条通道在故障时重新耦合。这类「隔离做了一半」的问题在故障复盘里非常常见，因为它平时完全看不出来。
+      </div>
+
+      <p>把所有可能共享的资源列一遍，逐个确认：</p>
+
+      <table class="cmp">
+        <thead><tr><th>共享资源</th><th>不隔离的后果</th></tr></thead>
+        <tbody>
+          <tr><td>工作线程 / 协程</td><td>最显眼的一个，通常会被隔离</td></tr>
+          <tr><td class="bad-cell">连接池</td><td>库存和优惠券共用一个 HTTP 连接池，库存把连接占满，优惠券拿不到连接——<strong>线程隔离了但连接没隔离</strong></td></tr>
+          <tr><td class="bad-cell">限流令牌 / 熔断器状态</td><td>共用一个熔断器就是 §3.4 的粒度问题</td></tr>
+          <tr><td>本地缓存容量</td><td>一个依赖的结果把缓存挤爆，另一个依赖的命中率暴跌</td></tr>
+          <tr><td class="mid-cell">日志与监控缓冲</td><td>最隐蔽的一个：故障依赖疯狂打错误日志，日志缓冲写满 → 阻塞所有线程（如果日志是同步的）</td></tr>
+          <tr><td>DNS 解析 / 名字服务客户端</td><td>共用一个解析器，一个域名解析慢会拖住所有域名的解析</td></tr>
+        </tbody>
+      </table>
+
+      <p>倒数第二行值得展开：<strong>同步日志是一个经常被忽略的全局共享点。</strong>下游故障时错误日志量可能涨几十倍，如果日志写入是同步的（或者异步但队列有界且满了会阻塞），那么所有线程都会卡在日志上——一个「隔离得很好」的系统，因为日志而整体挂掉。这也是为什么日志库的<strong>队列满时策略</strong>（阻塞 / 丢弃 / 采样）是一个弹性设计决策，不只是运维配置。</p>
+
+      <h3 id="s5-3">5.3 什么时候合并反而更好</h3>
+
+      <p>隔离不是越细越好。把 40 个 worker 拆成 5 组各 8 个，每组只服务一个依赖，会带来一个反效果：<strong>统计复用消失了。</strong></p>
+
+      <div class="box num">
+        排队论里，多服务台共享一个队列的排队时间远小于同样利用率下的独立小队列（<a href="capacity_backpressure_design.html#s3-2">M/M/c 对比</a>）。ρ = 85% 时，<code>c = 8</code> 的排队时间约 1.4×S，而 <code>c = 40</code> 只有 0.3×S。<br>
+        <strong>拆成 5 个 8 线程的池，正常情况下的排队时间会比一个 40 线程的池差 4 倍以上</strong>——你为了防范故障，牺牲了平时的性能。
+      </div>
+
+      <p>所以隔离的粒度是一次明确的取舍，判据是：</p>
+
+      <ul>
+        <li><strong>这个依赖会不会独立故障？</strong>如果五个依赖其实都部署在同一个集群、共享同一个数据库，那它们会一起挂，隔离没有意义。</li>
+        <li><strong>它们的服务时间分布是否接近？</strong>接近就合并（统计复用收益大），差一个数量级就拆（同<a href="image_pipeline_architecture.html#s6-2">分级队列</a>）。本例库存 20 ms 和支付 30 ms 接近，推荐 5 ms 差得远。</li>
+        <li><strong>故障时是否需要保住其中某一个？</strong>这是隔离最强的理由——核心与非核心之间必须有墙，哪怕代价是平时慢一点。</li>
+      </ul>
     </section>
 
     <section class="chapter" id="s6">
-      <div class="ch-head"><div class="num">06</div><div class="t"><h2>超时与重试：双刃剑</h2><div class="sub">用不好会放大故障</div></div></div>
-      <p><strong>超时</strong>是所有弹性手段的地基——没有超时，一个卡住的调用会永久占用资源。<strong>重试</strong>能提高成功率，但用不好会把下游打死（重试风暴）。</p>
-      <div class="card">
-        <div class="card-title">⏱️ 超时</div>
-        <ul>
-          <li>每个远程调用<strong>必设超时</strong>，且要合理（P99 + buffer，不是拍脑袋 30s）。</li>
-          <li><strong>超时预算传播</strong>：A(1s) 调 B，B 调 C 的超时不能大于剩余预算（deadline 沿链路递减，gRPC 原生支持）。</li>
-        </ul>
+      <div class="ch-head"><div class="num">06</div><div class="t"><h2>超时与重试</h2><div class="sub">超时是所有弹性手段的地基，重试是最容易失控的那个</div></div></div>
+
+      <h3 id="s6-1">6.1 超时值该由什么决定</h3>
+
+      <p>常见做法是「下游 P99 × 2 再加点 buffer」。这个做法在单跳时够用，在调用链上是错的，因为它<strong>只看了下游，没看上游</strong>。</p>
+
+      <div class="box arch">
+        换个角度想：超时的作用是「放弃」，所以它该由<strong>「再等下去还有没有意义」</strong>决定，而不是由下游的延迟分布决定。<br><br>
+        如果上游给你的 deadline 只剩 200 ms，那你给下游设 500 ms 超时毫无意义——上游 200 ms 后就走了，你还在等，白占 300 ms 的资源，而且这些资源产出的结果没有任何人会用。<strong>这类「注定被丢弃的工作」在过载时会占掉可观的容量，而且完全不可见。</strong>
       </div>
-      <div class="card">
-        <div class="card-title">🔁 重试（谨慎）</div>
-        <ul>
-          <li><strong>只重试幂等操作</strong>——非幂等写重试会重复下单/扣款（配合<a href="./api_design.html#s5">幂等键</a>）。</li>
-          <li><strong>指数退避 + 抖动（jitter）</strong>：避免所有客户端同时重试形成尖峰（惊群）。</li>
-          <li><strong>限制重试次数 + 重试预算</strong>：全局限制重试占比（如 ≤10%），防重试风暴放大故障。</li>
-          <li>只对<strong>可重试错误</strong>（超时、503）重试；4xx/业务错误不重试。</li>
-        </ul>
+
+      <div class="formula-like" style="border:1px solid var(--border);border-radius:10px;background:var(--bg-card-2);padding:14px 16px;margin:16px 0;font-family:var(--mono);font-size:14px;line-height:1.9;overflow-x:auto;">
+        超时 = <b style="color:var(--accent)">min</b>( 上游剩余 deadline − 本地开销 , &nbsp; 业务能接受的上限 , &nbsp; 下游 P99 × k )
       </div>
-      <div class="analogy">
-        <div class="at">反模式：重试风暴</div>
-        <p>下游抖动一下 → 所有客户端立刻重试 → 请求量瞬间翻几倍 → 本来能自愈的下游被重试流量彻底打死 → 更多超时 → 更多重试……<strong>重试在故障时会火上浇油</strong>。所以要退避 + 抖动 + 预算，并配合熔断（跳闸后连重试都停）。</p>
+
+      <p>三项各有各的角色：第一项保证不做无用功，第二项保证用户体验（就算下游很快，某些操作也不该让用户等超过 N 秒），第三项保证不误杀正常的慢请求（k 通常取 2–3）。<strong>取三者的最小值</strong>，而不是只算第三项。</p>
+
+      <h3 id="s6-2">6.2 deadline 沿链路递减</h3>
+
+      <div class="fig">
+        <svg viewBox="0 0 940 260" style="min-width:740px;height:auto" role="img" aria-label="超时预算沿调用链递减示意图：网关给下单服务五百毫秒预算，下单服务本地处理消耗后剩余四百三十毫秒，串行调用五个下游各自分配预算，最后一个下游拿到的预算已经很少；如果每一层都独立设置固定超时，总和会远超上游预算，导致上游早已放弃而下游还在工作">
+          <text class="tb" x="20" y="24">✅ deadline 传播：每一跳都知道自己还剩多少</text>
+          <rect class="box-a" x="20" y="40" width="130" height="44" rx="6"/>
+          <text class="t" x="34" y="62">网关</text><text class="tm" x="34" y="78">预算 500 ms</text>
+          <rect class="box-a" x="190" y="40" width="150" height="44" rx="6"/>
+          <text class="t" x="204" y="62">order-svc</text><text class="tm" x="204" y="78">剩 470 ms</text>
+          <rect class="box-g" x="380" y="24" width="120" height="34" rx="5"/>
+          <text class="ts" x="392" y="46">库存 · 给 60 ms</text>
+          <rect class="box-g" x="380" y="66" width="120" height="34" rx="5"/>
+          <text class="ts" x="392" y="88">风控 · 给 50 ms</text>
+          <rect class="box-g" x="540" y="24" width="130" height="34" rx="5"/>
+          <text class="ts" x="552" y="46">支付 · 给 90 ms</text>
+          <rect class="box-g" x="540" y="66" width="130" height="34" rx="5"/>
+          <text class="ts" x="552" y="88">优惠券 · 给 40 ms</text>
+          <rect class="box" x="700" y="45" width="150" height="34" rx="5"/>
+          <text class="ts" x="712" y="67">推荐 · 给剩下的 20 ms</text>
+          <path class="ln-a" d="M150 62 H182"/><path class="ar-a" d="M182 57 l8 5 -8 5 z"/>
+          <path class="ln-g" d="M340 62 H372"/><path class="ar-g" d="M372 57 l8 5 -8 5 z"/>
+          <text class="tg" x="20" y="112">每一跳把「剩余预算」放进请求头往下传，下游据此设自己的超时。<tspan class="ta">总和天然不会超过 500 ms。</tspan></text>
+
+          <text class="tb" x="20" y="152">❌ 各层独立设固定超时</text>
+          <rect class="box-a" x="20" y="168" width="130" height="44" rx="6"/>
+          <text class="t" x="34" y="190">网关</text><text class="tm" x="34" y="206">超时 500 ms</text>
+          <rect class="box-r" x="190" y="168" width="150" height="44" rx="6"/>
+          <text class="t" x="204" y="190">order-svc</text><text class="tm" x="204" y="206">五个下游各 300 ms</text>
+          <rect class="box-r" x="380" y="168" width="470" height="44" rx="6"/>
+          <text class="tr" x="394" y="190">最坏 5 × 300 = 1500 ms，是上游预算的 3 倍</text>
+          <text class="tm" x="394" y="206">网关 500 ms 就放弃了，order-svc 还要再干 1000 ms —— 全是无用功</text>
+          <path class="ln-r" d="M150 190 H182"/><path class="ar-r" d="M182 185 l8 5 -8 5 z"/>
+          <text class="tr" x="20" y="240">这些无用功在过载时会占掉可观容量，而且监控上完全看不出来：它们的指标是「成功」，只是没人要结果。</text>
+        </svg>
+        <figcaption>图 5 · deadline 传播不是优化，它是「不做无用功」的唯一手段。gRPC 原生支持，HTTP 侧要自己约定 header。</figcaption>
+      </div>
+
+<pre><code><span class="cm">// deadline 传播的最小实现：一个随请求走的绝对时刻。</span>
+<span class="cm">// 关键是它必须是「绝对时刻」而不是「剩余毫秒数」—— 后者在每一跳都要重新计算，</span>
+<span class="cm">// 而网络传输和排队的时间会被漏掉，越往下游误差越大。</span>
+<span class="kw">class</span> <span class="type">Deadline</span> {
+  <span class="type">std</span>::<span class="type">chrono</span>::<span class="type">steady_clock</span>::<span class="type">time_point</span> at_;   <span class="cm">// 必须用单调时钟，不能用系统时钟</span>
+
+ <span class="kw">public</span>:
+  <span class="type">std</span>::<span class="type">chrono</span>::<span class="type">milliseconds</span> <span class="fn">remaining</span>() <span class="kw">const</span> {
+    <span class="kw">auto</span> left = at_ - <span class="type">std</span>::<span class="type">chrono</span>::<span class="type">steady_clock</span>::<span class="fn">now</span>();
+    <span class="kw">return</span> <span class="type">std</span>::<span class="fn">max</span>(<span class="num">0</span>ms, <span class="type">std</span>::<span class="type">chrono</span>::<span class="fn">duration_cast</span>&lt;<span class="type">std</span>::<span class="type">chrono</span>::<span class="type">milliseconds</span>&gt;(left));
+  }
+
+  <span class="cm">// 调下游前算超时：三项取最小（§6.1）。reserve 是留给「拿到结果后还要做的事」。</span>
+  <span class="type">std</span>::<span class="type">chrono</span>::<span class="type">milliseconds</span> <span class="fn">budget_for</span>(<span class="kw">const</span> <span class="type">DepConfig</span>&amp; d) <span class="kw">const</span> {
+    <span class="kw">auto</span> left = <span class="fn">remaining</span>() - d.reserve;
+    <span class="kw">if</span> (left &lt;= <span class="num">0</span>ms) <span class="kw">return</span> <span class="num">0</span>ms;         <span class="cm">// 已经没预算了，直接走降级，别发这个请求</span>
+    <span class="kw">return</span> <span class="type">std</span>::<span class="fn">min</span>({left, d.max_timeout, d.p99 * d.k});
+  }
+};
+
+<span class="cm">// 调用点：预算为 0 就不发请求 —— 这一行是「不做无用功」的全部实现。</span>
+<span class="kw">auto</span> budget = deadline.<span class="fn">budget_for</span>(kInventory);
+<span class="kw">if</span> (budget == <span class="num">0</span>ms) <span class="kw">return</span> <span class="fn">fallback_inventory</span>();
+<span class="kw">auto</span> resp = inventory.<span class="fn">call</span>(req, budget, deadline);   <span class="cm">// deadline 继续往下传</span>
+</code></pre>
+
+      <div class="box danger" style="border-left:4px solid var(--danger);background:color-mix(in srgb, var(--danger) 8%, var(--bg-card));padding:14px 18px;border-radius:0 8px 8px 0;margin:16px 0;">
+        <strong>必须用单调时钟（<code>steady_clock</code> / <code>CLOCK_MONOTONIC</code>），不能用系统时钟。</strong>如果用 <code>system_clock</code>，一次 NTP 校时把时间往前调 1 秒，所有在途请求的 deadline 会瞬间「已过期」，全部被取消——表现为「某个时刻突然全站超时，几秒后自动恢复，日志里什么异常都没有」。这是分布式系统里最难查的一类问题之一。
+      </div>
+
+      <h3 id="s6-3">6.3 重试与熔断谁包着谁</h3>
+
+      <p>重试的放大是乘性的、而且<strong>恰好在过载时才启动</strong>——这部分的算术在<a href="capacity_backpressure_design.html#s6-3">容量篇 §6.3</a>，这里只补一个实现层面的细节，它经常被搞反。</p>
+
+      <p>重试和熔断的嵌套顺序有两种写法，行为完全不同：</p>
+
+      <div class="grid-2">
+        <div class="panel badp">
+          <h4>❌ 熔断在外，重试在内</h4>
+          <p><code>breaker(retry(call))</code>：熔断器只看到「重试三次后的最终结果」。<strong>三次调用只统计成一次失败</strong>，样本被稀释三倍，熔断器迟迟不跳闸；而且跳闸之前，每个请求都实实在在打了下游三次。</p>
+        </div>
+        <div class="panel good">
+          <h4>✅ 重试在外，熔断在内</h4>
+          <p><code>retry(breaker(call))</code>：每次重试都先过熔断器检查。<strong>熔断器统计到全部三次调用</strong>，跳闸更快；而且一旦跳闸，后续的重试会立刻被熔断器拒绝，<strong>重试自动停止</strong>——这正是我们想要的。</p>
+        </div>
+      </div>
+
+      <div class="box arch">
+        「重试在外、熔断在内」还有一个不明显的好处：<strong>它让重试预算和熔断自动配合。</strong>下游轻微抖动时熔断器不跳，重试正常发挥作用（提高成功率）；下游真的挂了熔断器跳闸，重试被立刻掐断（避免放大）。<strong>两个机制的边界由熔断器的阈值自动划定，不需要再单独调一套重试开关。</strong><br><br>
+        大多数弹性库（Resilience4j、Polly）的装饰器顺序是可配的，而默认顺序不一定是这个。这是一个值得在代码评审里专门看一眼的地方。
       </div>
     </section>
 
     <section class="chapter" id="s7">
-      <div class="ch-head"><div class="num">07</div><div class="t"><h2>负载脱落与自适应限流</h2><div class="sub">从静态阈值到动态自愈</div></div></div>
-      <p>静态限流阈值很难设准：设低了浪费容量，设高了保护不住。现代做法是<strong>自适应</strong>——根据系统实时状态动态调节。</p>
-      <ul>
-        <li><strong>负载脱落（Load Shedding）</strong>：当 CPU / 队列积压 / RT 超阈值时，主动丢弃部分请求（优先丢低优先级），保住系统不崩。Google SRE 的核心实践。</li>
-        <li><strong>自适应限流</strong>：以延迟/成功率为反馈信号动态调整放行量（类似 TCP 拥塞控制 / Netflix concurrency-limits / Sentinel BBR），无需人工调阈值。</li>
-        <li><strong>优先级 + 公平</strong>：过载时按请求优先级脱落（保交易、丢日志上报）；防单用户独占（加权公平）。</li>
-      </ul>
-      <div class="card">
-        <div class="card-title">📊 前提：可观测</div>
-        <p>所有弹性策略都依赖度量：QPS、RT（P99）、错误率、饱和度（CPU/队列）。没有监控就没有自适应，也无法验证策略是否生效。参见 <a href="./observability_engineering.html">可观测性工程</a>。</p>
+      <div class="ch-head"><div class="num">07</div><div class="t"><h2>负载脱落与自适应</h2><div class="sub">§1.4 那个「静态阈值挡不住容量变小」的洞，靠这一章补</div></div></div>
+
+      <h3 id="s7-1">7.1 静态阈值一周就过期</h3>
+
+      <p>限流阈值是按「压测出来的容量」设的，而容量不是一个常数。它随着这些东西一起漂：</p>
+
+      <table class="cmp">
+        <thead><tr><th>什么在变</th><th>容量怎么变</th></tr></thead>
+        <tbody>
+          <tr class="bad-cell"><td>下游 RT</td><td>§1.2 已经算过：下游慢 100 倍，容量掉 100 倍。<strong>这是最剧烈的一项，而且静态阈值完全感知不到</strong></td></tr>
+          <tr><td>缓存命中率</td><td>命中率从 95% 掉到 80%，落库请求翻 4 倍，容量对应下降</td></tr>
+          <tr><td>请求组成</td><td>大促时「查询」变「下单」，单请求成本涨几倍</td></tr>
+          <tr><td>机型与部署密度</td><td>换机型、同机部署了别的服务、超卖比例变化</td></tr>
+          <tr><td>代码本身</td><td>每次发版都可能改变单请求成本，而阈值没人跟着改</td></tr>
+        </tbody>
+      </table>
+
+      <p>所以静态限流只能作为<strong>粗粒度的第一道门</strong>（挡住明显异常的流量洪峰），真正贴着容量走的保护必须是自适应的——<strong>不看流量有多大，看系统自己累不累。</strong></p>
+
+      <h3 id="s7-2">7.2 三种反馈信号，只有一种够快</h3>
+
+      <div class="fig">
+        <svg viewBox="0 0 940 300" style="min-width:740px;height:auto" role="img" aria-label="三种过载反馈信号的响应速度对比：CPU 利用率在队列已经堆积后才上升，滞后最严重；队列长度比 CPU 快但阈值随扩容失效；排队时延在队列刚开始堆积时就上升，是最快且自归一化的信号">
+          <path class="grid" d="M80 60 H900 M80 120 H900 M80 180 H900 M80 240 H900"/>
+          <path class="ln" d="M80 40 V260 H900"/>
+          <text class="tm" x="30" y="264">0</text>
+          <text class="tm" x="80" y="284">过载开始</text>
+          <text class="tm" x="330" y="284">+1 s</text>
+          <text class="tm" x="580" y="284">+3 s</text>
+          <text class="tm" x="820" y="284">+5 s</text>
+          <text class="tb" x="80" y="30">同一次过载，三种信号的响应速度</text>
+
+          <path class="ln-g" d="M80 252 C 110 250, 130 120, 180 76 C 260 56, 500 50, 900 48"/>
+          <text class="tg" x="188" y="68">① 排队时延：立刻上升</text>
+          <text class="tm" x="188" y="84">请求一开始等，它就动了。而且自归一化——扩容后不用改阈值</text>
+
+          <path class="ln-y" d="M80 254 C 200 250, 290 200, 360 150 C 460 110, 620 86, 900 78"/>
+          <text class="ty" x="372" y="142">② 队列长度：慢半拍</text>
+          <text class="tm" x="372" y="158">要先堆起来才看得见；阈值随扩容失效</text>
+
+          <path class="ln-r" d="M80 256 C 300 254, 450 244, 560 216 C 680 184, 800 150, 900 132"/>
+          <text class="tr" x="572" y="208">③ CPU 利用率：最滞后</text>
+          <text class="tm" x="572" y="224">等你看到 CPU 高，队列已经堆了几千个</text>
+          <text class="tm" x="572" y="240">而且线程都在等 IO 时，CPU 根本不高（§1.2 就是这样）</text>
+        </svg>
+        <figcaption>图 6 · CPU 是最差的过载信号，却是最常被用的那个。§1.2 的场景里 CPU 甚至是<strong>下降</strong>的——线程都在等库存。</figcaption>
+      </div>
+
+      <p>最后那句是关键：<strong>在「下游变慢」这类故障里，CPU 利用率是下降的</strong>，因为所有线程都在等 IO。用 CPU 做脱载判据，在最需要它的场景下完全不会触发。</p>
+
+      <p><strong>排队时延</strong>是最好的信号，这也是 CoDel（Controlled Delay，最初为网络队列设计）的核心思想。它的精髓不是「队列多长」，而是<strong>「队列持续拥塞了多久」</strong>——短暂的排队是正常的突发吸收，持续的排队才说明容量不足：</p>
+
+<pre><code><span class="cm">// CoDel 式脱载：判据是「排队时延持续超过目标值」，不是「队列长度超过 N」。</span>
+<span class="cm">// 队列长度的阈值会随扩容失效（同样长度在更大的集群上其实更安全），</span>
+<span class="cm">// 而排队时延是自归一化的 —— 扩容之后它自然就降下来了，阈值不用改。</span>
+<span class="kw">class</span> <span class="type">CodelShedder</span> {
+  <span class="kw">static</span> <span class="kw">constexpr</span> <span class="kw">auto</span> kTarget   = <span class="num">20</span>ms;   <span class="cm">// 可接受的排队时延</span>
+  <span class="kw">static</span> <span class="kw">constexpr</span> <span class="kw">auto</span> kInterval = <span class="num">100</span>ms;  <span class="cm">// 观察窗口：持续这么久才算真拥塞</span>
+  <span class="type">TimePoint</span> overload_since_{};                <span class="cm">// 空 = 当前不在拥塞状态</span>
+
+ <span class="kw">public</span>:
+  <span class="cm">// 每个请求出队时调用一次。queued 是它在队列里待的时长。</span>
+  <span class="type">bool</span> <span class="fn">should_shed</span>(<span class="type">Duration</span> queued, <span class="type">TimePoint</span> now) {
+    <span class="kw">if</span> (queued &lt; kTarget) {
+      overload_since_ = {};                  <span class="cm">// 一旦有请求等得够短，就认为已恢复</span>
+      <span class="kw">return</span> <span class="kw">false</span>;
+    }
+    <span class="kw">if</span> (overload_since_ == <span class="type">TimePoint</span>{}) {
+      overload_since_ = now;                 <span class="cm">// 刚进入拥塞，先观察，不急着丢</span>
+      <span class="kw">return</span> <span class="kw">false</span>;                          <span class="cm">// ← 这一步让突发不会被误杀</span>
+    }
+    <span class="cm">// 持续拥塞超过一个观察窗口，才开始丢 —— 这就是 CoDel 与「队列超长就丢」的全部区别</span>
+    <span class="kw">return</span> now - overload_since_ &gt; kInterval;
+  }
+};
+
+<span class="cm">// 丢弃时按优先级从低到高（§7.3），并且要立刻返回明确的「过载」错误码，</span>
+<span class="cm">// 让调用方能退避 —— 返回 500 会让它当成偶发错误立刻重试，反而放大（§6.3）。</span>
+</code></pre>
+
+      <div class="box arch">
+        <code>kTarget = 20ms</code> 这个值该怎么定？<strong>它不是「用户能忍受的延迟」，而是「排队时延占端到端预算的可接受比例」。</strong>本例 P99 预算 500 ms、正常处理 50 ms，留 20 ms 给排队意味着排队占预算的 4%——足够吸收突发，又不至于把预算吃掉。<br><br>
+        更重要的是 <code>kInterval</code>：它区分了「突发」和「过载」。没有它，一次 100 ms 的正常流量尖峰就会触发丢弃；有了它，只有持续 100 ms 以上的拥塞才被认定为真过载。<strong>这个「先观察一个窗口」的设计，是 CoDel 相比「队列超长就丢」最本质的进步。</strong>
+      </div>
+
+      <p>另一条路是<strong>延迟梯度探测</strong>（Netflix concurrency-limits，思路来自 TCP Vegas）：持续测量 RT，逐步提高并发上限，一旦 RT 开始上升就回退。它的好处是能自动找到并发上限而不需要任何阈值；代价是收敛需要时间，且对 RT 抖动敏感。<strong>两者可以叠加</strong>：梯度探测定并发上限，CoDel 管超出上限之后的丢弃。</p>
+
+      <h3 id="s7-3">7.3 优先级必须在入口就打上</h3>
+
+      <p>脱载要丢就丢低价值的请求。但「价值」这个信息在哪一层才知道？</p>
+
+      <div class="box bad">
+        常见做法是在业务逻辑里判断优先级。但到那时候<strong>资源已经花掉了</strong>——请求已经占了线程、已经解析完参数、可能已经查过一次缓存。丢弃它只是止损，不能回收已花的成本。在过载时，这些「花了成本又被丢弃」的请求会占掉相当比例的容量。
+      </div>
+
+      <p>正确做法是<strong>在入口就把优先级打进请求上下文</strong>，依据可以是：调用方身份（内部批量任务 &lt; 普通用户 &lt; VIP）、接口本身（下单 &gt; 查询 &gt; 埋点上报）、以及重试标记（<strong>重试请求应当比首次请求优先级更低</strong>——它已经失败过一次，而且优先丢重试能天然抑制重试放大）。</p>
+
+      <p>最后一条值得单独强调：<strong>过载时优先丢弃重试请求</strong>，等于把 §6.3 的重试预算变成了一个自适应的机制——系统越忙，重试越容易被丢，放大效应自动收敛。这比配一个固定的重试预算百分比更贴合实际。</p>
+
+      <div class="box tip">
+        脱载和限流的分工要说清，它们不重复：<strong>限流在入口按「流量有多大」挡</strong>（快、便宜、但不知道系统实际状态）；<strong>脱载在服务内按「系统有多累」挡</strong>（准、能感知容量变化、但请求已经进来了）。两道都要有——限流挡住明显异常的洪峰，脱载兜住「流量正常但容量变小」这种限流看不见的情况（§1.4）。
       </div>
     </section>
 
     <section class="chapter" id="s8">
-      <div class="ch-head"><div class="num">08</div><div class="t"><h2>组合成一条防线</h2><div class="sub">它们不是替代，而是叠加</div></div></div>
-      <p>这些手段各管一段，实际系统把它们串成<strong>纵深防御</strong>：</p>
-      <div class="card">
-        <div class="card-title">🛡️ 一次请求的防护链</div>
-        <ul>
-          <li><strong>① 入口限流</strong>（网关）：挡住超容量流量，返回 429。</li>
-          <li><strong>② 隔离</strong>：请求进入该依赖的独立资源池，不影响其它。</li>
-          <li><strong>③ 超时</strong>：调用下游设合理 deadline，不无限等。</li>
-          <li><strong>④ 熔断</strong>：下游持续失败则跳闸，快速失败。</li>
-          <li><strong>⑤ 重试</strong>（幂等 + 退避 + 预算）：处理瞬时抖动。</li>
-          <li><strong>⑥ 降级</strong>：以上都失败时返回兜底结果。</li>
-          <li><strong>⑦ 负载脱落</strong>：系统整体过载时主动丢低优先级请求。</li>
-        </ul>
+      <div class="ch-head"><div class="num">08</div><div class="t"><h2>组合成一条防线</h2><div class="sub">顺序不是随便排的，参数也不是各自独立的</div></div></div>
+
+      <h3 id="s8-1">8.1 七道防线与它们的顺序</h3>
+
+      <div class="fig">
+        <svg viewBox="0 0 960 320" style="min-width:780px;height:auto" role="img" aria-label="一次请求穿过七道防线的顺序图：入口限流、负载脱落、隔离取资源、超时预算、熔断检查、重试、降级兜底，每一道都标注了它拦住什么以及为什么必须在这个位置">
+          <text class="tb" x="20" y="24">一次下单请求穿过的七道防线（从外到内）</text>
+
+          <rect class="box-y" x="20" y="40" width="180" height="56" rx="7"/>
+          <text class="tb" x="34" y="62">① 入口限流</text>
+          <text class="ts" x="34" y="80">网关 · 令牌桶</text>
+          <text class="tm" x="34" y="92">最便宜的拒绝方式</text>
+
+          <rect class="box-y" x="220" y="40" width="180" height="56" rx="7"/>
+          <text class="tb" x="234" y="62">② 负载脱落</text>
+          <text class="ts" x="234" y="80">服务内 · CoDel</text>
+          <text class="tm" x="234" y="92">要看到内部状态，所以在 ① 之后</text>
+
+          <rect class="box-a" x="420" y="40" width="180" height="56" rx="7"/>
+          <text class="tb" x="434" y="62">③ 隔离取资源</text>
+          <text class="ts" x="434" y="80">依赖专属线程池</text>
+          <text class="tm" x="434" y="92">先决定花谁的资源</text>
+
+          <rect class="box-a" x="620" y="40" width="180" height="56" rx="7"/>
+          <text class="tb" x="634" y="62">④ 超时预算</text>
+          <text class="ts" x="634" y="80">deadline 三项取小</text>
+          <text class="tm" x="634" y="92">预算为 0 直接跳到 ⑦</text>
+
+          <rect class="box-p" x="120" y="140" width="200" height="56" rx="7"/>
+          <text class="tb" x="134" y="162">⑤ 重试（外层）</text>
+          <text class="ts" x="134" y="180">退避 + 抖动 + 预算</text>
+
+          <rect class="box-r" x="360" y="140" width="200" height="56" rx="7"/>
+          <text class="tb" x="374" y="162">⑥ 熔断（内层）</text>
+          <text class="ts" x="374" y="180">跳闸则不真正调用</text>
+          <text class="tm" x="374" y="192">在 ⑤ 之内 → 跳闸能掐断重试</text>
+
+          <rect class="box-g" x="600" y="140" width="200" height="56" rx="7"/>
+          <text class="tb" x="614" y="162">⑦ 降级兜底</text>
+          <text class="ts" x="614" y="180">②③④⑥ 任一失败都走这里</text>
+
+          <path class="ln-a" d="M200 68 H212"/><path class="ar-a" d="M212 63 l8 5 -8 5 z"/>
+          <path class="ln-a" d="M400 68 H412"/><path class="ar-a" d="M412 63 l8 5 -8 5 z"/>
+          <path class="ln-a" d="M600 68 H612"/><path class="ar-a" d="M612 63 l8 5 -8 5 z"/>
+          <path class="ln-a" d="M710 96 V120 H220 V140"/><path class="ar-a" d="M215 140 l5 8 5 -8 z"/>
+          <path class="ln-a" d="M320 168 H352"/><path class="ar-a" d="M352 163 l8 5 -8 5 z"/>
+          <path class="ln-g" d="M560 168 H592"/><path class="ar-g" d="M592 163 l8 5 -8 5 z"/>
+
+          <rect class="box" x="20" y="222" width="920" height="82" rx="8"/>
+          <text class="tb" x="36" y="244">为什么是这个顺序</text>
+          <text class="t" x="36" y="264">· ①在最外：拒绝的成本最低，能在占用任何资源之前挡住（§1.3 那条「必须在稀缺资源之前」）</text>
+          <text class="t" x="36" y="282">· ②在①之后：脱载需要看到系统内部的排队状态，网关看不到</text>
+          <text class="t" x="36" y="300">· ⑥在⑤之内：熔断跳闸能立刻掐断重试；反过来会稀释熔断器的统计样本（§6.3）</text>
+        </svg>
+        <figcaption>图 7 · 七道防线。记忆口诀：<strong>限流挡在门外，脱载断尾求生，隔离分而治之，超时不无限等，重试小心翼翼，熔断快速失败，降级兜底保命。</strong></figcaption>
       </div>
-      <p>记忆口诀：<strong>限流挡在门外，隔离分而治之，超时不无限等，熔断快速失败，重试小心翼翼，降级兜底保命，脱落断尾求生。</strong></p>
+
+      <h3 id="s8-2">8.2 全部参数与取值依据</h3>
+
+      <p>把前面所有参数在这个场景下推一遍。<strong>第三列才是重点</strong>——换一个场景，照抄第二列的数字没有意义，但第三列的推导过程可以复用：</p>
+
+      <table class="cmp">
+        <thead><tr><th>参数</th><th>本例取值</th><th>由什么反推</th></tr></thead>
+        <tbody>
+          <tr><td>入口限流速率 r</td><td>6 万 QPS</td><td>大促峰值 5 万 × 1.2 余量。<strong>它挡的是异常洪峰，不是日常流量</strong></td></tr>
+          <tr><td>令牌桶容量 b</td><td>3000</td><td>下游能吸收的瞬时突发，不是「r × 1 秒」（§2.2）</td></tr>
+          <tr><td>脱载目标排队时延</td><td>20 ms</td><td>端到端预算 500 ms 的 4%，够吸收突发又不吃预算（§7.2）</td></tr>
+          <tr><td>脱载观察窗口</td><td>100 ms</td><td>区分「突发」与「真过载」；小于它的拥塞不丢弃</td></tr>
+          <tr><td>库存/支付/风控 线程池</td><td>各 40</td><td>Little's Law：峰值 QPS × RT。库存 8000 × 0.02 = 160 个在途，分摊到 40 实例 = 4，给 40 是 10 倍余量</td></tr>
+          <tr><td>推荐隔离方式</td><td>信号量 20</td><td>L2 依赖，可直接不调，不值得付线程池的上下文传递成本（§5.1）</td></tr>
+          <tr><td>库存慢调用阈值</td><td>100 ms</td><td>正常 P99 50 ms × 2。<strong>必须明显小于超时</strong>（§3.2）</td></tr>
+          <tr><td>库存超时</td><td>60 ms</td><td>三项取小：剩余预算、业务上限、P99 × k（§6.1）</td></tr>
+          <tr><td>熔断统计窗口</td><td>10 s 滑动</td><td>要能装下足够样本又不过于迟钝（§3.3）</td></tr>
+          <tr><td>熔断最小样本</td><td>20</td><td>低峰 QPS × 窗口的下界，避免低峰误判（§3.3）</td></tr>
+          <tr><td>熔断阈值</td><td>失败率 50% <strong>或</strong> 慢调用率 50%</td><td>两个条件是「或」，缺第二个就挡不住 §1.2 那类故障</td></tr>
+          <tr><td>熔断冷却</td><td>5 s</td><td>够下游做一次 GC / 重建连接池；且远大于超时 60 ms（§3.4 的不等式）</td></tr>
+          <tr><td>半开并发</td><td>3</td><td>并发上限而非总数；连续成功 5 次回 Closed</td></tr>
+          <tr><td>重试次数 / 预算</td><td>1 次 / 全局 ≤ 10%</td><td>预算是硬上限，次数只是上界（<a href="capacity_backpressure_design.html#s6-3">容量篇 §6.3</a>）</td></tr>
+        </tbody>
+      </table>
+
+      <div class="box num">
+        验证一下这组参数自洽：<code>慢调用阈值 100 ms</code> ……等一下，它<strong>大于</strong> <code>超时 60 ms</code>。<br><br>
+        这说明超时会先于慢调用判定生效——所有超过 60 ms 的请求都以「超时失败」计入<strong>失败率</strong>，慢调用率这一项永远是 0，等于白配。<br>
+        修正：<strong>慢调用阈值必须小于超时</strong>，取 40 ms（超时的 2/3）。这样 40–60 ms 的请求计为「慢但成功」，&gt; 60 ms 的计为「失败」，两个信号都能工作。<br><br>
+        <strong>这就是为什么参数必须一起推、并且真的代进去验一遍。</strong>单看每一个值都合理，凑在一起有一项是死的——而它恰好是防 §1.2 那类故障的那一项。
+      </div>
+
+      <h3 id="s8-3">8.3 三条 ADR</h3>
+
+      <div class="adr">
+        <div class="adr-head"><span class="adr-id">ADR-001</span><span class="adr-title">限流用两级（本地令牌桶 + 中心按用量校正），限流器故障时 fail-open 退回本地</span><span class="adr-status">已接受</span></div>
+        <div class="adr-row"><div class="k">背景</div><div>峰值 5 万 QPS × 多个限流维度，纯中心式限流会让 Redis 成为瓶颈并在每个请求上加一次往返；纯本地限流在流量不均时会误杀。</div></div>
+        <div class="adr-row"><div class="k">决策</div><div>热路径只做本地无锁令牌桶（§2.2 的 CAS 实现）；中心侧每 5 s 按各实例<strong>实际用量</strong>（而非实例数）重新分配配额，并允许实例向中心借用。中心不可用时保持最后一次配额继续本地限流，即 fail-open + 本地兜底。</div></div>
+        <div class="adr-row"><div class="k">后果</div><div><span class="win">得到</span>：热路径零网络调用、限流器不会成为新的单点、扩缩容期间不会因实例数突变而误杀。<br><span class="lose">付出</span>：全局配额是最终一致的，短时间内可能超出配额 10–20%（对保护性限流可接受，对计费类配额<strong>不可接受</strong>——那种场景必须用中心式 + fail-close）。</div></div>
+      </div>
+
+      <div class="adr">
+        <div class="adr-head"><span class="adr-id">ADR-002</span><span class="adr-title">核心依赖用线程池隔离，L2 依赖用信号量；熔断器粒度到 (服务, 接口)</span><span class="adr-status">已接受</span></div>
+        <div class="adr-row"><div class="k">背景</div><div>五个下游全是远程调用，都存在「卡住而不是失败」的可能，而信号量隔离无法隔离「慢」（§5.1）。同时全部用线程池会牺牲统计复用并增加上下文传递成本（§5.3）。</div></div>
+        <div class="adr-row"><div class="k">决策</div><div>库存 / 支付 / 风控各一个 40 线程的专用池；优惠券与推荐用信号量（它们可以直接跳过，不需要「把线程捞回来」）。熔断器按 (服务, 接口) 建，不共用。<strong>连接池与限流令牌一并按依赖隔离</strong>，不只隔离线程（§5.2）。</div></div>
+        <div class="adr-row"><div class="k">后果</div><div><span class="win">得到</span>：任一核心依赖变慢，影响面限制在它自己的 40 个线程内，整体吞吐从 4000 降到 3200 而不是 98。<br><span class="lose">付出</span>：三组线程池的排队时间比一个大池差（§5.3 的统计复用损失）；跨线程的 trace context / 事务上下文要显式传递，漏传会导致链路追踪断裂。</div></div>
+        <div class="adr-row"><div class="k">何时重议</div><div>若服务改造成协程 / 全异步模型，「等待」不再占用执行单元，线程池隔离的主要收益消失，应改回信号量 + 超时取消（§5.1 的提示框）。</div></div>
+      </div>
+
+      <div class="adr">
+        <div class="adr-head"><span class="adr-id">ADR-003</span><span class="adr-title">熔断必须同时启用慢调用率；装饰器顺序为「重试在外、熔断在内」</span><span class="adr-status">已接受</span></div>
+        <div class="adr-row"><div class="k">背景</div><div>本系统最危险的故障形态是「下游变慢但不报错」（§1.2），它不会触发只看失败率的熔断器；而重试与熔断的嵌套顺序会决定熔断器能否统计到全部调用、以及跳闸后能否掐断重试（§6.3）。</div></div>
+        <div class="adr-row"><div class="k">决策</div><div>每个熔断器同时配置失败率与慢调用率两个阈值（「或」关系），慢调用阈值取<strong>超时的 2/3</strong>（§8.2 验证出来的约束）。装饰器组装顺序固定为 <code>retry(breaker(call))</code>，并在代码评审清单里列为必查项。</div></div>
+        <div class="adr-row"><div class="k">后果</div><div><span class="win">得到</span>：「慢而不错」的故障能在 10 秒统计窗口内跳闸；跳闸后重试自动停止，重试放大与熔断的边界由熔断阈值自动划定，不需要另配开关。<br><span class="lose">付出</span>：慢调用阈值是一个需要随下游性能变化而复核的参数——下游优化变快之后阈值不跟着调，会变得过于敏感而误跳闸。<strong>需要纳入定期复核清单。</strong></div></div>
+      </div>
     </section>
 
     <section class="chapter" id="s9">
-      <div class="ch-head"><div class="num">09</div><div class="t"><h2>关键 take-aways</h2></div></div>
+      <div class="ch-head"><div class="num">09</div><div class="t"><h2>反向判据与 take-aways</h2><div class="sub">这些模式都在拿一部分请求的失败换整体存活</div></div></div>
+
+      <h3 id="s9-1">9.1 什么时候不要用这些模式</h3>
+
+      <table class="cmp">
+        <thead><tr><th>模式</th><th>什么时候不要用</th><th>为什么</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><strong>限流</strong></td>
+            <td>内部调用、单一可信调用方、流量本来就受控</td>
+            <td>限流的成本是一次判断 + 一份要维护的配置 + 误杀的风险。<strong>调用方就一个且它自己有限速时，再加一层只是增加了一个会配错的地方</strong></td>
+          </tr>
+          <tr>
+            <td><strong>熔断</strong></td>
+            <td>① 下游没有替代方案且没有兜底 ② 调用极低频</td>
+            <td>① 熔断只是把「慢慢失败」变成「快速失败」，如果没有兜底，用户体验反而更差<br>② 低频调用永远攒不够样本，熔断器要么不工作要么误判——不如直接靠超时</td>
+          </tr>
+          <tr>
+            <td><strong>重试</strong></td>
+            <td>非幂等、下游已在过载、错误是确定性的</td>
+            <td>确定性错误（参数错、鉴权失败）重试一万次也一样；下游过载时重试是<a href="capacity_backpressure_design.html#s6-3">火上浇油</a></td>
+          </tr>
+          <tr>
+            <td><strong>隔离</strong></td>
+            <td>依赖只有一两个、服务时间相近、且会一起故障</td>
+            <td>会一起挂的依赖之间隔离没有意义；服务时间相近时合并的<a href="capacity_backpressure_design.html#s3-2">统计复用收益</a>大于隔离收益（§5.3）</td>
+          </tr>
+          <tr>
+            <td><strong>降级</strong></td>
+            <td>核心链路、以及「兜底数据可能被误当成真实数据」的场景</td>
+            <td>返回一个旧的库存数或旧的价格，比返回错误更危险——<strong>错误会被处理，错误的数据会被信任</strong></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="box arch">
+        最重要的一条反向判据在模式之外：<strong>这些手段全都在「用一部分请求的失败，换整体的存活」。</strong>如果业务根本不能接受任何请求失败——金融清算、医疗、安全关键控制——那答案不是弹性模式，而是<strong>容量冗余 + 排队 + 异步化</strong>：把请求先落到一个持久队列里，慢慢处理，永不丢弃，用「延迟上升」代替「部分失败」。<br><br>
+        换句话说，弹性模式的适用前提是<strong>「快速失败」比「慢慢完成」更可接受</strong>。这个前提在交互式业务里成立，在批处理和强一致业务里往往不成立。选模式之前先确认这一条。
+      </div>
+
+      <h3 id="s9-2">9.2 一页速记</h3>
+
       <div class="card">
-        <div class="card-title">🎯 一页速记</div>
+        <div class="card-title">🎯 关键结论</div>
         <ul>
-          <li>弹性的目标不是「不失败」，而是<strong>把失败控制在局部、快速失败、优雅退化</strong>。</li>
-          <li><strong>限流</strong>：令牌桶允许突发（最常用）；分布式用 Redis+Lua 或两级方案。</li>
-          <li><strong>熔断</strong>：Closed → Open → Half-Open 三态，配错误率阈值 + 冷却 + 探测，必配降级。</li>
-          <li><strong>降级</strong>：先分级，核心不降；自动（熔断触发）+ 手动（大促开关）。</li>
-          <li><strong>隔离</strong>：舱壁模式限爆炸半径，线程池/信号量/集群/租户隔离。</li>
-          <li><strong>超时必设、重试谨慎</strong>（幂等 + 退避抖动 + 预算），否则重试风暴放大故障。</li>
-          <li>进阶：<strong>负载脱落 + 自适应限流</strong>，依赖可观测做动态自愈。</li>
+          <li><strong>先算再配。</strong>下游 RT 涨 100 倍，你的吞吐掉 100 倍（Little's Law）；从变慢到线程池打满只有 2 秒——任何依赖人工的预案都来不及。</li>
+          <li><strong>弹性代码必须在稀缺资源之前。</strong>线程耗尽之后，你写的降级逻辑根本没机会执行。</li>
+          <li><strong>限流</strong>：算法决定的是「放行什么形状的突发」，固定窗口会在交界处放行 2 倍；<strong>桶容量 b 由下游能吸收的瞬时突发决定</strong>，不是「r × 1 秒」。</li>
+          <li><strong>熔断</strong>：<strong>必须同时启用慢调用率</strong>，否则挡不住「慢而不错」这类最危险的故障；慢调用阈值要小于超时，否则永远不生效。粒度到 (服务, 接口)。</li>
+          <li><strong>降级</strong>：先分级；降级可以是连续谱（风控按金额分档）而非全有全无；<strong>开关不能依赖会和业务一起挂的配置中心</strong>；给手动开关加过期时间。</li>
+          <li><strong>隔离</strong>：线程池能隔离「慢」，信号量不能——这是两者唯一的本质区别。隔离要把连接池、熔断器、日志缓冲一起隔离，只隔线程等于隔了一半。</li>
+          <li><strong>超时</strong>：三项取小（上游剩余预算、业务上限、下游 P99×k）；deadline 用<strong>绝对时刻 + 单调时钟</strong>沿链路传播。</li>
+          <li><strong>重试</strong>：<code>retry(breaker(call))</code> 而不是反过来——熔断跳闸能自动掐断重试。</li>
+          <li><strong>脱载</strong>：用<strong>排队时延</strong>做信号，不要用 CPU（下游变慢时 CPU 反而是下降的）；CoDel 的精髓是「持续拥塞多久」而不是「队列多长」。优先丢重试请求。</li>
+          <li><strong>参数要一起推。</strong>单看每个值都合理，凑在一起常有一项是死的（§8.2 那个慢调用阈值就是）。</li>
         </ul>
       </div>
+    </section>
+
+    <section class="chapter" id="s10">
+      <div class="ch-head"><div class="num">10</div><div class="t"><h2>高频面试题 · 弹性与过载保护</h2><div class="sub">12 道，按难度分三档</div></div></div>
+
+      <p class="qa-hint">点击每道题展开参考答案（先自测，再对照）。</p>
+
+      <h3 id="s10-1">10.1 基础（必答）</h3>
+
+      <ol class="qa-list">
+        <li><details class="qa">
+          <summary><span class="lvl basic">基础</span>一个下游变慢，为什么会拖垮上游？给出量化的解释。</summary>
+          <div class="ans">
+            <p>并发度固定时，<strong>吞吐与响应时间成反比</strong>——这是 Little's Law 的直接推论 <code>λ = L / W</code>（§1.2）。</p>
+            <div class="point"><div class="label">代入算一遍</div><div>上游 40 实例 × 200 线程 = 8000 个并发槽位。正常单次 50 ms → 吞吐 <code>8000 / 0.05 = 16 万 QPS</code>。下游 RT 从 20 ms 涨到 2000 ms，单次变成 2030 ms → 吞吐 <code>8000 / 2.03 = 3940 QPS</code>。<strong>流入 8000，流出 3940。</strong></div></div>
+            <div class="point deep"><div class="label">从变慢到打满有多久</div><div>净积压 4060/s，槽位 8000 个（正常占用 400）→ <code>(8000−400)/4060 ≈ <strong>1.9 秒</strong></code>。这就是为什么弹性必须自动——人工介入的预案在这个时间尺度上完全无效。</div></div>
+            <div class="point bad"><div class="label">最容易被忽略的推论</div><div>线程耗尽之后，<strong>你写的降级代码根本执行不了</strong>——「返回兜底结果」也需要一个线程。熔断器也统计不到样本，请求连业务逻辑都进不去。所以弹性手段必须在「占用稀缺资源之前」生效，而不是写在 service 方法开头。</div></div>
+            <div class="point good"><div class="label">一句话</div><div>你的容量不是你自己的，它由最慢的那个依赖决定。压测出来的容量只在所有依赖都健康时成立。</div></div>
+          </div>
+        </details></li>
+
+        <li><details class="qa">
+          <summary><span class="lvl basic">基础</span>令牌桶和漏桶有什么区别？该怎么选？</summary>
+          <div class="ans">
+            <div class="point"><div class="label">漏桶</div><div>请求入桶、恒定速率流出，<strong>完全不允许突发</strong>。适合保护对突发极敏感的下游（老式第三方接口、直接写库）。缺点是空闲期的容量全部作废——空闲一小时也不给你攒，对交互式业务体验很差。</div></div>
+            <div class="point"><div class="label">令牌桶</div><div>匀速产令牌、取到才放行，<strong>允许可控突发</strong>（桶里攒的令牌）。绝大多数业务限流用它。</div></div>
+            <div class="point good"><div class="label">真正该展开的是桶容量 b</div><div>令牌桶有两个参数：速率 r 和桶容量 b。大部分人认真设 r、把 b 随手设成 <code>r × 1 秒</code>（库的默认值）。<strong>但 b 决定的是「单次能放行多大突发」，它的依据是下游能吸收的瞬时冲击，和 r 无关。</strong>r=1000/b=1000 意味着空闲一秒后能瞬间放 1000 个；如果下游连接池只有 50，这一下就打穿了，而限流器会告诉你「没超限」。</div></div>
+            <div class="point warn"><div class="label">顺带提一句固定窗口</div><div>它在窗口交界处可以放行 2 倍配额（第 0.9 s 放 100 个 + 第 1.1 s 放 100 个 = 0.2 s 内 200 个 = 瞬时 1000 QPS）。<strong>限流器本身成了突发的制造者</strong>——用它保护下游容量是错的。</div></div>
+          </div>
+        </details></li>
+
+        <li><details class="qa">
+          <summary><span class="lvl basic">基础</span>熔断器的三个状态是什么？半开态要注意什么？</summary>
+          <div class="ans">
+            <p><strong>Closed</strong>（正常放行 + 统计）→ 失败率或慢调用率超阈值且样本足够 → <strong>Open</strong>（全部快速失败，冷却计时）→ 冷却到期 → <strong>Half-Open</strong>（少量探测）→ 连续成功够多回 Closed，任一失败立刻回 Open 并重新计时。</p>
+            <div class="point deep"><div class="label">半开的关键细节</div><div>那个「少量」必须是<strong>并发上限</strong>，不是「放 N 个然后关门」。后者会让 N 个请求同时打进去、同时超时——等于在下游刚要恢复时又捶了它一次。正确做法是同时最多 N 个在途，一个回来了才放下一个。</div></div>
+            <div class="point warn"><div class="label">最小样本数</div><div>没有它，凌晨低峰只有 3 个请求错了 2 个 = 66% 失败率就跳闸了。样本数应覆盖「一个统计窗口内正常请求量」的下界。</div></div>
+            <div class="point bad"><div class="label">熔断必须配降级</div><div>跳闸后抛异常一路冒到最外层变成 500，用户体验从「慢」变成「立刻报错」，反而更差。<strong>熔断的价值是「省下资源去做兜底」，没有兜底就只剩省资源。</strong></div></div>
+          </div>
+        </details></li>
+
+        <li><details class="qa">
+          <summary><span class="lvl basic">基础</span>为什么重试可能让故障更严重？</summary>
+          <div class="ans">
+            <p>因为放大是<strong>乘性</strong>的，而且<strong>恰好在过载时才启动</strong>。三层各重试 3 次 = 27 倍。平时成功率 99.99%，重试量可忽略；一旦下游开始超时，27 倍流量立刻砸下去，把「有点慢」变成「彻底崩」。</p>
+            <div class="point good"><div class="label">四条约束</div><div>① 只重试<strong>幂等</strong>操作；② <strong>指数退避 + 随机抖动</strong>（只退避不抖动的话所有客户端永远同相，一个大尖峰变成一串小尖峰，总量没变）；③ <strong>重试预算</strong>而不是重试次数（「重试请求 ≤ 总请求的 10%」，过载时自动趋近于零）；④ 只重试<strong>可重试的错误</strong>（超时、503 可以，400 和业务错误重试一万次也一样）。</div></div>
+            <div class="point deep"><div class="label">加分：只在最外层重试</div><div>中间层不重试、把失败如实上报，放大从 3ⁿ 变成 3。「每一层都自己重试」通常是无意中形成的——每个团队都觉得自己那层加个重试更稳。</div></div>
+          </div>
+        </details></li>
+      </ol>
+
+      <h3 id="s10-2">10.2 中级（区分熟练度）</h3>
+
+      <ol class="qa-list" start="5">
+        <li><details class="qa">
+          <summary><span class="lvl mid">中级</span>下游只是变慢、没有报错，熔断器为什么不跳闸？</summary>
+          <div class="ans">
+            <p>因为默认的熔断配置<strong>只统计失败率</strong>，而「慢」不算失败——所有请求最终都成功返回了，失败率是 0%（§3.2）。</p>
+            <div class="point bad"><div class="label">而「慢」比「错」危险得多</div><div>下游直接报错（RT 5 ms）：上游单实例吞吐 <code>200/0.035 = 5714 QPS</code>，资源几乎不受影响。下游变慢不报错（RT 2000 ms）：吞吐 98 QPS，<strong>上游被拖垮</strong>。<strong>「错」会立刻释放资源，「慢」会一直占着。</strong></div></div>
+            <div class="point good"><div class="label">解法：慢调用率</div><div>熔断器要有两个独立触发条件，「或」的关系：失败率 &gt; 阈值，<strong>或</strong>慢调用率（RT 超过慢调用阈值的请求占比）&gt; 阈值。Resilience4j 和 Sentinel 都支持，但<strong>默认关闭</strong>——这大概是弹性配置里最值得单独检查的一项。</div></div>
+            <div class="point deep"><div class="label">慢调用阈值怎么定</div><div>它和超时是<strong>两个不同的数</strong>：超时决定「等多久放弃」，慢调用阈值决定「多慢算不健康」。<strong>后者必须明显小于前者</strong>（比如取超时的 2/3），否则熔断器要等请求超时才认为它慢，响应就晚了；如果慢调用阈值大于超时，这一项<strong>永远不会触发</strong>，等于白配。</div></div>
+          </div>
+        </details></li>
+
+        <li><details class="qa">
+          <summary><span class="lvl mid">中级</span>线程池隔离和信号量隔离，本质区别是什么？</summary>
+          <div class="ans">
+            <p>只有一条：<strong>调用是否在调用方的线程上执行。</strong>这一条决定了能不能隔离「慢」（§5.1）。</p>
+            <div class="point good"><div class="label">线程池隔离</div><div>调用在独立线程执行，<strong>调用方线程可以超时后放弃，去服务下一个请求</strong>。慢被关在专用池里，调用方最多损失一个超时的时间。</div></div>
+            <div class="point bad"><div class="label">信号量隔离</div><div>调用就在调用方线程上，只是限制了并发数。<strong>调用方线程仍然被卡满 2000 ms，无处可去。</strong>它省的是「不让更多线程陷进去」，不是「把陷进去的捞出来」。</div></div>
+            <div class="point"><div class="label">代价对比</div><div>线程池每次调用一次线程切换（5–10 μs），而且 <code>ThreadLocal</code> / trace context / 事务上下文都要手动跨线程传递；信号量只是一次原子操作，什么都不用管。</div></div>
+            <div class="point deep"><div class="label">判据</div><div><strong>这个依赖有没有可能「卡住而不是失败」？</strong>有就必须用线程池。远程调用几乎都有可能，所以核心远程依赖用线程池，本地缓存/内存计算用信号量。<br><strong>协程模型下这条判据会变形</strong>：等待不占执行单元，线程池隔离的主要收益消失，信号量 + 超时取消就够了。准确的表述是「等待是否占用稀缺的执行资源」。</div></div>
+          </div>
+        </details></li>
+
+        <li><details class="qa">
+          <summary><span class="lvl mid">中级</span>调用链上每一层的超时该怎么设？</summary>
+          <div class="ans">
+            <p>不是「下游 P99 × 2」那么简单——那只看了下游，没看上游。<strong>超时的作用是「放弃」，所以它该由「再等下去还有没有意义」决定</strong>（§6.1）。</p>
+            <div class="point good"><div class="label">三项取最小</div><div><code>超时 = min(上游剩余 deadline − 本地开销, 业务能接受的上限, 下游 P99 × k)</code>。第一项保证不做无用功，第二项保证用户体验，第三项避免误杀正常的慢请求。</div></div>
+            <div class="point bad"><div class="label">各层独立设固定超时的后果</div><div>网关 500 ms，order-svc 给五个下游各设 300 ms → 最坏 1500 ms，是上游预算的 3 倍。<strong>网关 500 ms 就走了，order-svc 还要再干 1000 ms，全是无用功</strong>——而且这些请求的监控指标是「成功」，完全看不出来。过载时它们会占掉可观容量。</div></div>
+            <div class="point deep"><div class="label">deadline 传播的两个实现要点</div><div>① 传<strong>绝对时刻</strong>而不是「剩余毫秒数」——后者在每一跳重算，会漏掉网络传输和排队的时间，越往下游误差越大。② 必须用<strong>单调时钟</strong>（<code>steady_clock</code>）。用系统时钟的话，一次 NTP 校时往前调 1 秒，所有在途请求的 deadline 瞬间「已过期」全部被取消——表现为「某一刻突然全站超时，几秒后自动恢复，日志里什么异常都没有」。</div></div>
+          </div>
+        </details></li>
+
+        <li><details class="qa">
+          <summary><span class="lvl mid">中级</span>降级方案写得很详细，为什么真出事时没生效？</summary>
+          <div class="ans">
+            <p>三个高频原因，都不是「方案写得不好」：</p>
+            <div class="point bad"><div class="label">① 降级开关依赖了会一起挂的东西</div><div>开关放在配置中心，而配置中心和业务在同一机房、共用同一套网络或注册中心。机房网络出问题 → 需要降级 → <strong>但开关推不下去</strong>。<br>要求：本地有兜底副本（且<strong>启动时能只靠本地文件起来</strong>）、自动降级完全不依赖外部输入、开关推送路径与业务流量路径分开。</div></div>
+            <div class="point bad"><div class="label">② 降级代码在稀缺资源的下游</div><div>写在 service 方法里的「如果过载就返回兜底」，在真过载时执行不到——线程已经耗尽了（§1.3）。</div></div>
+            <div class="point bad"><div class="label">③ 兜底路径平时不跑</div><div>「主库挂了读从库」「实时算不出来读离线表」看起来最完美，但<strong>它是一条平时不执行的代码路径</strong>，真出事时大概率也是坏的（依赖变了、数据格式变了、权限过期了）。必须常态化演练。</div></div>
+            <div class="point warn"><div class="label">还有一个运营层面的</div><div>大促结束后忘记关降级开关，几周后才有人发现某功能一直没生效。<strong>给手动开关加过期时间</strong>，到期自动失效并告警，比依赖流程可靠。</div></div>
+          </div>
+        </details></li>
+      </ol>
+
+      <h3 id="s10-3">10.3 高级（体现深度）</h3>
+
+      <ol class="qa-list" start="9">
+        <li><details class="qa">
+          <summary><span class="lvl adv">高级</span>限流阈值设了 5 万 QPS，为什么系统在 8000 QPS 时就挂了？</summary>
+          <div class="ans">
+            <p>因为<strong>静态限流阈值挡不住「容量变小」这类故障</strong>（§1.4、§7.1）。阈值是按健康时的容量（16 万 QPS）设的，而下游变慢后真实容量只有 3940 QPS——8000 QPS 在限流器看来完全合规，一个都不会拦。</p>
+            <div class="point"><div class="label">容量会随什么漂</div><div>下游 RT（最剧烈，涨 100 倍容量掉 100 倍）、缓存命中率、请求组成、机型与部署密度、以及每一次发版。<strong>压测出来的阈值一周就过期。</strong></div></div>
+            <div class="point good"><div class="label">解法：自适应脱载</div><div>不看流量有多大，<strong>看系统自己累不累</strong>。限流在入口按流量挡（快、便宜、但不知道内部状态），脱载在服务内按饱和度挡（准、能感知容量变化）。<strong>两道都要有，它们不重复。</strong></div></div>
+            <div class="point deep"><div class="label">用什么信号</div><div><strong>排队时延</strong>最好：请求一开始等它就动了，而且自归一化（扩容后不用改阈值）。<strong>CPU 是最差的信号</strong>——它最滞后，而且在「下游变慢」这类故障里 CPU 反而是<strong>下降</strong>的（线程都在等 IO），用它做判据在最需要的场景下完全不会触发。队列长度居中，但阈值会随扩容失效。</div></div>
+            <div class="point"><div class="label">CoDel 的精髓</div><div>判据是「排队时延<strong>持续</strong>超过目标值多久」，不是「队列多长」。先观察一个窗口（比如 100 ms）再开始丢，这一步让正常的突发不会被误杀——这是它相比「队列超长就丢」最本质的进步。</div></div>
+          </div>
+        </details></li>
+
+        <li><details class="qa">
+          <summary><span class="lvl adv">高级</span>重试和熔断，装饰器的嵌套顺序有讲究吗？</summary>
+          <div class="ans">
+            <p>有，而且两种顺序的行为完全不同（§6.3）。</p>
+            <div class="point bad"><div class="label">❌ 熔断在外，重试在内：breaker(retry(call))</div><div>熔断器只看到「重试三次后的最终结果」，<strong>三次调用被统计成一次失败</strong>，样本稀释三倍，跳闸慢；而且跳闸之前，每个请求都实实在在打了下游三次。</div></div>
+            <div class="point good"><div class="label">✅ 重试在外，熔断在内：retry(breaker(call))</div><div>每次重试都先过熔断器检查。熔断器<strong>统计到全部三次调用</strong>，跳闸更快；一旦跳闸，后续重试立刻被熔断器拒绝，<strong>重试自动停止</strong>。</div></div>
+            <div class="point deep"><div class="label">不明显的好处</div><div>这个顺序让<strong>重试预算和熔断自动配合</strong>：下游轻微抖动时熔断器不跳，重试正常发挥作用；下游真挂了熔断器跳闸，重试被立刻掐断。<strong>两个机制的边界由熔断阈值自动划定，不需要再单独调一套重试开关。</strong></div></div>
+            <div class="point warn"><div class="label">实践提醒</div><div>Resilience4j、Polly 这些库的装饰器顺序是可配的，默认顺序不一定是这个。值得在代码评审清单里列为必查项。</div></div>
+          </div>
+        </details></li>
+
+        <li><details class="qa">
+          <summary><span class="lvl adv">高级</span>每个下游都做了线程池隔离，为什么一个依赖故障还是把整个服务拖垮了？</summary>
+          <div class="ans">
+            <p>因为<strong>只隔离了最显眼的那个资源</strong>，剩下任何一个共享资源都足以让两条通道在故障时重新耦合（§5.2）。</p>
+            <div class="point"><div class="label">要逐个确认的共享资源</div><div><strong>连接池</strong>（线程隔离了但共用一个 HTTP 连接池，一个依赖把连接占满）、<strong>熔断器状态</strong>（共用一个就是粒度问题）、<strong>限流令牌</strong>、<strong>本地缓存容量</strong>、<strong>DNS 解析器</strong>（一个域名解析慢拖住所有域名）。</div></div>
+            <div class="point bad"><div class="label">最隐蔽的一个：日志</div><div>下游故障时错误日志量可能涨几十倍。如果日志是同步写、或者异步队列有界且满了会阻塞，<strong>所有线程会一起卡在日志上</strong>——一个「隔离得很好」的系统因为日志整体挂掉。所以日志库的「队列满时策略」（阻塞/丢弃/采样）是一个弹性设计决策，不只是运维配置。</div></div>
+            <div class="point deep"><div class="label">反过来也要问：是不是隔离过头了</div><div>把 40 个 worker 拆成 5 组各 8 个，<strong>统计复用就消失了</strong>。ρ=85% 时 <code>c=8</code> 的排队时间约 1.4×S，而 <code>c=40</code> 只有 0.3×S——为了防范故障，牺牲了平时 4 倍的排队性能。<br>判据三条：这些依赖会不会<strong>独立</strong>故障（会一起挂就没必要隔离）、服务时间分布是否接近（接近则合并的复用收益更大）、故障时是否必须保住其中某一个（这是隔离最强的理由）。</div></div>
+          </div>
+        </details></li>
+
+        <li><details class="qa">
+          <summary><span class="lvl adv">高级</span>这一整套模式，什么时候不该用？</summary>
+          <div class="ans">
+            <p>逐个说完之后，还有一条在所有模式之上的判据。</p>
+            <div class="point"><div class="label">逐个的反向判据</div><div><strong>限流</strong>：调用方单一且可信时，多一层只是多一个会配错的地方。<strong>熔断</strong>：下游没有替代也没有兜底时，它只是把「慢慢失败」变成「快速失败」，体验更差；调用极低频时永远攒不够样本。<strong>重试</strong>：非幂等、确定性错误、下游已过载。<strong>隔离</strong>：依赖会一起故障、或服务时间相近（合并的统计复用收益更大）。<strong>降级</strong>：兜底数据可能被当成真实数据时——<strong>错误会被处理，错误的数据会被信任</strong>。</div></div>
+            <div class="point good"><div class="label">最上面那条</div><div>这些手段全都在<strong>「用一部分请求的失败，换整体的存活」</strong>。如果业务根本不能接受任何请求失败——金融清算、医疗、安全关键控制——那答案不是弹性模式，而是<strong>容量冗余 + 持久队列 + 异步化</strong>：请求先落盘，慢慢处理，永不丢弃，用「延迟上升」代替「部分失败」。</div></div>
+            <div class="point deep"><div class="label">所以选模式之前先确认前提</div><div><strong>「快速失败」是不是比「慢慢完成」更可接受？</strong>这个前提在交互式业务里成立，在批处理和强一致业务里往往不成立。前提不成立时，这一整篇的模式都是错的工具。</div></div>
+          </div>
+        </details></li>
+      </ol>
     </section>
 
 <div class="footer-nav">
   <a href="./microservices_architecture.html">🧩 微服务架构</a>
   <a href="./api_design.html">🔌 API 设计</a>
+  <a href="./capacity_backpressure_design.html">🧮 容量估算与背压</a>
+  <a href="./high_concurrency_gateway.html">📡 案例 · IoT 接入网关</a>
   <a href="./observability_engineering.html">🔭 可观测性</a>
-  <a href="../interview/backend_system_design.html">🏗 后端系统设计</a>
   <a href="../index.html">🏠 主页</a>
 </div>
 

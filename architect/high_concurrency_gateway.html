@@ -1,0 +1,2376 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>百万级 IoT 接入网关架构设计 · 单机 30 万长连接 / 弱网重连 / mTLS 握手预算 / OTA 下发</title>
+<meta name="description" content="一个完整的 C++ 高并发接入网关架构案例：从 SLA 反推单机 30 万长连接的内存与握手预算，shared-nothing 线程模型与跨核下发，弱网半开连接与超时不等式，mTLS 握手风暴，QoS1 的 PUBACK 时机，OTA 控制面/数据面分离，以及 30 万连接怎么滚动升级——含 6 条 ADR 与 12 道面试题">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<style>
+  /* format-unify: shell (hero / layout / toc / chapter / pre / table / box) 来自
+     guide-theme.css + article.css；这里只写本页特有的组件。 */
+  body { overflow-x: hidden; }
+  main { min-width: 0; }
+  section.chapter > h2 { color: var(--accent); font-size: 1.5rem; margin: 0 0 1rem; padding-bottom: .5rem; border-bottom: 1px solid var(--border); }
+
+  /* ===== 架构师视角 callout（article.css 的 .box.star/.box.q 已被面试语义占用） ===== */
+  .box.arch { border-color: var(--accent-2); background: color-mix(in srgb, var(--accent-2) 8%, var(--bg-card)); }
+  .box.arch::before { content: "⭐ 架构师视角: "; color: var(--accent-2); font-weight: 700; }
+  .box.num { border-color: var(--accent-3); background: color-mix(in srgb, var(--accent-3) 8%, var(--bg-card)); }
+  .box.num::before { content: "🧮 算一下: "; color: var(--accent-3); font-weight: 700; }
+
+  /* ===== ADR 决策卡：本页的招牌组件 ===== */
+  .adr { border: 1px solid color-mix(in srgb, var(--accent-2) 40%, var(--border)); border-radius: 12px; margin: 20px 0; overflow: hidden; background: var(--bg-card); }
+  .adr-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 12px 16px; background: color-mix(in srgb, var(--accent-2) 10%, var(--bg-card)); border-bottom: 1px solid color-mix(in srgb, var(--accent-2) 30%, var(--border)); }
+  .adr-id { font-family: var(--mono); font-size: 12px; font-weight: 700; letter-spacing: .06em; padding: 3px 9px; border-radius: 5px; background: var(--accent-2); color: var(--bg); }
+  .adr-title { font-weight: 700; color: var(--text); flex: 1 1 260px; min-width: 0; }
+  .adr-status { font-family: var(--mono); font-size: 11px; padding: 2px 8px; border-radius: 99px; border: 1px solid var(--accent-3); color: var(--accent-3); }
+  .adr-row { display: grid; grid-template-columns: 92px 1fr; gap: 14px; padding: 11px 16px; border-bottom: 1px solid var(--border); font-size: 14px; }
+  .adr-row:last-child { border-bottom: none; }
+  .adr-row > div { min-width: 0; }
+  .adr-row .k { color: var(--accent); font-weight: 600; font-family: var(--mono); font-size: 12.5px; }
+  @media (max-width: 760px) { .adr-row { grid-template-columns: 1fr; gap: 4px; } }
+
+  /* ===== 需求指标卡 ===== */
+  .reqs { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 10px; margin: 16px 0; }
+  .req { border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 8px; padding: 11px 13px; background: var(--bg-card); min-width: 0; }
+  .req .rk { font-size: 12px; color: var(--text-dim); }
+  .req .rv { font-family: var(--mono); font-size: 19px; font-weight: 700; color: var(--text); margin: 3px 0; letter-spacing: -.5px; }
+  .req .rn { font-size: 12px; color: var(--text-mute); line-height: 1.5; }
+  .req.hot { border-left-color: var(--danger); }
+  .req.warm { border-left-color: var(--accent-4); }
+  .req.cool { border-left-color: var(--accent-3); }
+
+  /* ===== 约束不等式 ===== */
+  .ineq { border: 1px solid var(--border); border-radius: 10px; background: var(--bg-card-2); padding: 14px 16px; margin: 16px 0; font-family: var(--mono); font-size: 14px; line-height: 2.1; overflow-x: auto; }
+  .ineq b { color: var(--accent); font-weight: 700; }
+  .ineq .why { font-family: var(--sans); font-size: 12.5px; color: var(--text-dim); margin-left: 10px; }
+
+  /* ===== 通用小件 ===== */
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 16px 0; }
+  .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin: 16px 0; }
+  @media (max-width: 760px) { .grid-2, .grid-3 { grid-template-columns: 1fr; } }
+  .grid-2 > *, .grid-3 > * { min-width: 0; }
+  .panel { border: 1px solid var(--border); border-radius: 9px; padding: 12px 14px; background: var(--bg-card); min-width: 0; }
+  .panel > h4 { margin: 0 0 6px; font-size: 14px; }
+  .panel.good { border-left: 3px solid var(--accent-3); }
+  .panel.bad { border-left: 3px solid var(--danger); }
+  .panel.mid { border-left: 3px solid var(--accent-4); }
+  .panel.info { border-left: 3px solid var(--accent); }
+  .good-cell { background: color-mix(in srgb, var(--accent-3) 10%, transparent); }
+  .bad-cell { background: color-mix(in srgb, var(--danger) 10%, transparent); }
+  .mid-cell { background: color-mix(in srgb, var(--accent-4) 10%, transparent); }
+  .win { color: var(--accent-3); font-weight: 700; }
+  .lose { color: var(--danger); font-weight: 700; }
+
+  /* ===== 图 ===== */
+  .fig { margin: 22px 0; overflow-x: auto; }
+  .fig svg { max-width: 100%; height: auto; }
+  .fig figcaption { font-size: 12.5px; color: var(--text-dim); margin-top: 8px; text-align: center; }
+  .fig .box   { fill: var(--bg-card-2); stroke: var(--border-2); stroke-width: 1.2; }
+  .fig .box-a { fill: color-mix(in srgb, var(--accent) 14%, var(--bg-card)); stroke: var(--accent); stroke-width: 1.2; }
+  .fig .box-g { fill: color-mix(in srgb, var(--accent-3) 14%, var(--bg-card)); stroke: var(--accent-3); stroke-width: 1.2; }
+  .fig .box-p { fill: color-mix(in srgb, var(--accent-2) 14%, var(--bg-card)); stroke: var(--accent-2); stroke-width: 1.2; }
+  .fig .box-y { fill: color-mix(in srgb, var(--accent-4) 14%, var(--bg-card)); stroke: var(--accent-4); stroke-width: 1.2; }
+  .fig .box-r { fill: color-mix(in srgb, var(--danger) 14%, var(--bg-card)); stroke: var(--danger); stroke-width: 1.2; }
+  .fig .t  { fill: var(--text); font-size: 12px; }
+  .fig .tb { fill: var(--text); font-size: 12.5px; font-weight: 700; }
+  .fig .ts { fill: var(--text-dim); font-size: 10.5px; }
+  .fig .tm { fill: var(--text-dim); font-size: 10.5px; font-family: var(--mono); }
+  .fig .ta { fill: var(--accent); font-size: 11.5px; font-weight: 700; }
+  .fig .tg { fill: var(--accent-3); font-size: 11px; font-weight: 600; }
+  .fig .ty { fill: var(--accent-4); font-size: 11px; font-weight: 600; }
+  .fig .tr { fill: var(--danger); font-size: 11px; font-weight: 600; }
+  .fig .tp { fill: var(--accent-2); font-size: 11px; font-weight: 600; }
+  .fig .ln   { stroke: var(--border-2); stroke-width: 1.4; fill: none; }
+  .fig .ln-a { stroke: var(--accent); stroke-width: 1.6; fill: none; }
+  .fig .ln-g { stroke: var(--accent-3); stroke-width: 1.6; fill: none; }
+  .fig .ln-r { stroke: var(--danger); stroke-width: 1.6; fill: none; }
+  .fig .ln-y { stroke: var(--accent-4); stroke-width: 1.6; fill: none; }
+  .fig .ln-d { stroke: var(--text-mute); stroke-width: 1.2; fill: none; stroke-dasharray: 4 3; }
+  .fig .ar-a { fill: var(--accent); }
+  .fig .ar-g { fill: var(--accent-3); }
+  .fig .ar-r { fill: var(--danger); }
+  .fig .grid { stroke: var(--border); stroke-width: .8; fill: none; }
+</style>
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav tn-shell-overlay">
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="system_architecture_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 100 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="layout">
+<aside class="toc">
+  <h2>IoT 接入网关架构设计 · Roadmap</h2>
+  <nav>
+    <ol>
+      <li><a href="#s1">把「几十万设备」翻译成可验证的指标</a>
+        <ol>
+          <li><a href="#s1-1">甲方原话与真实工况</a></li>
+          <li><a href="#s1-2">需求表：六个可测指标</a></li>
+          <li><a href="#s1-3">IoT 接入与 IM 网关的四个本质差异</a></li>
+          <li><a href="#s1-4">范围切分与非目标</a></li>
+        </ol>
+      </li>
+      <li><a href="#s2">C4 视图：连接与会话必须分开</a>
+        <ol>
+          <li><a href="#s2-1">Level 1 · 系统上下文</a></li>
+          <li><a href="#s2-2">Level 2 · 容器分解</a></li>
+          <li><a href="#s2-3">为什么「连接」和「会话」是两个概念</a></li>
+        </ol>
+      </li>
+      <li><a href="#s3">接入层：长连接的负载均衡是一次性的</a>
+        <ol>
+          <li><a href="#s3-1">四个候选</a></li>
+          <li><a href="#s3-2">均衡了新建，不等于均衡了负载</a></li>
+          <li><a href="#s3-3">Kubernetes 上的四个坑</a></li>
+          <li><a href="#s3-4">ADR-001 决策记录</a></li>
+        </ol>
+      </li>
+      <li><a href="#s4">线程模型：shared-nothing 与它的代价</a>
+        <ol>
+          <li><a href="#s4-1">三个候选与判据</a></li>
+          <li><a href="#s4-2">为什么 IoT 场景选每核一份</a></li>
+          <li><a href="#s4-3">代价：跨核下发</a></li>
+          <li><a href="#s4-4">SO_REUSEPORT 的两个坑</a></li>
+          <li><a href="#s4-5">ADR-002 决策记录</a></li>
+        </ol>
+      </li>
+      <li><a href="#s5">每连接预算：单机上限从哪来</a>
+        <ol>
+          <li><a href="#s5-1">逐项拆解</a></li>
+          <li><a href="#s5-2">37 GB → 3 GB：省下来的全在用户态</a></li>
+          <li><a href="#s5-3">Session 对象从 512 字节压到一条 cache line</a></li>
+          <li><a href="#s5-4">收发缓冲不能常驻</a></li>
+          <li><a href="#s5-5">内核与 socket 参数清单</a></li>
+        </ol>
+      </li>
+      <li><a href="#s6">C++ 侧真正会咬人的四个点</a>
+        <ol>
+          <li><a href="#s6-1">shared_ptr 的引用计数会在核之间弹跳</a></li>
+          <li><a href="#s6-2">三十万个定时器</a></li>
+          <li><a href="#s6-3">handler 热路径上的堆分配</a></li>
+          <li><a href="#s6-4">伪共享：一个计数器吃掉一成吞吐</a></li>
+        </ol>
+      </li>
+      <li><a href="#s7">弱网：IoT 网关与其它网关最大的分歧点</a>
+        <ol>
+          <li><a href="#s7-1">三种死连接，第三种最贵</a></li>
+          <li><a href="#s7-2">四个超时必须满足的不等式</a></li>
+          <li><a href="#s7-3">重连风暴：服务端一个人解决不了</a></li>
+        </ol>
+      </li>
+      <li><a href="#s8">mTLS：连接建立的瓶颈是 CPU</a>
+        <ol>
+          <li><a href="#s8-1">握手成本预算</a></li>
+          <li><a href="#s8-2">握手必须有独立的执行资源</a></li>
+          <li><a href="#s8-3">会话复用与它的前向安全折损</a></li>
+          <li><a href="#s8-4">五百万张证书怎么吊销</a></li>
+          <li><a href="#s8-5">ADR-003 决策记录</a></li>
+        </ol>
+      </li>
+      <li><a href="#s9">上行：整点同相与 QoS1 的语义成本</a>
+        <ol>
+          <li><a href="#s9-1">为什么峰值是稳态的九倍</a></li>
+          <li><a href="#s9-2">PUBACK 的时机决定了架构</a></li>
+          <li><a href="#s9-3">攒批的三个触发条件</a></li>
+          <li><a href="#s9-4">存储抖动时的三种选择</a></li>
+        </ol>
+      </li>
+      <li><a href="#s10">下行：设备寻址与 OTA</a>
+        <ol>
+          <li><a href="#s10-1">三级寻址与会话注册中心</a></li>
+          <li><a href="#s10-2">离线指令、幂等与过期</a></li>
+          <li><a href="#s10-3">ADR-004 OTA 必须走控制面 / 数据面分离</a></li>
+          <li><a href="#s10-4">分批放行与自动暂停</a></li>
+        </ol>
+      </li>
+      <li><a href="#s11">发布与容量：三十万连接怎么滚动升级</a>
+        <ol>
+          <li><a href="#s11-1">直接杀 Pod 的代价</a></li>
+          <li><a href="#s11-2">优雅下线四步</a></li>
+          <li><a href="#s11-3">断连速率由握手预算反推</a></li>
+          <li><a href="#s11-4">SLI / SLO 与告警</a></li>
+        </ol>
+      </li>
+      <li><a href="#s12">速查、演进与反向判据</a>
+        <ol>
+          <li><a href="#s12-1">六条 ADR 汇总</a></li>
+          <li><a href="#s12-2">参数速查</a></li>
+          <li><a href="#s12-3">演进路线与触发信号</a></li>
+          <li><a href="#s12-4">这套架构什么时候不适用</a></li>
+        </ol>
+      </li>
+      <li><a href="#s13">高频面试题 · 高并发接入网关</a>
+        <ol>
+          <li><a href="#s13-1">基础（必答）</a></li>
+          <li><a href="#s13-2">中级（区分熟练度）</a></li>
+          <li><a href="#s13-3">高级（体现深度）</a></li>
+        </ol>
+      </li>
+    </ol>
+  </nav>
+</aside>
+
+<main>
+
+<header class="hero">
+  <div class="badge">Architecture · High Concurrency · Case Study</div>
+  <h1>百万级 IoT 接入网关架构设计</h1>
+  <p class="sub">一个完整的 C++ 服务端架构案例：从「支持几十万设备」这句含糊的甲方需求出发，一路算到单机 30 万长连接的内存预算、握手 CPU 预算、四个超时必须满足的不等式，以及三十万连接怎么在不惊动设备的前提下滚动升级。六条 ADR 记录了每一次取舍。</p>
+  <div class="meta-row">
+    <span class="pill red">核心难度 ★★★★★</span>
+    <span class="pill cyan">端到端案例</span>
+    <span class="pill green">阅读时长 ~100 min</span>
+    <span class="pill amber">前置 TCP · epoll · C++ 并发</span>
+  </div>
+</header>
+
+<!-- =========================================================== -->
+<!-- S1 -->
+<!-- =========================================================== -->
+<section class="chapter" id="s1">
+  <div class="ch-head">
+    <div class="num">01</div>
+    <div class="t">
+      <h2>把「几十万设备」翻译成可验证的指标</h2>
+      <div class="sub">架构设计的第一步不是画图，是把形容词换成数字</div>
+    </div>
+  </div>
+
+  <h3 id="s1-1">1.1 甲方原话与真实工况</h3>
+
+  <p>需求方是一家做工业能源管理的公司，原话是这样的：</p>
+
+  <blockquote>「我们要做一个设备接入平台，支持几十万台设备同时在线，把数据收上来，也能远程下指令和升级固件。要稳定，不能丢数据。」</blockquote>
+
+  <p>这句话里没有一个词是可以直接验证的。「几十万」是 20 万还是 80 万？「同时在线」是保持长连接还是每小时来一次？「不能丢数据」是不能丢遥测还是不能丢计费？这三个问题的答案不同，架构会完全不同——所以在画任何图之前，先做四轮追问，把工况问清楚：</p>
+
+  <table>
+    <thead><tr><th>追问</th><th>答案</th><th>它改变了什么</th></tr></thead>
+    <tbody>
+      <tr><td>设备是市电还是电池供电？</td><td>两类都有：40 万台市电供电的能源网关，460 万台电池供电的 NB-IoT 传感器</td><td class="bad-cell">决定了要不要保持长连接——这是全篇最大的一个分叉</td></tr>
+      <tr><td>上报周期与单帧大小？</td><td>网关 30 s 一帧、约 200 B；传感器 1 h 一帧</td><td>决定瓶颈是带宽还是每包成本</td></tr>
+      <tr><td>下行有多少、要多快？</td><td>控制指令约 500 QPS，端到端 P99 &lt; 2 s；固件 8 MB，一批 5 万台</td><td>决定下行是走网关还是走旁路</td></tr>
+      <tr><td>「不能丢」具体指什么？</td><td>遥测可丢（30 s 后就有下一帧）；告警和计费不能丢</td><td class="good-cell">决定 QoS 分级与反压时的丢弃策略</td></tr>
+    </tbody>
+  </table>
+
+  <div class="box arch">
+    第四个答案是最值钱的。「不能丢数据」如果按字面落地，整条上行链路都要做端到端持久化确认，吞吐会被存储的写入速度绑死；而一旦确认「遥测可丢、告警不可丢」，就可以按 topic 分级，让 95% 的流量走廉价路径。<strong>把一句形容词拆成两类数据，比任何技术优化都省钱。</strong>
+  </div>
+
+  <h3 id="s1-2">1.2 需求表：六个可测指标</h3>
+
+  <p>四轮追问之后，需求变成了下面这六个数字。它们的作用不是写进文档好看，而是<strong>后面每一个技术决策都要能追溯到其中某一条</strong>——追溯不到的决策，就是在凭喜好选技术。</p>
+
+  <div class="reqs">
+    <div class="req hot"><div class="rk">长连接在线数</div><div class="rv">40 万</div><div class="rn">稳态；节假日峰值 50 万。单机上限由容灾反推（§5）</div></div>
+    <div class="req"><div class="rk">上行消息率</div><div class="rv">1.33 万 /s</div><div class="rn">40 万 ÷ 30 s。整点同相时观测峰值 12 万 /s（§9.1）</div></div>
+    <div class="req cool"><div class="rk">上行带宽</div><div class="rv">2.7 MB/s</div><div class="rn">包多字节少，瓶颈在每包成本，不在带宽</div></div>
+    <div class="req warm"><div class="rk">下行指令</div><div class="rv">500 QPS</div><div class="rn">端到端 P99 &lt; 2 s，含设备侧弱网 RTT</div></div>
+    <div class="req hot"><div class="rk">稳态重连率</div><div class="rv">28 次 /s</div><div class="rn">日均断连 6 次/设备。故障恢复时可达 5000 次/s（§8.1）</div></div>
+    <div class="req"><div class="rk">可用性</div><div class="rv">99.9 %</div><div class="rn">月度不可用预算 43 min，滚动升级必须包含在内（§11）</div></div>
+  </div>
+
+  <p>硬件是给定的，不是可选项：<strong>3 台 2×16C（32 物理核 / 64 逻辑核）、64 GB 内存、10 GbE 的机器</strong>，跑在自建 Kubernetes 上。这个约束比看起来重要——64 GB 意味着内存预算真的会咬人（§5），而 10 GbE 对 2.7 MB/s 的上行来说富余到可以忽略，于是所有优化都应该指向 CPU 和内存，而不是带宽。</p>
+
+  <p>把这六个指标和质量属性对齐，就得到了整篇文章的骨架。每一条质量属性往下都会落成具体的架构手段，而每一个手段都会在后面的章节里被展开和验证：</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 940 320" style="min-width:700px;height:auto" role="img" aria-label="需求指标到质量属性到架构手段的三层映射图：在线数与内存预算对应可伸缩性，落到每连接预算与 shared-nothing 线程模型；重连率对应弹性，落到握手隔离与设备侧退避；下行时延对应性能，落到三级寻址与影子设备；可用性对应可运维性，落到优雅下线与滚动升级速率控制">
+      <text class="tb" x="70" y="24">需求指标</text>
+      <text class="tb" x="380" y="24">质量属性</text>
+      <text class="tb" x="700" y="24">架构手段（本文章节）</text>
+
+      <rect class="box-a" x="20" y="40" width="200" height="46" rx="7"/>
+      <text class="t" x="34" y="60">40 万在线 / 64 GB</text>
+      <text class="tm" x="34" y="76">§1.2</text>
+      <rect class="box-a" x="20" y="100" width="200" height="46" rx="7"/>
+      <text class="t" x="34" y="120">1.33 万 msg/s · 200 B</text>
+      <text class="tm" x="34" y="136">§1.2</text>
+      <rect class="box-a" x="20" y="160" width="200" height="46" rx="7"/>
+      <text class="t" x="34" y="180">28 → 5000 次重连/s</text>
+      <text class="tm" x="34" y="196">§1.2</text>
+      <rect class="box-a" x="20" y="220" width="200" height="46" rx="7"/>
+      <text class="t" x="34" y="240">下行 P99 &lt; 2 s</text>
+      <text class="tm" x="34" y="256">§1.2</text>
+      <rect class="box-a" x="20" y="280" width="200" height="36" rx="7"/>
+      <text class="t" x="34" y="303">可用性 99.9 %</text>
+
+      <rect class="box-p" x="300" y="52" width="160" height="40" rx="7"/>
+      <text class="tb" x="316" y="77">可伸缩性</text>
+      <rect class="box-p" x="300" y="122" width="160" height="40" rx="7"/>
+      <text class="tb" x="316" y="147">性能 · 尾延迟</text>
+      <rect class="box-p" x="300" y="192" width="160" height="40" rx="7"/>
+      <text class="tb" x="316" y="217">弹性 · 过载保护</text>
+      <rect class="box-p" x="300" y="262" width="160" height="40" rx="7"/>
+      <text class="tb" x="316" y="287">可运维性</text>
+
+      <rect class="box-g" x="540" y="40" width="380" height="64" rx="7"/>
+      <text class="t" x="556" y="60">每连接预算 37 GB → 3 GB（§5）</text>
+      <text class="t" x="556" y="78">shared-nothing 线程模型（§4）</text>
+      <text class="tm" x="556" y="95">单机上限 30 万连接由容灾反推</text>
+      <rect class="box-g" x="540" y="116" width="380" height="64" rx="7"/>
+      <text class="t" x="556" y="136">时间轮取代 30 万定时器（§6.2）</text>
+      <text class="t" x="556" y="154">攒批上行 + PUBACK 时机（§9）</text>
+      <text class="tm" x="556" y="171">每包成本，不是带宽</text>
+      <rect class="box-g" x="540" y="192" width="380" height="64" rx="7"/>
+      <text class="t" x="556" y="212">握手独立线程池 + 限速（§8.2）</text>
+      <text class="t" x="556" y="230">设备侧指数退避 + 抖动（§7.3）</text>
+      <text class="tm" x="556" y="247">服务端单方面解决不了</text>
+      <rect class="box-g" x="540" y="262" width="380" height="54" rx="7"/>
+      <text class="t" x="556" y="282">优雅下线四步 + 速率反推（§11）</text>
+      <text class="tm" x="556" y="300">发布本身要算进不可用预算</text>
+
+      <path class="ln-a" d="M220 63 H292"/><path class="ln-a" d="M220 123 H292 V132"/>
+      <path class="ln-a" d="M220 183 H270 V212 H292"/><path class="ln-a" d="M220 243 H270 V142 H292"/>
+      <path class="ln-a" d="M220 298 H270 V282 H292"/>
+      <path class="ln-g" d="M460 72 H532"/><path class="ln-g" d="M460 142 H532 V148"/>
+      <path class="ln-g" d="M460 212 H532 V224"/><path class="ln-g" d="M460 282 H532 V289"/>
+      <path class="ar-a" d="M292 58 l8 5 -8 5 z"/><path class="ar-a" d="M292 127 l8 5 -8 5 z"/>
+      <path class="ar-a" d="M292 207 l8 5 -8 5 z"/><path class="ar-a" d="M292 137 l8 5 -8 5 z"/>
+      <path class="ar-a" d="M292 277 l8 5 -8 5 z"/>
+      <path class="ar-g" d="M532 67 l8 5 -8 5 z"/><path class="ar-g" d="M532 143 l8 5 -8 5 z"/>
+      <path class="ar-g" d="M532 219 l8 5 -8 5 z"/><path class="ar-g" d="M532 284 l8 5 -8 5 z"/>
+    </svg>
+    <figcaption>图 1 · 从指标到手段的可追溯映射。反过来读也要成立：每一个技术决策都能指回左边某一条数字。</figcaption>
+  </div>
+
+  <h3 id="s1-3">1.3 IoT 接入与 IM 网关的四个本质差异</h3>
+
+  <p>「几十万长连接」这个描述让人第一反应是照抄 IM 网关的架构。这是个陷阱：两者在四个维度上正好相反，而这四个维度恰好决定了线程模型、内存分布和故障形态。</p>
+
+  <table>
+    <thead><tr><th>维度</th><th>IM / 消息推送</th><th>IoT 设备接入</th><th>架构后果</th></tr></thead>
+    <tbody>
+      <tr><td>流量方向</td><td>下行为主，一条群消息扇出到几千人</td><td class="good-cell">上行为主，下行只有指令</td><td>IM 的核心难题是扇出放大；IoT 的核心难题是每包成本</td></tr>
+      <tr><td>消息大小</td><td>文本 + 富媒体，几 KB 到几十 KB</td><td class="good-cell">遥测 200 B</td><td>IoT 的 payload 摊薄不了框架开销，锁与 malloc 直接暴露在热路径上（§6）</td></tr>
+      <tr><td>连接稳定性</td><td>手机在 WiFi / 4G 间切换，断连有明确的 FIN 或 RST</td><td class="bad-cell">现场设备信号丢失，大量<strong>半开连接</strong></td><td>IoT 必须自己做活性判定，TCP 帮不上（§7.1）</td></tr>
+      <tr><td>时间分布</td><td>跟人的作息走，早晚高峰平滑</td><td class="bad-cell">跟固件里的 <code>sleep(30)</code> 走，会<strong>同相</strong></td><td>IoT 的峰值是自己造出来的，可以用架构手段抹平（§9.1）</td></tr>
+    </tbody>
+  </table>
+
+  <div class="box tip">
+    第三、四条是 IoT 独有的，而它们都不是「更难的 TCP 问题」，而是<strong>客户端行为进了架构设计的范围</strong>。设备固件的 <code>sleep(30)</code> 和它的重连退避策略，和服务端的线程模型一样属于这个系统的架构决策——只是那部分代码不在你的仓库里。这一点在 §7.3 会变成一个必须双方协同才能解决的问题。
+  </div>
+
+  <h3 id="s1-4">1.4 范围切分与非目标</h3>
+
+  <p>回到 §1.1 那个最大的分叉：500 万设备里只有 40 万保持长连接，另外 460 万台电池供电的传感器每小时唤醒一次、用短连接上报完就睡。很容易想当然地认为「都是设备接入，一套网关收了」。算一下就知道不行：</p>
+
+  <div class="box num">
+    460 万台 ÷ 3600 s = <strong>1278 次新建连接/s</strong>，而长连接侧稳态只有 28 次/s。两者的连接建立频率差 45 倍。由于 mTLS 完整握手要花掉约 1.1 ms 服务端 CPU（§8.1），短连接侧光是握手就需要 <strong>1.4 个核持续满载</strong>，长连接侧只要 0.03 核。
+  </div>
+
+  <p>这两侧的成本结构完全不同：长连接侧的钱花在<strong>常驻内存</strong>上，短连接侧的钱花在<strong>连接建立的 CPU</strong> 上。混在一个进程里，意味着短连接的握手洪峰会直接抢走长连接的上行处理时间，而且两者的扩容依据（内存 vs CPU）互相打架，没法定一个统一的副本数。所以第一条架构决策在画图之前就产生了：<strong>两侧分开部署，各自独立扩缩。</strong></p>
+
+  <div class="grid-2">
+    <div class="panel info">
+      <h4>本文范围</h4>
+      <p>40 万长连接侧：接入层选型、线程模型、每连接预算、弱网活性判定、握手预算、上下行链路、滚动升级。这一侧的难点是<strong>规模与常驻资源</strong>。</p>
+    </div>
+    <div class="panel mid">
+      <h4>明确的非目标</h4>
+      <p>460 万短连接摄取侧只给判据不展开：它应该做的是 PSK / 会话票据优先、DTLS + Connection ID 保持身份、以及按到达率而不是连接数扩缩。难点是<strong>握手成本与突发</strong>，是另一篇的题目。</p>
+    </div>
+  </div>
+
+  <p>另外三件明确不做的事，写进文档是为了让后来者知道这不是遗漏：<strong>设备固件不在本文范围</strong>（但它的退避策略是本架构的前提，见 §7.3）；<strong>规则引擎与业务计算不放在网关里</strong>（网关必须保持薄，理由见 §12.4）；<strong>不追求强一致</strong>——本文所有决策都建立在「最终一致 + 可重试」之上，这个前提在 §10.1 会被显式用到。</p>
+</section>
+
+<!-- =========================================================== -->
+<!-- S2 -->
+<!-- =========================================================== -->
+<section class="chapter" id="s2">
+  <div class="ch-head">
+    <div class="num">02</div>
+    <div class="t">
+      <h2>C4 视图：连接与会话必须分开</h2>
+      <div class="sub">整篇文章只有一个结构性洞见，就在这一章</div>
+    </div>
+  </div>
+
+  <p>这一章用 C4 模型的前两层画出系统。<a href="architecture_methodology.html#ch2">架构方法论 · 第 2 章</a>讲了 C4 的记法和它为什么胜过 UML，这里不重复，直接用；要留意的是第三小节那个切分——它决定了后面从线程模型到滚动升级的所有事情。</p>
+
+  <h3 id="s2-1">2.1 Level 1 · 系统上下文</h3>
+
+  <p>Level 1 只回答一个问题：<strong>这个系统和谁打交道，边界在哪里。</strong>画它的价值在于暴露那些「本来以为不用管」的外部依赖——比如运营商的 NAT 超时，它不是我们的组件，但它会直接决定我们的心跳周期（§7.2）。</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 940 300" style="min-width:720px;height:auto" role="img" aria-label="Level 1 系统上下文图：40 万能源网关与 460 万 NB-IoT 传感器经运营商网络和 NAT 接入设备接入平台；平台对外连接证书颁发机构、时序数据库、Kafka 消息总线、对象存储 CDN，以及运维控制台和业务应用">
+      <rect class="box-a" x="30" y="60" width="150" height="60" rx="8"/>
+      <text class="tb" x="46" y="84">能源网关</text>
+      <text class="tm" x="46" y="102">40 万 · 长连接</text>
+      <rect class="box" x="30" y="150" width="150" height="60" rx="8"/>
+      <text class="tb" x="46" y="174">NB-IoT 传感器</text>
+      <text class="tm" x="46" y="192">460 万 · 短连接</text>
+
+      <rect class="box-y" x="230" y="95" width="120" height="80" rx="8"/>
+      <text class="tb" x="246" y="122">运营商网络</text>
+      <text class="ts" x="246" y="140">4G / NB-IoT</text>
+      <text class="tr" x="246" y="160">NAT 空闲回收</text>
+
+      <rect class="box-p" x="400" y="70" width="180" height="130" rx="10"/>
+      <text class="tb" x="416" y="98">设备接入平台</text>
+      <text class="ts" x="416" y="118">长连接网关（本文）</text>
+      <text class="ts" x="416" y="136">短连接摄取（非目标）</text>
+      <text class="ts" x="416" y="154">会话注册 · 控制面</text>
+      <text class="tm" x="416" y="180">3 × 2×16C / 64 GB</text>
+
+      <rect class="box-g" x="640" y="30" width="150" height="44" rx="7"/>
+      <text class="t" x="656" y="49">私有 CA</text>
+      <text class="tm" x="656" y="65">一机一证 · 吊销</text>
+      <rect class="box-g" x="640" y="86" width="150" height="44" rx="7"/>
+      <text class="t" x="656" y="105">Kafka</text>
+      <text class="tm" x="656" y="121">上行总线 · acks=all</text>
+      <rect class="box-g" x="640" y="142" width="150" height="44" rx="7"/>
+      <text class="t" x="656" y="161">时序数据库</text>
+      <text class="tm" x="656" y="177">遥测落库</text>
+      <rect class="box-g" x="640" y="198" width="150" height="44" rx="7"/>
+      <text class="t" x="656" y="217">对象存储 / CDN</text>
+      <text class="tm" x="656" y="233">OTA 固件实体</text>
+      <rect class="box" x="640" y="254" width="150" height="40" rx="7"/>
+      <text class="t" x="656" y="279">业务应用 · 控制台</text>
+
+      <path class="ln-a" d="M180 90 H222"/><path class="ar-a" d="M222 85 l8 5 -8 5 z"/>
+      <path class="ln-d" d="M180 180 H222 V150"/>
+      <path class="ln-a" d="M350 135 H392"/><path class="ar-a" d="M392 130 l8 5 -8 5 z"/>
+      <path class="ln-g" d="M580 100 H616 V52 H632"/><path class="ar-g" d="M632 47 l8 5 -8 5 z"/>
+      <path class="ln-g" d="M580 118 H616 V108 H632"/><path class="ar-g" d="M632 103 l8 5 -8 5 z"/>
+      <path class="ln-g" d="M580 140 H616 V164 H632"/><path class="ar-g" d="M632 159 l8 5 -8 5 z"/>
+      <path class="ln-g" d="M580 160 H600 V220 H632"/><path class="ar-g" d="M632 215 l8 5 -8 5 z"/>
+      <path class="ln-d" d="M580 180 H600 V274 H632"/>
+      <text class="tm" x="188" y="82">MQTT / TLS</text>
+      <text class="tm" x="358" y="128">mTLS</text>
+    </svg>
+    <figcaption>图 2 · Level 1。虚线是本文不展开但会约束设计的边：短连接侧（§1.4）和运营商 NAT（§7.2）。</figcaption>
+  </div>
+
+  <div class="box arch">
+    很多 Level 1 图会把「运营商网络」省掉，理由是「那是网络，不是系统组件」。但它是这个架构里<strong>唯一我们无法配置、又会单方面终止连接</strong>的参与者，它的空闲回收时间是心跳周期的硬上界。<strong>凡是能单方面改变系统状态、又不受我们控制的东西，都必须画进 Level 1。</strong>
+  </div>
+
+  <h3 id="s2-2">2.2 Level 2 · 容器分解</h3>
+
+  <p>Level 2 把平台内部拆开。这里的分解原则不是按业务功能，而是<strong>按「变化频率 × 资源画像」</strong>：变化频率不同的东西要能独立发布，资源画像不同的东西要能独立扩缩。网关是最难发布的（一次重启动 30 万连接），所以它必须最薄、变得最少。</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 960 400" style="min-width:760px;height:auto" role="img" aria-label="Level 2 容器图：设备经 L4 DSR 负载均衡进入三个长连接网关实例，网关向上把遥测写入 Kafka 再落时序库，向下从控制面接收指令；旁边有会话注册中心、设备影子、OTA 控制器与证书服务，OTA 固件实体不经过网关而直接从对象存储下载">
+      <rect class="box" x="16" y="150" width="96" height="60" rx="7"/>
+      <text class="tb" x="30" y="176">设备</text>
+      <text class="tm" x="30" y="194">40 万</text>
+
+      <rect class="box-y" x="136" y="150" width="104" height="60" rx="7"/>
+      <text class="tb" x="150" y="172">L4 DSR</text>
+      <text class="ts" x="150" y="190">无状态转发</text>
+      <text class="tm" x="150" y="205">§3</text>
+
+      <rect class="box-p" x="270" y="96" width="210" height="170" rx="10"/>
+      <text class="tb" x="284" y="118">长连接网关 × 3</text>
+      <text class="tm" x="284" y="134">C++ · 每核一份 shared-nothing</text>
+      <rect class="box-a" x="284" y="146" width="182" height="30" rx="5"/>
+      <text class="t" x="296" y="166">TLS 终止 + 握手线程池 §8</text>
+      <rect class="box-a" x="284" y="182" width="182" height="30" rx="5"/>
+      <text class="t" x="296" y="202">MQTT 编解码 + 时间轮 §6</text>
+      <rect class="box-a" x="284" y="218" width="182" height="30" rx="5"/>
+      <text class="t" x="296" y="238">攒批上行 + 跨核下发 §4 §9</text>
+      <text class="tr" x="284" y="260">设计上限 30 万连接 / 实例</text>
+
+      <rect class="box-g" x="530" y="30" width="180" height="52" rx="7"/>
+      <text class="t" x="544" y="50">Kafka · 上行总线</text>
+      <text class="tm" x="544" y="68">acks=all 后才回 PUBACK</text>
+      <rect class="box-g" x="750" y="30" width="180" height="52" rx="7"/>
+      <text class="t" x="764" y="50">时序数据库</text>
+      <text class="tm" x="764" y="68">遥测 · 降采样 · 冷热分离</text>
+
+      <rect class="box-a" x="530" y="106" width="180" height="52" rx="7"/>
+      <text class="t" x="544" y="126">会话注册中心</text>
+      <text class="tm" x="544" y="144">deviceId → 实例:核:槽 §10.1</text>
+      <rect class="box-a" x="530" y="176" width="180" height="52" rx="7"/>
+      <text class="t" x="544" y="196">设备影子</text>
+      <text class="tm" x="544" y="214">最后状态 · 离线指令队列</text>
+      <rect class="box-a" x="530" y="246" width="180" height="52" rx="7"/>
+      <text class="t" x="544" y="266">控制面 API</text>
+      <text class="tm" x="544" y="284">指令下发 · 幂等键 §10.2</text>
+
+      <rect class="box-y" x="750" y="176" width="180" height="52" rx="7"/>
+      <text class="t" x="764" y="196">OTA 控制器</text>
+      <text class="tm" x="764" y="214">分批放行 · 自动暂停 §10.4</text>
+      <rect class="box-g" x="750" y="246" width="180" height="52" rx="7"/>
+      <text class="t" x="764" y="266">对象存储 / CDN</text>
+      <text class="tm" x="764" y="284">固件实体 400 GB</text>
+      <rect class="box" x="530" y="318" width="180" height="46" rx="7"/>
+      <text class="t" x="544" y="341">证书服务 · 私有 CA</text>
+      <text class="tm" x="544" y="357">短有效期证书 §8.4</text>
+
+      <path class="ln-a" d="M112 180 H128"/><path class="ar-a" d="M128 175 l8 5 -8 5 z"/>
+      <path class="ln-a" d="M240 180 H262"/><path class="ar-a" d="M262 175 l8 5 -8 5 z"/>
+      <path class="ln-g" d="M480 150 H505 V56 H522"/><path class="ar-g" d="M522 51 l8 5 -8 5 z"/>
+      <path class="ln-g" d="M710 56 H742"/><path class="ar-g" d="M742 51 l8 5 -8 5 z"/>
+      <path class="ln-a" d="M480 170 H505 V132 H522"/><path class="ar-a" d="M522 127 l8 5 -8 5 z"/>
+      <path class="ln-a" d="M480 200 H505 V202 H522"/><path class="ar-a" d="M522 197 l8 5 -8 5 z"/>
+      <path class="ln-a" d="M522 272 H505 V232 H480"/><path class="ar-a" d="M480 227 l-8 5 8 5 z"/>
+      <path class="ln-y" d="M750 202 H730 V272 H710"/>
+      <path class="ln-r" d="M112 214 C 300 380, 600 380, 840 300" stroke-dasharray="6 4"/>
+      <text class="tr" x="400" y="374">固件实体不经过网关（§10.3）</text>
+    </svg>
+    <figcaption>图 3 · Level 2。红色虚线是 OTA 的数据面：它绕开网关直连对象存储，这是本架构里最省钱的一条边。</figcaption>
+  </div>
+
+  <p>值得单独说的是「网关最薄」这条原则的具体尺度。网关只做四件事：TLS 终止、MQTT 编解码、活性维护、以及把上行转成 Kafka 消息。<strong>规则判断、告警阈值、数据转换一律不放进来。</strong>理由不是分层洁癖，而是发布成本——业务规则每周都改，网关重启一次要付 30 万连接重连的代价（§11.1）。<strong>发布代价越高的组件，允许它承载的变化就越少</strong>，这是一条可以量化的分层依据，比「高内聚低耦合」有用得多。</p>
+
+  <h3 id="s2-3">2.3 为什么「连接」和「会话」是两个概念</h3>
+
+  <p>朴素实现里，一个设备就是一个 TCP 连接上的一个对象，设备在线等于连接存在。这个等价关系在 40 万规模下会连着崩三次，所以要提前把它拆开：</p>
+
+  <div class="grid-3">
+    <div class="panel bad">
+      <h4>崩塌一 · 半开连接</h4>
+      <p>设备断电了但 TCP 不知道（§7.1），连接对象还在，控制台显示在线。指令投过去、进了内核发送缓冲、write 返回成功，业务以为下发成功了。<strong>连接存在 ≠ 设备在线。</strong></p>
+    </div>
+    <div class="panel bad">
+      <h4>崩塌二 · 重连期间</h4>
+      <p>设备换基站，断开后 3 s 重连。这 3 s 里它的会话应该还在（MQTT 有 clean_session=false 的语义），订阅关系、QoS1 待确认消息都得保留。<strong>连接消失 ≠ 会话结束。</strong></p>
+    </div>
+    <div class="panel bad">
+      <h4>崩塌三 · 网关重启</h4>
+      <p>网关实例升级，连接全断。如果会话状态只活在这个进程里，30 万台设备的订阅关系和在途消息就一起丢了。<strong>会话不能和进程同生命周期。</strong></p>
+    </div>
+  </div>
+
+  <p>拆开之后，三个概念各有归属，而且各自的一致性要求完全不同——这是后面能做出很多简化的根本原因：</p>
+
+  <table>
+    <thead><tr><th>概念</th><th>住在哪</th><th>生命周期</th><th>一致性要求</th></tr></thead>
+    <tbody>
+      <tr><td><strong>连接</strong>（fd + TLS + 缓冲）</td><td>网关某个实例的某个核，独占</td><td>一次 TCP 连接</td><td class="good-cell">不需要——它就是本地状态，进程没了它也该没</td></tr>
+      <tr><td><strong>会话</strong>（订阅、在途消息、clean_session）</td><td>会话注册中心 + 设备影子</td><td>跨多次连接，按 MQTT 语义过期</td><td class="mid-cell">最终一致足够：寻址错了就重试（§10.1）</td></tr>
+      <tr><td><strong>设备</strong>（身份、证书、影子状态）</td><td>设备台账 + 影子服务</td><td>设备的整个生命周期</td><td class="bad-cell">证书吊销要强一致（§8.4），影子状态最终一致</td></tr>
+    </tbody>
+  </table>
+
+  <div class="box arch">
+    这张表最有用的一列是最右边。<strong>因为「连接」不需要任何一致性保证，网关才可以是完全无状态、可随意重启的</strong>；也正因为「会话」只要最终一致，会话注册中心才可以用一个分片的 Redis 而不是 Raft 集群（<a href="distributed_systems_fundamentals.html#ch3">一致性模型对比</a>）。<strong>先把状态按一致性要求分类，再选存储</strong>——顺序反过来就会出现「用 etcd 存 30 万连接的心跳时间」这种把强一致用在不需要的地方、然后被写入吞吐打死的设计。
+  </div>
+
+  <p>「活性」这个概念也随之落地：设备在线与否不看连接是否存在，而看<strong>最近一次收到字节的时间</strong>。这个判定住在网关的时间轮里（§6.2），并且周期性地把结果同步到影子服务。§7.2 会给出这个时间窗口必须满足的不等式。</p>
+</section>
+
+<!-- =========================================================== -->
+<!-- S3 -->
+<!-- =========================================================== -->
+<section class="chapter" id="s3">
+  <div class="ch-head">
+    <div class="num">03</div>
+    <div class="t">
+      <h2>接入层：长连接的负载均衡是一次性的</h2>
+      <div class="sub">第一个反直觉的地方：两种主流均衡策略在这里都是错的</div>
+    </div>
+  </div>
+
+  <h3 id="s3-1">3.1 四个候选</h3>
+
+  <p>设备要先找到某个网关实例。这一步的候选方案在无状态 HTTP 服务里几乎不用思考——挂个 L7 网关就完事——但长连接把它变成了一个真问题。四个候选：</p>
+
+  <table>
+    <thead><tr><th>方案</th><th>每连接开销</th><th>能否感知连接数</th><th>致命问题</th></tr></thead>
+    <tbody>
+      <tr><td>Kubernetes <code>Service</code> + kube-proxy</td><td class="bad-cell">1 条 conntrack ≈ 0.3 KB，30 万连接 = 90 KB 表项 × 转发路径数</td><td>否</td><td class="bad-cell"><code>nf_conntrack</code> 表满后<strong>静默丢包</strong>，且 SNAT 掉源 IP（§3.3）</td></tr>
+      <tr><td>L7 代理（Envoy / Nginx stream）</td><td class="bad-cell">代理侧再开一条连接 + 一份缓冲，内存与握手成本翻倍</td><td class="good-cell">是，可做加权与慢启动</td><td>TLS 要么在代理终止（网关拿不到设备证书身份），要么透传（代理白付一份连接成本）</td></tr>
+      <tr><td class="good-cell">L4 DSR（LVS DR / ECMP）</td><td class="good-cell">只有入向经过，回包直接走，几乎为零</td><td>否（需要控制面补）</td><td>只能按四元组哈希，不感知负载；配置复杂</td></tr>
+      <tr><td>DNS 多 A 记录 + 设备侧选择</td><td class="good-cell">零</td><td>否</td><td class="bad-cell">缓存 TTL 不可控，摘除一个实例要等几分钟到几小时，故障切换太慢</td></tr>
+    </tbody>
+  </table>
+
+  <p>先看一眼 L7 那一行的代价，因为它是最容易被默认选中的方案。如果在 Envoy 终止 TLS，网关就拿不到设备证书里的身份，而<strong>这个身份是本系统的授权依据</strong>（哪台设备能发哪个 topic）；要透传身份就得靠 <code>PROXY protocol</code> 或者把证书指纹塞进 header，等于把安全边界搬到了代理上。如果改成 TCP 透传，代理只是个搬运工，却要为 30 万连接各维护一条上游连接和一份缓冲——按 §5 的预算，那是又一个 3 GB 和又一份 fd 上限问题。<strong>为长连接付两次连接成本，是这一层最典型的浪费。</strong></p>
+
+  <h3 id="s3-2">3.2 均衡了新建，不等于均衡了负载</h3>
+
+  <p>真正的反直觉在这里。短连接服务里「负载均衡」和「流量均衡」是同一件事，因为连接活不过一个请求；长连接里一条连接能活好几天，于是<strong>负载均衡器只能均衡「新建连接」这个导数，它对存量无能为力</strong>。两种最常用的策略在这个前提下各错一半：</p>
+
+  <div class="grid-2">
+    <div class="panel bad">
+      <h4>轮询（round-robin）：新实例永远补不齐</h4>
+      <p>实例 C 重启后连接数归零，但轮询只会把<strong>新建连接</strong>的三分之一给它。稳态新建才 28 次/s，要补上 10 万连接的缺口需要 <code>100000 / (28/3) ≈ 3 小时</code>。这三个小时里 A、B 各多背 5 万连接。</p>
+    </div>
+    <div class="panel bad">
+      <h4>最少连接（least-conn）：新实例被瞬间打爆</h4>
+      <p>反过来，least-conn 会把<strong>所有</strong>新建连接都送给刚重启的 C，直到它追平。如果此时正赶上一次重连洪峰（§7.3），5000 次/s 全砸在一个实例上——它需要 5.6 个核纯做握手（§8.1），远超单实例预算，于是握手排队、设备超时、继续重试。</p>
+    </div>
+  </div>
+
+  <div class="fig">
+    <svg viewBox="0 0 920 300" style="min-width:720px;height:auto" role="img" aria-label="两种负载均衡策略下重启实例连接数随时间变化的对比曲线：轮询下重启实例的连接数在三小时内缓慢爬升长期偏低，最少连接下重启实例的连接数瞬间尖峰超过设计上限，加权慢启动加主动再平衡则在二十分钟内平滑收敛到目标水位">
+      <path class="grid" d="M60 40 H880 M60 90 H880 M60 140 H880 M60 190 H880 M60 240 H880"/>
+      <path class="ln" d="M60 30 V250 H880"/>
+      <text class="tm" x="16" y="44">30 万</text>
+      <text class="tm" x="16" y="144">15 万</text>
+      <text class="tm" x="24" y="252">0</text>
+      <text class="tm" x="60" y="270">重启完成</text>
+      <text class="tm" x="380" y="270">+20 min</text>
+      <text class="tm" x="700" y="270">+3 h</text>
+      <text class="ts" x="820" y="270">时间</text>
+
+      <path class="ln-d" d="M60 90 H880"/>
+      <text class="tm" x="820" y="84">目标水位 13 万</text>
+      <path class="ln-r" d="M60 40 H880" stroke-dasharray="5 4"/>
+      <text class="tr" x="790" y="34">设计上限 30 万</text>
+
+      <path class="ln-y" d="M60 250 C 240 244, 480 210, 880 118"/>
+      <text class="ty" x="600" y="176">轮询：3 小时才追平，期间其它实例超载</text>
+
+      <path class="ln-r" d="M60 250 C 90 250, 105 60, 150 34 C 200 20, 260 60, 340 90 C 460 120, 620 100, 880 92"/>
+      <text class="tr" x="164" y="26">least-conn：瞬间越过上限，握手排队</text>
+
+      <path class="ln-g" d="M60 250 C 160 240, 260 140, 400 96 C 560 84, 700 90, 880 90"/>
+      <text class="tg" x="420" y="72">加权慢启动 + 主动再平衡：20 min 平滑收敛</text>
+    </svg>
+    <figcaption>图 4 · 同一次实例重启，三种策略下连接数的恢复轨迹。纵轴是单实例连接数，虚线是 §5 算出的设计上限。</figcaption>
+  </div>
+
+  <p>可行的做法是两个手段合起来用，缺一个都不行：</p>
+
+  <p><strong>一、新实例慢启动。</strong>让实例在上线后的一段时间内以递增的权重接收新连接（Envoy 的 <code>slow_start_config</code>、LVS 的加权轮询配合控制面调权），把 least-conn 的尖峰削成斜坡。这解决了「被打爆」，但没解决「追平太慢」。</p>
+
+  <p><strong>二、主动再平衡。</strong>既然均衡器只能作用于新建，那就<strong>人为制造新建</strong>：网关周期性（每 30 s）向控制面上报自己的连接数，控制面算出偏离目标水位最多的实例，通知它按限定速率主动断开一小批连接。设备重连时会被均衡器分到别处，缺口就补上了。</p>
+
+  <p>关键在于「主动断开」怎么断才不伤设备。MQTT 5.0 为此专门提供了机制：服务端发 <code>DISCONNECT</code> 时带上 reason code <code>0x9C (Use another server)</code> 加 <code>Server Reference</code> 属性，设备收到后<strong>立即重连并且不触发退避</strong>——它知道这是一次调度，不是故障。MQTT 3.1.1 没有这个字段，只能直接关连接，设备会走退避逻辑（这就是 §12.3 里推动设备升级协议版本的实际动机）。</p>
+
+  <div class="box danger">
+    再平衡的速率不能拍脑袋，它必须小于<strong>集群剩余的握手能力</strong>。每一次主动断开都会换来一次完整 mTLS 握手（约 1.1 ms CPU），而这笔 CPU 是从上行处理里抢的。§11.3 会把这个速率算出来，滚动升级用的是同一个公式——<strong>再平衡和优雅下线在物理上是同一件事</strong>，只是触发原因不同。
+  </div>
+
+  <h3 id="s3-3">3.3 Kubernetes 上的四个坑</h3>
+
+  <p>这套系统跑在自建 K8s 上，而 K8s 的默认网络路径是为无状态短连接优化的。四个坑按被踩到的顺序排列：</p>
+
+  <table>
+    <thead><tr><th>坑</th><th>症状</th><th>根因</th><th>做法</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>nf_conntrack</code> 表满</td>
+        <td class="bad-cell">丢包率突然抬升，但网卡、应用日志、监控全都正常；只有 <code>dmesg</code> 里有 <code>table full, dropping packet</code></td>
+        <td>每条连接一个 conntrack 条目，默认 <code>nf_conntrack_max</code> 通常远小于 30 万 × 转发跳数</td>
+        <td><code>hostNetwork: true</code> + 外部 L4 DSR，整条路径不经过 kube-proxy，conntrack 归零</td>
+      </tr>
+      <tr>
+        <td><code>externalTrafficPolicy: Cluster</code></td>
+        <td>网关看到的源 IP 全是节点 IP</td>
+        <td>Cluster 模式为了跨节点转发做了 SNAT</td>
+        <td>改 <code>Local</code>；或者同上直接绕开 Service</td>
+      </tr>
+      <tr>
+        <td>优雅停机时间不够</td>
+        <td class="bad-cell">发布时 30 万设备同时重连</td>
+        <td><code>terminationGracePeriodSeconds</code> 默认 30 s，而按 §11.3 的速率排空需要十几分钟</td>
+        <td>由断连速率反推这个值，配合 <code>preStop</code>（§11.4）</td>
+      </tr>
+      <tr>
+        <td>readiness 与 draining 语义冲突</td>
+        <td>要么排空期间还在收新连接，要么进程被提前杀掉</td>
+        <td>K8s 只有「就绪 / 不就绪」两态，没有「正在排空但还活着」</td>
+        <td>readiness 探针独立于健康探针：排空一开始就让 readiness 失败（从 endpoints 摘除），存活探针继续返回成功</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="box tip">
+    第一个坑值得记住的不是参数，而是它的<strong>失败形态</strong>：conntrack 打满不会报错、不会重试、不会出现在任何应用指标里，它只是安静地丢包。<strong>凡是「静默降级」的依赖都必须提前监控起来</strong>——<code>nf_conntrack_count / nf_conntrack_max</code> 的比值应该和 CPU、内存一样是一等公民指标（§11.4）。
+  </div>
+
+  <h3 id="s3-4">3.4 ADR-001 决策记录</h3>
+
+  <div class="adr">
+    <div class="adr-head"><span class="adr-id">ADR-001</span><span class="adr-title">接入层用外部 L4 DSR + hostNetwork，不走 kube-proxy Service，不引入 L7 代理</span><span class="adr-status">已接受</span></div>
+    <div class="adr-row"><div class="k">背景</div><div>40 万长连接需要分发到 3 个网关实例。连接寿命以天计，均衡器只能作用于新建连接；同时设备证书身份必须在网关侧可见，用于 topic 级授权。</div></div>
+    <div class="adr-row"><div class="k">候选</div><div>① K8s Service + kube-proxy ② Envoy L7 / TCP 透传 ③ 外部 L4 DSR + hostNetwork ④ DNS 多 A 记录</div></div>
+    <div class="adr-row"><div class="k">决策</div><div>选 ③。DSR 只有入向包经过均衡器，回包直接从网关出网卡，30 万连接在均衡器上不产生任何状态；hostNetwork 让整条路径避开 conntrack。均衡器缺失的「感知负载」能力由控制面补：网关每 30 s 上报连接数，超出目标水位时按速率主动断连（MQTT 5.0 <code>0x9C</code> 重定向）。</div></div>
+    <div class="adr-row"><div class="k">后果</div><div><span class="win">得到</span>：均衡器零状态、无 conntrack 上限、设备证书身份直达网关、回包不过均衡器省一跳。<br><span class="lose">付出</span>：失去 K8s 的服务发现，实例 IP 要自己注册进 DSR 的 real server 列表；失去 L7 的可观测性，连接级指标只能由网关自己打点；<code>hostNetwork</code> 意味着端口在节点上全局唯一，同一节点跑不了两个实例。</div></div>
+    <div class="adr-row"><div class="k">何时重议</div><div>若实例数增长到十几个以上、手工维护 real server 列表变得易错，应引入控制器自动同步；若将来需要在接入层做协议转换（例如同时支持 MQTT over WebSocket 与 CoAP），L7 的价值会重新超过它的成本。</div></div>
+  </div>
+</section>
+
+<!-- =========================================================== -->
+<!-- S4 -->
+<!-- =========================================================== -->
+<section class="chapter" id="s4">
+  <div class="ch-head">
+    <div class="num">04</div>
+    <div class="t">
+      <h2>线程模型：shared-nothing 与它的代价</h2>
+      <div class="sub">选一个模型很容易，说清楚它让你付出了什么才是架构工作</div>
+    </div>
+  </div>
+
+  <h3 id="s4-1">4.1 三个候选与判据</h3>
+
+  <p>网关内部怎么用 32 个物理核，有三种成熟做法。<a href="../system/async_networking_guide.html#s6">异步网络编程指南 · 第 6 章</a>讲了它们在 Asio 里的写法与 strand 的语义，这里只讨论选型：</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 960 300" style="min-width:780px;height:auto" role="img" aria-label="三种线程模型对比图：方案A 单个 io_context 被多个线程共享，所有连接在一个队列里需要加锁；方案B 每核一个 io_context 配合 SO_REUSEPORT，连接被内核分流后由单核独占无需加锁但跨核下发需要额外通道；方案C 主从 Reactor，主线程只做 accept 再把连接分给从线程">
+      <rect class="box-r" x="20" y="40" width="280" height="230" rx="10"/>
+      <text class="tb" x="36" y="62">A · 单 io_context 多线程共享</text>
+      <rect class="box" x="40" y="76" width="240" height="34" rx="5"/>
+      <text class="t" x="54" y="98">1 个 epoll + 1 个任务队列</text>
+      <rect class="box-a" x="40" y="122" width="70" height="30" rx="4"/><text class="ts" x="58" y="142">线程 1</text>
+      <rect class="box-a" x="125" y="122" width="70" height="30" rx="4"/><text class="ts" x="143" y="142">线程 2</text>
+      <rect class="box-a" x="210" y="122" width="70" height="30" rx="4"/><text class="ts" x="222" y="142">线程 32</text>
+      <path class="ln-r" d="M160 110 V122"/>
+      <text class="tr" x="40" y="176">每条消息都要抢队列锁</text>
+      <text class="t" x="40" y="196">✅ 天然均衡，实现最简单</text>
+      <text class="t" x="40" y="214">✅ 下发不用跨核，任何线程都能写</text>
+      <text class="tr" x="40" y="234">❌ 小消息高频时锁成为瓶颈</text>
+      <text class="tr" x="40" y="252">❌ Session 必须线程安全（strand 或锁）</text>
+
+      <rect class="box-g" x="330" y="40" width="290" height="230" rx="10"/>
+      <text class="tb" x="346" y="62">B · 每核一份 shared-nothing</text>
+      <rect class="box-y" x="350" y="76" width="250" height="30" rx="5"/>
+      <text class="t" x="364" y="96">内核按四元组哈希（SO_REUSEPORT）</text>
+      <rect class="box-a" x="350" y="118" width="76" height="42" rx="4"/>
+      <text class="ts" x="362" y="134">核 1</text><text class="tm" x="362" y="150">epoll+ctx</text>
+      <rect class="box-a" x="437" y="118" width="76" height="42" rx="4"/>
+      <text class="ts" x="449" y="134">核 2</text><text class="tm" x="449" y="150">epoll+ctx</text>
+      <rect class="box-a" x="524" y="118" width="76" height="42" rx="4"/>
+      <text class="ts" x="536" y="134">核 32</text><text class="tm" x="536" y="150">epoll+ctx</text>
+      <text class="tg" x="350" y="180">连接被单核独占，热路径上一把锁都没有</text>
+      <text class="t" x="350" y="200">✅ Session 无需线程安全，可以是裸对象</text>
+      <text class="t" x="350" y="218">✅ 每核数据结构常驻自己的 L2</text>
+      <text class="tr" x="350" y="238">❌ 跨核下发要自建通道（§4.3）</text>
+      <text class="tr" x="350" y="256">❌ 存量倾斜不会自愈（§4.4）</text>
+
+      <rect class="box-y" x="650" y="40" width="290" height="230" rx="10"/>
+      <text class="tb" x="666" y="62">C · 主从 Reactor</text>
+      <rect class="box-p" x="670" y="76" width="250" height="30" rx="5"/>
+      <text class="t" x="684" y="96">主线程只做 accept + 握手</text>
+      <rect class="box-a" x="670" y="118" width="76" height="42" rx="4"/>
+      <text class="ts" x="682" y="134">从 1</text><text class="tm" x="682" y="150">epoll</text>
+      <rect class="box-a" x="757" y="118" width="76" height="42" rx="4"/>
+      <text class="ts" x="769" y="134">从 2</text><text class="tm" x="769" y="150">epoll</text>
+      <rect class="box-a" x="844" y="118" width="76" height="42" rx="4"/>
+      <text class="ts" x="856" y="134">从 31</text><text class="tm" x="856" y="150">epoll</text>
+      <path class="ln-a" d="M795 106 V118"/>
+      <text class="ty" x="670" y="180">分配由自己决定，可以按连接数均衡</text>
+      <text class="t" x="670" y="200">✅ 分配可控，天然解决倾斜</text>
+      <text class="t" x="670" y="218">✅ 握手集中，便于限速（§8.2）</text>
+      <text class="tr" x="670" y="238">❌ 主线程是单点，accept 速率有上限</text>
+      <text class="tr" x="670" y="256">❌ 仍需跨核下发</text>
+    </svg>
+    <figcaption>图 5 · 三种线程模型。区别不在「快不快」，在于<strong>锁在哪里、分配由谁决定、跨核怎么通信</strong>这三件事的组合。</figcaption>
+  </div>
+
+  <h3 id="s4-2">4.2 为什么 IoT 场景选每核一份</h3>
+
+  <p>选 B 的理由完全来自 §1.2 的两个数字：<strong>消息小（200 B）、消息多（1.33 万/s，峰值 12 万/s）</strong>。这个组合让方案 A 的共享队列锁变成了主要成本：</p>
+
+  <div class="box num">
+    处理一帧 200 B 的 MQTT PUBLISH，实际业务工作量大约是几百纳秒（解析固定头 + 变长头 + 拷贝 payload + 一次 topic 查表）。而一次跨核的锁竞争，只要发生实际争用，光是 cache line 在核之间迁移就要 100–200 ns 量级。<strong>当单条消息的处理时间和一次锁争用的时间是同一个数量级时，锁不再是「开销」，它是主要成本。</strong>
+  </div>
+
+  <p>换个角度看同一件事：如果消息是 64 KB（比如 IM 的图片消息），处理一条要几十微秒，那么 200 ns 的锁开销占比不到 1%，方案 A 完全够用，还省下跨核下发的全部复杂度。<strong>所以「选哪个线程模型」的答案不是某个模型更先进，而是取决于单条消息的处理时间和一次锁争用时间的比值。</strong>这个比值越接近 1，越要往 shared-nothing 走。</p>
+
+  <p>第二个理由是内存局部性。方案 B 里每个核独占约 1 万个连接（30 万 ÷ 32），Session 对象被压到 64 B（§5.3）后，这 1 万个 Session 一共 640 KB——正好落在单核 L2（通常 1–2 MB）的量级里。<strong>整个核的工作集常驻自己的 L2，不和别的核共享任何可写数据</strong>，这是方案 A 无论怎么优化都做不到的。</p>
+
+  <p>没选方案 C 的理由要说清楚，因为它其实很接近：主从 Reactor 天然解决了 §3.2 的存量倾斜，而且把握手集中到主线程便于限速。但它的主线程是单点——按 §8.1，一次 mTLS 握手要 1.1 ms CPU，单线程做握手的上限是 900 次/s，而 §7.3 的重连洪峰要求 5000 次/s。所以 C 的主线程必须扩成一个线程池，扩完之后它和 B 的区别就只剩「分配由用户态决定还是内核决定」了。<strong>最终的方案其实是 B 加上 C 的握手池</strong>：内核负责分流已建立的连接，独立的握手线程池负责建立过程（§8.2）。</p>
+
+  <h3 id="s4-3">4.3 代价：跨核下发</h3>
+
+  <p>shared-nothing 的账单在这里。控制面下发一条指令，HTTP 请求落在核 A 的线程上，而目标设备的连接在核 B 上——而且<strong>核 B 上的连接只能由核 B 自己碰</strong>，这是这个模型的立身之本，不能破。于是必须有一条跨核通道。</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 940 280" style="min-width:740px;height:auto" role="img" aria-label="跨核下发路径图：控制面指令进入核A，核A查会话注册中心得到目标在核B，把定长消息写入核B的有界MPSC环形队列，只在队列由空变非空时写一次eventfd唤醒核B的epoll，核B被唤醒后一次性排空整个队列">
+      <rect class="box-p" x="20" y="30" width="140" height="50" rx="7"/>
+      <text class="t" x="34" y="52">控制面 API</text>
+      <text class="tm" x="34" y="70">500 QPS</text>
+
+      <rect class="box-a" x="20" y="120" width="200" height="130" rx="9"/>
+      <text class="tb" x="34" y="142">核 A（收到请求的核）</text>
+      <text class="t" x="34" y="166">① 查会话注册中心</text>
+      <text class="tm" x="34" y="184">deviceId → 实例:核B:槽 17</text>
+      <text class="t" x="34" y="206">② 组一条 32 B 定长消息</text>
+      <text class="tm" x="34" y="224">只放 (slot, gen, 指令码)</text>
+      <text class="tr" x="34" y="244">不放指针，不放 shared_ptr</text>
+
+      <rect class="box-y" x="290" y="120" width="230" height="130" rx="9"/>
+      <text class="tb" x="304" y="142">核 B 的有界 MPSC 环</text>
+      <rect class="box" x="304" y="156" width="30" height="26" rx="3"/>
+      <rect class="box" x="338" y="156" width="30" height="26" rx="3"/>
+      <rect class="box-g" x="372" y="156" width="30" height="26" rx="3"/>
+      <rect class="box-g" x="406" y="156" width="30" height="26" rx="3"/>
+      <rect class="box-g" x="440" y="156" width="30" height="26" rx="3"/>
+      <rect class="box" x="474" y="156" width="30" height="26" rx="3"/>
+      <text class="tm" x="304" y="200">容量 8192 条，写满即拒绝</text>
+      <text class="ty" x="304" y="220">满了就告诉调用方「设备忙」</text>
+      <text class="tm" x="304" y="240">——背压在这里，不在下游</text>
+
+      <rect class="box-r" x="290" y="34" width="230" height="52" rx="7"/>
+      <text class="tb" x="304" y="54">eventfd（唤醒信号）</text>
+      <text class="tr" x="304" y="74">仅在「空 → 非空」时写一次</text>
+
+      <rect class="box-g" x="590" y="120" width="220" height="130" rx="9"/>
+      <text class="tb" x="604" y="142">核 B（连接所在的核）</text>
+      <text class="t" x="604" y="166">③ epoll 被 eventfd 唤醒</text>
+      <text class="t" x="604" y="188">④ 一次排空整个队列</text>
+      <text class="tm" x="604" y="206">1000 条 = 1 次唤醒</text>
+      <text class="t" x="604" y="228">⑤ 校验 gen，写 TLS</text>
+      <text class="tg" x="604" y="246">Session 始终只被核 B 触碰</text>
+
+      <path class="ln-a" d="M90 80 V112"/><path class="ar-a" d="M85 112 l5 8 5 -8 z"/>
+      <path class="ln-a" d="M220 185 H282"/><path class="ar-a" d="M282 180 l8 5 -8 5 z"/>
+      <path class="ln-r" d="M220 160 H255 V60 H282"/><path class="ar-r" d="M282 55 l8 5 -8 5 z"/>
+      <path class="ln-r" d="M520 60 H555 V150 H582"/><path class="ar-r" d="M582 145 l8 5 -8 5 z"/>
+      <path class="ln-g" d="M520 190 H582"/><path class="ar-g" d="M582 185 l8 5 -8 5 z"/>
+      <text class="tm" x="836" y="190">→ 设备</text>
+      <path class="ln-g" d="M810 185 H830"/>
+    </svg>
+    <figcaption>图 6 · 跨核下发。三个设计点：定长 POD 消息、有界队列作为背压点、唤醒信号聚合。</figcaption>
+  </div>
+
+  <p>为什么不直接用 <code>asio::post(other_ctx, handler)</code>？它能工作，但有三个问题：队列<strong>无界</strong>（下游变慢时会一直堆到 OOM，背压彻底消失）、每次 post 都要把 handler 装进 <code>std::function</code> 从而<strong>一次堆分配</strong>、以及每次 post 都会<strong>无条件唤醒</strong>目标 io_context。第三点在 OTA 通知这种批量下发场景下最致命：给 5 万台设备发通知会产生 5 万次 <code>write(eventfd)</code> 系统调用和 5 万次线程唤醒。</p>
+
+  <p>自己写这条通道，核心是三十行：</p>
+
+<pre><code><span class="cm">// 跨核只传 POD：拿到 slot 后由目标核自己去查 Session，指针和引用计数都不过界</span>
+<span class="kw">struct</span> <span class="type">Mail</span> {
+  <span class="type">uint32_t</span> slot;      <span class="cm">// Session 在目标核槽位数组里的下标</span>
+  <span class="type">uint32_t</span> gen;       <span class="cm">// 槽位代号，防 ABA：槽被复用后 gen 不同，投递自然失效</span>
+  <span class="type">uint32_t</span> cmd_id;    <span class="cm">// 指令在下行池里的编号，payload 不进队列</span>
+  <span class="type">uint32_t</span> deadline_ms;
+};
+<span class="kw">static_assert</span>(<span class="kw">sizeof</span>(<span class="type">Mail</span>) == <span class="num">16</span> &amp;&amp; <span class="kw">alignof</span>(<span class="type">Mail</span>) == <span class="num">4</span>);
+
+<span class="kw">class</span> <span class="type">CoreMailbox</span> {
+  <span class="kw">static</span> <span class="kw">constexpr</span> <span class="type">uint32_t</span> kCap = <span class="num">8192</span>;              <span class="cm">// 2 的幂，取模变位与</span>
+  <span class="type">Mail</span> ring_[kCap];
+  <span class="kw">alignas</span>(<span class="num">64</span>) <span class="type">std</span>::<span class="type">atomic</span>&lt;<span class="type">uint32_t</span>&gt; head_{<span class="num">0</span>};        <span class="cm">// 多生产者在这里 CAS</span>
+  <span class="kw">alignas</span>(<span class="num">64</span>) <span class="type">std</span>::<span class="type">atomic</span>&lt;<span class="type">uint32_t</span>&gt; tail_{<span class="num">0</span>};        <span class="cm">// 单消费者独占，和 head 分开 line</span>
+  <span class="kw">alignas</span>(<span class="num">64</span>) <span class="type">std</span>::<span class="type">atomic</span>&lt;<span class="type">bool</span>&gt;     armed_{<span class="kw">false</span>};   <span class="cm">// 唤醒信号是否已在途</span>
+  <span class="type">int</span> evfd_;                                             <span class="cm">// 注册在目标核的 epoll 上</span>
+
+ <span class="kw">public</span>:
+  <span class="cm">// 任意核可调。返回 false = 队列满 —— 这就是背压点，调用方要如实告诉上游「设备忙」</span>
+  <span class="type">bool</span> <span class="fn">post</span>(<span class="kw">const</span> <span class="type">Mail</span>&amp; m) <span class="kw">noexcept</span> {
+    <span class="type">uint32_t</span> h = head_.<span class="fn">load</span>(<span class="type">std</span>::memory_order_relaxed);
+    <span class="kw">do</span> {
+      <span class="kw">if</span> (h - tail_.<span class="fn">load</span>(<span class="type">std</span>::memory_order_acquire) &gt;= kCap) <span class="kw">return</span> <span class="kw">false</span>;
+    } <span class="kw">while</span> (!head_.<span class="fn">compare_exchange_weak</span>(h, h + <span class="num">1</span>, <span class="type">std</span>::memory_order_relaxed));
+    ring_[h &amp; (kCap - <span class="num">1</span>)] = m;
+    <span class="type">std</span>::<span class="fn">atomic_thread_fence</span>(<span class="type">std</span>::memory_order_release);
+
+    <span class="cm">// 关键：唤醒信号聚合。只有第一个让队列从空变非空的人才写 eventfd，</span>
+    <span class="cm">// 后面 8000 条搭同一趟车 —— 5 万台设备的 OTA 通知可能只产生几十次系统调用。</span>
+    <span class="kw">if</span> (!armed_.<span class="fn">exchange</span>(<span class="kw">true</span>, <span class="type">std</span>::memory_order_acq_rel)) {
+      <span class="type">uint64_t</span> one = <span class="num">1</span>;
+      ::<span class="fn">write</span>(evfd_, &amp;one, <span class="kw">sizeof</span> one);
+    }
+    <span class="kw">return</span> <span class="kw">true</span>;
+  }
+
+  <span class="cm">// 只有目标核会调。先解除 armed 再排空，顺序反了会漏掉排空后新入队的消息。</span>
+  <span class="kw">template</span> &lt;<span class="kw">class</span> <span class="type">F</span>&gt; <span class="type">void</span> <span class="fn">drain</span>(<span class="type">F</span>&amp;&amp; fn) {
+    <span class="type">uint64_t</span> sink;
+    ::<span class="fn">read</span>(evfd_, &amp;sink, <span class="kw">sizeof</span> sink);
+    armed_.<span class="fn">store</span>(<span class="kw">false</span>, <span class="type">std</span>::memory_order_release);
+    <span class="type">uint32_t</span> t = tail_.<span class="fn">load</span>(<span class="type">std</span>::memory_order_relaxed);
+    <span class="kw">for</span> (<span class="type">uint32_t</span> h = head_.<span class="fn">load</span>(<span class="type">std</span>::memory_order_acquire); t != h; ++t)
+      <span class="fn">fn</span>(ring_[t &amp; (kCap - <span class="num">1</span>)]);
+    tail_.<span class="fn">store</span>(t, <span class="type">std</span>::memory_order_release);
+  }
+};
+</code></pre>
+
+  <div class="box danger">
+    <code>drain()</code> 里「先清 <code>armed_</code> 再读 <code>head_</code>」的顺序不能颠倒。如果先排空再清标志，那么在排空之后、清标志之前入队的消息，其生产者会看到 <code>armed_ == true</code> 而不写 eventfd，这条消息就<strong>永远躺在队列里等下一次唤醒</strong>——表现是「偶尔有指令延迟几十秒才到」，而且只在高并发下发时出现。这类唤醒丢失是自建通道最经典的 bug，无界队列（比如 <code>asio::post</code>）不会有，因为它每次都无条件唤醒。<strong>做聚合唤醒就必须付出这份小心。</strong>
+  </div>
+
+  <p>队列满的时候必须<strong>如实向上返回失败</strong>，而不是阻塞等待或者扩容。这是整条下行链路唯一的背压点：<code>post()</code> 返回 false，控制面 API 就给调用方返回「设备忙，请重试」。如果这里选择阻塞，HTTP 线程会被拖住，压力就传到了控制面的连接池上，最终以一个完全无关的形态（API 超时）暴露出来。<a href="resilience_patterns.html#s2">限流与水位</a>讲的是同一个道理：<strong>背压点要设在压力产生的地方，而不是让它往上游漂。</strong></p>
+
+  <h3 id="s4-4">4.4 SO_REUSEPORT 的两个坑</h3>
+
+  <p>方案 B 依赖 <code>SO_REUSEPORT</code> 让内核按四元组哈希把新连接分给某个核的监听 socket。它省掉了用户态的分发逻辑，但有两个必须知道的行为：</p>
+
+  <p><strong>坑一：加入或退出监听组会重排哈希桶。</strong>内核在 reuseport 组里按 <code>hash % group_size</code> 选 socket。当一个 worker 线程关闭它的监听 socket（比如线程崩溃重启、或者优雅下线时逐个关闭），<code>group_size</code> 变化，<strong>已经在 SYN 队列里、握手还没完成的连接可能被重新哈希到另一个 socket，导致这些 SYN 被丢弃</strong>，设备侧表现为连接超时。Linux 4.5+ 提供 <code>SO_ATTACH_REUSEPORT_EBPF</code> 让你自己决定分发逻辑，可以做到一致性哈希式的平滑变更；如果不想上 eBPF，工程上的做法是<strong>监听 socket 的数量在进程生命周期内固定不变</strong>——worker 线程可以退出，但它的监听 socket 交给别人接管，绝不关闭。</p>
+
+  <p><strong>坑二：分布不会自愈。</strong>内核按四元组哈希，长期看新建连接是均匀的，但它<strong>不看每个 socket 现有的连接数</strong>。§3.2 的存量倾斜在核之间同样存在：某个核上的连接恰好断得少，它就一直比别人多。核间倾斜比实例间倾斜危害小（同一台机器，内存是共享的），但它会造成尾延迟——那个核的时间轮扫描更慢、上行队列更长。做法和 §3.2 一致：把「主动断连再平衡」的粒度做到核级别，让偏离最多的核先断。</p>
+
+  <h3 id="s4-5">4.5 ADR-002 决策记录</h3>
+
+  <div class="adr">
+    <div class="adr-head"><span class="adr-id">ADR-002</span><span class="adr-title">每核一份 shared-nothing（SO_REUSEPORT），跨核下发走有界 MPSC + 聚合 eventfd</span><span class="adr-status">已接受</span></div>
+    <div class="adr-row"><div class="k">背景</div><div>上行 1.33 万 msg/s（峰值 12 万），单帧 200 B。单条消息的处理时间（几百纳秒）与一次跨核锁争用（100–200 ns）同量级，共享队列会成为主要成本。</div></div>
+    <div class="adr-row"><div class="k">候选</div><div>① 单 <code>io_context</code> 多线程共享 ② 每核一个 <code>io_context</code> + <code>SO_REUSEPORT</code> ③ 主从 Reactor</div></div>
+    <div class="adr-row"><div class="k">决策</div><div>选 ②，并吸收 ③ 的握手池思想：连接建立由独立线程池承担（ADR-003），建立后的连接由内核哈希绑定到某个核，此后<strong>只由该核触碰</strong>。跨核下发用每核一个容量 8192 的有界 MPSC 环，消息是 16 B POD（<code>slot + gen</code> 弱句柄），唤醒信号做「空→非空」聚合。</div></div>
+    <div class="adr-row"><div class="k">后果</div><div><span class="win">得到</span>：热路径零锁；Session 无需线程安全，可以是裸 POD（§5.3）并常驻本核 L2；每核工作集独立，扩核近线性。<br><span class="lose">付出</span>：多了一条自己维护的跨核通道，唤醒聚合有丢唤醒的风险（见上文顺序约束）；核间存量倾斜不自愈，需要控制面补一个再平衡；<code>SO_REUSEPORT</code> 组内 socket 数量必须固定，限制了 worker 的动态伸缩。</div></div>
+    <div class="adr-row"><div class="k">何时重议</div><div>若上行平均消息大小涨到 4 KB 以上（例如设备开始上传波形或图片），单条处理时间会远大于锁开销，方案 ① 的简单性会重新占优；若下行流量变成主导（例如加入视频回传的反向通道），跨核下发的成本会超过省掉的锁，应改回共享模型。</div></div>
+  </div>
+</section>
+
+<!-- =========================================================== -->
+<!-- S5 -->
+<!-- =========================================================== -->
+<section class="chapter" id="s5">
+  <div class="ch-head">
+    <div class="num">05</div>
+    <div class="t">
+      <h2>每连接预算：单机上限从哪来</h2>
+      <div class="sub">「能放下多少连接」这个问题，九成的答案在你自己的用户态代码里</div>
+    </div>
+  </div>
+
+  <p>先确定要算的目标是什么。稳态 40 万在线、峰值 50 万、3 个实例，那么单实例的设计上限不是 <code>50 万 ÷ 3</code>，而是由<strong>容灾场景</strong>反推：任意一个实例故障后，剩下两个要能接住全部峰值流量。</p>
+
+  <div class="box num">
+    单实例上限 ≥ 峰值 ÷ (实例数 − 1) = 50 万 ÷ 2 = <strong>25 万</strong>。留 20% 余量取 <strong>30 万</strong>。<br>
+    （这类「由 SLA 反推资源」的算术，方法与它们各自的失效条件汇总在<a href="capacity_backpressure_design.html">容量估算与背压</a>。）<br>
+    稳态时每实例只有 13–17 万连接，也就是说<strong>常态下有一半以上的容量是为「某台机器挂掉」准备的</strong>。这笔钱必须花——如果按稳态 17 万来设计，一台机器故障就会连锁把另外两台压垮。
+  </div>
+
+  <h3 id="s5-1">5.1 逐项拆解</h3>
+
+  <p>下面这张表是整章的产出：单实例 30 万连接，朴素实现和优化后各要多少内存。每一行的「手段」列都指向本章或后续小节。</p>
+
+  <table>
+    <thead><tr><th>项</th><th>朴素实现 / 连接</th><th>× 30 万</th><th>优化后 / 连接</th><th>× 30 万</th><th>手段</th></tr></thead>
+    <tbody>
+      <tr class="bad-cell"><td>用户态读缓冲（常驻）</td><td>64 KB</td><td><strong>19.2 GB</strong></td><td>0</td><td><strong>0</strong></td><td>池化，读完立即归还（§5.4）</td></tr>
+      <tr class="bad-cell"><td>OpenSSL <code>SSL</code> 对象 + 双向 BIO</td><td>~40 KB</td><td><strong>12.0 GB</strong></td><td>~6 KB</td><td>1.8 GB</td><td><code>SSL_MODE_RELEASE_BUFFERS</code> + 缩小 record</td></tr>
+      <tr><td>用户态写缓冲（常驻）</td><td>16 KB</td><td>4.8 GB</td><td>按需，摊薄 ~1.3 KB</td><td>0.4 GB</td><td>按需分配 + 水位上限（§5.4）</td></tr>
+      <tr><td>内核 <code>struct sock</code> + <code>tcp_sock</code></td><td>~2.3 KB</td><td>0.69 GB</td><td>~2.3 KB</td><td>0.69 GB</td><td class="mid-cell">动不了，这是每条 TCP 连接的固定成本</td></tr>
+      <tr><td>用户态 Session 对象</td><td>512 B</td><td>0.15 GB</td><td>64 B</td><td>0.02 GB</td><td>字段瘦身 + 槽位数组（§5.3）</td></tr>
+      <tr><td>epoll 注册项（<code>epitem</code>）</td><td>~0.2 KB</td><td>0.06 GB</td><td>~0.2 KB</td><td>0.06 GB</td><td class="mid-cell">动不了</td></tr>
+      <tr><td>conntrack 条目</td><td>~0.3 KB</td><td>0.09 GB</td><td>0</td><td>0</td><td><code>hostNetwork</code> 绕开（ADR-001）</td></tr>
+      <tr><td>MQTT QoS1 在途消息</td><td>视 inflight 配置</td><td>—</td><td>inflight=1 × 256 B</td><td>0.07 GB</td><td>限制在途窗口</td></tr>
+      <tr class="good-cell"><td><strong>合计</strong></td><td><strong>~124 KB</strong></td><td><strong>37.0 GB</strong></td><td><strong>~10 KB</strong></td><td><strong>3.0 GB</strong></td><td>12 倍</td></tr>
+    </tbody>
+  </table>
+
+  <div class="fig">
+    <svg viewBox="0 0 960 250" style="min-width:760px;height:auto" role="img" aria-label="单实例三十万连接的内存预算堆叠条形图对比：朴素实现合计三十七GB，其中用户态读缓冲十九点二GB和OpenSSL的十二GB占了绝大部分；优化后合计三点零GB，只剩下无法压缩的内核结构和缩小后的TLS上下文">
+      <text class="tb" x="20" y="26">单实例 30 万连接的内存去处</text>
+      <text class="ts" x="20" y="44">机器共 64 GB，扣掉内核、page cache 与其它进程后，可用于连接的预算约 40 GB</text>
+
+      <text class="tb" x="20" y="86">朴素实现</text>
+      <text class="tr" x="20" y="104">37.0 GB</text>
+      <rect class="box-r" x="120" y="66" width="415" height="42" rx="3"/>
+      <rect class="box-y" x="535" y="66" width="259" height="42" rx="3"/>
+      <rect class="box-p" x="794" y="66" width="104" height="42" rx="3"/>
+      <rect class="box-a" x="898" y="66" width="15" height="42" rx="2"/>
+      <rect class="box" x="913" y="66" width="7" height="42" rx="2"/>
+      <text class="t" x="200" y="92">读缓冲常驻 64 KB → 19.2 GB</text>
+      <text class="t" x="566" y="92">OpenSSL → 12.0 GB</text>
+      <text class="ts" x="800" y="92">写缓冲 4.8</text>
+
+      <text class="tb" x="20" y="168">优化后</text>
+      <text class="tg" x="20" y="186">3.0 GB</text>
+      <rect class="box-y" x="120" y="148" width="39" height="42" rx="3"/>
+      <rect class="box-p" x="159" y="148" width="9" height="42" rx="2"/>
+      <rect class="box-a" x="168" y="148" width="15" height="42" rx="2"/>
+      <rect class="box" x="183" y="148" width="3" height="42" rx="1"/>
+      <path class="ln-d" d="M196 169 H300"/>
+      <text class="tg" x="308" y="173">TLS 1.8 · 写缓冲 0.4 · 内核 0.69 · 其余 0.11</text>
+
+      <path class="ln-d" d="M120 118 V140"/>
+      <path class="ln-r" d="M960 66 V190" stroke-dasharray="0"/>
+      <text class="ts" x="120" y="222">▮ 用户态读缓冲　▮ TLS 上下文　▮ 用户态写缓冲　▮ 内核 sock　▮ Session / epoll / conntrack</text>
+      <text class="ta" x="120" y="242">省下来的 34 GB 里，有 33.6 GB 是我们自己申请的——内核只占 0.69 GB 且不可压缩</text>
+    </svg>
+    <figcaption>图 7 · 同一台机器、同一个内核，能放 30 万还是 5 万连接，差别全在这张图的前两段。</figcaption>
+  </div>
+
+  <h3 id="s5-2">5.2 37 GB → 3 GB：省下来的全在用户态</h3>
+
+  <p>这张表最值得记住的结论和大多数人的直觉相反。「单机几十万连接」这个话题下最常见的建议是调内核参数——<code>tcp_rmem</code>、<code>tcp_mem</code>、<code>somaxconn</code>——但从表里能看到，<strong>内核那两行加起来只有 0.75 GB，而且基本不可压缩</strong>。34 GB 的节省全部来自我们自己写的代码。</p>
+
+  <p>之所以会有「调内核就能省内存」的错觉，是因为一个普遍的误解：以为 <code>net.ipv4.tcp_rmem</code> 的默认值（常见 128 KB）是每条连接<strong>预留</strong>的内存。它不是。这三个数字是「最小 / 初始目标 / 上限」，内核的收发队列是<strong>按实际排队的数据量动态分配 <code>sk_buff</code></strong> 的；一条空闲连接的内核侧常驻只有 <code>struct sock</code> 和 <code>tcp_sock</code> 那约 2.3 KB。</p>
+
+  <div class="box tip">
+    这不代表 <code>tcp_rmem</code> 无关紧要——它决定的是<strong>上限</strong>，也就是「一条连接最坏能吃掉多少内核内存」。在 IoT 场景下，单帧 200 B、设备也不会一次灌几十 KB，所以把 <code>SO_RCVBUF</code> 显式设成 8 KB 是合理的：它不省常态内存，但把<strong>异常场景的爆炸半径</strong>从 30 万 × 128 KB（38 GB，足以打死整台机器）压到 30 万 × 8 KB（2.4 GB）。<strong>调内核缓冲不是为了省内存，是为了封住最坏情况。</strong>
+  </div>
+
+  <p>反过来，用户态那 33.6 GB 是怎么一步步申请出来的？两行代码而已：一个 <code>char rbuf[64 * 1024]</code> 放在 Session 里，一个默认配置的 <code>SSL_new()</code>。</p>
+
+  <p>OpenSSL 这一笔尤其容易漏。TLS record 的最大长度是 16 KB，所以 OpenSSL 默认给每个 <code>SSL</code> 对象准备了一个 16 KB 的读缓冲和一个 16 KB 的写缓冲，加上会话状态、密钥材料、握手残留，实测常驻在 35–45 KB。对 40 万连接来说这就是 12 GB——比业务数据本身大四个数量级（业务侧其实只有 200 B/帧）。两个对策：</p>
+
+  <ul>
+    <li><code>SSL_CTX_set_mode(ctx, SSL_MODE_RELEASE_BUFFERS)</code>：让 OpenSSL 在 record 处理完、连接空闲时<strong>释放这两个大缓冲</strong>，下次用到再分配。IoT 场景下连接 99.9% 的时间是空闲的，这个 mode 几乎白拿。</li>
+    <li><code>SSL_CTX_set_max_send_fragment(ctx, 2048)</code>：把发送 record 上限从 16 KB 降到 2 KB。下行指令本来就只有几百字节，用不到大 record；代价是发大块数据（比如 OTA，如果它真的走网关）时会分成更多 record，多几次加密调用——而 OTA 已经被 ADR-004 挪出网关了，所以这个代价是零。</li>
+  </ul>
+
+  <div class="box arch">
+    注意最后那半句：<code>max_send_fragment</code> 之所以能放心调小，是因为<strong>另一个决策（OTA 走旁路）已经把大块下行从网关拿走了</strong>。这是架构决策之间典型的相互支撑——单看任何一个决策都会觉得「太激进」，放在一起才成立。ADR 的价值就在这里：它把「这个决策依赖哪些其它决策」写下来，否则半年后有人为了图省事把 OTA 挪回网关，这个 2 KB 的 record 就会变成一个查不出来的性能问题。
+  </div>
+
+  <h3 id="s5-3">5.3 Session 对象从 512 字节压到一条 cache line</h3>
+
+  <p>Session 只占 0.15 GB，看着不值得优化。但它的大小影响的不是内存总量，而是<strong>缓存命中率</strong>——每收到一帧都要读一次 Session，30 万个对象里 1 万个属于当前核。先看朴素写法：</p>
+
+  <div class="vs">
+    <div>
+      <h4 class="lose">❌ 朴素写法 · sizeof ≈ 512，另有 5 次堆分配</h4>
+<pre><code><span class="kw">struct</span> <span class="type">Session</span> {
+  <span class="type">std</span>::<span class="type">shared_ptr</span>&lt;tcp::<span class="type">socket</span>&gt; sock;   <span class="cm">// 16 B + 控制块 24 B（堆）</span>
+  <span class="type">std</span>::<span class="type">string</span>  device_id;              <span class="cm">// 32 B + 堆（IMEI 15 字符也超 SSO）</span>
+  <span class="type">std</span>::<span class="type">string</span>  client_id;              <span class="cm">// 32 B + 堆</span>
+  <span class="type">std</span>::<span class="type">chrono</span>::steady_clock::time_point last_seen;   <span class="cm">// 8 B</span>
+  <span class="type">std</span>::<span class="type">function</span>&lt;<span class="type">void</span>(<span class="type">Msg</span>)&gt; on_message;  <span class="cm">// 32 B + 堆（捕获超 SBO）</span>
+  <span class="type">std</span>::<span class="type">vector</span>&lt;<span class="type">Msg</span>&gt;   inflight;          <span class="cm">// 24 B + 堆</span>
+  asio::<span class="type">steady_timer</span> keepalive;         <span class="cm">// ~64 B，还要进 io_context 的定时器堆</span>
+  <span class="type">char</span> rbuf[<span class="num">64</span> * <span class="num">1024</span>];                 <span class="cm">// ← 真正的凶手，见 §5.4</span>
+  <span class="type">SSL</span>* ssl;
+  <span class="type">bool</span> authed; <span class="type">bool</span> draining; <span class="type">bool</span> clean_session;  <span class="cm">// 3 个 bool 占 3 B + padding</span>
+};
+<span class="cm">// 每个 Session 摸一次要碰 8 条 cache line + 追 5 个指针到堆上的随机位置</span>
+</code></pre>
+    </div>
+    <div>
+      <h4 class="win">✅ 瘦身后 · sizeof == 64，零堆分配</h4>
+<pre><code><span class="kw">struct</span> <span class="kw">alignas</span>(<span class="num">64</span>) <span class="type">Session</span> {          <span class="cm">// 正好一条 cache line</span>
+  <span class="type">int</span>      fd;              <span class="cm">// 4  裸 fd，生命周期由本核独占（§6.1）</span>
+  <span class="type">uint32_t</span> gen;             <span class="cm">// 4  槽位代号，跨核弱句柄防 ABA</span>
+  <span class="type">uint32_t</span> last_seen_ms;    <span class="cm">// 4  相对进程启动的毫秒，49 天回绕，够用</span>
+  <span class="type">uint16_t</span> wheel_slot;      <span class="cm">// 2  在时间轮里的槽号（§6.2）</span>
+  <span class="type">uint16_t</span> keepalive_sec;   <span class="cm">// 2  设备 CONNECT 里协商的心跳周期</span>
+  <span class="type">uint8_t</span>  state;           <span class="cm">// 1  位段：CONNECTED|AUTHED|DRAINING|CLEAN</span>
+  <span class="type">uint8_t</span>  qos1_inflight;    <span class="cm">// 1  在途 QoS1 条数，窗口限 1</span>
+  <span class="type">uint8_t</span>  device_id[<span class="num">24</span>];   <span class="cm">// 24 定长，IMEI / 序列号都塞得下，无堆</span>
+  <span class="type">WBuf</span>*   wbuf;            <span class="cm">// 8  按需，空闲时为 nullptr（§5.4）</span>
+  <span class="type">SSL</span>*    ssl;             <span class="cm">// 8</span>
+  <span class="type">uint32_t</span> tenant_id;       <span class="cm">// 4</span>
+  <span class="type">uint32_t</span> _pad;            <span class="cm">// 4</span>
+};
+<span class="kw">static_assert</span>(<span class="kw">sizeof</span>(<span class="type">Session</span>) == <span class="num">64</span>);
+
+<span class="cm">// 每核一个连续槽位数组，Session 不单独 new。索引即身份，跨核只传 (slot, gen)。</span>
+<span class="type">std</span>::<span class="type">vector</span>&lt;<span class="type">Session</span>&gt; slots_;      <span class="cm">// reserve(12000)，一次分配到底</span>
+</code></pre>
+    </div>
+  </div>
+
+  <p>三处改动值得单独解释，因为它们各自解决一个具体问题，而不是「为了省字节」：</p>
+
+  <table>
+    <thead><tr><th>改动</th><th>省下的字节</th><th>真正的目的</th></tr></thead>
+    <tbody>
+      <tr><td><code>std::string</code> → <code>uint8_t[24]</code></td><td>2 次堆分配 + 40 B</td><td>消除追指针：设备 ID 在鉴权和打点时都要读，放进对象体内就和其它字段同在一条 line</td></tr>
+      <tr><td>时间戳用 <code>uint32_t</code> 毫秒偏移</td><td>4 B</td><td>时间轮只需要毫秒精度和 49 天的量程，<code>time_point</code> 的 64 位纳秒是浪费；顺便让整个结构能放进 64 B</td></tr>
+      <tr><td>去掉 <code>shared_ptr</code> 与 <code>steady_timer</code></td><td>~80 B + 1 次堆分配</td><td class="good-cell">这两个是 §6.1 和 §6.2 的主题——它们的真实代价是跨核原子操作和 O(log n) 堆操作，字节数只是副产品</td></tr>
+    </tbody>
+  </table>
+
+  <div class="box num">
+    单核 1 万个 Session × 64 B = <strong>640 KB</strong>，落在单核 L2（通常 1–2 MB）的量级里。也就是说稳态下<strong>整个核的会话工作集可以常驻它自己的 L2</strong>，收一帧消息只需要一次 cache line 读取。朴素写法的 512 B × 8 条 line 加上 5 次指针追踪，同样的工作要产生 6–10 次可能的 cache miss——每次约 80–100 ns，在 200 ns 的处理预算里就是全部。
+  </div>
+
+  <h3 id="s5-4">5.4 收发缓冲不能常驻</h3>
+
+  <p>那个 <code>char rbuf[64 * 1024]</code> 是 19.2 GB 的来源。它之所以会被写出来，是因为它让代码变简单：读缓冲和连接同生命周期，不用管释放。但仔细想一下这块内存的使用率：<strong>连接 99.9% 的时间在等下一帧，缓冲区里什么都没有。</strong>30 万条连接同时有数据在读缓冲里的概率接近零。</p>
+
+  <p>正确的做法是把读缓冲从「per-connection 常驻」改成「per-core 池化，借用即还」：</p>
+
+  <div class="grid-2">
+    <div class="panel good">
+      <h4>读缓冲 · 借用即还</h4>
+      <p>每个核持有一小组 16 KB 的缓冲块（比如 64 块 = 1 MB）。<code>epoll</code> 报告可读时从池里借一块，<code>read()</code> → 解析 → 处理完立刻归还。因为是 shared-nothing，这个池<strong>不需要任何同步</strong>，借还就是一次数组下标操作。</p>
+      <p>池子要多大？由「同一轮 epoll 事件里最多有多少连接可读」决定，而不是连接总数。<code>epoll_wait</code> 的 <code>maxevents</code> 设成 512，池子给 512 块就绝对够，实际远用不满。</p>
+    </div>
+    <div class="panel mid">
+      <h4>写缓冲 · 按需 + 水位</h4>
+      <p>下行只有 500 QPS，稳态下有在途数据的连接不到 200 条。所以写缓冲应该是 <code>WBuf* wbuf</code> 这个指针——为 <code>nullptr</code> 时说明这条连接没有待发数据，一个字节都不占。</p>
+      <p>真正要设计的是<strong>水位</strong>：单连接待发数据超过 256 KB 说明设备收不动了（弱网或已经半死）。此时不能无限缓存，必须选一个策略：丢弃低优先级下行、或者直接断开这条连接让它重连（§7.1 的半开连接就是这么被发现的）。</p>
+    </div>
+  </div>
+
+  <div class="box danger">
+    「写缓冲无上限」是长连接服务里最常见的 OOM 原因，而且它的表现极具欺骗性：内存曲线平时非常平稳，某天某个区域网络劣化，几万台设备同时收不动，写缓冲在几十秒内涨到几十 GB，进程被 OOM Killer 杀掉。然后这几十万连接重连、可能又落到同一批实例上、又收不动——<strong>一次网络劣化变成了一次雪崩</strong>。水位和丢弃策略不是优化项，它是这条链路的保险丝。
+  </div>
+
+  <h3 id="s5-5">5.5 内核与 socket 参数清单</h3>
+
+  <p>按 §5.2 的结论，这些参数的作用主要是<strong>解除人为上限、封住最坏情况</strong>，而不是省内存。整理成「参数 → 目的 → 怎么定这个值」，因为照抄一串数字最容易在别人的机型上出问题：</p>
+
+  <table>
+    <thead><tr><th>参数</th><th>目的</th><th>怎么定</th></tr></thead>
+    <tbody>
+      <tr><td><code>fs.nr_open</code> / <code>LimitNOFILE</code></td><td>解除 fd 上限</td><td>≥ 连接数 × 1.2 + 富余。30 万连接给 40 万。<strong>注意 systemd 的 <code>LimitNOFILE</code> 和 <code>ulimit -n</code> 是两套</strong>，容器里还要看 Pod 的 securityContext</td></tr>
+      <tr><td><code>net.core.somaxconn</code></td><td>accept 队列长度</td><td>由重连洪峰的<strong>瞬时到达率 × 握手池排空延迟</strong>决定，不是越大越好：队列太长意味着设备在队列里等到超时，然后重试——排不完的队不如尽早拒绝（§7.3）</td></tr>
+      <tr><td><code>net.ipv4.tcp_max_syn_backlog</code></td><td>半连接队列</td><td>同上。配合 <code>tcp_syncookies=1</code> 兜底</td></tr>
+      <tr><td><code>SO_RCVBUF</code> / <code>SO_SNDBUF</code>（显式 setsockopt）</td><td>封住单连接最坏内存</td><td>按最大单帧大小定，IoT 取 8 KB。<strong>显式设置会关闭内核的自动调整</strong>，所以不要在带宽敏感的连接上这么干</td></tr>
+      <tr><td><code>net.ipv4.tcp_mem</code></td><td>全局 TCP 内存上限（页数）</td><td>兜底熔断，设成「可用内存的 1/4」。触到上限时内核会开始丢包并在 <code>/proc/net/sockstat</code> 里体现，必须监控</td></tr>
+      <tr><td><code>net.netfilter.nf_conntrack_max</code></td><td>—</td><td class="good-cell">ADR-001 走 <code>hostNetwork</code> 后这条路径不产生 conntrack，无需调整；但<strong>比值仍要监控</strong>（§3.3）</td></tr>
+      <tr><td><code>net.ipv4.ip_local_port_range</code></td><td>本机作为客户端的端口数</td><td>网关是服务端，用不到；但它<strong>连 Kafka</strong> 时是客户端——这条限制的是网关到下游的连接数，容易被忽略</td></tr>
+      <tr><td><code>net.core.netdev_max_backlog</code> + RSS/RPS</td><td>软中断分发</td><td>按 §4.2 的每核绑定来配：让网卡队列的中断亲和性和 worker 的 CPU 绑定<strong>对齐</strong>，否则收包在核 A、处理在核 B，白付一次跨核</td></tr>
+    </tbody>
+  </table>
+
+  <div class="box tip">
+    最后一行常被忽略但收益很大：<code>SO_REUSEPORT</code> 让内核按四元组把<strong>连接</strong>分给某个核，而网卡 RSS 按四元组把<strong>中断</strong>分给某个核——两者用的哈希不一样，所以默认情况下「收包的核」和「处理的核」大概率不同，每一帧都要跨一次核。对 200 B 的小包来说这笔开销占比很高。Linux 4.5+ 可以用 <code>SO_ATTACH_REUSEPORT_CBPF</code> 让连接的分配跟着 <code>SO_INCOMING_CPU</code> 走，把两者对齐。这也是 <a href="../communication/high_performance.html#s6">高性能网络编程 · 批处理与 NUMA</a>那一章讨论的同一类问题。
+  </div>
+</section>
+
+<!-- =========================================================== -->
+<!-- S6 -->
+<!-- =========================================================== -->
+<section class="chapter" id="s6">
+  <div class="ch-head">
+    <div class="num">06</div>
+    <div class="t">
+      <h2>C++ 侧真正会咬人的四个点</h2>
+      <div class="sub">四个都是「代码完全正确、在一千连接下完美工作」的东西</div>
+    </div>
+  </div>
+
+  <p>这一章的四个问题有一个共同特征：它们在开发和测试环境（几千连接）下<strong>完全看不出来</strong>，压测到十万量级才会出现，而且症状都是「CPU 高但看不出高在哪」。这也是为什么它们必须在架构阶段就被决定，而不是留给后期优化。</p>
+
+  <h3 id="s6-1">6.1 shared_ptr 的引用计数会在核之间弹跳</h3>
+
+  <p><code>std::shared_ptr&lt;Session&gt;</code> 是管理连接生命周期的标准答案：异步回调里持有它，就不用担心回调执行时对象已经被销毁。问题在于它的引用计数是一个<strong>原子变量</strong>，而原子变量的成本完全取决于<strong>有几个核在碰它</strong>。</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 920 230" style="min-width:720px;height:auto" role="img" aria-label="引用计数跨核弹跳示意图：左侧共享模型下四个核轮流对同一个引用计数做原子加减，包含该计数的cache line在核之间反复迁移每次约一百纳秒；右侧shared-nothing模型下Session由单核独占引用计数退化为普通整数或直接消失">
+      <rect class="box-r" x="20" y="30" width="420" height="180" rx="10"/>
+      <text class="tb" x="36" y="52">共享模型：计数在 4 个核之间弹跳</text>
+      <rect class="box-a" x="40" y="66" width="80" height="34" rx="5"/><text class="ts" x="66" y="88">核 1</text>
+      <rect class="box-a" x="140" y="66" width="80" height="34" rx="5"/><text class="ts" x="166" y="88">核 2</text>
+      <rect class="box-a" x="240" y="66" width="80" height="34" rx="5"/><text class="ts" x="266" y="88">核 3</text>
+      <rect class="box-a" x="340" y="66" width="80" height="34" rx="5"/><text class="ts" x="366" y="88">核 4</text>
+      <rect class="box-y" x="140" y="140" width="180" height="40" rx="5"/>
+      <text class="t" x="154" y="165">control block · refcount</text>
+      <path class="ln-r" d="M80 100 C 90 122, 180 128, 200 138"/>
+      <path class="ln-r" d="M180 100 V138"/>
+      <path class="ln-r" d="M280 100 C 275 122, 250 128, 240 138"/>
+      <path class="ln-r" d="M380 100 C 370 122, 300 130, 288 138"/>
+      <text class="tr" x="36" y="200">每次 copy / 析构 = 一次 RFO，line 迁移 ~100 ns</text>
+
+      <rect class="box-g" x="480" y="30" width="420" height="180" rx="10"/>
+      <text class="tb" x="496" y="52">shared-nothing：连接归单核独占</text>
+      <rect class="box-a" x="500" y="66" width="80" height="34" rx="5"/><text class="ts" x="526" y="88">核 1</text>
+      <rect class="box" x="600" y="66" width="80" height="34" rx="5"/><text class="ts" x="626" y="88">核 2</text>
+      <rect class="box" x="700" y="66" width="80" height="34" rx="5"/><text class="ts" x="726" y="88">核 3</text>
+      <rect class="box" x="800" y="66" width="80" height="34" rx="5"/><text class="ts" x="826" y="88">核 4</text>
+      <rect class="box-g" x="500" y="140" width="180" height="40" rx="5"/>
+      <text class="t" x="514" y="158">slots_[17] · Session 64 B</text>
+      <text class="tm" x="514" y="174">无引用计数</text>
+      <path class="ln-g" d="M540 100 V138"/>
+      <text class="ln-d" x="0" y="0"></text>
+      <path class="ln-d" d="M640 100 C 640 120, 700 130, 700 150 H690"/>
+      <text class="tm" x="706" y="154">其它核只能 post(slot, gen)</text>
+      <text class="tg" x="496" y="200">生命周期由所在核独占，热路径上没有原子操作</text>
+    </svg>
+    <figcaption>图 8 · 同一个 <code>shared_ptr</code>，在共享模型里是跨核争抢点，在 shared-nothing 里可以整个消失。</figcaption>
+  </div>
+
+  <p>值得强调的是：<strong>问题不是「原子操作慢」。</strong>一个只被单核访问的原子自增，cache line 一直在本核的 L1 里，成本约几个周期，可以忽略。真正贵的是<strong>争用</strong>——多个核轮流写同一条 line，每次都要把这条 line 从别人的 L1 里抢过来（RFO），跨 socket 时更要走内存或 UPI。<code>shared_ptr</code> 的复制在异步代码里极其频繁（每次 <code>async_read</code> 捕获一次、每次 <code>post</code> 一次），于是这条 line 就在核之间持续弹跳。</p>
+
+  <p>§4.2 选了 shared-nothing，所以有一个比「优化 <code>shared_ptr</code>」更彻底的答案：<strong>让它从热路径上消失</strong>。Session 住在本核的槽位数组里（§5.3），生命周期由本核独占管理，回调里传的是裸引用；其它核想碰这条连接只能投递 <code>(slot, gen)</code> 弱句柄（§4.3）。这套设计一次解决了四个问题：</p>
+
+  <ul>
+    <li><strong>引用计数争抢</strong>：不存在引用计数了。</li>
+    <li><strong>跨核生命周期竞争</strong>：只有一个核能销毁 Session，不需要任何同步。</li>
+    <li><strong>ABA</strong>：槽位被复用后 <code>gen</code> 递增，迟到的投递会因为 <code>gen</code> 不匹配被丢掉——这正是 <code>weak_ptr</code> 想解决的问题，但代价是 8 字节整数比较而不是原子加载。</li>
+    <li><strong>缓存局部性</strong>：槽位数组连续，遍历（比如时间轮扫描）是顺序访问，硬件预取器能派上用场。</li>
+  </ul>
+
+  <div class="box arch">
+    这是本文里最典型的一次「架构决策消除了一类实现难题」。如果线程模型选了共享（§4.1 方案 A），那么 <code>shared_ptr</code>、strand、weak_ptr 提升、生命周期竞态就全都是必修课，每一项都要小心处理；一旦选了 shared-nothing，<strong>它们中的大部分不是被优化了，而是被定义掉了</strong>。这也解释了为什么 §4 那一章要花那么多篇幅在选型上——选错模型，后面每一章都会变难。
+  </div>
+
+  <p>要付的代价也要说清楚：裸指针 + 槽位索引意味着<strong>编译器不再替你检查生命周期</strong>。工程上必须靠约定顶住：跨核消息里永远只有 <code>(slot, gen)</code>、任何函数签名里出现 <code>Session&amp;</code> 就意味着「调用者保证在本核执行」、并且用一个 debug 模式下的断言检查当前线程 ID 是否等于该核的 owner。<strong>这类「靠约定而非类型系统保证」的设计，必须在 ADR 里写明，并且在代码里放断言，否则半年后一定会有人从另一个线程直接调它。</strong></p>
+
+  <h3 id="s6-2">6.2 三十万个定时器</h3>
+
+  <p>MQTT 的 keepalive 要求：如果在 1.5 倍 keepalive 周期内没收到设备的任何报文，服务端应当关闭连接。朴素实现是每个 Session 一个 <code>asio::steady_timer</code>，收到数据就 <code>cancel()</code> 再 <code>expires_after()</code> 重新武装。</p>
+
+  <div class="box num">
+    <code>io_context</code> 的定时器队列是一个堆，插入和取消都是 O(log n)。n = 30 万时 log₂n ≈ 18 次比较，每次比较可能是一次 cache miss（堆节点分散在堆内存里）。<br>
+    而「重置心跳」的频率不是每 45 秒一次，是<strong>每收到一帧就一次</strong>：1.33 万 msg/s × (1 次 cancel + 1 次 rearm) = <strong>2.7 万次 O(log 30万) 堆操作/秒</strong>，峰值时 24 万次/秒。再加上每次 <code>async_wait</code> 一个 handler 的堆分配（§6.3）。
+  </div>
+
+  <p>时间轮把这件事变成 O(1)。它的可行性来自一个业务事实：<strong>MQTT keepalive 的判定本来就允许 1.5 倍宽限，所以 ±1 秒的精度损失完全无害。</strong>用精度换复杂度，前提是业务允许——这是架构判断，不是优化技巧。</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 940 260" style="min-width:740px;height:auto" role="img" aria-label="分层时间轮结构图：128个槽位每槽代表一秒覆盖128秒窗口，每槽挂一条侵入式双向链表；收到数据时把Session从旧槽摘下挂到当前槽加超时秒数的新槽是两次指针写；每秒只扫描一个槽，链表里剩下的连接就是超时的">
+      <text class="tb" x="20" y="24">128 槽 × 1 s = 128 s 覆盖窗口（&gt; 读超时 R = 75 s）</text>
+      <g>
+        <rect class="box" x="20" y="44" width="52" height="44" rx="4"/><text class="tm" x="34" y="70">t+0</text>
+        <rect class="box-y" x="76" y="44" width="52" height="44" rx="4"/><text class="tm" x="90" y="70">t+1</text>
+        <rect class="box" x="132" y="44" width="52" height="44" rx="4"/><text class="tm" x="146" y="70">t+2</text>
+        <text class="t" x="196" y="72">…</text>
+        <rect class="box-g" x="230" y="44" width="52" height="44" rx="4"/><text class="tm" x="240" y="70">t+75</text>
+        <text class="t" x="294" y="72">…</text>
+        <rect class="box" x="326" y="44" width="52" height="44" rx="4"/><text class="tm" x="334" y="70">t+127</text>
+      </g>
+      <text class="ty" x="76" y="106">↑ 正在扫描的槽</text>
+      <text class="tg" x="222" y="106">↑ 新收到数据的连接挂到这里</text>
+
+      <path class="ln-g" d="M256 88 V124"/>
+      <rect class="box-a" x="196" y="130" width="56" height="26" rx="3"/><text class="tm" x="206" y="147">sess 17</text>
+      <rect class="box-a" x="258" y="130" width="56" height="26" rx="3"/><text class="tm" x="268" y="147">sess 41</text>
+      <rect class="box-a" x="320" y="130" width="56" height="26" rx="3"/><text class="tm" x="330" y="147">sess 88</text>
+      <path class="ln" d="M252 143 H258 M314 143 H320"/>
+      <text class="ts" x="196" y="172">侵入式双向链表：prev/next 就在 Session 里，无额外分配</text>
+
+      <rect class="box-r" x="470" y="40" width="450" height="86" rx="8"/>
+      <text class="tb" x="486" y="62">朴素：30 万个 steady_timer</text>
+      <text class="t" x="486" y="82">重置一次 = cancel + rearm = 2 × O(log 30万)</text>
+      <text class="tr" x="486" y="102">2.7 万次/s 稳态，峰值 24 万次/s，每次伴随堆分配</text>
+      <text class="tm" x="486" y="118">还要 30 万 × 64 B 的 timer 对象</text>
+
+      <rect class="box-g" x="470" y="140" width="450" height="86" rx="8"/>
+      <text class="tb" x="486" y="162">时间轮：两次指针写</text>
+      <text class="t" x="486" y="182">重置一次 = 从旧槽摘下 + 挂到新槽 = O(1)</text>
+      <text class="tg" x="486" y="202">每秒只扫一个槽 ≈ 30万/128 ≈ 2344 条连接</text>
+      <text class="tm" x="486" y="218">代价：精度 ±1 s（MQTT 允许 1.5× 宽限，无害）</text>
+    </svg>
+    <figcaption>图 9 · 时间轮。左边是结构，右边是它替换掉的东西。</figcaption>
+  </div>
+
+<pre><code><span class="kw">class</span> <span class="type">TimerWheel</span> {
+  <span class="kw">static</span> <span class="kw">constexpr</span> <span class="type">uint32_t</span> kSlots = <span class="num">128</span>;   <span class="cm">// 2 的幂 → 取模变位与；128 s &gt; R = 75 s</span>
+  <span class="type">IntrusiveList</span> slots_[kSlots];             <span class="cm">// 链表节点就是 Session 自己，零分配</span>
+  <span class="type">uint32_t</span> now_slot_ = <span class="num">0</span>;
+
+ <span class="kw">public</span>:
+  <span class="cm">// 收到任何一个字节都会调它：把 Session 从旧槽摘下，挂到 (now + timeout) 槽。</span>
+  <span class="type">void</span> <span class="fn">touch</span>(<span class="type">Session</span>&amp; s) <span class="kw">noexcept</span> {
+    slots_[s.wheel_slot].<span class="fn">erase</span>(s);                                  <span class="cm">// O(1)</span>
+    s.wheel_slot = (now_slot_ + s.keepalive_sec * <span class="num">3</span> / <span class="num">2</span>) &amp; (kSlots - <span class="num">1</span>);
+    slots_[s.wheel_slot].<span class="fn">push_back</span>(s);                              <span class="cm">// O(1)</span>
+  }
+
+  <span class="cm">// 每秒调一次：只扫一个槽，链表里剩下的就是超时的。</span>
+  <span class="kw">template</span> &lt;<span class="kw">class</span> <span class="type">F</span>&gt; <span class="type">void</span> <span class="fn">tick</span>(<span class="type">F</span>&amp;&amp; on_timeout) {
+    now_slot_ = (now_slot_ + <span class="num">1</span>) &amp; (kSlots - <span class="num">1</span>);
+    <span class="cm">// 先把整条链摘下来再逐个回调：on_timeout 会关连接，从而 erase 自己，</span>
+    <span class="cm">// 边遍历边删会踩到已失效的 next 指针。</span>
+    <span class="type">IntrusiveList</span> expired;
+    expired.<span class="fn">splice</span>(slots_[now_slot_]);
+    <span class="kw">while</span> (<span class="type">Session</span>* s = expired.<span class="fn">pop_front</span>()) <span class="fn">on_timeout</span>(*s);
+  }
+};
+</code></pre>
+
+  <div class="box danger">
+    <code>keepalive_sec * 3 / 2</code> 有可能超过 128：MQTT 允许 keepalive 最大 65535 秒。设备如果协商了一个很长的 keepalive，槽号回绕后会被<strong>提前判超时</strong>。两种处理：在 CONNECT 时就把 keepalive 钳制到协议允许的范围内（服务端可以在 CONNACK 里回一个更小的值，MQTT 5.0 的 <code>Server Keep Alive</code> 属性专门干这个），或者做成<strong>分层</strong>时间轮（秒轮 + 分钟轮）。前者更简单，而且对 IoT 来说钳制 keepalive 本来就是必要的——§7.2 会说明为什么心跳周期不能由设备单方面决定。
+  </div>
+
+  <h3 id="s6-3">6.3 handler 热路径上的堆分配</h3>
+
+  <p>异步框架的每一个 <code>async_read(sock, buf, handler)</code> 都要把 handler 存到某个地方，等 IO 完成后再取出来执行。Asio 通过 <code>associated_allocator</code> 拿分配器，默认走 <code>operator new</code>。于是每一帧消息至少一次 malloc + 一次 free；如果代码里还用了 <code>std::function</code> 包装回调，捕获超出小对象优化容量时又是一次。</p>
+
+  <p>1.33 万 msg/s 下这是 2.7 万次/s 的分配，峰值 24 万次/s。<code>tcmalloc</code>/<code>jemalloc</code> 的小对象分配在 thread cache 命中时只有几十纳秒，听起来不多，但要注意它落在<strong>200 ns 的处理预算</strong>里，而且 malloc 的元数据访问会污染刚才好不容易攒下的 cache 局部性。三档对策，按侵入性排序：</p>
+
+  <table>
+    <thead><tr><th>档</th><th>做法</th><th>效果</th><th>代价</th><th>什么时候够用</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>一</td>
+        <td>给每个 Session 一小块栈式 arena，通过 <code>asio::bind_allocator</code> 挂上去。Asio 保证同一操作链上同时存活的 op 极少（1–2 个），所以几百字节的 arena 就够，用完即退栈</td>
+        <td class="good-cell">消掉几乎全部分配</td>
+        <td>要理解 Asio 的分配器契约；arena 溢出要能回退到 <code>new</code></td>
+        <td class="good-cell">绝大多数场景，包括本文这个</td>
+      </tr>
+      <tr>
+        <td>二</td>
+        <td>per-core 的 <code>std::pmr::unsynchronized_pool_resource</code>。因为 shared-nothing，可以用非同步版本——这是选对线程模型的又一次红利</td>
+        <td>同上，且写法更标准</td>
+        <td>pmr 的间接调用无法内联；池的回收策略要自己调</td>
+        <td>团队更熟悉 pmr 时</td>
+      </tr>
+      <tr>
+        <td>三</td>
+        <td>不用框架的 async 接口，自己写 <code>epoll</code> ET 循环 + 显式状态机，CRTP 静态派发，零间接调用零分配</td>
+        <td class="good-cell">理论最优</td>
+        <td class="bad-cell">IO 框架变成自己维护的东西：定时器、取消、错误传播、TLS 状态机全部自己写</td>
+        <td>10 万 QPS 以上且延迟极敏感（Envoy、brpc 走的这条路）</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="box tip">
+    不要一上来就选第三档。它确实最快，但它把「网络框架」从依赖变成了你的资产——所有 bug 都是你的 bug。判据很简单：<strong>先用第一档做出来、压测、看 <code>perf</code> 里 malloc 相关符号的占比</strong>。如果不到 3%，第三档能带来的收益还不如把时间花在 §7 的弱网处理上。<a href="../system/async_networking_guide.html#s3">Asio 的执行模型</a>那一章有第一档的完整写法。
+  </div>
+
+  <h3 id="s6-4">6.4 伪共享：一个计数器吃掉一成吞吐</h3>
+
+  <p>最后一个是最隐蔽的，因为它的代码看起来完全无害：</p>
+
+  <p>为了做监控，我们需要统计每秒处理了多少条消息。自然的写法是一个全局 <code>std::atomic&lt;uint64_t&gt; g_msg_count</code>，每处理一帧自增一次。在 32 个核上，这意味着<strong>同一条 cache line 每秒被 32 个核抢 1.33 万次</strong>（峰值 12 万次）。每次抢夺都是一次 RFO，跨 NUMA socket 时更贵。实测中这样一个计数器吃掉 10% 以上吞吐是常事，而且 <code>perf top</code> 只会告诉你「时间花在那条 <code>lock add</code> 指令上」，不会告诉你原因是争用。</p>
+
+  <p>对策是 per-core 计数，采集时求和。真正需要注意的是三个细节：</p>
+
+  <ul>
+    <li><strong>对齐的对象是数组元素，不是数组。</strong><code>uint64_t counters[64]</code> 会把 8 个计数器塞进一条 line，问题一点没解决。要写 <code>struct alignas(64) Counter { uint64_t v; }; Counter counters[64];</code>。</li>
+    <li><strong>数组的邻居也会伪共享。</strong>如果这个数组是某个结构体的成员，它前后的成员可能和第一个/最后一个计数器落在同一条 line 上。放成独立的 <code>static</code>，或者前后各加一条 line 的 padding。</li>
+    <li><strong>line 大小不一定是 64。</strong><code>std::hardware_destructive_interference_size</code> 在 x86-64 上通常给 64，但 Intel 的 adjacent-cache-line prefetch 会成对拉取，有效粒度接近 128；部分 ARM 平台的 line 本身就是 128。跨平台代码保守取 <strong>128</strong>。</li>
+  </ul>
+
+  <p>发现这类问题只有一个可靠工具：<code>perf c2c record / report</code>，它直接报告哪条 cache line 上发生了多少次跨核的 HITM（从别的核的缓存里命中），并且能定位到具体的变量和源码行。<strong>凡是多核服务，上线前跑一次 <code>perf c2c</code> 应该和跑一次压测一样是标准动作</strong>——它经常能找出几个谁都没想到的共享变量，比如一个用来打日志限速的时间戳。</p>
+
+  <table>
+    <thead><tr><th>坑</th><th>症状</th><th>怎么定位</th><th>对策</th></tr></thead>
+    <tbody>
+      <tr><td><code>shared_ptr</code> 引用计数争抢</td><td>CPU 高，<code>perf</code> 指向 <code>lock addq</code> 或析构函数</td><td><code>perf c2c</code> 看控制块所在 line 的 HITM</td><td>shared-nothing + <code>(slot, gen)</code> 弱句柄</td></tr>
+      <tr><td>30 万个定时器</td><td>CPU 里有可观比例在定时器堆的比较与 <code>rb_insert</code></td><td><code>perf record</code> 火焰图里 <code>timer_queue</code> 相关帧异常粗</td><td>时间轮，精度换 O(1)</td></tr>
+      <tr><td>handler 堆分配</td><td><code>malloc</code>/<code>free</code> 在火焰图里占 3% 以上</td><td>同上；或用 <code>ltrace</code>/eBPF 统计分配速率</td><td>per-Session arena 或 per-core pmr</td></tr>
+      <tr><td>伪共享</td><td class="bad-cell">加核不增吞吐甚至倒退；单核压测反而更快</td><td class="good-cell"><code>perf c2c</code>——这是唯一能直接指认它的工具</td><td>per-core 数据 + <code>alignas(128)</code></td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- =========================================================== -->
+<!-- S7 -->
+<!-- =========================================================== -->
+<section class="chapter" id="s7">
+  <div class="ch-head">
+    <div class="num">07</div>
+    <div class="t">
+      <h2>弱网：IoT 网关与其它网关最大的分歧点</h2>
+      <div class="sub">这一章处理的问题，TCP 自己解决不了，服务端一个人也解决不了</div>
+    </div>
+  </div>
+
+  <h3 id="s7-1">7.1 三种死连接，第三种最贵</h3>
+
+  <p>「连接断了」有三种形态，它们对服务端的成本完全不同：</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 960 300" style="min-width:760px;height:auto" role="img" aria-label="三种死连接的时序对比图：正常关闭时设备发FIN服务端立即回收；进程崩溃时操作系统发RST服务端也能立即感知；而设备断电或信号丢失时没有任何报文到达服务端，连接对象一直存在直到应用层读超时才被回收，这段时间里它占着全部资源">
+      <text class="tb" x="20" y="24">设备侧事件</text>
+      <text class="tb" x="330" y="24">链路上发生了什么</text>
+      <text class="tb" x="660" y="24">服务端何时回收</text>
+      <path class="ln" d="M300 34 V286 M640 34 V286"/>
+
+      <rect class="box-g" x="20" y="48" width="260" height="66" rx="7"/>
+      <text class="tb" x="34" y="70">① 正常关闭</text>
+      <text class="ts" x="34" y="88">设备主动 DISCONNECT</text>
+      <text class="tm" x="34" y="105">固件升级前、维护窗口</text>
+      <text class="t" x="318" y="72">MQTT DISCONNECT → FIN</text>
+      <path class="ln-g" d="M318 84 H620"/><path class="ar-g" d="M620 79 l8 5 -8 5 z"/>
+      <text class="tg" x="660" y="76">立即</text>
+      <text class="tm" x="660" y="94">epoll 报 EPOLLIN + read 返回 0</text>
+
+      <rect class="box-y" x="20" y="128" width="260" height="66" rx="7"/>
+      <text class="tb" x="34" y="150">② 进程 / 系统崩溃</text>
+      <text class="ts" x="34" y="168">设备重启、看门狗复位</text>
+      <text class="tm" x="34" y="185">操作系统还活着</text>
+      <text class="t" x="318" y="152">内核代发 RST</text>
+      <path class="ln-y" d="M318 164 H620"/><path class="ar-a" d="M620 159 l8 5 -8 5 z"/>
+      <text class="ty" x="660" y="156">立即</text>
+      <text class="tm" x="660" y="174">epoll 报 EPOLLERR / ECONNRESET</text>
+
+      <rect class="box-r" x="20" y="208" width="260" height="76" rx="7"/>
+      <text class="tb" x="34" y="230">③ 断电 / 信号丢失</text>
+      <text class="tr" x="34" y="248">半开连接（half-open）</text>
+      <text class="tm" x="34" y="265">现场断电、进隧道、基站故障</text>
+      <text class="tm" x="34" y="280">IoT 里这一类占绝大多数</text>
+      <text class="tr" x="318" y="232">什么都没有发生</text>
+      <text class="tm" x="318" y="250">没有 FIN，没有 RST，</text>
+      <text class="tm" x="318" y="266">对端已经不存在了</text>
+      <path class="ln-d" d="M318 278 H620"/>
+      <text class="tr" x="660" y="232">要等应用层读超时</text>
+      <text class="tm" x="660" y="250">这段时间它占着：fd、</text>
+      <text class="tm" x="660" y="266">Session、TLS 上下文、</text>
+      <text class="tm" x="660" y="282">以及「设备在线」这个错觉</text>
+    </svg>
+    <figcaption>图 10 · 第三种是 IoT 的常态，也是唯一需要架构设计的一种。</figcaption>
+  </div>
+
+  <p>第三种为什么贵，有两笔账。<strong>资源账</strong>：日均断连 6 次/设备里绝大多数是这一类，如果回收窗口是 75 秒，那么任意时刻都有 <code>40万 × 6 / 86400 × 75 ≈ 2083</code> 条半开连接在占资源——这个数字不大，可以忍。<strong>正确性账</strong>要严重得多：在被回收之前，网关认为这台设备在线，控制面下发的指令会被投给它，<code>SSL_write</code> 成功返回（数据只是进了内核发送缓冲），业务侧收到「下发成功」。设备再也不会响应，这条指令就静默丢失了。</p>
+
+  <p>为什么 TCP keepalive 不够用？它<strong>能</strong>探测半开连接，但默认参数是 <code>tcp_keepalive_time = 7200</code> 秒（2 小时）才发第一个探针。而运营商 NAT 的空闲连接回收通常是 5 分钟——也就是说在 TCP 探针发出之前，NAT 早就把映射删了，探针发出去也回不来。把 <code>tcp_keepalive_time</code> 调小到 60 秒是可行的，但它的粒度是 socket 选项、和 MQTT 的 keepalive 语义脱节、而且探针包不携带任何业务信息。<strong>结论是应用层心跳必须有，TCP keepalive 只作为兜底</strong>（防止应用层逻辑本身出 bug 导致连接永久泄漏）。</p>
+
+  <div class="box danger">
+    绝对不能用「写超时」判活。<code>SSL_write</code> 或 <code>send</code> 返回成功只说明数据进了内核发送缓冲；在弱网下，数据可能在缓冲里排队几十秒才发出，或者永远发不出去（对端不存在，重传到上限才报错，那要几分钟）。<strong>唯一可靠的活性证据是「收到了对端的字节」</strong>——所以判定逻辑挂在读路径上（§6.2 的 <code>touch()</code> 由任何一次成功读取触发），而不是写路径上。
+  </div>
+
+  <h3 id="s7-2">7.2 四个超时必须满足的不等式</h3>
+
+  <p>这套系统里有四个超时值，分别由四个不同的角色控制，而它们之间有强耦合。任何一个配错，症状都是「设备莫名掉线」或者「设备明明死了还显示在线」，而且很难归因——因为你只能看到自己那一个参数。</p>
+
+  <div class="ineq">
+    设 <b>K</b> = 设备 MQTT keepalive 周期（设备提出，服务端可钳制）<br>
+    　 <b>R</b> = 网关读超时（我们定，即 §6.2 的时间轮窗口）<br>
+    　 <b>N</b> = 运营商 NAT 空闲映射回收时间（<span class="why">不可控，只能测量</span>）<br>
+    　 <b>L</b> = 中间有状态设备的空闲超时（LB / 防火墙，<span class="why">ADR-001 已尽量绕开</span>）<br><br>
+    ① <b>K &lt; N</b><span class="why">否则 NAT 先删映射，设备以为连接还在，实际已经不通</span><br>
+    ② <b>K &lt; L</b><span class="why">同理。这条是选 L4 DSR 而非 L7 代理的又一个理由——DSR 无状态，没有 L</span><br>
+    ③ <b>R ≥ 1.5 K + J</b><span class="why">J 是弱网抖动余量。允许丢一个心跳，否则一次丢包就误杀一台正常设备</span><br>
+    ④ <b>R 不出现在下行判活路径上</b><span class="why">见下文。否则下行 P99 会被 R 直接绑定</span>
+  </div>
+
+  <p>代入实测数据求解。测量 <b>N</b> 的办法是拿几十台真机跑不同的静默时长看连接何时失效——4G 常见 5 分钟，NB-IoT 的一些省份网络低到 60–90 秒。取最保守的 <strong>N = 90 s</strong>：</p>
+
+  <table>
+    <thead><tr><th>值</th><th>取值</th><th>依据</th></tr></thead>
+    <tbody>
+      <tr><td><b>K</b> 设备心跳</td><td class="good-cell">45 s</td><td>由 ① 得 K &lt; 90，留一半余量。<strong>服务端在 CONNACK 里用 MQTT 5.0 的 <code>Server Keep Alive</code> 强制钳制到 45 s</strong>——不能让设备自己决定，因为老固件里常写着 300 s</td></tr>
+      <tr><td><b>R</b> 网关读超时</td><td class="good-cell">75 s</td><td>由 ③ 得 R ≥ 1.5 × 45 + J = 67.5 + 7.5 = 75</td></tr>
+      <tr><td>时间轮覆盖窗口</td><td>128 s</td><td>必须 &gt; R，且是 2 的幂（§6.2）</td></tr>
+      <tr><td><b>L</b></td><td class="good-cell">不存在</td><td>ADR-001 选了无状态 DSR，路径上没有会超时的中间设备。<strong>这是那个决策一个没被预料到的红利</strong></td></tr>
+    </tbody>
+  </table>
+
+  <p>第 ④ 条需要单独说，因为它是把两个 SLA 解耦的关键。如果下行流程是「查会话 → 找到连接 → 写过去 → 等 ACK 超时才知道设备已死」，那么一台半开连接的设备会让指令等到 R = 75 s 才失败——远超「下行 P99 &lt; 2 s」的要求。做法是把活性判定从下行关键路径上摘掉：</p>
+
+  <ul>
+    <li>控制面下发时<strong>先读设备影子</strong>里的 <code>last_seen</code>。这个值由网关每隔几秒批量同步，精度够。超过一个心跳周期没更新就直接按「离线」处理，走离线指令队列（§10.2），不去尝试实时下发。</li>
+    <li>确实认为在线的，下发后设 <strong>1.5 s 的指令层 ACK 超时</strong>（MQTT QoS1 的 PUBACK 或业务层回执）。超时就立刻标记为可疑并转入离线队列，同时通知网关<strong>提前判死</strong>这条连接——这条通知能把半开连接的回收从 75 s 提前到 1.5 s。</li>
+  </ul>
+
+  <div class="box arch">
+    这就是「用一个宽松的判据保证不误杀，再用一个严格的判据保证不误信」。<strong>R = 75 s 负责「不冤枉正常设备」，指令层 1.5 s 超时负责「不欺骗业务方」</strong>，两者服务不同的质量属性（可靠性 vs 时延），所以必须是两个不同的数字。把它们合成一个，无论取哪个值都会牺牲另一边——这是超时设计里最常见的错误。
+  </div>
+
+  <h3 id="s7-3">7.3 重连风暴：服务端一个人解决不了</h3>
+
+  <p>一个区域的基站故障恢复，10 万台设备同时发现网络可用。如果固件写的是「断线就立即重连，失败就再立即重连」，这 10 万台会在几秒内全部涌向网关：</p>
+
+  <div class="box num">
+    10 万台在 5 s 内重连 = <strong>2 万次握手/s</strong>。按 §8.1 的 1.1 ms CPU/握手，需要 <strong>22 个核</strong>纯做握手——超过单实例 32 核的三分之二，上行处理被挤到几乎停摆。<br>
+    更糟的是正反馈：握手排队 → 设备等到超时 → 断开重试 → <strong>队列里那次握手的 CPU 白花了</strong>，因为对端已经走了 → 有效吞吐进一步下降 → 更多设备超时。这是一个典型的<strong>重试放大导致的正反馈</strong>，它不会自己停下来。
+  </div>
+
+  <p>服务端能做的三件事都是必要的，但都不够：</p>
+
+  <div class="grid-3">
+    <div class="panel mid">
+      <h4>accept 限速</h4>
+      <p>握手线程池的入口限速到集群能承受的速率（§8.2）。超出的连接<strong>尽早拒绝</strong>而不是排队——排不完的队等于用 CPU 去服务已经放弃的客户。</p>
+    </div>
+    <div class="panel mid">
+      <h4>会话复用优先</h4>
+      <p>重连的设备如果能命中会话票据，握手成本从 1.1 ms 降到约 0.05 ms（§8.3），20 倍差距，把 22 个核变成 1 个核。</p>
+    </div>
+    <div class="panel mid">
+      <h4>队列宁短勿长</h4>
+      <p><code>somaxconn</code> 不要设成很大的值。队列长度应该约等于「握手池 1–2 秒能排空的量」，剩下的靠 SYN 丢弃让设备退避。</p>
+    </div>
+  </div>
+
+  <p>但这三件事都改变不了一个事实：<strong>到达率是设备决定的。</strong>如果 10 万台设备坚持每 1 秒重试一次，服务端无论怎么限速，收到的 SYN 都是 10 万/s，光是处理和丢弃这些 SYN 就会吃掉可观的软中断 CPU。真正的解法必须在设备侧：</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 940 260" style="min-width:740px;height:auto" role="img" aria-label="重连风暴的到达率曲线对比：无退避时十万台设备在五秒内产生两万次每秒的握手峰值远超服务端能力线并因超时重试形成持续高原；固定退避把峰值推后但仍然同相形成周期性尖峰；指数退避加随机抖动把同一批设备摊到十分钟内到达率始终低于服务端能力">
+      <path class="grid" d="M70 50 H900 M70 100 H900 M70 150 H900 M70 200 H900"/>
+      <path class="ln" d="M70 40 V210 H900"/>
+      <text class="tm" x="14" y="54">2 万/s</text>
+      <text class="tm" x="14" y="154">5 千/s</text>
+      <text class="tm" x="40" y="212">0</text>
+      <text class="tm" x="70" y="230">0</text>
+      <text class="tm" x="330" y="230">1 min</text>
+      <text class="tm" x="620" y="230">5 min</text>
+      <text class="tm" x="860" y="230">10 min</text>
+      <text class="ts" x="820" y="248">恢复后经过的时间</text>
+      <text class="tb" x="70" y="28">握手到达率</text>
+
+      <path class="ln-g" d="M70 150 H900" stroke-dasharray="6 4"/>
+      <text class="tg" x="760" y="144">服务端能力 5000 次/s</text>
+
+      <path class="ln-r" d="M70 210 C 76 210, 82 60, 96 50 C 130 46, 200 78, 300 92 C 460 104, 700 108, 900 110"/>
+      <text class="tr" x="104" y="44">无退避：峰值 2 万/s，之后被重试撑成高原</text>
+
+      <path class="ln-y" d="M70 210 C 74 210, 78 118, 88 112 C 100 108, 108 200, 122 206 C 200 206, 200 130, 214 124 C 228 120, 236 202, 248 206 C 330 206, 330 152, 344 148 C 358 146, 366 204, 378 207 C 500 207, 520 176, 534 174 C 548 173, 556 206, 568 208 C 900 208, 900 208, 900 208"/>
+      <text class="ty" x="392" y="130">固定退避：峰值降了，但设备仍然同相，形成周期性尖峰</text>
+
+      <path class="ln-a" d="M70 210 C 140 200, 200 176, 300 172 C 450 170, 620 178, 900 190"/>
+      <text class="ta" x="150" y="166">指数退避 + 随机抖动：摊平到 10 min，始终低于能力线</text>
+    </svg>
+    <figcaption>图 11 · 同一批 10 万台设备，三种客户端重连策略下服务端看到的到达率。中间那条曲线说明<strong>只加退避不加抖动是不够的</strong>。</figcaption>
+  </div>
+
+  <p>中间那条曲线是个容易踩的坑：加了指数退避但没加抖动，所有设备的退避序列完全一样（1 s、2 s、4 s、8 s……），于是它们<strong>永远保持同相</strong>，只是把一个大尖峰变成了一串小尖峰，总量一点没变。必须加抖动：<code>sleep = min(cap, base × 2^n) × random(0.5, 1.5)</code>。上限 <code>cap</code> 也要有，通常 5–10 分钟，否则设备退避到几小时，故障恢复后要等很久才回来。</p>
+
+  <div class="box arch">
+    这一节最重要的结论和技术无关：<strong>设备固件的重连策略是这个系统的架构决策，即使那段代码不在你的仓库里。</strong>它必须写进 ADR、写进设备接入规范、并且在设备准入测试里被验证（模拟断网 10 分钟，抓包看重连间隔序列是否带抖动）。<br><br>
+    如果现网已经有一批不带抖动的老固件——这几乎必然发生——那么服务端唯一能做的就是<strong>让恢复本身变慢</strong>：故障恢复后不要一次性放开全部 accept，而是按坡道逐步提升限速阈值。这样虽然设备侧仍然同相涌来，但被拒绝的那些会自然错开重试时刻，几轮之后相位就散了。<strong>用服务端的准入节奏，替设备补上它缺失的抖动。</strong>
+  </div>
+</section>
+
+<!-- =========================================================== -->
+<!-- S8 -->
+<!-- =========================================================== -->
+<section class="chapter" id="s8">
+  <div class="ch-head">
+    <div class="num">08</div>
+    <div class="t">
+      <h2>mTLS：连接建立的瓶颈是 CPU</h2>
+      <div class="sub">40 万条连接的稳态成本可以忽略，但建立它们的成本不能</div>
+    </div>
+  </div>
+
+  <h3 id="s8-1">8.1 握手成本预算</h3>
+
+  <p>一机一证的双向 TLS，服务端在一次完整握手里要做的公钥运算是：验证客户端证书链（1–2 次 ECDSA 验签）、用自己的私钥签名（1 次 ECDSA 签名）、以及一次 ECDHE 密钥协商。用 P-256 曲线，在现代 x86 单核上的量级是：</p>
+
+  <table>
+    <thead><tr><th>操作</th><th>单核成本</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td>ECDSA P-256 验签 × 2</td><td>~150 μs</td><td>验签比签名贵 3 倍，而 mTLS 比单向 TLS 多的就是这一项</td></tr>
+      <tr><td>ECDSA P-256 签名 × 1</td><td>~25 μs</td><td>服务端证书</td></tr>
+      <tr><td>ECDHE P-256</td><td>~50 μs</td><td>密钥协商</td></tr>
+      <tr><td>证书链解析、RNG、状态机、record 加解密</td><td>~800 μs</td><td class="mid-cell">往往被低估：ASN.1 解析和几次内存分配加起来比密码学运算还多</td></tr>
+      <tr class="bad-cell"><td><strong>合计</strong></td><td><strong>~1.1 ms</strong></td><td><strong>单核约 900 次握手/s</strong>。务必在自己的机型上用 <code>openssl speed</code> 加真实压测重新标定</td></tr>
+    </tbody>
+  </table>
+
+  <p>把这个单价乘上四个场景的到达率，就得到了整章的结论：</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 940 280" style="min-width:740px;height:auto" role="img" aria-label="四种场景下的握手CPU预算对比条形图：稳态重连每秒二十八次只需零点零三核；单区域故障恢复每秒一千六百六十七次需要一点九核；实例重启三十万连接六十秒内重连每秒五千次需要五点六核；无退避的重连风暴每秒两万次需要二十二核远超单实例三十二核的可用预算">
+      <text class="tb" x="20" y="24">握手 CPU 预算（单实例 32 核）</text>
+      <path class="ln" d="M240 36 V250"/>
+      <path class="ln-r" d="M240 36 V250" stroke-dasharray="0"/>
+      <path class="ln-d" d="M780 36 V250"/>
+      <text class="tr" x="700" y="30">32 核（全部）</text>
+
+      <text class="t" x="20" y="66">稳态重连 28 /s</text>
+      <rect class="box-g" x="240" y="52" width="4" height="22" rx="2"/>
+      <text class="tg" x="256" y="68">0.03 核 · 可忽略</text>
+
+      <text class="t" x="20" y="112">单区故障恢复 1667 /s</text>
+      <rect class="box-g" x="240" y="98" width="32" height="22" rx="2"/>
+      <text class="tg" x="284" y="114">1.9 核 · 从上行里挤一点即可</text>
+
+      <text class="t" x="20" y="158">实例重启 5000 /s</text>
+      <rect class="box-y" x="240" y="144" width="95" height="22" rx="2"/>
+      <text class="ty" x="348" y="160">5.6 核 · 17 % —— 必须隔离，否则上行抖动</text>
+
+      <text class="t" x="20" y="204">无退避风暴 2 万 /s</text>
+      <rect class="box-r" x="240" y="190" width="374" height="22" rx="2"/>
+      <text class="tr" x="628" y="206">22 核 · 68 % —— 上行停摆，正反馈雪崩</text>
+
+      <text class="t" x="20" y="244">同上但命中会话票据</text>
+      <rect class="box-g" x="240" y="230" width="17" height="22" rx="2"/>
+      <text class="tg" x="270" y="246">1.0 核 · 会话复用把它变回可控（§8.3）</text>
+    </svg>
+    <figcaption>图 12 · 同一个系统，握手成本在四个场景里跨了三个数量级。最后一行说明为什么会话复用不是优化项而是必需品。</figcaption>
+  </div>
+
+  <h3 id="s8-2">8.2 握手必须有独立的执行资源</h3>
+
+  <p>从图 12 能看出，握手的 CPU 需求在正常和异常之间差 700 倍。如果握手和上行处理跑在同一批线程上（也就是 §4 方案 B 的朴素实现——新连接落在哪个核就在哪个核握手），那么一次重连洪峰会直接偷走上行的 CPU：<strong>正常设备的遥测开始延迟、PUBACK 变慢、攒批超时触发、上行吞吐下降</strong>——一个只该影响「正在重连的设备」的事件，变成了影响全部 40 万台设备的故障。</p>
+
+  <p>这就是 <a href="resilience_patterns.html#s5">隔离与爆炸半径</a>那一章的舱壁模式，落在这个系统上的具体形态是：</p>
+
+  <ul>
+    <li><strong>独立的握手线程池</strong>，固定 4–6 个线程并 pin 在专门的核上。它的容量决定了集群的握手上限（4 线程 × 900 = 3600 次/s），也就是 §11.3 和 §3.2 里那个「速率」的来源。</li>
+    <li><strong>入口有界排队 + 尽早拒绝</strong>。队列长度按「1–2 秒能排空」定；满了就直接关闭连接，不进队列。被拒的设备会退避重试（§7.3），这比让它在队列里等到超时要好——超时的握手是纯浪费。</li>
+    <li><strong>握手完成后把 fd 交给某个 worker 核</strong>。这一步和 <code>SO_REUSEPORT</code> 的内核分流并不冲突：内核决定 fd 落在哪个监听 socket，握手池负责把它推进 TLS 就绪状态，然后由该 socket 所属的核接管。也可以反过来，由握手池按连接数主动选核——这就吸收了 §4.1 方案 C 的优点（分配可控）。</li>
+  </ul>
+
+  <div class="box tip">
+    「握手池的线程数」和「worker 核数」是两个独立的容量维度，不要混在一个配置项里。前者按<strong>最坏重连速率</strong>定，后者按<strong>稳态消息率</strong>定。把它们绑在一起（比如「每个核既做 worker 又做握手」）会导致：为了扛住重连洪峰而超配核数，绝大部分时间这些核在空转。
+  </div>
+
+  <h3 id="s8-3">8.3 会话复用与它的前向安全折损</h3>
+
+  <p>TLS 1.3 的会话恢复（PSK / session ticket）跳过全部非对称运算，握手成本从 1.1 ms 降到约 0.05 ms——图 12 最后一行那 20 倍。对一个「设备日均断连 6 次、恢复时会有洪峰」的系统来说，这不是优化，它是让 §7.3 那个场景从「雪崩」变成「可控」的唯一手段。</p>
+
+  <p>但会话票据有一个跟架构直接冲突的性质：<strong>票据是用某个密钥加密的，而这个密钥默认是每个进程自己生成的。</strong>于是设备重连时如果被负载均衡分到了另一个实例，票据解不开，只能退回完整握手——而重连洪峰恰恰是最需要复用、又最可能换实例的时候（因为 §3.2 的再平衡、或者因为原实例正在重启）。命中率会低到没有意义。</p>
+
+  <table>
+    <thead><tr><th>方案</th><th>洪峰时命中率</th><th>安全影响</th><th>运维成本</th></tr></thead>
+    <tbody>
+      <tr><td>各实例独立票据密钥（默认）</td><td class="bad-cell">约 1/实例数，且实例重启后归零</td><td class="good-cell">无</td><td>零</td></tr>
+      <tr><td class="good-cell">集群共享票据密钥，定期轮换</td><td class="good-cell">接近 100%</td><td class="mid-cell">密钥泄露会危及该轮换周期内的所有会话（前向安全折损）</td><td>需要密钥分发与轮换机制</td></tr>
+      <tr><td>会话缓存放共享存储（Redis）</td><td>高</td><td class="good-cell">无折损</td><td class="bad-cell">每次握手一次网络往返，在洪峰时把压力转移给 Redis</td></tr>
+      <tr><td>设备侧固定连同一实例（DNS / 配置下发）</td><td>高</td><td class="good-cell">无折损</td><td class="bad-cell">丧失负载均衡与故障转移能力，和 ADR-001 冲突</td></tr>
+    </tbody>
+  </table>
+
+  <p>选共享密钥，但要把「折损」量化到可接受：<strong>票据密钥每 6 小时轮换、同时保留前一轮的密钥用于解密</strong>（新会话只用当前密钥加密）。这样任一密钥的暴露窗口最多 12 小时，而不是无限期。密钥通过控制面下发到各实例内存，不落盘。</p>
+
+  <div class="box arch">
+    这个决策值得记录的地方在于它<strong>明确地拿安全性换了可用性</strong>，而且给出了折损的边界（12 小时）而不是含糊地说「影响不大」。这类决策最怕的不是选错，而是<strong>没人知道它被做过</strong>——三年后一次安全审计发现「票据密钥居然是共享的」，如果没有 ADR，唯一的结论会是「这是个漏洞」，然后有人把它改回去，接着某次故障恢复时集群被握手打死。<a href="architecture_methodology.html#ch7">ADR 那一章</a>讲的「记录被否决的候选和它们的代价」，这里是一个非常具体的用例。
+  </div>
+
+  <h3 id="s8-4">8.4 五百万张证书怎么吊销</h3>
+
+  <p>一机一证意味着 500 万张证书，而其中总会有需要作废的：设备被盗、私钥泄露、设备退役。标准手段在这个规模下都不太好用：</p>
+
+  <div class="grid-3">
+    <div class="panel bad">
+      <h4>CRL 不可行</h4>
+      <p>吊销列表要包含所有被吊销证书的序列号。假设 1% 被吊销就是 5 万条，几 MB 的文件，网关每次更新都要重新解析全表，而且它<strong>永远在增长</strong>。</p>
+    </div>
+    <div class="panel bad">
+      <h4>OCSP 引入外部依赖</h4>
+      <p>每次握手向 CA 查一次，等于在连接建立的关键路径上加了一次网络往返和一个可能挂掉的外部依赖。洪峰时 5000 次/s 的 OCSP 查询会把 CA 打死。</p>
+    </div>
+    <div class="panel good">
+      <h4>短有效期 + 本地黑名单</h4>
+      <p>证书有效期设成 7–30 天，由设备在到期前自动续签（用当前证书换新证书）。吊销就是<strong>不给它续签</strong>——最长 30 天自动失效，不需要任何吊销机制。</p>
+    </div>
+  </div>
+
+  <p>短有效期把「吊销」这个难题转化成了「续签」这个例行问题，代价是必须建一套可靠的自动续签链路（而且它自己不能依赖设备在线——离线太久的设备证书会过期，需要一条带外的恢复路径，通常是一个有效期很长的「注册凭证」）。对于需要<strong>立即</strong>生效的吊销（设备被盗），再加一层网关本地的布隆过滤器：控制面把吊销的设备 ID 推送给所有实例，握手完成后查一次布隆过滤器，命中就断开。布隆过滤器 5 万条目在 1% 误判率下只要约 60 KB，可以常驻内存；误判的代价是一台正常设备被拒绝一次，用一个精确的小集合做二次确认即可。</p>
+
+  <h3 id="s8-5">8.5 ADR-003 决策记录</h3>
+
+  <div class="adr">
+    <div class="adr-head"><span class="adr-id">ADR-003</span><span class="adr-title">握手用独立线程池并限速；会话票据密钥集群共享、6 小时轮换；证书用短有效期替代吊销列表</span><span class="adr-status">已接受</span></div>
+    <div class="adr-row"><div class="k">背景</div><div>mTLS 完整握手约 1.1 ms CPU。稳态重连 28 次/s 可忽略，但实例重启会产生 5000 次/s（5.6 核），无退避的重连风暴可达 2 万次/s（22 核）。同时 500 万张设备证书需要可行的吊销方案。</div></div>
+    <div class="adr-row"><div class="k">决策</div><div>① 握手在 4–6 个专用线程上执行并 pin 核，入口有界排队、满即拒绝；② 会话票据密钥由控制面统一下发，6 h 轮换、保留前一轮用于解密，不落盘；③ 证书有效期 30 天 + 自动续签，吊销 = 停止续签；需要立即生效时用控制面推送的布隆过滤器黑名单。</div></div>
+    <div class="adr-row"><div class="k">后果</div><div><span class="win">得到</span>：重连洪峰不再抢占上行 CPU（爆炸半径限定在「正在重连的设备」）；洪峰时握手成本降低 20 倍；吊销问题被转化为续签问题，无需维护增长无界的 CRL。<br><span class="lose">付出</span>：票据密钥共享带来最长 12 小时的前向安全折损窗口（已量化并接受）；必须建设并维护一条自动续签链路，以及一条设备长期离线后的带外恢复路径；握手池的线程数成为一个需要独立容量规划的参数。</div></div>
+    <div class="adr-row"><div class="k">依赖</div><div>本决策的③依赖设备固件支持自动续签。存量设备若不支持，需保留一套长有效期证书并单独维护 CRL——这是<strong>已知的技术债</strong>，随固件升级逐步收敛（§12.3）。</div></div>
+  </div>
+</section>
+
+<!-- =========================================================== -->
+<!-- S9 -->
+<!-- =========================================================== -->
+<section class="chapter" id="s9">
+  <div class="ch-head">
+    <div class="num">09</div>
+    <div class="t">
+      <h2>上行：整点同相与 QoS1 的语义成本</h2>
+      <div class="sub">峰值是自己造出来的，所以也能用架构手段抹平</div>
+    </div>
+  </div>
+
+  <h3 id="s9-1">9.1 为什么峰值是稳态的九倍</h3>
+
+  <p>按 §1.2，稳态上行是 1.33 万 msg/s，但生产上观测到的峰值是 12 万 msg/s。带宽和 CPU 都得按峰值配，也就是说<strong>九分之八的容量是为峰值买的、平时空转</strong>。所以第一个问题应该是：这个峰值是哪来的？</p>
+
+  <p>答案在固件里。设备的上报循环是这样的：</p>
+
+<pre><code><span class="cm">// 设备固件（不在我们的仓库里，但它是这个系统的架构组成部分）</span>
+<span class="kw">while</span> (<span class="num">1</span>) {
+  <span class="fn">read_meters</span>(&amp;frame);
+  <span class="fn">mqtt_publish</span>(<span class="str">"telemetry/..."</span>, &amp;frame, <span class="num">200</span>);
+  <span class="fn">sleep</span>(<span class="num">30</span>);            <span class="cm">// ← 上报相位由「上电时刻」决定，此后永久锁定</span>
+}
+</code></pre>
+
+  <p>相位由上电时刻决定，而设备的上电时刻<strong>不是随机的</strong>：一个小区停电恢复，几千台设备在同一秒上电；一批新设备现场安装，装完统一通电；一次大规模固件升级，重启时刻集中。每一次这样的事件都会造出一个「相位簇」，而这个簇<strong>永远不会自己散开</strong>——<code>sleep(30)</code> 是精确的，几千台设备会一起在第 0 秒、第 30 秒、第 60 秒上报，年复一年。</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 940 250" style="min-width:740px;height:auto" role="img" aria-label="上行到达率的相位分布对比图：同相时几个相位簇让到达率在三十秒周期内出现十二万每秒的尖峰而其余时间接近于零；下发随机相位偏移后同一批设备的上报被摊到整个三十秒窗口，到达率变成平坦的一点三三万每秒">
+      <path class="grid" d="M60 46 H900 M60 86 H900 M60 126 H900"/>
+      <path class="ln" d="M60 36 V136 H900"/>
+      <text class="tm" x="6" y="50">12 万/s</text>
+      <text class="tm" x="18" y="130">0</text>
+      <text class="tb" x="60" y="26">同相：几个相位簇</text>
+      <path class="ln-r" d="M60 136 L110 136 L114 44 L120 44 L124 136 L250 136 L254 62 L260 62 L264 136 L400 136 L404 44 L410 44 L414 136 L540 136 L544 62 L550 62 L554 136 L690 136 L694 44 L700 44 L704 136 L830 136 L834 62 L840 62 L844 136 L900 136"/>
+      <text class="tr" x="130" y="42">↑ 峰值是稳态的 9 倍，容量得按它买</text>
+      <text class="tm" x="106" y="152">t=0</text>
+      <text class="tm" x="246" y="152">+30 s</text>
+      <text class="tm" x="396" y="152">+60 s</text>
+      <text class="tm" x="686" y="152">+120 s</text>
+
+      <path class="grid" d="M60 196 H900 M60 216 H900"/>
+      <path class="ln" d="M60 176 V226 H900"/>
+      <text class="tm" x="6" y="200">1.33 万/s</text>
+      <text class="tb" x="60" y="170">下发随机相位偏移后</text>
+      <path class="ln-g" d="M60 226 C 120 214, 200 198, 300 196 C 500 194, 700 197, 900 196"/>
+      <text class="tg" x="420" y="190">平坦：同一批设备，同样的总量，峰值消失</text>
+      <text class="tm" x="620" y="218">容量按 1.33 万/s 配即可，省下 8/9</text>
+    </svg>
+    <figcaption>图 13 · 峰值不是需求，是固件相位的副作用。识别出这一点，容量需求直接降到九分之一。</figcaption>
+  </div>
+
+  <p>解法是<strong>服务端下发随机相位偏移</strong>：设备连上来时，网关在 CONNACK 里（MQTT 5.0 用 User Property，3.1.1 用一条专门的配置 topic）带一个 0–29 秒的随机值，设备把它存进 flash，之后的上报循环变成 <code>sleep(30)</code> 加上首次的 <code>sleep(offset)</code>。因为偏移是持久化的，重启后相位保持散开。</p>
+
+  <div class="box arch">
+    这件事最值得学的是<strong>为什么用架构手段而不是改固件</strong>。改固件当然更"正确"（把 <code>sleep(30)</code> 改成 <code>sleep(30 + rand()%30)</code>），但固件升级要经过灰度、现场覆盖率爬升、还有一批设备永远升不上来——按经验，让一批现网设备的固件覆盖率到 90% 要按季度计。而下发相位偏移<strong>当天生效、对老固件同样有效</strong>（只要它支持配置 topic）。<br><br>
+    这就是架构师和工程师视角的一个典型分别：<strong>面对一个「本该由别人修」的缺陷，架构师要评估的是「等他修」和「我在自己这一侧抵消掉」哪个总成本更低</strong>，而不是判断谁的责任。这里九分之八的容量差，答案很明显。
+  </div>
+
+  <h3 id="s9-2">9.2 PUBACK 的时机决定了架构</h3>
+
+  <p>MQTT QoS1 承诺「至少一次」：服务端回了 PUBACK，设备就丢弃本地副本；没回，设备会重传。所以<strong>「什么时候回 PUBACK」等价于「什么时候我们承诺不会丢这条数据」</strong>——这是一个纯粹的架构决策，不是实现细节。三个候选：</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 960 300" style="min-width:780px;height:auto" role="img" aria-label="三种PUBACK时机的对比图：方案一收到就回ACK吞吐最高但进程崩溃会丢数据；方案二等时序库落库后再回ACK不丢但上行吞吐被存储写入速度绑死；方案三等Kafka acks等于all返回后回ACK既不丢又保持网关无状态只增加五到十五毫秒延迟">
+      <rect class="box-r" x="16" y="34" width="300" height="246" rx="10"/>
+      <text class="tb" x="30" y="56">① 收到即 ACK</text>
+      <rect class="box" x="30" y="70" width="272" height="26" rx="4"/><text class="t" x="42" y="88">设备 → 网关：PUBLISH</text>
+      <rect class="box-g" x="30" y="102" width="272" height="26" rx="4"/><text class="t" x="42" y="120">网关 → 设备：PUBACK（立刻）</text>
+      <rect class="box" x="30" y="134" width="272" height="26" rx="4"/><text class="t" x="42" y="152">网关 → Kafka：异步，无等待</text>
+      <text class="tg" x="30" y="182">✅ 上行延迟最低，吞吐最高</text>
+      <text class="tr" x="30" y="204">❌ 进程被 OOM Kill / 机器断电</text>
+      <text class="tr" x="30" y="222">　 → 内存里的那批数据无声消失</text>
+      <text class="tm" x="30" y="246">适用：遥测（下一帧 30 s 后就来）</text>
+      <text class="tm" x="30" y="264">不适用：告警、计费</text>
+
+      <rect class="box-y" x="332" y="34" width="300" height="246" rx="10"/>
+      <text class="tb" x="346" y="56">② 落时序库后 ACK</text>
+      <rect class="box" x="346" y="70" width="272" height="26" rx="4"/><text class="t" x="358" y="88">设备 → 网关：PUBLISH</text>
+      <rect class="box" x="346" y="102" width="272" height="26" rx="4"/><text class="t" x="358" y="120">网关 → 时序库：写入并等确认</text>
+      <rect class="box-y" x="346" y="134" width="272" height="26" rx="4"/><text class="t" x="358" y="152">网关 → 设备：PUBACK</text>
+      <text class="tg" x="346" y="182">✅ 语义最强，落库即承诺</text>
+      <text class="tr" x="346" y="204">❌ 上行吞吐 = 存储写入吞吐</text>
+      <text class="tr" x="346" y="222">❌ 存储抖动直接传导到 40 万设备</text>
+      <text class="tm" x="346" y="246">存储升级、compaction、扩容</text>
+      <text class="tm" x="346" y="264">都会变成一次上行故障</text>
+
+      <rect class="box-g" x="648" y="34" width="300" height="246" rx="10"/>
+      <text class="tb" x="662" y="56">③ Kafka acks=all 后 ACK ✔</text>
+      <rect class="box" x="662" y="70" width="272" height="26" rx="4"/><text class="t" x="674" y="88">设备 → 网关：PUBLISH</text>
+      <rect class="box" x="662" y="102" width="272" height="26" rx="4"/><text class="t" x="674" y="120">网关 → Kafka：攒批 + acks=all</text>
+      <rect class="box-g" x="662" y="134" width="272" height="26" rx="4"/><text class="t" x="674" y="152">网关 → 设备：PUBACK</text>
+      <text class="tg" x="662" y="182">✅ 不丢：Kafka 本身就是复制好的 WAL</text>
+      <text class="tg" x="662" y="204">✅ 网关保持无状态，可随意重启</text>
+      <text class="tg" x="662" y="222">✅ 与存储解耦，抖动被 Kafka 吸收</text>
+      <text class="ty" x="662" y="246">代价：上行 +5~15 ms（SLA 是秒级，无感）</text>
+      <text class="tm" x="662" y="264">代价：多一个必须高可用的依赖</text>
+    </svg>
+    <figcaption>图 14 · PUBACK 时机的三个候选。方案 ③ 有一个不太显眼的好处：它让网关不需要本地磁盘。</figcaption>
+  </div>
+
+  <p>方案 ② 和 ③ 之间还有一个很容易被选中的中间态：<strong>网关写本地 WAL，落盘后就回 PUBACK</strong>，再异步推给下游。它的延迟比 ③ 更低（本地 fsync 比一次网络往返快），看起来很有吸引力。但顺着它往下推一步就会发现问题：本地 WAL 只在<strong>进程</strong>崩溃时管用，机器整体故障（磁盘坏、节点下线）时 WAL 里的数据一样丢。要让它真正可靠，WAL 必须复制到别的节点——<strong>而「一个被复制的 WAL」正是 Kafka 的定义。</strong>自己实现它，等于自己写一个 Kafka，还得处理副本同步、故障切换、以及网关重启后的恢复流程（在这期间它不能接受新连接）。</p>
+
+  <div class="box arch">
+    更关键的是，本地 WAL 会<strong>让网关变成有状态的</strong>，而这一条会连带否掉前面的好几个决策：Pod 需要 PVC（不能随意调度）、优雅下线时要等 WAL 排空（§11 的排空时间被拉长）、扩缩容要迁移数据。<strong>「网关无状态」不是一个洁癖，它是 §11 那套滚动升级方案的前提。</strong><br><br>
+    这也是为什么这个决策要写进 ADR：单看「本地 WAL vs Kafka」，前者延迟更低、依赖更少，是个挺合理的选择；只有把它和「网关必须能随意重启」这个约束放在一起看，才知道它不行。
+  </div>
+
+  <h3 id="s9-3">9.3 攒批的三个触发条件</h3>
+
+  <p>选了方案 ③，Kafka produce 就在上行的关键路径上，必须攒批——1.33 万 msg/s 逐条 produce 会产生 1.33 万次网络往返。攒批有三个触发条件，缺一个都会出问题：</p>
+
+  <table>
+    <thead><tr><th>触发条件</th><th>取值</th><th>它防的是什么</th></tr></thead>
+    <tbody>
+      <tr><td>条数达到 <code>batch.size</code></td><td>500 条</td><td>保证批次不会太小，摊薄每批的固定开销</td></tr>
+      <tr><td>字节达到上限</td><td>64 KB</td><td class="mid-cell">防止「条数没到但字节爆了」。IoT 帧长基本固定，但一旦有设备开始上传诊断日志，单条可能几十 KB——<strong>只按条数攒批的系统会在这时候突然发出巨大的请求</strong></td></tr>
+      <tr><td><code>linger.ms</code> 超时</td><td class="good-cell">10 ms</td><td class="good-cell">兜底。低谷期（比如凌晨）到达率可能只有几百/s，攒 500 条要好几秒——而这几秒里设备在等 PUBACK。<strong>超时是三个条件里唯一保证延迟上界的那个，绝不能省</strong></td></tr>
+    </tbody>
+  </table>
+
+  <p>攒批和 QoS1 的交互有两个必须处理的地方：</p>
+
+  <p><strong>一、PUBACK 必须等整批的 ack。</strong>一批 500 条对应 500 台设备，Kafka 回 ack 之后才能给这 500 台各发一个 PUBACK。所以 <code>linger.ms</code> 直接进入上行延迟，10 ms 对秒级 SLA 完全无感。要注意的是<strong>失败也是整批的</strong>：produce 失败时这 500 条都不能回 PUBACK，设备会重传——这是正确行为，但要确保网关不会在重传到来时因为「已经处理过」而误 ACK。</p>
+
+  <p><strong>二、按设备分区保证顺序。</strong>Kafka 只在分区内保序，所以同一台设备的消息必须进同一个分区（用 deviceId 做 partition key）。同时 <code>max.in.flight.requests.per.connection</code> 要设成 1，否则前一批失败重试、后一批已经成功，同一设备的两帧就乱序了。<a href="../architect/storage_and_data_architecture.html#ch4">WAL 与崩溃恢复</a>那一章讨论的顺序保证，在这里是同一个约束。</p>
+
+  <h3 id="s9-4">9.4 存储抖动时的三种选择</h3>
+
+  <p>Kafka 或时序库出现抖动（扩容、compaction、网络分区），上行链路开始堵。这时候必须<strong>提前决定</strong>怎么办——如果不决定，默认行为就是「无界排队直到 OOM」，也就是 §5.4 那个雪崩的翻版：</p>
+
+  <table>
+    <thead><tr><th>选择</th><th>做法</th><th>后果链</th><th>适用</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>① 不回 PUBACK</td>
+        <td>让设备自己保存并重传</td>
+        <td>设备 inflight 窗口是 1，于是它会<strong>停止后续上报</strong>，数据积压在设备的 flash 里。恢复后有一波补传洪峰，<span class="lose">必须限速</span>否则二次打死存储。数据不丢。</td>
+        <td class="good-cell">告警、计费</td>
+      </tr>
+      <tr>
+        <td>② 网关本地缓冲</td>
+        <td>写本地磁盘等恢复</td>
+        <td class="bad-cell">网关变有状态（§9.2 已否）；而且磁盘也会满，满了之后还是要在 ① 和 ③ 之间选——<strong>它只是把决策推迟了，没有消除它</strong></td>
+        <td>不采用</td>
+      </tr>
+      <tr>
+        <td>③ 丢弃 + 打点</td>
+        <td>直接回 PUBACK 然后扔掉，计数上报</td>
+        <td>数据丢了，但设备侧一切正常、不积压、恢复后无洪峰。因为遥测 30 s 一帧，丢几分钟的数据对趋势分析没有影响。</td>
+        <td class="good-cell">遥测</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p>决策是<strong>按消息类别分级</strong>：topic 前缀决定它走哪条路。这正是 §1.1 第四轮追问的价值——因为提前问清了「遥测可丢、告警不可丢」，这里才能做出一个不需要妥协的选择：95% 的流量走 ③（不积压、无洪峰），5% 走 ①（不丢、可控的补传）。</p>
+
+  <div class="box danger">
+    ① 那条路的<strong>恢复限速</strong>是最容易漏掉的一环。存储恢复的瞬间，所有积压的设备会同时开始补传，到达率可以是稳态的几十倍——这和 §7.3 的重连风暴是同一个数学问题，也需要同样的解法（设备侧抖动 + 服务端坡道式放开）。<strong>凡是「攒着等恢复」的设计，都必须同时设计恢复时的节奏</strong>，否则故障恢复本身会成为第二次故障。
+  </div>
+</section>
+
+<!-- =========================================================== -->
+<!-- S10 -->
+<!-- =========================================================== -->
+<section class="chapter" id="s10">
+  <div class="ch-head">
+    <div class="num">10</div>
+    <div class="t">
+      <h2>下行：设备寻址与 OTA</h2>
+      <div class="sub">下行流量只有上行的 0.04%，但它带来了两个最难的问题</div>
+    </div>
+  </div>
+
+  <h3 id="s10-1">10.1 三级寻址与会话注册中心</h3>
+
+  <p>控制面拿到一个 deviceId，要找到它的连接。§4 的 shared-nothing 模型让这个地址变成三级：<strong>哪个实例 → 哪个核 → 哪个槽位</strong>，加上 <code>gen</code> 一共四个字段、16 字节。</p>
+
+  <p>会话注册中心存这份映射。它的选型有个反直觉的地方：<strong>这里只需要最终一致，所以不要用共识系统。</strong>理由是「寻址错了的代价极低」——</p>
+
+  <ul>
+    <li>读到过期的地址 → 投递到错误的实例 → 那个实例发现 <code>gen</code> 不匹配（§4.3）→ 返回「不在我这」→ 控制面重查一次。总成本是一次多余的往返，几毫秒。</li>
+    <li>读到的地址是空 → 按离线处理，进离线指令队列（§10.2）。设备下次连上来会收到。</li>
+  </ul>
+
+  <div class="box num">
+    对比一下写入压力：40 万连接、日均断连 6 次，就是 <code>40万 × 6 / 86400 ≈ 28</code> 次注册变更/s 稳态；实例重启时 30 万条要在几分钟内全部更新，瞬时可达数千/s。<br>
+    这个写入量对分片 Redis 来说毫无压力，但对一个 Raft 集群来说是<strong>每一次写都要过一轮多数派复制</strong>——用 etcd 存这个会在实例重启时被写入吞吐直接打死。<a href="distributed_systems_fundamentals.html#ch9">分布式协调那一章</a>的判据在这里很直接：<strong>需要「谁是主」这类唯一性裁决时用共识系统，需要「东西在哪」这类可重试的查找时用 KV 缓存。</strong>
+  </div>
+
+  <p>具体做法：Redis Cluster 按 deviceId 哈希分片，键是 deviceId、值是那 16 字节地址，TTL 设成 2 倍读超时（150 s），由网关每 60 s 批量续期。<strong>TTL 的作用是兜底</strong>：网关被 <code>kill -9</code> 时来不及清理注册表，TTL 会在 150 s 内自动收敛。<strong>批量续期</strong>很重要——30 万个键逐个 <code>EXPIRE</code> 是 30 万次往返，要用 pipeline 按分片攒批。</p>
+
+  <h3 id="s10-2">10.2 离线指令、幂等与过期</h3>
+
+  <p>设备不在线时的指令要排队，而排队立刻带来三个必须回答的问题：</p>
+
+  <div class="grid-3">
+    <div class="panel info">
+      <h4>队列多深</h4>
+      <p>按设备限深（比如 32 条）。一台离线三个月的设备不该攒下几万条指令——它上线时会被一次性灌爆，而且那些指令早就没意义了。<strong>队列满时丢最老的</strong>，因为控制指令的价值随时间衰减。</p>
+    </div>
+    <div class="panel info">
+      <h4>什么时候过期</h4>
+      <p>每条指令带 <code>deadline</code>。「把阀门关到 30%」这种指令过了两小时再执行可能是危险的。<strong>过期的判断必须在设备侧也做一遍</strong>——网关投递和设备执行之间还有弱网延迟。</p>
+    </div>
+    <div class="panel info">
+      <h4>怎么保证不重复执行</h4>
+      <p>每条指令一个幂等键（<a href="api_design.html#s5">幂等设计</a>）。重传、重连、控制面重试都可能导致同一条指令到达两次，<strong>设备侧必须按键去重</strong>——服务端做不到，因为它不知道设备到底执行了没有。</p>
+    </div>
+  </div>
+
+  <p>第三点值得强调：QoS1 是「至少一次」，所以<strong>重复投递是协议保证的一部分，不是 bug</strong>。想要「恰好一次」只能靠幂等，而幂等的最终责任方是执行侧（设备）。服务端能做的是把幂等键设计好：用「指令 ID + 目标状态」而不是「递增序号」，这样即使设备的去重表被重启清空，重复执行一次「把阀门设为 30%」也是无害的。<strong>把指令设计成幂等的（声明目标状态）而不是增量的（「再关 10%」），是这一层最有效的一个约定。</strong></p>
+
+  <h3 id="s10-3">10.3 ADR-004 OTA 必须走控制面 / 数据面分离</h3>
+
+  <p>OTA 是这个系统里唯一的大流量场景，也是最容易把架构毁掉的一个需求。先算账：</p>
+
+  <div class="box num">
+    一批 5 万台设备 × 8 MB 固件 = <strong>400 GB</strong>。<br>
+    如果从网关下发：假设希望 1 小时内完成，需要 <code>400 GB / 3600 s ≈ 111 MB/s ≈ 0.9 Gbps</code>——单看带宽 10 GbE 撑得住。但内存撑不住：按 §5.4，每条连接的写缓冲上限 256 KB，5 万台同时下载意味着<strong>网关要持有 5 万 × 数百 KB 的在途数据</strong>，而且弱网设备收得慢、缓冲会一直贴着上限。再叠加 §5.2 那个已经调到 2 KB 的 TLS record，8 MB 固件要切成 4000 个 record，每个都要走一次加密——CPU 也被吃掉一大块。
+  </div>
+
+  <p>更根本的问题是：<strong>这个流量和网关的职责毫无关系。</strong>网关的价值在于维护 40 万条长连接的活性和身份，搬运固件字节流不需要长连接、不需要设备身份（一个签名的固件包谁下载都无害）、也不需要 MQTT。让它经过网关，唯一的效果是让最难重启的那个组件承担最大的流量。</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 940 280" style="min-width:740px;height:auto" role="img" aria-label="OTA控制面数据面分离图：网关只通过MQTT下发一条几百字节的通知包含固件版本预签名URL和校验哈希；固件实体四百GB由设备直接从对象存储或CDN下载完全不经过网关；下载完成后设备通过网关上报结果给OTA控制器用于灰度判断">
+      <rect class="box" x="20" y="110" width="110" height="60" rx="7"/>
+      <text class="tb" x="34" y="136">设备</text>
+      <text class="tm" x="34" y="154">5 万台/批</text>
+
+      <rect class="box-p" x="360" y="34" width="200" height="70" rx="8"/>
+      <text class="tb" x="374" y="56">OTA 控制器</text>
+      <text class="ts" x="374" y="74">分批放行 · 令牌</text>
+      <text class="tm" x="374" y="92">失败率超阈值自动暂停</text>
+
+      <rect class="box-a" x="180" y="110" width="150" height="60" rx="7"/>
+      <text class="tb" x="194" y="132">长连接网关</text>
+      <text class="tg" x="194" y="150">只过控制面</text>
+      <text class="tm" x="194" y="164">通知 ~300 B</text>
+
+      <rect class="box-g" x="640" y="34" width="200" height="70" rx="8"/>
+      <text class="tb" x="654" y="56">对象存储 / CDN</text>
+      <text class="ts" x="654" y="74">固件实体 400 GB</text>
+      <text class="tm" x="654" y="92">预签名 URL · 限时</text>
+
+      <path class="ln-a" d="M130 132 H172"/><path class="ar-a" d="M172 127 l8 5 -8 5 z"/>
+      <path class="ln-a" d="M330 132 H352 V80 H352"/><path class="ar-a" d="M352 75 l8 5 -8 5 z"/>
+      <path class="ln-a" d="M360 60 H340 V120 H330"/><path class="ar-a" d="M330 115 l-8 5 8 5 z"/>
+      <text class="ta" x="196" y="196">控制面：谁该升级、URL 是什么</text>
+      <text class="tm" x="196" y="214">MQTT · 300 B × 5 万 = 15 MB 总量</text>
+
+      <path class="ln-g" d="M75 170 C 80 240, 400 250, 700 250 V112"/>
+      <path class="ar-g" d="M695 112 l5 -8 5 8 z"/>
+      <text class="tg" x="360" y="242">数据面：HTTPS Range 直连，完全不经过网关</text>
+      <text class="tm" x="360" y="270">400 GB · 由 CDN 的带宽和计费承担，可独立扩容</text>
+
+      <path class="ln-d" d="M560 70 H632"/>
+      <text class="tm" x="566" y="64">签发预签名 URL</text>
+    </svg>
+    <figcaption>图 15 · 控制面走网关（15 MB），数据面绕开网关（400 GB）。两条路的流量差 2.7 万倍。</figcaption>
+  </div>
+
+  <div class="adr">
+    <div class="adr-head"><span class="adr-id">ADR-004</span><span class="adr-title">OTA 固件实体不经过网关，网关只下发预签名 URL 与放行令牌</span><span class="adr-status">已接受</span></div>
+    <div class="adr-row"><div class="k">背景</div><div>单批 OTA 为 5 万台 × 8 MB = 400 GB。若经网关下发，需要网关同时持有 5 万份在途写缓冲，并把已调至 2 KB 的 TLS record 切成 4000 段逐段加密，内存与 CPU 都会被这一个非核心职责挤占。</div></div>
+    <div class="adr-row"><div class="k">决策</div><div>网关只走控制面：一条约 300 B 的 MQTT 通知，含目标版本、对象存储的预签名 URL（限时有效）、以及固件的签名与哈希。设备用普通 HTTPS + Range 请求直接从 CDN 下载，支持断点续传（弱网下必需）。下载与校验完成后经网关上报结果，供 OTA 控制器做灰度判断。</div></div>
+    <div class="adr-row"><div class="k">后果</div><div><span class="win">得到</span>：网关流量从 400 GB 降到 15 MB；固件分发的带宽成本转移到 CDN 并可独立扩容；断点续传天然支持（HTTP Range），弱网设备不必从头再来；固件包的完整性由签名保证，不依赖传输通道的机密性。<br><span class="lose">付出</span>：多一个外部依赖（对象存储 / CDN）与一套预签名 URL 的签发和过期管理；设备固件必须实现 HTTPS 客户端与断点续传（对资源受限的 MCU 是真实负担）；下载进度不再经过网关，可观测性要靠设备上报或 CDN 日志补。</div></div>
+    <div class="adr-row"><div class="k">何时重议</div><div>若将来接入一批完全没有 HTTP 栈的极简设备，需要为它们保留一条经网关的分块下发通道——但那应该是一个<strong>独立的、可限流的下发服务</strong>，而不是把逻辑加回长连接网关。</div></div>
+  </div>
+
+  <h3 id="s10-4">10.4 分批放行与自动暂停</h3>
+
+  <p>就算固件不过网关，「5 万台同时下载」本身也是个问题：CDN 会被打出带宽尖峰（还可能触发计费告警），而且如果这批固件有 bug，5 万台会一起变砖。所以 OTA 控制器要做两件事：</p>
+
+  <p><strong>分批放行。</strong>通知不是一次全发，而是按批次发（1% → 5% → 20% → 100%），每批之间留观察窗口。放行的粒度还要考虑<strong>地理和电网分布</strong>——不要让同一个变电站下的设备在同一批里，否则那一批集体变砖会导致一个区域的数据全断。</p>
+
+  <p><strong>自动暂停。</strong>每批的成功率、平均下载时长、升级后的重连率都要有阈值，任一项超限就<strong>自动停止后续放行</strong>并告警。注意「升级后的重连率」这个指标：如果新固件有个会导致偶发崩溃的 bug，设备会反复重启重连——这在成功率上看不出来（升级本身成功了），只能靠重连率发现。<strong>灰度的观察指标必须包含「升级之后设备的行为」，而不只是「升级过程的成功率」。</strong></p>
+
+  <div class="box tip">
+    分批放行的实现有一个便宜的做法：不需要控制器主动推送，而是让设备<strong>在自己的心跳里询问</strong>「有没有我的升级任务」，控制器按当前放行窗口决定回不回。这样放行速率完全由控制器一侧的一个数字决定，暂停就是把这个数字改成 0——比取消已发出的通知简单得多。<strong>把「推送」改成「受控的拉取」，是控制大规模下发节奏最省事的手法</strong>，同样适用于配置变更和证书续签（§8.4）。
+  </div>
+</section>
+
+<!-- =========================================================== -->
+<!-- S11 -->
+<!-- =========================================================== -->
+<section class="chapter" id="s11">
+  <div class="ch-head">
+    <div class="num">11</div>
+    <div class="t">
+      <h2>发布与容量：三十万连接怎么滚动升级</h2>
+      <div class="sub">前面十章的所有约束，会在这一章一起结账</div>
+    </div>
+  </div>
+
+  <h3 id="s11-1">11.1 直接杀 Pod 的代价</h3>
+
+  <p>无状态 HTTP 服务的滚动升级是个非事件：摘流量、等在途请求（几百毫秒）、杀进程。长连接网关不是——一个实例承载 13–17 万连接，直接杀掉意味着这些设备同时断连，然后：</p>
+
+  <div class="box num">
+    17 万台设备断连，即使固件带了正确的退避与抖动（§7.3），它们也会在 1–5 分钟内全部回来。取 60 s 集中期，就是 <strong>2833 次握手/s</strong>；如果退避的抖动窗口小，可以短到 20 s，那是 <strong>8500 次握手/s</strong>——超过握手池 3600 次/s 的容量（§8.2），开始排队和拒绝。<br>
+    而这些连接要被<strong>剩下的两个实例</strong>接住，也就是它们各自要在几分钟内新增 8.5 万连接、承担一半的握手洪峰。§5 那个「单实例上限 30 万」的余量，就是为这一刻准备的。
+  </div>
+
+  <p>顺着往下推，这里还有一个隐藏的连锁：新连接会被均衡器分给「连接数最少」的实例——而正在启动的新版本 Pod 连接数是 0，于是 §3.2 的 least-conn 尖峰问题在滚动升级时必然出现。<strong>这就是为什么 §3.2 的慢启动和本节的排空必须同时存在</strong>：一个控制流出，一个控制流入，只做一半会把洪峰从一处挪到另一处。</p>
+
+  <h3 id="s11-2">11.2 优雅下线四步</h3>
+
+  <p>目标是把「17 万连接瞬间断开」摊成「按可控速率逐步迁走」。四个步骤，顺序不能变：</p>
+
+  <table>
+    <thead><tr><th>步</th><th>动作</th><th>为什么是这个顺序</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>1</td>
+        <td><strong>停止接收新连接</strong>：readiness 探针开始失败，从均衡器的 real server 列表里摘除；进程仍然存活并继续服务存量连接</td>
+        <td>必须最先做。否则一边排空一边进新连接，永远排不完</td>
+      </tr>
+      <tr>
+        <td>2</td>
+        <td><strong>按速率主动断连</strong>：每秒挑 N 条连接，发 MQTT 5.0 <code>DISCONNECT</code> + reason <code>0x9C</code> + <code>Server Reference</code>，然后关闭</td>
+        <td>带 <code>0x9C</code> 的设备<strong>立即重连且不退避</strong>，迁移最快；不支持 5.0 的老设备会走退避，所以要按协议版本分开统计速率</td>
+      </tr>
+      <tr>
+        <td>3</td>
+        <td><strong>等残余</strong>：还剩少量连接（比如已经半开、或者设备正好在弱网中）时不再等待，直接关闭</td>
+        <td>半开连接（§7.1）不会响应 DISCONNECT，也不会主动断开。等它们等于等满一个读超时 R = 75 s，没有意义</td>
+      </tr>
+      <tr>
+        <td>4</td>
+        <td><strong>flush 在途的上行</strong>：等 Kafka 把已收下但还没 ack 的批次确认完，再退出进程</td>
+        <td class="good-cell">这一步保证了 §9.2 的 QoS1 承诺：已经回过 PUBACK 的数据必须已经落进 Kafka。因为网关无状态，这一步只有几十毫秒</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="fig">
+    <svg viewBox="0 0 960 290" style="min-width:760px;height:auto" role="img" aria-label="滚动升级期间的双轴曲线图：旧实例的连接数从十七万按每秒两百条的速率线性下降到零耗时约十四分钟，同期集群握手速率维持在两千次每秒的平台低于三千六百次每秒的容量线；对比直接杀Pod的情况连接数瞬间归零而握手速率冲到八千五百次每秒远超容量线">
+      <path class="grid" d="M70 56 H890 M70 106 H890 M70 156 H890 M70 206 H890"/>
+      <path class="ln" d="M70 40 V216 H890"/>
+      <text class="tm" x="10" y="60">17 万</text>
+      <text class="tm" x="26" y="160">8 万</text>
+      <text class="tm" x="46" y="218">0</text>
+      <text class="ta" x="70" y="30">旧实例连接数（左轴）</text>
+      <text class="tr" x="700" y="30">握手速率（右轴）</text>
+      <text class="tm" x="70" y="236">0</text>
+      <text class="tm" x="330" y="236">5 min</text>
+      <text class="tm" x="620" y="236">10 min</text>
+      <text class="tm" x="850" y="236">15 min</text>
+
+      <path class="ln-r" d="M70 106 H890" stroke-dasharray="6 4"/>
+      <text class="tr" x="756" y="100">握手容量 3600 /s</text>
+
+      <path class="ln-a" d="M70 56 L840 216"/>
+      <text class="ta" x="300" y="128">按 200 条/s 排空：14 min 线性下降</text>
+
+      <path class="ln-g" d="M70 206 C 100 172, 140 166, 200 166 L800 166 C 830 168, 850 200, 870 214"/>
+      <text class="tg" x="300" y="158">同期握手速率稳定在 2000 /s，留 45 % 余量给正常重连</text>
+
+      <path class="ln-d" d="M70 56 L76 216"/>
+      <text class="tm" x="82" y="204">← 直接杀 Pod：连接数瞬间归零</text>
+      <path class="ln-r" d="M70 206 C 74 206, 78 54, 88 50 C 120 48, 160 130, 220 160 C 300 178, 400 190, 500 198"/>
+      <text class="tr" x="96" y="44">握手冲到 8500 /s，2.4 倍超载 → 排队 → 超时 → 重试</text>
+
+      <text class="ts" x="70" y="266">纵轴左：旧实例连接数　纵轴右：集群握手速率（同一坐标系按比例叠加，仅示意量级关系）</text>
+      <text class="ts" x="70" y="284">14 分钟不是「慢」，它是把一次 2.4 倍超载换成了一段全程留有余量的平缓迁移</text>
+    </svg>
+    <figcaption>图 16 · 排空速率是唯一的旋钮：往左调更快但会撞握手上限，往右调更安全但发布窗口变长。</figcaption>
+  </div>
+
+  <h3 id="s11-3">11.3 断连速率由握手预算反推</h3>
+
+  <p>「每秒断多少条」不能拍脑袋，它由 §8.1 的握手预算决定。把这段逻辑写成代码，顺便把 §3.2 的再平衡也用同一条公式——<strong>它们在物理上是同一件事</strong>：</p>
+
+<pre><code><span class="cm">// 排空速率与再平衡速率是同一个公式：都受「集群还剩多少握手能力」约束。</span>
+<span class="cm">// 只有触发原因不同（发布 / 倾斜），所以实现成一个函数，避免两处各调一套参数。</span>
+<span class="type">uint32_t</span> <span class="fn">drain_rate_per_sec</span>(<span class="kw">const</span> <span class="type">ClusterState</span>&amp; c) {
+  <span class="cm">// 1. 集群理论握手能力：健康实例数 × 每实例握手线程数 × 单线程 900 次/s</span>
+  <span class="type">uint32_t</span> capacity = c.healthy_instances * c.handshake_threads * <span class="num">900</span>;
+
+  <span class="cm">// 2. 扣掉稳态自然重连（§1.2 的 28 次/s，取实测的 P95 而不是均值）</span>
+  <span class="type">uint32_t</span> headroom = capacity &gt; c.natural_reconnect_p95
+                        ? capacity - c.natural_reconnect_p95 : <span class="num">0</span>;
+
+  <span class="cm">// 3. 只用掉余量的一半：另一半留给「排空期间恰好发生一次区域故障」。</span>
+  <span class="cm">//    发布窗口里出故障不是假设，它比平时更容易 —— 集群正处于降级状态。</span>
+  headroom /= <span class="num">2</span>;
+
+  <span class="cm">// 4. 老协议设备断开后会走退避，重连不是立刻发生，对瞬时握手压力贡献低；</span>
+  <span class="cm">//    MQTT 5.0 带 0x9C 的设备会立即重连，1 条断开 ≈ 1 次即时握手。</span>
+  <span class="type">double</span> immediate = c.mqtt5_ratio * <span class="num">1.0</span> + (<span class="num">1.0</span> - c.mqtt5_ratio) * <span class="num">0.3</span>;
+  <span class="type">uint32_t</span> rate = <span class="kw">static_cast</span>&lt;<span class="type">uint32_t</span>&gt;(headroom / immediate);
+
+  <span class="cm">// 5. 上界：排空必须在 terminationGracePeriodSeconds 内完成，否则被 SIGKILL；</span>
+  <span class="cm">//    下界：太慢会让发布窗口长到没人愿意发版，那样就没人升级了 —— 这也是风险。</span>
+  <span class="kw">return</span> <span class="type">std</span>::<span class="fn">clamp</span>(rate, <span class="num">50u</span>, <span class="num">2000u</span>);
+}
+</code></pre>
+
+  <div class="box num">
+    代入本例：3 实例 × 4 线程 × 900 = 10800 次/s 理论能力。但排空时被摘掉一个实例，只剩 2 个 → 7200。扣掉稳态重连 P95（约 60 次/s）→ 7140，取一半 → 3570。假设 MQTT 5.0 占比 40%：<code>immediate = 0.4 + 0.6 × 0.3 = 0.58</code>，得到 6155 次/s。<br>
+    这个数远大于图 16 里用的 200 条/s——为什么？因为<strong>还有一个更紧的约束</strong>：那 17 万连接要被剩下 2 个实例接住，而它们各自还要处理自己原有的连接。真正的限制往往不是握手，而是「接收方的 CPU 和内存增长速率」。所以实际速率是<strong>取所有约束里最小的那个</strong>，而这段代码只算了其中一条——这也是它必须写成一个能加约束的函数、而不是一个配置项的原因。
+  </div>
+
+  <p>反推出速率之后，K8s 的两个参数就有了依据，而不是抄默认值：<code>terminationGracePeriodSeconds</code> 要 ≥ <code>最大连接数 / 排空速率 + 余量</code>（17 万 / 200 ≈ 850 s，取 1200 s）；<code>preStop</code> 钩子负责触发排空并阻塞到完成。<strong>注意 <code>preStop</code> 的超时和 grace period 是同一个计时器</strong>——如果 preStop 还在跑但 grace period 到了，进程照样被 SIGKILL，前面的努力全部作废。这是这套方案最常见的落地失败原因。</p>
+
+  <h3 id="s11-4">11.4 SLI / SLO 与告警</h3>
+
+  <p>99.9% 可用性等于每月 43 分钟的不可用预算，而按 §11.2，一次滚动升级要 14 分钟 × 3 个实例。<strong>所以发布本身必须不消耗可用性预算</strong>——这要求排空期间被迁移的设备始终有实例可连，也就是 §5 那个「单实例上限 30 万」的余量。发布不是「消耗预算的动作」，它是「必须设计成不消耗预算的动作」。</p>
+
+  <p>指标定义上，这个系统有几个和普通服务不一样的地方。<a href="observability_engineering.html#ch8">直方图与分位数</a>那一章讲了怎么正确聚合分位数，这里只说选哪些指标：</p>
+
+  <table>
+    <thead><tr><th>SLI</th><th>定义</th><th>为什么是这个定义</th></tr></thead>
+    <tbody>
+      <tr><td>设备在线率</td><td>影子里 <code>last_seen</code> 在一个心跳周期内的设备数 ÷ 应在线设备数</td><td class="good-cell"><strong>不用「连接数」</strong>——半开连接（§7.1）会让连接数虚高，用最后活跃时间才是真实的在线</td></tr>
+      <tr><td>上行端到端成功率</td><td>Kafka 收到的消息数 ÷ 设备侧发出的消息数（靠设备上报计数比对）</td><td>网关自己的计数只能证明「我收到的都处理了」，证明不了「没漏收」。<strong>成功率的分母必须来自发送方</strong></td></tr>
+      <tr><td>下行指令时延</td><td>控制面下发到设备回执的 P99，<strong>按在线/离线分开统计</strong></td><td>混在一起算的话，离线设备的秒级到分钟级会把分位数完全污染</td></tr>
+      <tr><td>握手队列水位与拒绝率</td><td>握手池队列长度、每秒拒绝数</td><td>这是 §7.3 雪崩的<strong>先行指标</strong>：拒绝率抬头比 CPU 打满早几十秒</td></tr>
+      <tr><td><code>nf_conntrack</code> 使用率</td><td>count / max</td><td class="mid-cell">§3.3 那个静默丢包的唯一预警。即使 ADR-001 已经绕开，也要监控——万一有人把 hostNetwork 改回去</td></tr>
+    </tbody>
+  </table>
+
+  <p>关于每连接打点：<strong>不要做。</strong>30 万条连接如果各自上报一组指标，时序库会被标签基数打死（30 万 × 若干指标 × 若干标签）。正确做法是网关侧聚合成直方图后上报，只对<strong>抽样的设备</strong>（比如按 deviceId 哈希取千分之一）保留逐设备的明细。<strong>需要排查某一台具体设备时，靠的是日志和链路追踪，不是指标</strong>——这两者的成本模型完全不同。</p>
+</section>
+
+<!-- =========================================================== -->
+<!-- S12 -->
+<!-- =========================================================== -->
+<section class="chapter" id="s12">
+  <div class="ch-head">
+    <div class="num">12</div>
+    <div class="t">
+      <h2>速查、演进与反向判据</h2>
+      <div class="sub">包括最重要的一节：这套架构什么时候不该用</div>
+    </div>
+  </div>
+
+  <h3 id="s12-1">12.1 六条 ADR 汇总</h3>
+
+  <table>
+    <thead><tr><th>编号</th><th>决策</th><th>核心理由</th><th>付出的代价</th></tr></thead>
+    <tbody>
+      <tr><td>ADR-001</td><td>L4 DSR + <code>hostNetwork</code>，不走 kube-proxy，不引入 L7</td><td>长连接在均衡器上不留状态；设备证书身份直达网关</td><td>失去 K8s 服务发现与 L7 可观测性；同节点跑不了两实例</td></tr>
+      <tr><td>ADR-002</td><td>每核一份 shared-nothing + 有界 MPSC 跨核下发</td><td>200 B 消息的处理时间与一次锁争用同量级</td><td>自建跨核通道（含丢唤醒风险）；核间倾斜不自愈</td></tr>
+      <tr><td>ADR-003</td><td>握手独立线程池限速；票据密钥集群共享 6 h 轮换；短有效期证书替代 CRL</td><td>握手成本在正常与异常间差 700 倍，必须隔离</td><td>最长 12 h 前向安全折损；必须建自动续签链路</td></tr>
+      <tr><td>ADR-004</td><td>OTA 固件走对象存储 / CDN，网关只发 URL 与令牌</td><td>网关流量 400 GB → 15 MB</td><td>多一个外部依赖；设备需实现 HTTPS 断点续传</td></tr>
+      <tr><td>ADR-005</td><td>QoS1 的 PUBACK 在 Kafka <code>acks=all</code> 之后发，网关不落本地盘</td><td>「一个被复制的 WAL」就是 Kafka；保持网关无状态</td><td>上行 +5~15 ms；Kafka 成为强依赖</td></tr>
+      <tr><td>ADR-006</td><td>长连接侧与短连接摄取侧分开部署</td><td>成本结构不同（常驻内存 vs 建连 CPU），扩容依据打架</td><td>两套部署、两套监控、两份运维负担</td></tr>
+    </tbody>
+  </table>
+
+  <h3 id="s12-2">12.2 参数速查</h3>
+
+  <table>
+    <thead><tr><th>参数</th><th>本例取值</th><th>由什么反推</th></tr></thead>
+    <tbody>
+      <tr><td>单实例连接上限</td><td>30 万</td><td>峰值 50 万 ÷ (3 − 1) × 1.2 余量（§5）</td></tr>
+      <tr><td>设备心跳 K</td><td>45 s</td><td>&lt; 实测 NAT 回收 90 s 的一半（§7.2），CONNACK 强制钳制</td></tr>
+      <tr><td>网关读超时 R</td><td>75 s</td><td>1.5 K + 抖动余量 7.5 s（§7.2）</td></tr>
+      <tr><td>时间轮槽数</td><td>128（× 1 s）</td><td>&gt; R，且为 2 的幂（§6.2）</td></tr>
+      <tr><td>指令层 ACK 超时</td><td>1.5 s</td><td>下行 P99 &lt; 2 s，且必须与 R 解耦（§7.2 第 ④ 条）</td></tr>
+      <tr><td>握手线程数</td><td>4–6</td><td>最坏重连速率 ÷ 900 次/s（§8.1）</td></tr>
+      <tr><td>跨核队列容量</td><td>8192</td><td>下行 QPS × 可容忍的排队时延，且为 2 的幂（§4.3）</td></tr>
+      <tr><td><code>SO_RCVBUF</code></td><td>8 KB</td><td>最大单帧大小；目的是封住爆炸半径不是省内存（§5.2）</td></tr>
+      <tr><td>单连接写缓冲水位</td><td>256 KB</td><td>超过即视为设备收不动，触发降级或断开（§5.4）</td></tr>
+      <tr><td>Kafka <code>linger.ms</code></td><td>10 ms</td><td>直接进入上行延迟；秒级 SLA 下可放宽（§9.3）</td></tr>
+      <tr><td>排空速率</td><td>200 条/s</td><td>取握手余量、接收方增长速率等约束的最小值（§11.3）</td></tr>
+      <tr><td><code>terminationGracePeriodSeconds</code></td><td>1200 s</td><td>最大连接数 ÷ 排空速率 + 余量（§11.3）</td></tr>
+      <tr><td>会话注册 TTL</td><td>150 s</td><td>2 × R，作为 <code>kill -9</code> 的兜底（§10.1）</td></tr>
+    </tbody>
+  </table>
+
+  <div class="box tip">
+    这张表最有用的是<strong>第三列</strong>。表里没有一个数字是「业界最佳实践」抄来的，每一个都能从需求指标推导出来——所以换一个场景（比如心跳周期要改成 20 s），能顺着第三列把受影响的参数全部找出来（R、时间轮槽数、TTL），而不是改一个漏三个。<strong>配置文档只写值不写推导依据，是运维事故的一个稳定来源。</strong>
+  </div>
+
+  <h3 id="s12-3">12.3 演进路线与触发信号</h3>
+
+  <p>本文写的是 v2。<strong>不要一上来就做 v2</strong>——它的复杂度只在特定规模下才划算。三个阶段和它们之间的迁移触发信号：</p>
+
+  <div class="grid-3">
+    <div class="panel good">
+      <h4>v1 · ≤ 5 万连接</h4>
+      <p>单 <code>io_context</code> + 线程池、<code>shared_ptr&lt;Session&gt;</code>、每连接一个 <code>steady_timer</code>、直接写时序库。<strong>这些「错误做法」在这个规模下完全正确</strong>，而且开发速度快一个档。三个月能上线。</p>
+    </div>
+    <div class="panel mid">
+      <h4>v2 · 5 万 → 50 万</h4>
+      <p>本文。触发信号是可测量的，不是感觉：<code>perf</code> 里锁等待或原子操作占 CPU &gt; 15%；内存使用率 &gt; 60% 且主要在用户态缓冲；一次发布的窗口拉长到 20 min 以上；一次区域故障恢复导致过全站上行抖动。</p>
+    </div>
+    <div class="panel info">
+      <h4>v3 · 多机房 / 300 万</h4>
+      <p>设备按地理就近接入 + 跨机房会话路由 + 区域自治（单机房失联时本地仍能收数据）。新问题：设备跟着基站漂移导致机房间反复抖动，需要连接亲和性与滞回阈值。</p>
+    </div>
+  </div>
+
+  <p>顺便说一下技术债怎么管。本文留了两笔明确的债：<strong>MQTT 3.1.1 设备无法用 <code>0x9C</code> 重定向</strong>（让 §3.2 的再平衡和 §11.2 的排空效率打折），以及 <strong>老固件不支持证书自动续签</strong>（ADR-003 的依赖项）。这两笔都写进了 ADR，并且都有同一个收敛路径：随固件升级逐步减少。<strong>关键是给它们定一个可观测的指标</strong>——「MQTT 5.0 设备占比」和「支持自动续签的设备占比」应该出现在架构看板上，否则「随固件升级逐步收敛」就只是一句安慰话。</p>
+
+  <h3 id="s12-4">12.4 这套架构什么时候不适用</h3>
+
+  <p>这一节比前面十一章都重要，因为架构文档最大的危害是<strong>被套用到不该用的地方</strong>。五条反向判据：</p>
+
+  <table>
+    <thead><tr><th>如果……</th><th>那么本文的哪个决策会失效</th><th>该怎么做</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>连接数 &lt; 5 万</td>
+        <td class="bad-cell">ADR-002 的收益（省掉锁）小于它的成本（自建跨核通道 + 裸指针的生命周期风险）</td>
+        <td>回到 v1：共享 <code>io_context</code>，<code>shared_ptr</code>，per-connection timer</td>
+      </tr>
+      <tr>
+        <td>下行成为主导（视频回传、指令流）</td>
+        <td class="bad-cell">shared-nothing 的每一条下行都要过跨核队列，跨核成本从「偶尔」变成「常态」，会超过省掉的锁</td>
+        <td>改回共享模型，或者按「设备」而非「连接」分片，让下行的产生方和连接落在同一个核</td>
+      </tr>
+      <tr>
+        <td>平均消息 &gt; 4 KB</td>
+        <td class="bad-cell">§4.2 的核心论证（处理时间 ≈ 锁争用时间）不再成立，锁开销占比降到 1% 以下</td>
+        <td>选简单的模型，把精力放在零拷贝和缓冲管理上（<a href="../communication/high_performance.html#s4">零拷贝那一章</a>）</td>
+      </tr>
+      <tr>
+        <td>需要强一致（金融交易、工控闭环）</td>
+        <td class="bad-cell">ADR-005 的「至少一次 + 幂等」、§10.1 的「寻址错了就重试」全部建立在最终一致上</td>
+        <td>这不是网关的问题，是整条链路的问题。需要端到端的事务或共识（<a href="distributed_systems_advanced.html#s3">Raft</a>），代价是吞吐下降一到两个数量级</td>
+      </tr>
+      <tr>
+        <td>要在网关里做业务计算</td>
+        <td class="bad-cell">§2.2 的「网关最薄」被破坏，于是业务的变更频率乘上网关的发布代价（§11 的 14 分钟 × 3）</td>
+        <td>把计算放到 Kafka 下游的流处理里。<strong>网关的发布代价高，所以它承载的变化必须少</strong>——这条约束是物理的，不是风格偏好</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="box arch">
+    把这五条读一遍会发现一个规律：<strong>失效的判据几乎都指向同一个数字——单条消息的处理时间与一次跨核同步开销的比值。</strong>这个比值大（消息大、逻辑重），共享模型就够；比值接近 1（消息小、逻辑薄、量大），才需要 shared-nothing。<br><br>
+    一份好的架构文档不只说「我选了什么」，还要说清「这个选择依赖哪个量级关系」。因为规模会变、需求会变，而<strong>唯一能让后来者判断「现在还该不该这么做」的东西，就是当初那个量级关系还成立不成立。</strong>
+  </div>
+</section>
+
+<!-- =========================================================== -->
+<!-- S13 · INTERVIEW -->
+<!-- =========================================================== -->
+<section class="chapter" id="s13">
+  <div class="ch-head">
+    <div class="num">13</div>
+    <div class="t">
+      <h2>高频面试题 · 高并发接入网关</h2>
+      <div class="sub">12 道，按难度分三档</div>
+    </div>
+  </div>
+
+  <p class="qa-hint">点击每道题展开参考答案（先自测，再对照）。</p>
+
+  <h3 id="s13-1">13.1 基础（必答）</h3>
+
+  <ol class="qa-list">
+    <li><details class="qa">
+      <summary><span class="lvl basic">基础</span>「单机支持 30 万长连接」，最先撞到的上限是什么？</summary>
+      <div class="ans">
+        <p>不是 CPU，不是带宽，也不是 <code>fs.nr_open</code>——那些是<strong>人为上限</strong>，改个配置就没了。真正的物理上限是<strong>每连接的常驻内存</strong>，而它的绝大部分是我们自己申请的（§5.1）。</p>
+        <div class="point bad"><div class="label">典型错答</div><div>「调 <code>tcp_rmem</code> 和 <code>tcp_mem</code>」。<code>tcp_rmem</code> 的默认值是收发队列的<strong>上限</strong>，不是每连接预留；空闲连接的内核侧常驻只有 <code>struct sock</code> + <code>tcp_sock</code> 约 2.3 KB，占总预算不到 2%。</div></div>
+        <div class="point good"><div class="label">该怎么答</div><div>逐项列出预算：用户态读缓冲（如果常驻 64 KB，30 万就是 19.2 GB）、OpenSSL 的 <code>SSL</code> 对象加双向 16 KB BIO（约 40 KB/连接 = 12 GB）、用户态写缓冲、Session 对象、内核 sock、epoll item。然后指出前两项占了九成，而它们都可以靠池化和 <code>SSL_MODE_RELEASE_BUFFERS</code> 消掉。</div></div>
+        <div class="point"><div class="label">加分</div><div>补一句「所以我会先算这张表，再决定单机放多少连接，而不是反过来先定目标再优化」。</div></div>
+      </div>
+    </details></li>
+
+    <li><details class="qa">
+      <summary><span class="lvl basic">基础</span>为什么长连接场景下负载均衡器的轮询和最少连接策略都不够用？</summary>
+      <div class="ans">
+        <p>因为均衡器只能作用于<strong>新建连接</strong>这个导数，而连接寿命以天计，存量分布它管不着（§3.2）。</p>
+        <ul>
+          <li><strong>轮询</strong>：重启后连接数归零的实例只能分到 1/N 的新建连接，按稳态 28 次/s 的新建速率，补齐 10 万连接要几个小时。这期间其它实例持续超载。</li>
+          <li><strong>最少连接</strong>：反过来把所有新建都送给它，如果恰好赶上一次重连洪峰，5000 次/s 的握手全砸在一个实例上，它需要 5.6 个核纯做握手，直接排队崩掉。</li>
+        </ul>
+        <div class="point good"><div class="label">正确组合</div><div>新实例<strong>慢启动</strong>（递增权重，削掉 least-conn 的尖峰）+ <strong>主动再平衡</strong>（网关上报连接数，偏高的实例按速率主动断连，用 MQTT 5.0 的 <code>0x9C</code> 让设备不退避地立刻重连）。前者管流入，后者管流出。</div></div>
+      </div>
+    </details></li>
+
+    <li><details class="qa">
+      <summary><span class="lvl basic">基础</span>怎么判断一条连接背后的设备还活着？为什么不能用写操作判断？</summary>
+      <div class="ans">
+        <p>唯一可靠的证据是<strong>最近收到过对端的字节</strong>。判活逻辑必须挂在读路径上。</p>
+        <div class="point bad"><div class="label">写操作不行</div><div><code>send</code> / <code>SSL_write</code> 返回成功只说明数据进了内核发送缓冲。弱网下它可能排队几十秒；对端已经不存在时，要等 TCP 重传到上限（几分钟）才会报错。<strong>「写成功」和「对端收到」之间没有任何关系。</strong></div></div>
+        <div class="point warn"><div class="label">TCP keepalive 只能兜底</div><div>默认 <code>tcp_keepalive_time = 7200</code> 秒，而运营商 NAT 的空闲回收常见 5 分钟甚至 60 秒——探针还没发，映射早删了。可以调小，但它和 MQTT keepalive 语义脱节、探针不带业务信息，所以只作为「应用层逻辑出 bug 导致连接泄漏」的最后防线。</div></div>
+        <div class="point good"><div class="label">正解</div><div>应用层心跳（MQTT keepalive）+ 服务端读超时，超时判定用时间轮做到 O(1)（§6.2）。窗口取 1.5 倍心跳周期加抖动余量。</div></div>
+      </div>
+    </details></li>
+
+    <li><details class="qa">
+      <summary><span class="lvl basic">基础</span>MQTT QoS1 的 PUBACK 应该在什么时候发？</summary>
+      <div class="ans">
+        <p>这不是实现细节，它<strong>定义了系统承诺在哪一刻起不会丢这条数据</strong>（§9.2）。三个候选各有代价：</p>
+        <table>
+          <thead><tr><th>时机</th><th>代价</th></tr></thead>
+          <tbody>
+            <tr><td>收到就回</td><td>进程崩溃 / 被 OOM Kill 时内存里那批数据无声消失</td></tr>
+            <tr><td>落终态存储后回</td><td>上行吞吐 = 存储写入吞吐；存储的每次抖动都变成一次上行故障</td></tr>
+            <tr><td>写进复制型日志（Kafka <code>acks=all</code>）后回</td><td>上行 +5~15 ms，多一个强依赖</td></tr>
+          </tbody>
+        </table>
+        <div class="point good"><div class="label">推荐第三种</div><div>它同时满足「不丢」和「网关无状态」。而「网关无状态」是滚动升级方案（§11）的前提。</div></div>
+        <div class="point deep"><div class="label">为什么不写本地 WAL</div><div>本地 WAL 只防进程崩溃，防不了机器故障；要防就得复制，<strong>而「被复制的 WAL」就是 Kafka</strong>。更要命的是它让网关变成有状态的，连带否掉「可随意重启」这个前提。</div></div>
+      </div>
+    </details></li>
+  </ol>
+
+  <h3 id="s13-2">13.2 中级（区分熟练度）</h3>
+
+  <ol class="qa-list" start="5">
+    <li><details class="qa">
+      <summary><span class="lvl mid">中级</span>什么时候该选 shared-nothing（每核一份）线程模型，什么时候不该？给出可量化的判据。</summary>
+      <div class="ans">
+        <p>判据是一个比值：<strong>单条消息的处理时间 ÷ 一次跨核同步开销</strong>（§4.2、§12.4）。</p>
+        <ul>
+          <li>一次实际发生争用的跨核锁或原子操作，成本在 100–200 ns 量级（cache line 的 RFO 迁移，跨 socket 更贵）。</li>
+          <li>处理一帧 200 B 的 MQTT 报文大约几百纳秒。<strong>比值接近 1，锁不是「开销」而是主要成本</strong> → 选 shared-nothing。</li>
+          <li>处理一条 64 KB 的消息要几十微秒，比值是 100 以上，锁占比不到 1% → 共享模型完全够用，还省掉全部跨核复杂度。</li>
+        </ul>
+        <div class="point warn"><div class="label">要主动说出代价</div><div>跨核下发必须自建通道（有界队列 + 聚合唤醒，有丢唤醒风险）；核间存量倾斜不自愈；<code>SO_REUSEPORT</code> 组内 socket 数量要固定；Session 变成裸指针，生命周期靠约定而非类型系统保证。只说好处不说代价，是这道题最常见的失分点。</div></div>
+      </div>
+    </details></li>
+
+    <li><details class="qa">
+      <summary><span class="lvl mid">中级</span>shared-nothing 下，别的线程要给某条连接发数据，怎么做？</summary>
+      <div class="ans">
+        <p>关键约束是<strong>连接只能被它所属的核触碰</strong>，这是模型的立身之本。所以需要一条跨核通道，三个设计点（§4.3）：</p>
+        <div class="point"><div class="label">传什么</div><div>定长 POD，只放 <code>(slot, gen)</code> 弱句柄 + 指令编号。<strong>不能传指针，更不能传 <code>shared_ptr</code></strong>——后者的原子引用计数就是我们想消除的东西。<code>gen</code>（槽位代号）负责防 ABA：槽被复用后 gen 不同，迟到的投递自然失效。</div></div>
+        <div class="point"><div class="label">怎么背压</div><div>有界队列（比如 8192），写满就<strong>如实返回失败</strong>，让调用方告诉上游「设备忙」。这是下行链路唯一的背压点。如果这里阻塞或者无界扩容，压力会往上游漂，最终以一个完全无关的形态（控制面 API 超时）暴露。</div></div>
+        <div class="point deep"><div class="label">怎么唤醒</div><div><code>eventfd</code> 注册在目标核的 epoll 上，但<strong>只在队列「空 → 非空」时写一次</strong>，后面的消息搭同一趟车。给 5 万台设备发通知可能只产生几十次系统调用。顺序有硬约束：消费侧必须<strong>先清 armed 标志再读队列头</strong>，颠倒了会丢唤醒——表现为「偶尔有指令延迟几十秒」，只在高并发下发时出现。</div></div>
+        <div class="point warn"><div class="label">为什么不用 <code>asio::post</code></div><div>它无界（背压消失）、每次 post 一次 <code>std::function</code> 堆分配、且无条件唤醒。批量下发时会产生和消息数一样多的系统调用与线程唤醒。</div></div>
+      </div>
+    </details></li>
+
+    <li><details class="qa">
+      <summary><span class="lvl mid">中级</span>三十万个心跳定时器怎么管？为什么 <code>asio::steady_timer</code> 不合适？</summary>
+      <div class="ans">
+        <p><code>io_context</code> 的定时器队列是堆，插入和取消都是 O(log n)。真正的问题在于<strong>重置频率</strong>：心跳不是每 45 秒重置一次，而是<strong>每收到一帧就重置一次</strong>——1.33 万 msg/s × (cancel + rearm) = 2.7 万次 O(log 30万) 堆操作/秒，峰值 24 万次/秒，每次还伴随一个 handler 的堆分配（§6.2）。</p>
+        <div class="point good"><div class="label">时间轮</div><div>128 槽 × 1 s（2 的幂，取模变位与；覆盖窗口 128 s 要大于读超时 75 s）。每槽一条<strong>侵入式</strong>双向链表——链表节点就是 Session 自己，零额外分配。重置 = 从旧槽摘下 + 挂到新槽 = 两次指针写，O(1)。每秒只扫一个槽（约 30万/128 ≈ 2344 条）。</div></div>
+        <div class="point deep"><div class="label">为什么可以这么做</div><div>因为<strong>MQTT keepalive 本来就允许 1.5 倍宽限，±1 秒的精度损失完全无害</strong>。这是拿精度换复杂度，前提是业务允许——是架构判断，不是优化技巧。</div></div>
+        <div class="point warn"><div class="label">两个坑</div><div>① <code>tick()</code> 里要<strong>先把整条链摘下来再逐个回调</strong>，因为回调会关连接从而把自己从链表里删掉，边遍历边删会踩到失效的 next 指针。② MQTT 允许 keepalive 最大 65535 秒，乘 1.5 会超出槽数导致<strong>提前误判超时</strong>；要么在 CONNACK 里用 <code>Server Keep Alive</code> 钳制，要么做分层时间轮。</div></div>
+      </div>
+    </details></li>
+
+    <li><details class="qa">
+      <summary><span class="lvl mid">中级</span>发布一个承载 17 万连接的网关实例，怎么做才不引发雪崩？</summary>
+      <div class="ans">
+        <p>直接杀掉的后果：17 万台设备在 20–60 秒内集中重连，即 2833–8500 次握手/s，而握手池容量只有 3600 次/s（§11.1）。超载 → 排队 → 设备超时 → 重试 → 排队里那次握手的 CPU 白花 → 正反馈。</p>
+        <div class="point good"><div class="label">优雅下线四步，顺序不能变</div><div>① readiness 失败、从均衡器摘除，但进程继续服务存量（<strong>必须最先做</strong>，否则一边排空一边进新连接）；② 按速率主动断连，带 MQTT 5.0 <code>DISCONNECT</code> + <code>0x9C</code> + <code>Server Reference</code>，设备会立即重连且不退避；③ 残余（半开连接、正在弱网中的）不再等待，直接关；④ flush 在途上行，等 Kafka 确认完再退出，兑现已发出的 PUBACK 承诺。</div></div>
+        <div class="point deep"><div class="label">速率怎么定</div><div>取所有约束里最小的那个：集群剩余握手能力（要扣掉稳态重连、再留一半给「排空期间恰好出故障」）、以及接收方实例的 CPU/内存增长速率。<strong>本例是 200 条/s，排空 14 分钟。</strong></div></div>
+        <div class="point warn"><div class="label">最常见的落地失败</div><div><code>terminationGracePeriodSeconds</code> 忘了按 <code>连接数 ÷ 速率</code> 反推（默认 30 s，需要 1200 s）。<code>preStop</code> 和 grace period 共用同一个计时器，超时照样 SIGKILL，前面全部作废。</div></div>
+        <div class="point"><div class="label">还要注意</div><div>新版本 Pod 连接数为 0，least-conn 会把洪峰全给它——所以<strong>排空和慢启动必须同时存在</strong>，只做一半是把洪峰从一处挪到另一处。</div></div>
+      </div>
+    </details></li>
+  </ol>
+
+  <h3 id="s13-3">13.3 高级（体现深度）</h3>
+
+  <ol class="qa-list" start="9">
+    <li><details class="qa">
+      <summary><span class="lvl adv">高级</span>系统里有四个超时值分别由四方控制，它们之间有什么约束？</summary>
+      <div class="ans">
+        <p>设 K = 设备心跳周期、R = 网关读超时、N = 运营商 NAT 空闲回收、L = 中间有状态设备的空闲超时（§7.2）：</p>
+        <div class="point"><div class="label">K &lt; N</div><div>否则 NAT 先删映射，设备以为连接还在、实际已经不通。N 不可控，只能拿真机测——4G 常见 5 min，部分省份的 NB-IoT 低到 60–90 s。</div></div>
+        <div class="point"><div class="label">K &lt; L</div><div>同理。<strong>选无状态 L4 DSR 而不是 L7 代理的一个附带收益就是 L 根本不存在</strong>，这条约束自动满足。</div></div>
+        <div class="point"><div class="label">R ≥ 1.5 K + 抖动</div><div>允许丢一个心跳，否则弱网下一次丢包就误杀正常设备。本例 K = 45 s → R = 75 s。</div></div>
+        <div class="point deep"><div class="label">R 必须离开下行关键路径</div><div>这是最容易漏的一条。如果下行靠「写过去等超时」判活，一台半开连接的设备会让指令等 75 s 才失败，远超「下行 P99 &lt; 2 s」。做法是<strong>下发前先读设备影子的 <code>last_seen</code></strong>，并对确认在线的设置 1.5 s 的指令层 ACK 超时，超时立刻转离线队列并通知网关提前判死。</div></div>
+        <div class="point good"><div class="label">背后的原则</div><div>R = 75 s 负责「不冤枉正常设备」，1.5 s 负责「不欺骗业务方」。<strong>两者服务不同的质量属性（可靠性 vs 时延），所以必须是两个数字</strong>；合成一个，无论取哪个值都会牺牲另一边。</div></div>
+      </div>
+    </details></li>
+
+    <li><details class="qa">
+      <summary><span class="lvl adv">高级</span>一次区域基站故障恢复，10 万台设备同时回来。服务端能扛住吗？</summary>
+      <div class="ans">
+        <p>先算：10 万台在 5 秒内回来 = 2 万次握手/s。mTLS 完整握手约 1.1 ms CPU（两次 ECDSA 验签是 mTLS 比单向 TLS 多出来的部分），2 万次/s 需要 <strong>22 个核</strong>，占单实例 32 核的 68%——上行处理基本停摆（§7.3、§8.1）。</p>
+        <div class="point bad"><div class="label">而且它不会自己停下来</div><div>握手排队 → 设备等到超时 → 断开重试 → <strong>队列里那次握手的 CPU 白花了（对端已经走了）</strong> → 有效吞吐进一步下降 → 更多设备超时。典型的重试放大正反馈。</div></div>
+        <div class="point"><div class="label">服务端能做的三件（都必要，都不够）</div><div>① 握手独立线程池 + 入口限速，超出<strong>尽早拒绝而不是排队</strong>（排不完的队等于用 CPU 服务已经放弃的客户）；② 会话票据复用，把握手从 1.1 ms 降到 0.05 ms，22 核变 1 核；③ <code>somaxconn</code> 宁短勿长。</div></div>
+        <div class="point deep"><div class="label">真正的解法在设备侧</div><div>到达率是设备决定的。必须是<strong>指数退避 + 随机抖动 + 上限</strong>：<code>min(cap, base × 2^n) × rand(0.5, 1.5)</code>。只加退避不加抖动是个陷阱——所有设备的退避序列一模一样，它们<strong>永远保持同相</strong>，一个大尖峰只是变成一串小尖峰，总量没变。</div></div>
+        <div class="point good"><div class="label">现网已有不带抖动的老固件怎么办</div><div>让恢复本身变慢：故障恢复后按坡道逐步提升 accept 限速。被拒绝的设备会自然错开重试时刻，几轮之后相位就散了。<strong>用服务端的准入节奏，替设备补上它缺失的抖动。</strong></div></div>
+        <div class="point warn"><div class="label">架构层面的结论</div><div>设备固件的重连策略是这个系统的架构决策，即使代码不在你的仓库里。它必须写进 ADR 和设备接入规范，并在准入测试里抓包验证退避序列。</div></div>
+      </div>
+    </details></li>
+
+    <li><details class="qa">
+      <summary><span class="lvl adv">高级</span>加核之后吞吐不升反降，怎么定位？</summary>
+      <div class="ans">
+        <p>「单核压测更快、加核变慢」是<strong>伪共享或缓存行争用</strong>的典型签名（§6.4）。定位工具只有一个可靠：</p>
+        <div class="point good"><div class="label">perf c2c</div><div><code>perf c2c record</code> / <code>report</code> 直接报告哪条 cache line 上发生了多少次跨核 HITM（从别的核的缓存里命中），并定位到具体变量和源码行。<strong>其它工具（<code>perf top</code>、火焰图）只能告诉你时间花在某条 <code>lock add</code> 指令上，不会告诉你原因是争用。</strong></div></div>
+        <div class="point"><div class="label">常见的三个源头</div><div>① 全局统计计数器 <code>std::atomic&lt;uint64_t&gt;</code>——32 个核每秒抢同一条 line 上万次，实测能吃掉 10% 以上吞吐；② <code>shared_ptr</code> 的控制块；③ 意想不到的共享变量，比如日志限速用的时间戳。</div></div>
+        <div class="point deep"><div class="label">对齐的三个细节</div><div>① 对齐的对象是<strong>数组元素</strong>：<code>uint64_t c[64]</code> 把 8 个计数器塞一条 line，等于没改，要写 <code>struct alignas(64) Counter { uint64_t v; }</code>；② <strong>数组的邻居也会伪共享</strong>——如果它是某结构体的成员，前后成员可能和首尾计数器同 line，要 padding 或独立 static；③ <strong>line 不一定是 64 字节</strong>：Intel 的 adjacent-line prefetch 让有效粒度接近 128，部分 ARM 平台本身就是 128，跨平台保守取 128。</div></div>
+        <div class="point good"><div class="label">流程上的建议</div><div><code>perf c2c</code> 应该和压测一样是上线前的标准动作。它经常能揪出几个谁都没想到的共享变量。</div></div>
+      </div>
+    </details></li>
+
+    <li><details class="qa">
+      <summary><span class="lvl adv">高级</span>五百万台设备一机一证，怎么做证书吊销？</summary>
+      <div class="ans">
+        <p>标准手段在这个规模下都不太好用（§8.4）：</p>
+        <ul>
+          <li><strong>CRL</strong>：假设 1% 被吊销就是 5 万条序列号、几 MB 的文件，网关每次更新都要重新解析，而且它<strong>永远只增不减</strong>。</li>
+          <li><strong>OCSP</strong>：在连接建立的关键路径上加一次网络往返和一个可能挂掉的外部依赖。重连洪峰时 5000 次/s 的查询会把 CA 打死。OCSP stapling 解决的是服务端证书，帮不了客户端证书。</li>
+        </ul>
+        <div class="point good"><div class="label">把吊销转化成续签</div><div>证书有效期设 7–30 天，设备用当前证书自动换新证书。<strong>吊销 = 停止给它续签</strong>，最长 30 天自动失效，不需要任何吊销机制。这是用「短生命周期」换掉「撤销机制」的经典手法（和 SPIFFE / 短期 token 的思路一致）。</div></div>
+        <div class="point warn"><div class="label">代价要说清</div><div>必须建一套可靠的自动续签链路，而且它<strong>不能只依赖设备在线</strong>——离线太久的设备证书会过期，需要一条带外恢复路径（通常是一个有效期很长的注册凭证）。另外老固件可能不支持续签，那就是一笔明确的技术债，要有可观测的收敛指标。</div></div>
+        <div class="point deep"><div class="label">需要立即生效的吊销</div><div>设备被盗这类场景等不了 30 天。加一层网关本地的<strong>布隆过滤器</strong>：控制面推送吊销的设备 ID，握手完成后查一次，命中就断开。5 万条目在 1% 误判率下约 60 KB，可以常驻内存；误判的代价只是一台正常设备被拒一次，用一个精确的小集合做二次确认即可。</div></div>
+      </div>
+    </details></li>
+  </ol>
+</section>
+
+<div class="footer-nav">
+  <a href="architecture_methodology.html">← 架构方法论 · C4 / ATAM / DDD / ADR</a>
+  <a href="image_pipeline_architecture.html">下一篇 · 万级并发图片处理流水线 →</a>
+  <a href="capacity_backpressure_design.html">配套 · 容量估算与背压（本文算术的底座）</a>
+  <a href="architect_capstone.html">相关 · 嵌入式方向的端到端案例</a>
+  <a href="../system/async_networking_guide.html#s13">相关 · Asio 与单机百万连接的实现手段</a>
+  <a href="../communication/high_performance.html">相关 · 无锁队列 / 零拷贝 / 内存池</a>
+  <a href="resilience_patterns.html">相关 · 限流 · 熔断 · 降级 · 隔离</a>
+  <a href="system_architecture_directory.html">目录</a>
+  <a href="../index.html">主页</a>
+</div>
+
+
+
+</main>
+</div>
+
+<script>
+(function () {
+  var sections = document.querySelectorAll('section.chapter');
+  var links = document.querySelectorAll('aside.toc nav a');
+  if (!sections.length || !links.length) return;
+  var obs = new IntersectionObserver(function (entries) {
+    entries.forEach(function (e) {
+      if (!e.isIntersecting) return;
+      var href = '#' + e.target.id;
+      links.forEach(function (a) { a.classList.toggle('active', a.getAttribute('href') === href); });
+    });
+  }, { rootMargin: '-30% 0px -60% 0px' });
+  sections.forEach(function (s) { obs.observe(s); });
+})();
+</script>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,1018 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>容量估算与背压 · Little's Law / 排队论 70% 线 / USL / 内存预算 / 尾延迟放大 / 三种背压</title>
+<meta name="description" content="架构设计里的算术：用 Little's Law 把到达率和延迟换算成内存，用排队论解释为什么利用率不能超过 70%，用 USL 解释加核为什么会变慢，怎么做一张站得住的内存预算表，扇出与重试如何放大尾延迟，以及背压的三种实现各自会怎么失效">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<style>
+  /* format-unify: shell (hero / layout / toc / chapter / pre / table / box) 来自
+     guide-theme.css + article.css；这里只写本页特有的组件。 */
+  body { overflow-x: hidden; }
+  main { min-width: 0; }
+  section.chapter > h2 { color: var(--accent); font-size: 1.5rem; margin: 0 0 1rem; padding-bottom: .5rem; border-bottom: 1px solid var(--border); }
+
+  .box.arch { border-color: var(--accent-2); background: color-mix(in srgb, var(--accent-2) 8%, var(--bg-card)); }
+  .box.arch::before { content: "⭐ 架构师视角: "; color: var(--accent-2); font-weight: 700; }
+  .box.num { border-color: var(--accent-3); background: color-mix(in srgb, var(--accent-3) 8%, var(--bg-card)); }
+  .box.num::before { content: "🧮 算一下: "; color: var(--accent-3); font-weight: 700; }
+
+  .formula { border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border)); border-radius: 10px; background: color-mix(in srgb, var(--accent) 6%, var(--bg-card)); padding: 16px 18px; margin: 18px 0; text-align: center; overflow-x: auto; }
+  .formula .f { font-family: var(--mono); font-size: 21px; font-weight: 700; color: var(--text); letter-spacing: .5px; }
+  .formula .legend { font-size: 12.5px; color: var(--text-dim); margin-top: 9px; line-height: 1.8; }
+  .formula .legend b { color: var(--accent); font-family: var(--mono); }
+
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 16px 0; }
+  .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin: 16px 0; }
+  @media (max-width: 760px) { .grid-2, .grid-3 { grid-template-columns: 1fr; } }
+  .grid-2 > *, .grid-3 > * { min-width: 0; }
+  .panel { border: 1px solid var(--border); border-radius: 9px; padding: 12px 14px; background: var(--bg-card); min-width: 0; }
+  .panel > h4 { margin: 0 0 6px; font-size: 14px; }
+  .panel.good { border-left: 3px solid var(--accent-3); }
+  .panel.bad { border-left: 3px solid var(--danger); }
+  .panel.mid { border-left: 3px solid var(--accent-4); }
+  .panel.info { border-left: 3px solid var(--accent); }
+  .good-cell { background: color-mix(in srgb, var(--accent-3) 10%, transparent); }
+  .bad-cell { background: color-mix(in srgb, var(--danger) 10%, transparent); }
+  .mid-cell { background: color-mix(in srgb, var(--accent-4) 10%, transparent); }
+  .win { color: var(--accent-3); font-weight: 700; }
+  .lose { color: var(--danger); font-weight: 700; }
+
+  .fig { margin: 22px 0; overflow-x: auto; }
+  .fig svg { max-width: 100%; height: auto; }
+  .fig figcaption { font-size: 12.5px; color: var(--text-dim); margin-top: 8px; text-align: center; }
+  .fig .box   { fill: var(--bg-card-2); stroke: var(--border-2); stroke-width: 1.2; }
+  .fig .box-a { fill: color-mix(in srgb, var(--accent) 14%, var(--bg-card)); stroke: var(--accent); stroke-width: 1.2; }
+  .fig .box-g { fill: color-mix(in srgb, var(--accent-3) 14%, var(--bg-card)); stroke: var(--accent-3); stroke-width: 1.2; }
+  .fig .box-p { fill: color-mix(in srgb, var(--accent-2) 14%, var(--bg-card)); stroke: var(--accent-2); stroke-width: 1.2; }
+  .fig .box-y { fill: color-mix(in srgb, var(--accent-4) 14%, var(--bg-card)); stroke: var(--accent-4); stroke-width: 1.2; }
+  .fig .box-r { fill: color-mix(in srgb, var(--danger) 14%, var(--bg-card)); stroke: var(--danger); stroke-width: 1.2; }
+  .fig .t  { fill: var(--text); font-size: 12px; }
+  .fig .tb { fill: var(--text); font-size: 12.5px; font-weight: 700; }
+  .fig .ts { fill: var(--text-dim); font-size: 10.5px; }
+  .fig .tm { fill: var(--text-dim); font-size: 10.5px; font-family: var(--mono); }
+  .fig .ta { fill: var(--accent); font-size: 11.5px; font-weight: 700; }
+  .fig .tg { fill: var(--accent-3); font-size: 11px; font-weight: 600; }
+  .fig .ty { fill: var(--accent-4); font-size: 11px; font-weight: 600; }
+  .fig .tr { fill: var(--danger); font-size: 11px; font-weight: 600; }
+  .fig .tp { fill: var(--accent-2); font-size: 11px; font-weight: 600; }
+  .fig .ln   { stroke: var(--border-2); stroke-width: 1.4; fill: none; }
+  .fig .ln-a { stroke: var(--accent); stroke-width: 1.8; fill: none; }
+  .fig .ln-g { stroke: var(--accent-3); stroke-width: 1.8; fill: none; }
+  .fig .ln-r { stroke: var(--danger); stroke-width: 1.8; fill: none; }
+  .fig .ln-y { stroke: var(--accent-4); stroke-width: 1.8; fill: none; }
+  .fig .ln-p { stroke: var(--accent-2); stroke-width: 1.8; fill: none; }
+  .fig .ln-d { stroke: var(--text-mute); stroke-width: 1.2; fill: none; stroke-dasharray: 4 3; }
+  .fig .ar-a { fill: var(--accent); }
+  .fig .ar-g { fill: var(--accent-3); }
+  .fig .ar-r { fill: var(--danger); }
+  .fig .grid { stroke: var(--border); stroke-width: .8; fill: none; }
+</style>
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav tn-shell-overlay">
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="system_architecture_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 35 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="layout">
+<aside class="toc">
+  <h2>容量估算与背压 · Roadmap</h2>
+  <nav>
+    <ol>
+      <li><a href="#s1">容量估算为什么总是错</a>
+        <ol>
+          <li><a href="#s1-1">三种典型错法</a></li>
+          <li><a href="#s1-2">估算的目的不是算准</a></li>
+        </ol>
+      </li>
+      <li><a href="#s2">Little's Law：知二求一</a>
+        <ol>
+          <li><a href="#s2-1">式子与它成立的条件</a></li>
+          <li><a href="#s2-2">三种用法</a></li>
+          <li><a href="#s2-3">它说不了什么</a></li>
+        </ol>
+      </li>
+      <li><a href="#s3">排队：70% 那条线</a>
+        <ol>
+          <li><a href="#s3-1">利用率与排队时间的关系</a></li>
+          <li><a href="#s3-2">服务台越多，能跑的利用率越高</a></li>
+          <li><a href="#s3-3">方差比利用率更致命</a></li>
+        </ol>
+      </li>
+      <li><a href="#s4">USL：加核为什么会变慢</a>
+        <ol>
+          <li><a href="#s4-1">Amdahl 只会饱和，USL 会倒退</a></li>
+          <li><a href="#s4-2">怎么测出自己的 α 和 β</a></li>
+          <li><a href="#s4-3">β 在代码里长什么样</a></li>
+        </ol>
+      </li>
+      <li><a href="#s5">内存预算表怎么做</a>
+        <ol>
+          <li><a href="#s5-1">五个步骤</a></li>
+          <li><a href="#s5-2">两个常见错误</a></li>
+          <li><a href="#s5-3">RSS 不等于预算</a></li>
+        </ol>
+      </li>
+      <li><a href="#s6">尾延迟放大：扇出与重试</a>
+        <ol>
+          <li><a href="#s6-1">扇出：整体的 P50 接近单个的 P99</a></li>
+          <li><a href="#s6-2">对冲请求</a></li>
+          <li><a href="#s6-3">重试放大与重试预算</a></li>
+        </ol>
+      </li>
+      <li><a href="#s7">背压：三种实现与各自的失效模式</a>
+        <ol>
+          <li><a href="#s7-1">有界队列</a></li>
+          <li><a href="#s7-2">信用值</a></li>
+          <li><a href="#s7-3">传输层天然反压</a></li>
+          <li><a href="#s7-4">背压必须一路传到源头</a></li>
+        </ol>
+      </li>
+      <li><a href="#s8">一张检查清单</a></li>
+      <li><a href="#s9">高频面试题 · 容量与背压</a>
+        <ol>
+          <li><a href="#s9-1">基础（必答）</a></li>
+          <li><a href="#s9-2">中级（区分熟练度）</a></li>
+          <li><a href="#s9-3">高级（体现深度）</a></li>
+        </ol>
+      </li>
+    </ol>
+  </nav>
+</aside>
+
+<main>
+
+<header class="hero">
+  <div class="badge">Architecture · Capacity · Methodology</div>
+  <h1>容量估算与背压</h1>
+  <p class="sub">架构设计里真正要用到的算术只有五样：Little's Law、排队延迟曲线、USL、内存预算表、尾延迟放大。它们都很简单，但每一样都能让一个「凭经验拍出来」的容量决策差上几倍。这一篇把它们讲清楚，并说明各自在什么时候会骗你。</p>
+  <div class="meta-row">
+    <span class="pill red">核心难度 ★★★★☆</span>
+    <span class="pill cyan">方法论</span>
+    <span class="pill green">阅读时长 ~35 min</span>
+    <span class="pill amber">配套两个案例阅读</span>
+  </div>
+</header>
+
+<section class="chapter" id="s1">
+  <div class="ch-head">
+    <div class="num">01</div>
+    <div class="t">
+      <h2>容量估算为什么总是错</h2>
+      <div class="sub">先看清三种错法，后面五章分别是它们的解药</div>
+    </div>
+  </div>
+
+  <p>这一篇是 <a href="high_concurrency_gateway.html">IoT 接入网关</a> 和 <a href="image_pipeline_architecture.html">图片处理流水线</a> 两个案例的算术底座。那两篇里反复出现「由 X 反推 Y」的推导，用的就是这几样工具；把它们抽出来单独讲，是为了避免在两个案例里各讲一遍，也为了说清一件在案例里说不清的事：<strong>这些公式各自在什么条件下会失效。</strong></p>
+
+  <h3 id="s1-1">1.1 三种典型错法</h3>
+
+  <div class="grid-3">
+    <div class="panel bad">
+      <h4>① 按平均值算</h4>
+      <p>「平均 QPS 是 500，单请求 20 ms，所以 10 个核就够」。这个算法忽略了<strong>到达是不均匀的</strong>——平均利用率 50% 完全可能伴随着大量排队。方差被丢掉了。</p>
+      <p class="tm">解药：§3</p>
+    </div>
+    <div class="panel bad">
+      <h4>② 按峰值买机器</h4>
+      <p>「峰值需要 336 核，那就买 336 核」。这个算法忽略了<strong>排队本身要占容量</strong>——跑在 100% 利用率上的系统，排队延迟是发散的。</p>
+      <p class="tm">解药：§3</p>
+    </div>
+    <div class="panel bad">
+      <h4>③ 线性外推</h4>
+      <p>「8 核跑 1000 QPS，64 核就是 8000」。这个算法忽略了<strong>争用</strong>——超过某个点之后加核不但不涨，还会倒退。</p>
+      <p class="tm">解药：§4</p>
+    </div>
+  </div>
+
+  <p>还有两个更隐蔽的，它们不属于「算错」而属于「算漏」：<strong>只算自己申请的内存，忘了库和内核那一份</strong>（§5.2），以及<strong>只算单跳延迟，忘了扇出与重试的放大</strong>（§6）。这两个的共同特点是，你算出来的数字看起来完全合理，直到上线。</p>
+
+  <h3 id="s1-2">1.2 估算的目的不是算准</h3>
+
+  <div class="box arch">
+    容量估算不可能算准，因为输入本身就是估的。它的价值在另外三件事上：<br>
+    <strong>① 找出哪个资源会先见底。</strong>是 CPU、内存、带宽、还是某个外部依赖的配额？知道了这个，优化和监控才有方向。<br>
+    <strong>② 知道离见底还有多远。</strong>是 2 倍还是 20 倍？这决定了「现在就要改架构」还是「加机器再撑一年」。<br>
+    <strong>③ 让假设变得可以被反驳。</strong>写下「假设单请求 20 ms」之后，别人可以说「不对，P95 是 80 ms」——而「我觉得 10 台够了」是没法讨论的。<br><br>
+    所以估算的产出不是一个数字，是<strong>一张列明假设的表</strong>。数字错了可以改，假设没写下来就永远查不出错在哪。
+  </div>
+</section>
+
+<section class="chapter" id="s2">
+  <div class="ch-head">
+    <div class="num">02</div>
+    <div class="t">
+      <h2>Little's Law：知二求一</h2>
+      <div class="sub">最简单也最常被浪费的一个式子</div>
+    </div>
+  </div>
+
+  <h3 id="s2-1">2.1 式子与它成立的条件</h3>
+
+  <div class="formula">
+    <div class="f">L = λ × W</div>
+    <div class="legend">
+      <b>L</b> 系统里的平均在途数量（个）　　<b>λ</b> 平均到达率（个/秒）　　<b>W</b> 单个在系统里的平均停留时间（秒）
+    </div>
+  </div>
+
+  <p>它的适用条件宽松到令人意外：只要系统处于<strong>稳态</strong>（长期看进出速率相等、没有无限积压），这个式子就成立。<strong>不需要任何关于到达分布或服务时间分布的假设</strong>——到达是泊松的还是成批突发的、服务时间是恒定的还是重尾的，都不影响。</p>
+
+  <p>这个「不需要假设」正是它有用的原因，也划出了它的边界：它只谈<strong>长期平均</strong>，对任何一个具体时刻、对任何分位数，它都不发表意见（§2.3）。</p>
+
+  <h3 id="s2-2">2.2 三种用法</h3>
+
+  <div class="fig">
+    <svg viewBox="0 0 940 260" style="min-width:740px;height:auto" role="img" aria-label="Little's Law 的三种用法示意：已知到达率和处理时间求在途数量从而得到内存占用；已知队列深度和出队速率求等待时间从而得到延迟；已知在途上限和处理时间求最大吞吐从而得到容量上限">
+      <rect class="box-a" x="20" y="40" width="285" height="180" rx="10"/>
+      <text class="tb" x="36" y="64">① 求 L → 得到内存</text>
+      <text class="tm" x="36" y="88">已知：到达率 λ、处理时间 W</text>
+      <text class="t" x="36" y="116">L = λ × W</text>
+      <text class="ts" x="36" y="140">1200 张/s × 0.28 s = 336 张在途</text>
+      <text class="ta" x="36" y="164">× 每张 36 MB = 12 GB</text>
+      <text class="tm" x="36" y="192">用途：把「吞吐」翻译成「内存」，</text>
+      <text class="tm" x="36" y="208">这是最常用也最省事的一种</text>
+
+      <rect class="box-g" x="327" y="40" width="285" height="180" rx="10"/>
+      <text class="tb" x="343" y="64">② 求 W → 得到延迟</text>
+      <text class="tm" x="343" y="88">已知：队列深度 L、出队速率 λ</text>
+      <text class="t" x="343" y="116">W = L / λ</text>
+      <text class="ts" x="343" y="140">队里 8000 个 ÷ 400 个/s = 20 s</text>
+      <text class="tg" x="343" y="164">积压要 20 秒才能消化完</text>
+      <text class="tm" x="343" y="192">用途：现场判断「这个积压严重吗」，</text>
+      <text class="tm" x="343" y="208">比盯着队列长度有意义得多</text>
+
+      <rect class="box-p" x="634" y="40" width="285" height="180" rx="10"/>
+      <text class="tb" x="650" y="64">③ 求 λ → 得到容量</text>
+      <text class="tm" x="650" y="88">已知：在途上限 L、处理时间 W</text>
+      <text class="t" x="650" y="116">λ = L / W</text>
+      <text class="ts" x="650" y="140">64 个 worker ÷ 0.28 s = 228 张/s</text>
+      <text class="tp" x="650" y="164">这台机器的吞吐上限</text>
+      <text class="tm" x="650" y="192">用途：不用压测就能先估出</text>
+      <text class="tm" x="650" y="208">「理论上限在哪」</text>
+    </svg>
+    <figcaption>图 1 · 同一个式子的三种读法。第二种在故障现场最有用，第三种在设计阶段最有用。</figcaption>
+  </div>
+
+  <p>第二种用法值得展开，因为它把一个常见的无效指标变成了有效的。<strong>「队列里有 8000 条」这个数字本身没有意义</strong>——它可能是灾难，也可能是三十秒后就消化完的正常波动。除以出队速率之后得到「还要 20 秒」，这才是能拿来做决策的信息：20 秒可以等，20 分钟就要限流了。</p>
+
+  <div class="box tip">
+    所以监控面板上<strong>不要只放队列长度，要放「预计排空时间」</strong>（队列长度 ÷ 近期出队速率）。前者的告警阈值会随着系统扩容而失效——扩容之后同样的队列长度其实没那么危险了，但阈值没人改，于是它开始误报，然后被人调高，然后在真出问题时不报。后者是自归一化的，扩容后不需要改阈值。
+  </div>
+
+  <h3 id="s2-3">2.3 它说不了什么</h3>
+
+  <p>Little's Law 的三个盲区，每一个都在实践中坑过人：</p>
+
+  <table>
+    <thead><tr><th>它说不了</th><th>为什么</th><th>该用什么</th></tr></thead>
+    <tbody>
+      <tr><td class="bad-cell">任何分位数</td><td>它只谈平均。平均在途 336 完全可能对应「大多数时候 200、偶尔 2000」</td><td>排队论（§3）或直接测</td></tr>
+      <tr><td class="bad-cell">峰值需要多少内存</td><td>同上。按 L 的平均值配内存，会在突发时 OOM</td><td>L 作为下界，再乘一个由方差决定的系数（§3.3）</td></tr>
+      <tr><td class="bad-cell">非稳态时的任何事</td><td>系统正在积压（进 &gt; 出）时它不成立，而<strong>故障时恰恰就是非稳态</strong></td><td>故障场景要单独推演，不能套公式</td></tr>
+    </tbody>
+  </table>
+
+  <p>第三条最要紧：<strong>你最需要容量估算的那一刻，恰恰是这个式子失效的时候。</strong>它适合回答「稳态下要多少资源」，不适合回答「雪崩时会怎样」。后者要靠故障推演（比如 <a href="image_pipeline_architecture.html#s9-1">图片流水线 §9.1 的后果链</a>），把每一步写出来，而不是算出来。</p>
+</section>
+
+<section class="chapter" id="s3">
+  <div class="ch-head">
+    <div class="num">03</div>
+    <div class="t">
+      <h2>排队：70% 那条线</h2>
+      <div class="sub">为什么「刚好够用」的容量一定不够用</div>
+    </div>
+  </div>
+
+  <h3 id="s3-1">3.1 利用率与排队时间的关系</h3>
+
+  <p>最简单的排队模型（单服务台、到达和服务都是随机的，即 M/M/1）给出的排队时间是：</p>
+
+  <div class="formula">
+    <div class="f">W<sub>q</sub> = ρ / (1 − ρ) × S</div>
+    <div class="legend">
+      <b>W<sub>q</sub></b> 平均排队等待时间　　<b>ρ</b> 利用率（0–1）　　<b>S</b> 平均服务时间
+    </div>
+  </div>
+
+  <p>这个式子的形状比它的精确值重要得多。代几个数进去：</p>
+
+  <table>
+    <thead><tr><th>利用率 ρ</th><th>排队时间 W<sub>q</sub></th><th>总响应时间 (W<sub>q</sub> + S)</th><th>解读</th></tr></thead>
+    <tbody>
+      <tr class="good-cell"><td>50%</td><td>1.0 × S</td><td>2.0 × S</td><td>响应时间是服务时间的两倍，很舒服</td></tr>
+      <tr class="good-cell"><td>70%</td><td>2.3 × S</td><td>3.3 × S</td><td>还行。这是常见的目标水位</td></tr>
+      <tr class="mid-cell"><td>80%</td><td>4.0 × S</td><td>5.0 × S</td><td>开始明显了</td></tr>
+      <tr class="bad-cell"><td>90%</td><td>9.0 × S</td><td>10 × S</td><td>再加 10% 流量就是 19×</td></tr>
+      <tr class="bad-cell"><td>95%</td><td>19 × S</td><td>20 × S</td><td>任何小扰动都会造成长时间的队列</td></tr>
+      <tr class="bad-cell"><td>99%</td><td>99 × S</td><td>100 × S</td><td>—</td></tr>
+    </tbody>
+  </table>
+
+  <div class="fig">
+    <svg viewBox="0 0 940 300" style="min-width:740px;height:auto" role="img" aria-label="利用率与排队延迟的关系曲线：横轴是利用率纵轴是排队时间相对服务时间的倍数；单服务台的曲线在百分之七十之后急剧上翘到百分之九十已经是九倍；而六十四个服务台共享一个队列的曲线要平缓得多在百分之八十五仍然接近水平">
+      <path class="grid" d="M70 60 H890 M70 110 H890 M70 160 H890 M70 210 H890"/>
+      <path class="ln" d="M70 40 V250 H890"/>
+      <text class="tm" x="20" y="64">10× S</text>
+      <text class="tm" x="26" y="114">6× S</text>
+      <text class="tm" x="26" y="164">3× S</text>
+      <text class="tm" x="26" y="214">1× S</text>
+      <text class="tm" x="60" y="270">0</text>
+      <text class="tm" x="240" y="270">50%</text>
+      <text class="tm" x="480" y="270">70%</text>
+      <text class="tm" x="650" y="270">85%</text>
+      <text class="tm" x="840" y="270">95%</text>
+      <text class="ts" x="770" y="290">利用率 ρ</text>
+      <text class="tb" x="70" y="30">排队时间 / 服务时间</text>
+
+      <path class="ln-r" d="M70 248 C 200 244, 330 234, 420 216 C 500 196, 550 168, 590 132 C 620 104, 650 76, 680 56 C 700 46, 720 44, 740 42"/>
+      <text class="tr" x="600" y="112">c = 1（单服务台）</text>
+      <text class="tm" x="600" y="128">70% 之后急剧上翘</text>
+
+      <path class="ln-y" d="M70 249 C 250 248, 420 246, 540 240 C 630 232, 690 214, 740 178 C 780 140, 810 90, 830 54"/>
+      <text class="ty" x="690" y="160">c = 8</text>
+
+      <path class="ln-g" d="M70 250 C 300 250, 500 249, 640 247 C 740 244, 800 230, 840 196 C 866 168, 878 120, 884 78"/>
+      <text class="tg" x="700" y="238">c = 64（合并队列）</text>
+      <text class="tm" x="700" y="254">85% 仍然接近水平</text>
+
+      <path class="ln-d" d="M480 40 V250"/>
+      <text class="ta" x="392" y="52">70% 线</text>
+    </svg>
+    <figcaption>图 2 · 三条曲线的拐点位置不同。这解释了为什么「一个大池子」比「几个小池子」能跑更高的利用率。</figcaption>
+  </div>
+
+  <div class="box num">
+    从表里读出两个可操作的结论：<br>
+    <strong>① 目标利用率定在 60–70%，不是 90%。</strong>剩下那 30% 不是浪费，它是「排队不爆炸」的成本。<br>
+    <strong>② 越接近满载，加机器的收益越大。</strong>从 95% 降到 90%（加 5% 容量），排队时间从 19×S 降到 9×S，砍掉一半。而从 50% 降到 45%，几乎没变化。<strong>所以「系统很慢，加一点机器就好了很多」不是错觉，是这条曲线的形状。</strong>
+  </div>
+
+  <h3 id="s3-2">3.2 服务台越多，能跑的利用率越高</h3>
+
+  <p>图 2 里三条曲线的差别，是容量规划里最实用的一条结论。多服务台共享一个队列（M/M/c）的排队时间远小于同样利用率下的单服务台，原因很直观：<strong>单服务台被一个慢请求卡住时整队都得等，64 个服务台里卡住一个，还有 63 个在服务。</strong></p>
+
+  <table>
+    <thead><tr><th>ρ = 85% 时的排队时间</th><th>c = 1</th><th>c = 8</th><th>c = 64</th></tr></thead>
+    <tbody>
+      <tr><td>W<sub>q</sub> / S 约为</td><td class="bad-cell">5.7</td><td class="mid-cell">1.4</td><td class="good-cell">0.15</td></tr>
+    </tbody>
+  </table>
+
+  <p>这直接推出一条架构原则：<strong>能合并的队列就合并。</strong>把 8 个服务各配 8 个 worker 和一个独立队列，不如让 64 个 worker 共享一个队列——后者在同样利用率下的排队时间小一个数量级。这也是线程池优于「每个任务类型一个专用线程」的数学理由。</p>
+
+  <div class="box danger">
+    但这条原则和<a href="image_pipeline_architecture.html#s6-2">分级队列</a>、<a href="resilience_patterns.html#s5">舱壁隔离</a>是<strong>直接冲突</strong>的——那两个都在说「要拆开」。两边都对，取决于你在防哪种失效：<br>
+    <strong>合并</strong>优化的是<strong>平均等待</strong>（统计复用，闲的服务台能帮忙）；<br>
+    <strong>拆分</strong>优化的是<strong>故障隔离与尾延迟</strong>（一类请求变慢不拖累另一类）。<br><br>
+    判据是：<strong>被合并的请求，服务时间分布是否相近。</strong>相近就合并（比如都是几十毫秒的小请求）；差一个数量级就拆（比如 280 ms 的小图和 2.5 s 的巨图）。合并两类方差差异巨大的请求，会把统计复用的收益输光——原因就在下一节。
+  </div>
+
+  <h3 id="s3-3">3.3 方差比利用率更致命</h3>
+
+  <p>前面的式子假设服务时间是指数分布的。放宽到任意分布（M/G/1），Pollaczek–Khinchine 公式给出：</p>
+
+  <div class="formula">
+    <div class="f">W<sub>q</sub> = ρ / (1 − ρ) × S × (1 + C<sup>2</sup>) / 2</div>
+    <div class="legend">
+      <b>C</b> 服务时间的变异系数 = 标准差 ÷ 平均值。指数分布 C = 1，此式退化为 §3.1；恒定服务时间 C = 0，排队时间<strong>直接减半</strong>
+    </div>
+  </div>
+
+  <p>把几种典型负载的 C² 代进去：</p>
+
+  <table>
+    <thead><tr><th>负载</th><th>C²</th><th>相对指数分布的排队时间</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr class="good-cell"><td>恒定耗时（固定尺寸缩略图）</td><td>0</td><td>0.5×</td><td>方差为零是最好的情况</td></tr>
+      <tr><td>指数分布（教科书假设）</td><td>1</td><td>1.0×</td><td>基准</td></tr>
+      <tr class="mid-cell"><td>混合大小图片</td><td>3</td><td>2.0×</td><td>同样的利用率，排队时间翻倍</td></tr>
+      <tr class="bad-cell"><td>重尾（含 100 MP 全景图）</td><td>10</td><td class="bad-cell">5.5×</td><td>方差一项就吃掉了「从 90% 降到 70%」的全部收益</td></tr>
+    </tbody>
+  </table>
+
+  <div class="box arch">
+    这个式子给了「分级队列」一个精确的数学理由，而不只是「感觉上应该隔离」。<a href="image_pipeline_architecture.html#s6-2">按体积分成快慢两条通道</a>做的事情，本质上是<strong>把一个 C² = 10 的重尾分布，拆成两个各自 C² ≈ 1 的窄分布</strong>。<br><br>
+    收益可以算出来：快车道的排队时间从 5.5× 降到 1.0×，<strong>相当于把利用率从 90% 降到 60% 的效果，但一台机器都没多买。</strong>这就是为什么在有长尾的负载上，隔离往往比扩容划算得多。<br><br>
+    反过来也成立：如果你的服务时间方差本来就很小（C² ≈ 0），分级队列几乎没有收益，只会带来复杂度和资源碎片。<strong>先测 C²，再决定要不要拆。</strong>
+  </div>
+</section>
+
+<section class="chapter" id="s4">
+  <div class="ch-head">
+    <div class="num">04</div>
+    <div class="t">
+      <h2>USL：加核为什么会变慢</h2>
+      <div class="sub">Amdahl 定律只讲了一半，而缺的那一半才是坏消息</div>
+    </div>
+  </div>
+
+  <h3 id="s4-1">4.1 Amdahl 只会饱和，USL 会倒退</h3>
+
+  <p>Amdahl 定律说：程序里有 α 的部分无法并行，那么无论加多少核，加速比的上限是 1/α。它的曲线是<strong>单调上升然后趋于水平</strong>——最坏也就是白加。</p>
+
+  <p>但真实系统的曲线经常是<strong>先升、到顶、然后往下掉</strong>。Amdahl 解释不了「加核之后吞吐反而下降」。通用可扩展性定律（USL）补上了这一项：</p>
+
+  <div class="formula">
+    <div class="f">C(N) = N / (1 + α(N−1) + βN(N−1))</div>
+    <div class="legend">
+      <b>N</b> 并发度（核数 / 线程数 / 节点数）　　<b>α</b> 竞争系数：串行部分、锁等待<br>
+      <b>β</b> 一致性系数：<strong>参与者之间互相协调的开销</strong>——这一项让曲线掉头向下
+    </div>
+  </div>
+
+  <p>关键在于第三项的形状：<strong>α 那一项随 N 线性增长，而 β 那一项随 N² 增长。</strong>N 小的时候 β 项可以忽略，N 大到一定程度它就会超过分子的增长，整体开始下降。</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 940 300" style="min-width:740px;height:auto" role="img" aria-label="线性扩展Amdahl定律和USL三条曲线的对比：线性扩展是一条直线；Amdahl随核数上升后趋于水平饱和；USL先上升在三十二核附近达到峰值之后开始下降到六十四核时已经低于三十二核的吞吐">
+      <path class="grid" d="M70 60 H890 M70 110 H890 M70 160 H890 M70 210 H890"/>
+      <path class="ln" d="M70 40 V250 H890"/>
+      <text class="tm" x="30" y="64">高</text>
+      <text class="tm" x="30" y="214">低</text>
+      <text class="tm" x="66" y="270">1</text>
+      <text class="tm" x="200" y="270">8</text>
+      <text class="tm" x="340" y="270">16</text>
+      <text class="tm" x="480" y="270">32</text>
+      <text class="tm" x="680" y="270">64</text>
+      <text class="tm" x="860" y="270">128</text>
+      <text class="ts" x="790" y="290">并发度 N</text>
+      <text class="tb" x="70" y="30">吞吐</text>
+
+      <path class="ln-d" d="M70 246 L890 44"/>
+      <text class="tm" x="800" y="60">理想线性</text>
+
+      <path class="ln-a" d="M70 246 C 200 210, 340 160, 480 128 C 620 108, 760 98, 890 94"/>
+      <text class="ta" x="726" y="90">Amdahl：饱和，最坏是白加</text>
+
+      <path class="ln-r" d="M70 246 C 200 214, 340 172, 440 152 C 480 146, 510 146, 540 152 C 620 168, 760 200, 890 226"/>
+      <text class="tr" x="330" y="140">USL：峰值在 N* 处，之后<tspan class="tr">往下掉</tspan></text>
+      <path class="ln-d" d="M490 146 V250"/>
+      <text class="tr" x="440" y="240">N*</text>
+      <text class="tm" x="640" y="216">64 核的吞吐低于 32 核 —— 这不是玄学，是 β</text>
+
+      <text class="ts" x="70" y="290">N* = √((1−α)/β)。测出 α 和 β，就知道自己的峰值在哪，以及现在离它多远。</text>
+    </svg>
+    <figcaption>图 3 · 三条曲线。真实系统几乎总是第三条，区别只在峰值 N* 落在哪里。</figcaption>
+  </div>
+
+  <p>峰值出现在 <code>N* = √((1 − α) / β)</code>。这个式子的实用价值在于：<strong>β 只要不是零，N* 就是有限的</strong>——也就是说任何有跨核协调的系统都存在一个「加核开始变慢」的点，问题只是它在 32 核还是 3200 核。</p>
+
+  <h3 id="s4-2">4.2 怎么测出自己的 α 和 β</h3>
+
+  <p>不需要理论推导，测几个点拟合就行。这是一次性投入、长期受用的工作：</p>
+
+  <ol>
+    <li>把并发度设成 1、2、4、8、16、32、64，每个跑一次压测，记录<strong>吞吐</strong>（不是延迟）。</li>
+    <li>算出相对单并发的加速比 C(N)。</li>
+    <li>用最小二乘拟合 α 和 β（<code>scipy.optimize.curve_fit</code> 几行就够，也有现成的 USL 拟合脚本）。</li>
+    <li>代入 <code>N* = √((1−α)/β)</code>，得到峰值并发度。</li>
+  </ol>
+
+  <div class="box num">
+    拟合出来的两个数各有明确的行动含义：<br>
+    <strong>α 大</strong>（比如 &gt; 0.05）→ 有明显的串行瓶颈或锁竞争。去找那把锁，<code>perf</code> 或 <code>mutrace</code> 通常一眼能看到。<br>
+    <strong>β 大</strong>（比如 &gt; 0.0005）→ 有跨核/跨节点的协调开销。这个更难找，因为它往往不表现为「等锁」，而表现为「每个操作都慢了一点」。<code>perf c2c</code> 是主要工具。<br>
+    <strong>N* 远大于现有核数</strong> → 恭喜，可以放心加核。<strong>N* 就在附近</strong> → 加机器（横向）而不是加核（纵向）。
+  </div>
+
+  <h3 id="s4-3">4.3 β 在代码里长什么样</h3>
+
+  <p>α（串行/锁）大家都熟，β 更抽象一些。它在实际代码里主要是这四种形态，前两种在<a href="high_concurrency_gateway.html#s6">接入网关</a>和<a href="image_pipeline_architecture.html#s5-3">图片流水线</a>里都出现过：</p>
+
+  <table>
+    <thead><tr><th>β 的来源</th><th>症状</th><th>怎么发现</th></tr></thead>
+    <tbody>
+      <tr><td><strong>缓存行争用</strong>（伪共享、共享的原子计数器、<code>shared_ptr</code> 引用计数）</td><td>加核吞吐倒退；单核压测反而更快</td><td class="good-cell"><code>perf c2c</code> —— 直接报告哪条 cache line 上有跨核 HITM</td></tr>
+      <tr><td><strong>内存带宽饱和</strong></td><td>核没打满但吞吐上不去；对访存密集负载尤其明显</td><td><code>perf stat</code> 看 <code>LLC-load-misses</code>；或 Intel MLC / <code>pcm-memory</code> 直接量带宽</td></tr>
+      <tr><td><strong>分布式协调</strong>（分布式锁、共识、两阶段提交、全局序列号）</td><td>节点数增加时每个操作都变慢一点点</td><td>看协调操作的延迟随节点数的变化曲线</td></tr>
+      <tr><td><strong>NUMA 跨节点访问</strong></td><td>线程数超过单 socket 核数之后出现明显拐点</td><td><code>numastat</code> 看跨节点访问比例；用 <code>numactl</code> 绑核对照测</td></tr>
+    </tbody>
+  </table>
+
+  <div class="box arch">
+    最后一行有一个很实用的诊断技巧：<strong>如果吞吐曲线的拐点恰好落在「单 socket 核数」上，几乎可以断定是 NUMA。</strong>这类拐点非常有辨识度，因为它的位置由硬件决定，是一个整数（16、32、64），而不是一个奇怪的数字。<br><br>
+    对应的架构手法就是<a href="high_concurrency_gateway.html#s4-2">接入网关的 shared-nothing</a>：<strong>把 β 从「跨核」降到「核内」。</strong>它不是消除了协调，是把需要协调的范围缩小到一个核之内，让 β 趋近于零，从而把 N* 推到很远的地方。这也解释了为什么那套模型值得付出「自建跨核通道」的复杂度——<strong>它买的不是一点点性能，是可扩展性曲线的形状。</strong>
+  </div>
+</section>
+
+<section class="chapter" id="s5">
+  <div class="ch-head">
+    <div class="num">05</div>
+    <div class="t">
+      <h2>内存预算表怎么做</h2>
+      <div class="sub">五个步骤，两个必踩的坑</div>
+    </div>
+  </div>
+
+  <h3 id="s5-1">5.1 五个步骤</h3>
+
+  <p>内存预算是这几样工具里最朴素的一个——它就是一张加法表——但它也是最容易被跳过的，因为「看起来不用算也知道」。<a href="high_concurrency_gateway.html#s5">接入网关那张表</a>的结论是 37 GB 和 3 GB 的区别，没有人能靠直觉得到。</p>
+
+  <div class="grid-2">
+    <div class="panel info">
+      <h4>① 确定 X 是什么</h4>
+      <p>先定「每什么」：每连接、每任务、每会话、每分片。选错了后面全错——比如图片流水线如果按「每请求」算，会漏掉「一个请求内同时存在源位图和目标位图」。</p>
+    </div>
+    <div class="panel info">
+      <h4>② 穷举 per-X 的常驻项</h4>
+      <p>自己 new 的、库分配的、内核分配的，<strong>三类都要有</strong>（§5.2）。写不出某一项的数字，就去实测一个——「大概不大」是最危险的一格。</p>
+    </div>
+    <div class="panel info">
+      <h4>③ 每项给「朴素值」和「优化后」</h4>
+      <p>两列并排，才能一眼看出优化该投在哪。只写一列的表，读者无从判断哪些数字是可以改的。</p>
+    </div>
+    <div class="panel info">
+      <h4>④ 乘以 X 的上限，加固定开销</h4>
+      <p>固定开销包括：代码与静态数据、分配器缓存与碎片、线程栈、page cache、以及运行时（GC / JIT / CUDA context）。这部分不随 X 变化但常被漏掉。</p>
+    </div>
+    <div class="panel info">
+      <h4>⑤ 留 headroom，但要说清留给谁</h4>
+      <p>「留 20%」是句空话。要写成：留给<strong>突发</strong>多少、留给<strong>故障转移接管</strong>多少（接入网关那 30 万上限就是这么来的）、留给<strong>大对象尾部</strong>多少。</p>
+    </div>
+    <div class="panel good">
+      <h4>产出：一张能被反驳的表</h4>
+      <p>每一行都标注这个数字的<strong>来源</strong>（实测 / 文档 / 估计）。半年后有人说「这里不对」，能立刻定位到是哪一格的假设变了。</p>
+    </div>
+  </div>
+
+  <h3 id="s5-2">5.2 两个常见错误</h3>
+
+  <p><strong>错误一：只算自己 new 的。</strong>这是最普遍的一个。回看接入网关的预算表：37 GB 里最大的两笔是「用户态读缓冲 19.2 GB」和「OpenSSL 的 SSL 对象 12 GB」——后者<strong>没有任何一行我们自己写的代码申请过它</strong>，它藏在 <code>SSL_new()</code> 里。同理内核侧的 <code>struct sock</code>、epoll 注册项、conntrack 条目也都不会出现在任何堆分析工具里。</p>
+
+  <div class="box tip">
+    验证的办法很直接：<strong>把预算表算出来的数字，和实际压测时的 RSS 对一下。</strong>差得多就说明漏了项，回头找。这一步不能省——预算表最大的风险不是某一格算错了，是<strong>整整一行不在表上</strong>，而那一行往往是最大的那个。
+  </div>
+
+  <p><strong>错误二：用平均值乘 N。</strong>「平均每张图 36 MB × 336 张 = 12 GB」——但如果某一刻恰好来了 336 张 100 MP 的大图呢？那是 100 GB。</p>
+
+  <p>正确的做法是把这两个问题分开回答：</p>
+
+  <ul>
+    <li><strong>稳态预算</strong>用 P95 的单值 × 上限 N。用平均值会低估，用最大值会离谱地高估（因为「N 个都是最大」的概率极低）。</li>
+    <li><strong>尾部场景</strong>单独推演：「如果连续来 N 个最大的会怎样？」答案不应该是「算出一个更大的预算」，而应该是<strong>「有一道闸挡住它」</strong>——也就是<a href="image_pipeline_architecture.html#s3-2">按字节的配额</a>。<strong>配额的存在让尾部场景不需要被算进预算，这才是它最大的价值。</strong></li>
+  </ul>
+
+  <h3 id="s5-3">5.3 RSS 不等于预算</h3>
+
+  <p>算出预算 3 GB，跑起来 RSS 是 4.5 GB，这通常不是算错了。中间的差额有明确的构成，每一项都可以单独确认：</p>
+
+  <table>
+    <thead><tr><th>差额来源</th><th>典型量级</th><th>能不能压</th></tr></thead>
+    <tbody>
+      <tr><td>分配器的 thread cache 与 arena 缓存</td><td>每线程几 MB 到几十 MB</td><td>能，调 <code>tcache</code> / arena 数量，但会牺牲分配速度</td></tr>
+      <tr><td>碎片（外部 + 内部）</td><td class="mid-cell">5%–30%，取决于分配模式</td><td>能，用<a href="image_pipeline_architecture.html#s3-4">分档缓冲池</a>把大对象的分配模式规整化</td></tr>
+      <tr><td>已释放但未归还内核的页</td><td>取决于 <code>dirty_decay_ms</code> / mmap 阈值</td><td>能，但归还太积极会反复缺页</td></tr>
+      <tr><td>线程栈（已 touch 的部分）</td><td>每线程实际用到的几十 KB，不是 8 MB</td><td class="mid-cell">虚拟地址是 8 MB，RSS 只算 touch 过的</td></tr>
+      <tr><td>代码段、静态数据、运行时</td><td>几十到几百 MB</td><td>基本不能</td></tr>
+    </tbody>
+  </table>
+
+  <div class="box danger">
+    在容器里跑时，<strong>cgroup 的内存 limit 卡的是 RSS 加 page cache，不是你的预算。</strong>这意味着两件事：一是 limit 要按 RSS 的实测值加余量来设，不能按预算设；二是<strong>大量文件 IO 产生的 page cache 也算在你头上</strong>——虽然它在内存紧张时可以被回收，但回收有延迟，突发时完全可能先触发 OOM。读写大文件的服务要留意这一点，必要时用 <code>posix_fadvise(POSIX_FADV_DONTNEED)</code> 主动丢弃。
+  </div>
+</section>
+
+<section class="chapter" id="s6">
+  <div class="ch-head">
+    <div class="num">06</div>
+    <div class="t">
+      <h2>尾延迟放大：扇出与重试</h2>
+      <div class="sub">单跳都很健康，端到端却很糟</div>
+    </div>
+  </div>
+
+  <h3 id="s6-1">6.1 扇出：整体的 P50 接近单个的 P99</h3>
+
+  <p>一个请求要打 N 个后端并等全部返回，整体延迟等于这 N 个里<strong>最慢的那个</strong>。假设每个后端的 P99 是 100 ms，那么「至少有一个超过 100 ms」的概率是：</p>
+
+  <div class="formula">
+    <div class="f">P(至少一个慢) = 1 − 0.99<sup>N</sup></div>
+    <div class="legend">N = 1 → 1%　　N = 10 → 9.6%　　N = 50 → <b>39%</b>　　N = 100 → <b>63%</b>　　N = 500 → <b>99.3%</b></div>
+  </div>
+
+  <div class="fig">
+    <svg viewBox="0 0 940 270" style="min-width:740px;height:auto" role="img" aria-label="扇出放大曲线：横轴是扇出数量纵轴是至少一个后端落在P99以外的概率；扇出十时概率约百分之十扇出一百时已达百分之六十三扇出五百时接近百分之百，意味着整体的中位数延迟已经等于单个后端的P99">
+      <path class="grid" d="M70 50 H890 M70 100 H890 M70 150 H890 M70 200 H890"/>
+      <path class="ln" d="M70 40 V220 H890"/>
+      <text class="tm" x="22" y="54">100%</text>
+      <text class="tm" x="30" y="104">75%</text>
+      <text class="tm" x="30" y="154">50%</text>
+      <text class="tm" x="30" y="204">25%</text>
+      <text class="tm" x="66" y="240">1</text>
+      <text class="tm" x="190" y="240">10</text>
+      <text class="tm" x="360" y="240">50</text>
+      <text class="tm" x="520" y="240">100</text>
+      <text class="tm" x="740" y="240">300</text>
+      <text class="tm" x="870" y="240">500</text>
+      <text class="ts" x="790" y="260">扇出数量 N</text>
+      <text class="tb" x="70" y="30">「至少一个落在 P99 以外」的概率</text>
+
+      <path class="ln-r" d="M70 218 C 130 212, 190 198, 280 172 C 370 144, 450 116, 520 96 C 620 74, 740 58, 890 48"/>
+      <path class="ln-d" d="M70 150 H890"/>
+      <text class="tm" x="800" y="146">50% 线</text>
+      <path class="ln-d" d="M420 40 V220"/>
+      <text class="tr" x="428" y="138">N ≈ 70 时超过一半</text>
+      <text class="tm" x="428" y="156">此时整体的<tspan class="tr">中位数</tspan>就已经是单个后端的 P99</text>
+      <text class="ts" x="70" y="264">推论：想让扇出 100 的服务有一个体面的 P99，单个后端需要的是 P99.99，而不是 P99。</text>
+    </svg>
+    <figcaption>图 4 · 扇出把「小概率的慢」变成「大概率的慢」。这是分布式系统里最反直觉的一条算术。</figcaption>
+  </div>
+
+  <div class="box arch">
+    这条算术有一个很硬的推论：<strong>扇出很大的服务，不能靠「优化每个后端的平均延迟」来改善 P99。</strong>因为整体延迟由最慢的那个决定，而最慢的那个是被后端的<strong>尾部</strong>决定的。<br><br>
+    这就要求：扇出型服务对后端的 SLO 不能只提 P99，要提 <strong>P99.9 甚至 P99.99</strong>；反过来，如果后端做不到，那就不要设计成大扇出——把它改成分层扇出（每层扇出 10，两层覆盖 100），或者预聚合。<strong>「扇出多少」是一个架构参数，它直接决定了对下游的 SLO 要求，应该在设计时就算清楚。</strong>
+  </div>
+
+  <h3 id="s6-2">6.2 对冲请求</h3>
+
+  <p>既然慢是由「某一个后端偶尔慢」造成的，一个直接的对策是：<strong>等到超过 P95 还没返回，就向另一个副本再发一次，谁先回用谁。</strong>这就是对冲请求（hedged request）。</p>
+
+  <p>它的效果非常好——把「等一个可能很慢的实例」变成「等两个里快的那个」，而两个都慢的概率是单个的平方。代价是额外的负载，但因为只对超过 P95 的那部分发起，<strong>额外负载只有 5%</strong>。</p>
+
+  <table>
+    <thead><tr><th>要点</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td>触发阈值用 P95，不是固定值</td><td>固定值会在系统整体变慢时把对冲请求变成流量翻倍——正好在最不该加压的时候</td></tr>
+      <tr><td class="bad-cell">必须有对冲预算</td><td>限制对冲请求占总请求的比例（比如 5%）。<strong>没有预算的对冲在过载时会变成放大器</strong>，和 §6.3 的重试放大是同一个陷阱</td></tr>
+      <tr><td>请求必须幂等</td><td>两个副本可能都执行了。写操作要么别用对冲，要么保证幂等</td></tr>
+      <tr><td>第二个请求要发给不同实例</td><td>发给同一个实例毫无意义——它慢是因为它自己的状态（GC、缓存未命中、邻居干扰）</td></tr>
+    </tbody>
+  </table>
+
+  <h3 id="s6-3">6.3 重试放大与重试预算</h3>
+
+  <p>重试是最容易失控的一个机制，因为它的放大是<strong>乘性的</strong>：</p>
+
+  <div class="box num">
+    三层服务，每层「失败重试 3 次」，看起来很温和。<br>
+    最底层收到的请求数 = 3 × 3 × 3 = <strong>27 倍</strong>。<br><br>
+    更糟的是这个放大<strong>恰好在系统过载时才启动</strong>——平时成功率 99.99%，重试量可以忽略；一旦下游开始超时，27 倍的流量立刻砸下去，把「有点慢」变成「彻底崩」。这正是<a href="high_concurrency_gateway.html#s7-3">重连风暴</a>那个正反馈的一般形式。
+  </div>
+
+  <p>三条对策，缺一不可：</p>
+
+  <div class="grid-3">
+    <div class="panel good">
+      <h4>重试预算</h4>
+      <p>不是「每个请求重试 N 次」，而是「重试请求不超过总请求的 10%」。这让重试量<strong>有一个与成功率无关的绝对上限</strong>，过载时自动趋近于零。gRPC 和 Envoy 都内置了这个机制。</p>
+    </div>
+    <div class="panel good">
+      <h4>只在最外层重试</h4>
+      <p>中间层不重试，把失败如实往上报。这样放大从 3ⁿ 变成 3。<strong>「每一层都自己重试」是乘性放大的唯一原因</strong>，而它通常是无意中形成的——每个团队都觉得自己那层加个重试更稳。</p>
+    </div>
+    <div class="panel good">
+      <h4>只重试可重试的错误</h4>
+      <p>超时和 503 可以重试，400 和业务错误重试一万次也没用。<strong>下游应当明确区分「重试有希望」和「重试无意义」</strong>，这是 API 契约的一部分。</p>
+    </div>
+  </div>
+
+  <div class="box danger">
+    第二条最容易在组织层面失守：跨团队的服务链上，没有人能看到全貌，<strong>每个团队都在自己这层加了重试，谁都觉得合理。</strong>这类问题技术上很好解，难在要有人负责「整条链上的重试策略」。可行的做法是把它变成可观测的——在请求头里带一个<strong>重试计数</strong>，任何一层看到计数已经不为零就不再重试，同时把这个计数打进指标。这样「链上有几层在重试」就从一个组织问题变成了一张监控图。
+  </div>
+</section>
+
+<section class="chapter" id="s7">
+  <div class="ch-head">
+    <div class="num">07</div>
+    <div class="t">
+      <h2>背压：三种实现与各自的失效模式</h2>
+      <div class="sub">背压不是「加个队列上限」，它是一条必须完整的传导链</div>
+    </div>
+  </div>
+
+  <p>前面六章都在算「需要多少」。这一章处理「不够时怎么办」。答案只有一个词——把压力如实告诉上游——但它的实现方式有三种，各有各的失效方式。</p>
+
+  <h3 id="s7-1">7.1 有界队列</h3>
+
+  <p>最常见也最简单：队列满时，<code>push</code> 要么阻塞，要么返回失败。两种语义差别很大：</p>
+
+  <table>
+    <thead><tr><th>满时行为</th><th>适用</th><th>失效模式</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><strong>阻塞</strong>生产者</td>
+        <td>生产者可以被阻塞时（内部线程、可暂停的拉取循环）</td>
+        <td class="bad-cell">如果生产者是<strong>不能被阻塞的</strong>（网络接收线程、中断处理），阻塞会让它停止读 socket，压力传导到 TCP 缓冲，再传到对端窗口，最后变成丢包——<strong>背压变成了丢包，而且是在你看不见的地方</strong></td>
+      </tr>
+      <tr>
+        <td><strong>拒绝</strong>并返回错误</td>
+        <td>生产者能处理失败（能重试、能退回队列、能告诉用户）</td>
+        <td class="mid-cell">如果调用方把拒绝当成「重试一下就好」，会变成 §6.3 的重试放大。拒绝必须配<strong>退避</strong>才完整</td>
+      </tr>
+      <tr>
+        <td><strong>丢弃</strong>最老的</td>
+        <td>数据有时效性（遥测、指标、日志）</td>
+        <td>丢弃必须<strong>计数并告警</strong>。静默丢弃是最难查的故障形态之一</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3 id="s7-2">7.2 信用值</h3>
+
+  <p>下游主动告诉上游「你还可以发 N 个」，上游按信用发送，下游处理完归还信用。TCP 的滑动窗口、HTTP/2 与 gRPC 的流控、RDMA 的信用机制都是这一类。</p>
+
+  <div class="grid-2">
+    <div class="panel good">
+      <h4>优点</h4>
+      <p>压力<strong>提前</strong>传导——上游在发送之前就知道能不能发，不需要先发过去再被拒绝。这在跨网络时特别值钱：省掉了一次无效往返，也不会在链路上堆积注定被丢弃的数据。</p>
+    </div>
+    <div class="panel bad">
+      <h4>失效模式</h4>
+      <p><strong>信用回收路径本身出问题时会死锁。</strong>下游处理完了但归还信用的消息丢了、或者下游崩溃重启后信用状态不一致——上游就永远等在那里，而且它「看起来是正常的」（没有错误，只是不发了）。必须有超时兜底和信用状态的重新协商。</p>
+    </div>
+  </div>
+
+  <h3 id="s7-3">7.3 传输层天然反压</h3>
+
+  <p>最省事的一种：<strong>不读 socket。</strong>应用不调 <code>read()</code>，内核接收缓冲就会填满，TCP 窗口通告变成 0，对端的 <code>write()</code> 自然被阻塞。整条链路上不需要写一行背压代码。</p>
+
+  <table>
+    <thead><tr><th>优点</th><th>失效模式</th></tr></thead>
+    <tbody>
+      <tr>
+        <td class="good-cell">免费、可靠、跨进程跨机器自动生效</td>
+        <td class="bad-cell"><strong>粒度是整条连接</strong>。如果一条连接上跑着多路复用的多个流（HTTP/2、gRPC），一个流不读会把<strong>所有流一起卡住</strong>——这就是 HTTP/2 的队头阻塞。所以 HTTP/2 才要在应用层再做一层流级别的信用流控</td>
+      </tr>
+      <tr>
+        <td class="good-cell">压力传到源头，不在中间堆积</td>
+        <td class="bad-cell">对<strong>UDP 无效</strong>，对不关心对端的发送方也无效——它会一直发，只是被丢掉</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3 id="s7-4">7.4 背压必须一路传到源头</h3>
+
+  <p>三种机制怎么选是次要的，真正常见的失败是：<strong>背压在中间某一层被「吸收」了，于是压力绕过去，在别的地方以看不懂的形态爆发。</strong>三种吸收方式：</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 940 290" style="min-width:740px;height:auto" role="img" aria-label="背压传导链示意图：正常情况下压力从下游一路反向传导到源头让源头减速；而中间任何一层出现无界队列无限重试或自动扩容都会吸收掉背压信号让上游继续全速生产最终在被吸收的那一层堆积并崩溃">
+      <text class="tb" x="20" y="26">✅ 完整的传导链：压力一路回到源头</text>
+      <rect class="box-g" x="20" y="40" width="130" height="46" rx="7"/><text class="t" x="46" y="68">源头</text>
+      <rect class="box-a" x="200" y="40" width="130" height="46" rx="7"/><text class="t" x="230" y="68">接收层</text>
+      <rect class="box-a" x="380" y="40" width="130" height="46" rx="7"/><text class="t" x="410" y="68">处理层</text>
+      <rect class="box-a" x="560" y="40" width="130" height="46" rx="7"/><text class="t" x="590" y="68">写回层</text>
+      <rect class="box-y" x="740" y="40" width="130" height="46" rx="7"/><text class="t" x="768" y="68">下游变慢</text>
+      <path class="ln-g" d="M740 76 H700"/><path class="ar-g" d="M700 71 l-8 5 8 5 z"/>
+      <path class="ln-g" d="M560 76 H520"/><path class="ar-g" d="M520 71 l-8 5 8 5 z"/>
+      <path class="ln-g" d="M380 76 H340"/><path class="ar-g" d="M340 71 l-8 5 8 5 z"/>
+      <path class="ln-g" d="M200 76 H160"/><path class="ar-g" d="M160 71 l-8 5 8 5 z"/>
+      <text class="tg" x="20" y="106">源头减速 → 系统进入一个稳定的降级状态，可观测、可告警、可自愈</text>
+
+      <text class="tb" x="20" y="150">❌ 中间任何一层吸收掉信号，链条就断了</text>
+      <rect class="box-g" x="20" y="164" width="130" height="46" rx="7"/><text class="t" x="46" y="192">源头</text>
+      <rect class="box-a" x="200" y="164" width="130" height="46" rx="7"/><text class="t" x="230" y="192">接收层</text>
+      <rect class="box-r" x="380" y="164" width="130" height="46" rx="7"/><text class="t" x="396" y="186">处理层</text><text class="tr" x="396" y="203">无界队列</text>
+      <rect class="box-a" x="560" y="164" width="130" height="46" rx="7"/><text class="t" x="590" y="192">写回层</text>
+      <rect class="box-y" x="740" y="164" width="130" height="46" rx="7"/><text class="t" x="768" y="192">下游变慢</text>
+      <path class="ln-g" d="M740 200 H700"/><path class="ar-g" d="M700 195 l-8 5 8 5 z"/>
+      <path class="ln-g" d="M560 200 H520"/><path class="ar-g" d="M520 195 l-8 5 8 5 z"/>
+      <path class="ln-r" d="M380 200 H340" stroke-dasharray="4 3"/>
+      <text class="tr" x="346" y="228">信号到这里就没了</text>
+      <text class="tr" x="20" y="248">源头继续全速 → 无界队列一直涨 → 内存耗尽 → 进程被杀 → 任务重投 → 负载更高（见图片流水线 §9.1）</text>
+
+      <text class="ts" x="20" y="278">三种常见的「吸收」：无界队列、无限重试、自动扩容。前两个是 bug，第三个是配置——但后果一样。</text>
+    </svg>
+    <figcaption>图 5 · 背压是一条链，任何一环断掉整条就失效。</figcaption>
+  </div>
+
+  <p>第三种吸收方式——<strong>自动扩容</strong>——最值得单独提，因为它看起来是解决方案而不是问题。当队列变长时自动加实例，短期内确实缓解了，但它把「下游能力不足」这个信号变成了「上游继续全速 + 我们花更多钱」。如果瓶颈在下游（数据库、外部 API），加多少上游实例都没用，只会让下游被打得更惨。</p>
+
+  <div class="box arch">
+    <strong>自动扩容和背压不是替代关系，是互补关系。</strong>扩容处理的是「负载真的涨了」，背压处理的是「下游真的不行了」。区分它们的方法是看<strong>下游的饱和度</strong>：下游还有余量、只是我们的容量不够 → 扩容；下游已经饱和 → 背压，扩容只会加害。<br><br>
+    所以自动扩容的触发条件不应该只看自己的队列长度或 CPU，还要看下游的健康度。<strong>「队列长就扩容」这条最常见的规则，在下游是瓶颈时是完全错误的。</strong>
+  </div>
+</section>
+
+<section class="chapter" id="s8">
+  <div class="ch-head">
+    <div class="num">08</div>
+    <div class="t">
+      <h2>一张检查清单</h2>
+      <div class="sub">设计评审时逐条过</div>
+    </div>
+  </div>
+
+  <table>
+    <thead><tr><th>#</th><th>问题</th><th>没答案意味着</th><th>见</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>哪个资源会先见底？离见底还有几倍？</td><td>不知道该优化什么，也不知道该监控什么</td><td>§1.2</td></tr>
+      <tr><td>2</td><td>在途数量 L 是多少？它对应多少内存？</td><td>内存占用是个谜，只能靠上线后观察</td><td>§2.2</td></tr>
+      <tr><td>3</td><td>L 有没有变成代码里一个真实的上限？</td><td class="bad-cell">下游一慢，在途数就会翻十倍，内存跟着翻</td><td>§2.2</td></tr>
+      <tr><td>4</td><td>目标利用率是多少？为什么是这个数？</td><td>大概率按峰值买了机器，P99 会失守</td><td>§3.1</td></tr>
+      <tr><td>5</td><td>服务时间的变异系数 C² 是多少？</td><td>不知道该不该做分级队列；也解释不了「利用率不高但很慢」</td><td>§3.3</td></tr>
+      <tr><td>6</td><td>加核到多少会开始倒退（N*）？</td><td>扩容策略是纯猜的；可能已经在下坡段上了</td><td>§4.2</td></tr>
+      <tr><td>7</td><td>内存预算表里有没有库和内核那两类？</td><td class="bad-cell">最大的一笔很可能不在表上</td><td>§5.2</td></tr>
+      <tr><td>8</td><td>预算 vs 实测 RSS 差多少？差额能逐项解释吗？</td><td>要么漏了项，要么有碎片问题，两者都要查</td><td>§5.3</td></tr>
+      <tr><td>9</td><td>扇出是多少？对下游的 SLO 是 P99 还是 P99.9？</td><td>端到端 P99 会比预期差一个档</td><td>§6.1</td></tr>
+      <tr><td>10</td><td>链路上有几层在重试？有没有重试预算？</td><td class="bad-cell">过载时会有乘性放大，把「慢」变成「崩」</td><td>§6.3</td></tr>
+      <tr><td>11</td><td>背压有没有一路传到源头？中间有没有无界队列 / 无限重试 / 无脑扩容？</td><td class="bad-cell">故障时会走完那条不收敛的后果链</td><td>§7.4</td></tr>
+      <tr><td>12</td><td>拒绝率、丢弃数、配额等待时间有没有被监控？</td><td>背压生效与否完全不可见；<strong>拒绝率恒为零可能说明它根本没工作</strong></td><td>§7.1</td></tr>
+    </tbody>
+  </table>
+
+  <div class="box arch">
+    这张表可以直接贴进架构评审的模板里（<a href="architecture_methodology.html#ch11-1">架构方法论 · 模板速查</a>）。它的价值不在于每一条都要有完美答案——很多时候合理的答案就是「这一项现在不重要，因为 X」——而在于<strong>把「没想过」和「想过并接受」区分开</strong>。<br>
+    前者是风险，后者是决策。而 ADR 记录的正是后者。
+  </div>
+</section>
+
+<section class="chapter" id="s9">
+  <div class="ch-head">
+    <div class="num">09</div>
+    <div class="t">
+      <h2>高频面试题 · 容量与背压</h2>
+      <div class="sub">12 道，按难度分三档</div>
+    </div>
+  </div>
+
+  <p class="qa-hint">点击每道题展开参考答案（先自测，再对照）。</p>
+
+  <h3 id="s9-1">9.1 基础（必答）</h3>
+
+  <ol class="qa-list">
+    <li><details class="qa">
+      <summary><span class="lvl basic">基础</span>Little's Law 是什么？它需要哪些假设？</summary>
+      <div class="ans">
+        <p><strong>L = λ × W</strong>：平均在途数量 = 平均到达率 × 平均停留时间。</p>
+        <div class="point good"><div class="label">假设少得惊人</div><div>只要系统处于<strong>稳态</strong>（长期进出速率相等），它就成立。<strong>不需要任何关于到达分布或服务时间分布的假设</strong>——泊松、突发、恒定、重尾都不影响。这正是它有用的原因。</div></div>
+        <div class="point warn"><div class="label">但它只谈长期平均</div><div>对任何具体时刻、任何分位数都不发表意见。平均在途 336 完全可能对应「大多数时候 200、偶尔 2000」。</div></div>
+        <div class="point bad"><div class="label">最要紧的边界</div><div>系统正在积压（进 &gt; 出）时它<strong>不成立</strong>，而故障时恰恰就是非稳态。<strong>你最需要容量估算的那一刻，正是这个式子失效的时候。</strong>雪崩场景要靠故障推演，不能套公式。</div></div>
+      </div>
+    </details></li>
+
+    <li><details class="qa">
+      <summary><span class="lvl basic">基础</span>峰值需要 336 核，为什么不买 336 核？</summary>
+      <div class="ans">
+        <p>因为<strong>排队本身要占容量</strong>。跑在接近 100% 利用率上，排队延迟是发散的（§3.1）。</p>
+        <table>
+          <thead><tr><th>利用率</th><th>50%</th><th>70%</th><th>90%</th><th>95%</th></tr></thead>
+          <tbody><tr><td>排队时间 / 服务时间</td><td>1.0</td><td>2.3</td><td>9.0</td><td>19</td></tr></tbody>
+        </table>
+        <div class="point good"><div class="label">目标利用率定在 60–70%</div><div>那 30% 不是浪费，是「排队不爆炸」的成本。所以 336 核的峰值需求要配约 512 核。</div></div>
+        <div class="point deep"><div class="label">这条曲线的另一个推论</div><div>越接近满载，加机器的收益越大：从 95% 降到 90%（只加 5% 容量）排队时间砍一半；从 50% 降到 45% 几乎没变化。<strong>「加一点机器就好了很多」不是错觉，是曲线的形状。</strong></div></div>
+      </div>
+    </details></li>
+
+    <li><details class="qa">
+      <summary><span class="lvl basic">基础</span>队列里积压了 8000 条，严重吗？</summary>
+      <div class="ans">
+        <p><strong>光看这个数字无法判断。</strong>要除以出队速率：8000 ÷ 400/s = 20 秒——这才是能做决策的信息（§2.2 的第二种用法）。20 秒可以等，20 分钟就要限流了。</p>
+        <div class="point good"><div class="label">监控上的推论</div><div>面板上不要只放队列长度，要放<strong>「预计排空时间」</strong>（队列长度 ÷ 近期出队速率）。前者的告警阈值会随扩容失效——扩容后同样的长度其实没那么危险了，但没人改阈值，于是开始误报，被人调高，然后真出事时不报。<strong>后者是自归一化的。</strong></div></div>
+      </div>
+    </details></li>
+
+    <li><details class="qa">
+      <summary><span class="lvl basic">基础</span>无界队列有什么问题？</summary>
+      <div class="ans">
+        <p><strong>无界队列不是「没有背压」，是「把背压推迟到 OOM 那一刻」。</strong>它让下游的压力无法传导回上游，上游继续全速生产，队列一直涨到内存耗尽。</p>
+        <div class="point deep"><div class="label">后果不是「崩一次」，是不收敛</div><div>OOM → 在途任务全部未确认 → 队列重投 → 重启后负载 = 原流量 + 全部重投，<strong>比崩溃前更高</strong> → 更快被杀。而三个最直觉的应对都会加速它：加内存只是推迟；加机器让每台都走一遍；<strong>重启最糟</strong>，直接进入「原流量 + 重投」。</div></div>
+        <div class="point good"><div class="label">有界之后</div><div>故障停在「队列变长、上游被拒绝」这个可观测、可告警、可自愈的状态上。</div></div>
+        <div class="point warn"><div class="label">另外两种同样会吸收背压的东西</div><div>无限重试、以及<strong>无脑自动扩容</strong>。第三个最隐蔽，因为它看起来是解决方案。</div></div>
+      </div>
+    </details></li>
+  </ol>
+
+  <h3 id="s9-2">9.2 中级（区分熟练度）</h3>
+
+  <ol class="qa-list" start="5">
+    <li><details class="qa">
+      <summary><span class="lvl mid">中级</span>CPU 利用率只有 60%，P99 却很差。可能是什么原因？</summary>
+      <div class="ans">
+        <p>60% 的利用率按 §3.1 的表只对应约 1.5×S 的排队，所以问题多半不在「平均利用率」上。四个方向：</p>
+        <div class="point deep"><div class="label">① 服务时间方差大</div><div>M/G/1 的 P-K 公式：<code>W_q = ρ/(1−ρ) × S × (1+C²)/2</code>。C² = 10 的重尾负载，排队时间是指数分布假设下的 5.5 倍——<strong>方差一项就吃掉了「从 90% 降到 60%」的全部收益</strong>。这是最常见的原因。</div></div>
+        <div class="point"><div class="label">② 队头阻塞</div><div>单一 FIFO 里一个慢请求挡住后面所有人。它们变慢的原因和自己毫无关系。</div></div>
+        <div class="point"><div class="label">③ 平均掩盖了局部热点</div><div>整机 60% 可能是「4 个核 100% + 60 个核 50%」。分片不均、NUMA 不平衡、某个队列绑死在一个核上，都会这样。</div></div>
+        <div class="point"><div class="label">④ 不在 CPU 上</div><div>在等锁、等 IO、等外部依赖。<strong>先把「排队时间」和「服务时间」分开打点</strong>，两者的解法完全不同：排队靠降利用率或加容量，服务时间的长尾只能靠隔离或让慢的变快。</div></div>
+        <div class="point good"><div class="label">对应的解法</div><div>如果是①或②，<strong>分级队列比扩容划算得多</strong>：把一个 C²=10 的重尾分布拆成两个 C²≈1 的窄分布，快车道的排队时间从 5.5× 降到 1.0×，相当于把利用率从 90% 降到 60%，但一台机器都没多买。</div></div>
+      </div>
+    </details></li>
+
+    <li><details class="qa">
+      <summary><span class="lvl mid">中级</span>「一个大线程池」和「几个小线程池」，哪个好？</summary>
+      <div class="ans">
+        <p>两个方向的道理都成立，取决于你在防哪种失效——而<strong>判据是可以量化的</strong>。</p>
+        <div class="point"><div class="label">合并的理由：统计复用</div><div>M/M/c 里服务台越多，同样利用率下的排队时间越短。ρ=85% 时，<code>c=1</code> 的排队是 5.7×S，<code>c=8</code> 是 1.4×S，<code>c=64</code> 只有 0.15×S。<strong>单服务台被一个慢请求卡住时整队都等，64 个里卡住一个还有 63 个在服务。</strong></div></div>
+        <div class="point"><div class="label">拆分的理由：故障隔离与尾延迟</div><div>一类请求变慢不拖累另一类。这是舱壁模式。</div></div>
+        <div class="point good"><div class="label">判据</div><div><strong>被合并的请求，服务时间分布是否相近。</strong>相近就合并（都是几十毫秒的小请求）；差一个数量级就拆（280 ms 的小图 vs 2.5 s 的巨图）。合并两类方差差异巨大的请求，会把统计复用的收益输光——因为 P-K 公式里的 C² 会被拉高。</div></div>
+        <div class="point warn"><div class="label">拆的时候要拆干净</div><div>只隔离线程不隔离内存配额、连接池、限流令牌，隔离就只做了一半，故障时两条通道会重新耦合。<strong>做资源隔离时要把所有共享资源列一遍。</strong></div></div>
+      </div>
+    </details></li>
+
+    <li><details class="qa">
+      <summary><span class="lvl mid">中级</span>做一张内存预算表，最容易漏掉什么？</summary>
+      <div class="ans">
+        <div class="point bad"><div class="label">① 只算自己 new 的</div><div>最普遍的错误。接入网关那张表里 37 GB 的最大两笔是「用户态读缓冲 19.2 GB」和「OpenSSL 的 SSL 对象 12 GB」——<strong>后者没有任何一行我们写的代码申请过它</strong>，它藏在 <code>SSL_new()</code> 里。内核侧的 <code>struct sock</code>、epoll 注册项、conntrack 条目也一样，不会出现在任何堆分析工具里。</div></div>
+        <div class="point bad"><div class="label">② 用平均值乘 N</div><div>「平均 36 MB × 336 = 12 GB」，但如果这 336 张恰好都是 100 MP 的大图就是 100 GB。做法是分开回答：<strong>稳态预算</strong>用 P95 单值 × 上限 N；<strong>尾部场景</strong>不靠算，靠<strong>一道闸</strong>（按字节的配额）挡住。配额的价值就在于让尾部场景不需要被算进预算。</div></div>
+        <div class="point"><div class="label">③ 忘了固定开销</div><div>代码段、静态数据、分配器缓存与碎片、线程栈、page cache、CUDA context。不随 N 变化，但加起来可能几百 MB。</div></div>
+        <div class="point good"><div class="label">验证方法</div><div>把算出来的数字和压测时的实测 RSS 对一下。差得多就是漏项了。<strong>预算表最大的风险不是某一格算错，是整整一行不在表上——而那一行往往是最大的那个。</strong></div></div>
+      </div>
+    </details></li>
+
+    <li><details class="qa">
+      <summary><span class="lvl mid">中级</span>预算算出来 3 GB，实际 RSS 是 4.5 GB。是算错了吗？</summary>
+      <div class="ans">
+        <p>不一定。差额有明确构成，每一项都能单独确认（§5.3）：分配器的 thread cache 与 arena 缓存（每线程几 MB 到几十 MB）、碎片（5%–30%）、已释放但未归还内核的页、线程栈里 touch 过的部分、代码段与运行时。</p>
+        <div class="point good"><div class="label">正确的态度</div><div>不是「差了就是错了」，而是<strong>差额要能逐项解释</strong>。解释不了的部分才是要查的。</div></div>
+        <div class="point warn"><div class="label">容器里的额外陷阱</div><div>cgroup 的内存 limit 卡的是 <strong>RSS + page cache</strong>，不是你的预算。所以 limit 要按实测 RSS 加余量设。而且<strong>大量文件 IO 产生的 page cache 也算在你头上</strong>——虽然紧张时可回收，但回收有延迟，突发时完全可能先触发 OOM。必要时用 <code>posix_fadvise(POSIX_FADV_DONTNEED)</code> 主动丢弃。</div></div>
+      </div>
+    </details></li>
+  </ol>
+
+  <h3 id="s9-3">9.3 高级（体现深度）</h3>
+
+  <ol class="qa-list" start="9">
+    <li><details class="qa">
+      <summary><span class="lvl adv">高级</span>加核之后吞吐反而下降，怎么解释、怎么定位？</summary>
+      <div class="ans">
+        <p>Amdahl 定律解释不了这个——它的曲线只会饱和，不会下降。要用 <strong>USL</strong>：</p>
+        <div class="point deep"><div class="label">C(N) = N / (1 + α(N−1) + βN(N−1))</div><div><b>α</b> 是竞争（串行部分、锁），随 N <strong>线性</strong>增长；<b>β</b> 是一致性开销（参与者之间互相协调），随 N <strong>平方</strong>增长。N 小的时候 β 可忽略，大到一定程度它超过分子的增长，曲线掉头向下。峰值在 <code>N* = √((1−α)/β)</code>。<strong>β 只要不为零，N* 就是有限的</strong>——任何有跨核协调的系统都存在这个点。</div></div>
+        <div class="point good"><div class="label">怎么测</div><div>并发度取 1/2/4/8/16/32/64 各压一次，记吞吐，最小二乘拟合 α 和 β。α 大 → 找那把锁（<code>perf</code>、<code>mutrace</code>）；β 大 → 找跨核协调（<code>perf c2c</code>）。N* 远大于现有核数就放心加核，N* 就在附近就横向扩而不是纵向扩。</div></div>
+        <div class="point"><div class="label">β 在代码里的四种形态</div><div>缓存行争用（伪共享、共享原子计数器、<code>shared_ptr</code> 引用计数）、内存带宽饱和、分布式协调（分布式锁/共识/全局序列号）、NUMA 跨节点访问。</div></div>
+        <div class="point deep"><div class="label">一个很好用的诊断技巧</div><div><strong>如果吞吐曲线的拐点恰好落在「单 socket 核数」这个整数上，几乎可以断定是 NUMA。</strong>硬件决定的拐点位置有辨识度，不会是一个奇怪的数字。</div></div>
+        <div class="point good"><div class="label">架构层面的对策</div><div>shared-nothing：<strong>把 β 从「跨核」降到「核内」</strong>。它不是消除协调，是把协调范围缩到一个核之内，让 β 趋近于零、N* 推到很远。所以它买的不是一点点性能，<strong>是可扩展性曲线的形状</strong>。</div></div>
+      </div>
+    </details></li>
+
+    <li><details class="qa">
+      <summary><span class="lvl adv">高级</span>每个后端的 P99 都是 100 ms，扇出 100 个之后端到端延迟是多少？</summary>
+      <div class="ans">
+        <p>整体延迟等于最慢的那个。「至少一个超过 100 ms」的概率是 <code>1 − 0.99¹⁰⁰ = 63%</code>——<strong>也就是说整体延迟的中位数就已经超过单个后端的 P99 了</strong>（§6.1）。</p>
+        <div class="point bad"><div class="label">最重要的推论</div><div><strong>扇出很大的服务，不能靠优化后端的平均延迟来改善 P99。</strong>整体由最慢的决定，而最慢的由后端的<strong>尾部</strong>决定。优化平均值对它几乎没有影响。</div></div>
+        <div class="point good"><div class="label">三条对策</div><div>① 对后端提 <strong>P99.9 / P99.99</strong> 的 SLO，而不是 P99；② 改成<strong>分层扇出</strong>（每层扇 10，两层覆盖 100）或预聚合，把 N 降下来；③ <strong>对冲请求</strong>：超过 P95 还没返回就向另一个副本再发一次，谁快用谁。</div></div>
+        <div class="point warn"><div class="label">对冲的四个要点</div><div>阈值用 P95 <strong>而不是固定值</strong>（固定值会在系统整体变慢时把对冲变成流量翻倍，正好在最不该加压的时候）；<strong>必须有对冲预算</strong>（比如占总请求 5%），否则过载时它就是个放大器；请求必须幂等（两个副本可能都执行）；第二个请求要发给<strong>不同实例</strong>（同一个实例慢是因为它自己的状态）。</div></div>
+        <div class="point deep"><div class="label">架构层面</div><div>「扇出多少」是一个架构参数，它直接决定了对下游的 SLO 要求，应该在设计时就算清楚，而不是等上线后发现 P99 不达标再去优化后端。</div></div>
+      </div>
+    </details></li>
+
+    <li><details class="qa">
+      <summary><span class="lvl adv">高级</span>三层服务每层重试 3 次，会发生什么？怎么治？</summary>
+      <div class="ans">
+        <p>放大是<strong>乘性</strong>的：3 × 3 × 3 = <strong>27 倍</strong>。而且这个放大<strong>恰好在系统过载时才启动</strong>——平时成功率 99.99%，重试量可忽略；一旦下游开始超时，27 倍流量立刻砸下去，把「有点慢」变成「彻底崩」（§6.3）。</p>
+        <div class="point good"><div class="label">① 重试预算，而不是重试次数</div><div>规则改成「重试请求不超过总请求的 10%」。这让重试量有一个<strong>与成功率无关的绝对上限</strong>，过载时自动趋近于零。gRPC 和 Envoy 都内置了这个机制。</div></div>
+        <div class="point good"><div class="label">② 只在最外层重试</div><div>中间层不重试，把失败如实上报。放大从 3ⁿ 变成 3。<strong>「每一层都自己重试」是乘性放大的唯一原因</strong>，而它通常是无意中形成的——每个团队都觉得自己那层加个重试更稳。</div></div>
+        <div class="point good"><div class="label">③ 只重试可重试的错误</div><div>超时和 503 可以，400 和业务错误重试一万次也没用。<strong>区分「重试有希望」和「重试无意义」是 API 契约的一部分。</strong></div></div>
+        <div class="point deep"><div class="label">第②条在组织上很难落地</div><div>跨团队的链路上没人看得到全貌。可行的做法是把它变成可观测的：<strong>请求头里带一个重试计数</strong>，任何一层看到计数不为零就不再重试，同时把计数打进指标。这样「链上有几层在重试」就从一个组织问题变成了一张监控图。</div></div>
+      </div>
+    </details></li>
+
+    <li><details class="qa">
+      <summary><span class="lvl adv">高级</span>背压有哪几种实现？各自会怎么失效？</summary>
+      <div class="ans">
+        <div class="point"><div class="label">① 有界队列</div><div>满时阻塞 / 拒绝 / 丢弃最老的。<strong>阻塞的陷阱</strong>：如果生产者是不能被阻塞的（网络接收线程、中断处理），阻塞会让它停止读 socket，压力传到 TCP 缓冲再到对端窗口，最后<strong>变成丢包，而且是在你看不见的地方</strong>。<strong>拒绝的陷阱</strong>：调用方如果当成「重试一下就好」，就变成重试放大——拒绝必须配退避才完整。<strong>丢弃</strong>必须计数并告警，静默丢弃是最难查的故障形态之一。</div></div>
+        <div class="point"><div class="label">② 信用值</div><div>下游告诉上游「还能发 N 个」，上游按信用发。TCP 窗口、HTTP/2 流控、RDMA 都是这类。优点是压力<strong>提前</strong>传导，跨网络时省掉一次无效往返。<strong>失效模式：信用回收路径本身出问题会死锁</strong>——归还消息丢了或下游重启后状态不一致，上游永远等着，而且「看起来是正常的」（没有错误，只是不发了）。必须有超时兜底和状态重协商。</div></div>
+        <div class="point"><div class="label">③ 传输层天然反压</div><div>不读 socket，内核缓冲填满，TCP 窗口归零，对端 write 自然阻塞。免费、可靠、跨机器自动生效。<strong>失效模式：粒度是整条连接</strong>——多路复用时一个流不读会把所有流一起卡住，这就是 HTTP/2 的队头阻塞，所以它才要在应用层再做一层流级流控。另外对 UDP 无效。</div></div>
+        <div class="point bad"><div class="label">比选哪种更重要的问题</div><div><strong>背压必须一路传到源头。</strong>中间任何一层吸收掉信号，压力就会绕过去、在别的地方以看不懂的形态爆发。三种吸收方式：<strong>无界队列、无限重试、无脑自动扩容</strong>。</div></div>
+        <div class="point deep"><div class="label">第三个最隐蔽</div><div>自动扩容看起来是解决方案。但如果瓶颈在下游（数据库、外部 API），加多少上游实例都没用，只会把下游打得更惨。<strong>扩容处理「负载真的涨了」，背压处理「下游真的不行了」</strong>，区分方法是看下游的饱和度。「队列长就扩容」这条最常见的规则，在下游是瓶颈时是完全错误的。</div></div>
+      </div>
+    </details></li>
+  </ol>
+</section>
+
+<div class="footer-nav">
+  <a href="image_pipeline_architecture.html">← 上一篇 · 万级并发图片处理流水线</a>
+  <a href="high_concurrency_gateway.html">案例 · IoT 接入网关（30 万长连接）</a>
+  <a href="resilience_patterns.html">相关 · 限流 · 熔断 · 降级 · 隔离</a>
+  <a href="observability_engineering.html">相关 · 可观测性与分位数聚合</a>
+  <a href="architecture_methodology.html">相关 · 架构方法论</a>
+  <a href="system_architecture_directory.html">目录</a>
+  <a href="../index.html">主页</a>
+</div>
+
+
+
+</main>
+</div>
+
+<script>
+(function () {
+  var sections = document.querySelectorAll('section.chapter');
+  var links = document.querySelectorAll('aside.toc nav a');
+  if (!sections.length || !links.length) return;
+  var obs = new IntersectionObserver(function (entries) {
+    entries.forEach(function (e) {
+      if (!e.isIntersecting) return;
+      var href = '#' + e.target.id;
+      links.forEach(function (a) { a.classList.toggle('active', a.getAttribute('href') === href); });
+    });
+  }, { rootMargin: '-30% 0px -60% 0px' });
+  sections.forEach(function (s) { obs.observe(s); });
+})();
+</script>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

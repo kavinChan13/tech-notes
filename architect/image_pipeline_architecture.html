@@ -1,0 +1,1542 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>万级并发图片处理流水线架构设计 · 三层并发度 / 内存放大 18 倍 / 分级队列 / GPU 批处理 / 反压</title>
+<meta name="description" content="一个完整的 C++ 高吞吐流水线架构案例：为什么「同时处理 10000 张图片」是个未定义的需求，三层并发度各自怎么定容，4 MB 的 JPEG 为什么会变成 72 MB，配额单位为什么必须是字节，尾延迟为什么由最大的那张图决定，GPU 批大小怎么在吞吐与延迟之间兑换，以及反压失效如何一步步变成雪崩——含 5 条 ADR 与 12 道面试题">
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<style>
+  /* format-unify: shell (hero / layout / toc / chapter / pre / table / box) 来自
+     guide-theme.css + article.css；这里只写本页特有的组件。 */
+  body { overflow-x: hidden; }
+  main { min-width: 0; }
+  section.chapter > h2 { color: var(--accent); font-size: 1.5rem; margin: 0 0 1rem; padding-bottom: .5rem; border-bottom: 1px solid var(--border); }
+
+  .box.arch { border-color: var(--accent-2); background: color-mix(in srgb, var(--accent-2) 8%, var(--bg-card)); }
+  .box.arch::before { content: "⭐ 架构师视角: "; color: var(--accent-2); font-weight: 700; }
+  .box.num { border-color: var(--accent-3); background: color-mix(in srgb, var(--accent-3) 8%, var(--bg-card)); }
+  .box.num::before { content: "🧮 算一下: "; color: var(--accent-3); font-weight: 700; }
+
+  .adr { border: 1px solid color-mix(in srgb, var(--accent-2) 40%, var(--border)); border-radius: 12px; margin: 20px 0; overflow: hidden; background: var(--bg-card); }
+  .adr-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 12px 16px; background: color-mix(in srgb, var(--accent-2) 10%, var(--bg-card)); border-bottom: 1px solid color-mix(in srgb, var(--accent-2) 30%, var(--border)); }
+  .adr-id { font-family: var(--mono); font-size: 12px; font-weight: 700; letter-spacing: .06em; padding: 3px 9px; border-radius: 5px; background: var(--accent-2); color: var(--bg); }
+  .adr-title { font-weight: 700; color: var(--text); flex: 1 1 260px; min-width: 0; }
+  .adr-status { font-family: var(--mono); font-size: 11px; padding: 2px 8px; border-radius: 99px; border: 1px solid var(--accent-3); color: var(--accent-3); }
+  .adr-row { display: grid; grid-template-columns: 92px 1fr; gap: 14px; padding: 11px 16px; border-bottom: 1px solid var(--border); font-size: 14px; }
+  .adr-row:last-child { border-bottom: none; }
+  .adr-row > div { min-width: 0; }
+  .adr-row .k { color: var(--accent); font-weight: 600; font-family: var(--mono); font-size: 12.5px; }
+  @media (max-width: 760px) { .adr-row { grid-template-columns: 1fr; gap: 4px; } }
+
+  .reqs { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 10px; margin: 16px 0; }
+  .req { border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 8px; padding: 11px 13px; background: var(--bg-card); min-width: 0; }
+  .req .rk { font-size: 12px; color: var(--text-dim); }
+  .req .rv { font-family: var(--mono); font-size: 19px; font-weight: 700; color: var(--text); margin: 3px 0; letter-spacing: -.5px; }
+  .req .rn { font-size: 12px; color: var(--text-mute); line-height: 1.5; }
+  .req.hot { border-left-color: var(--danger); }
+  .req.warm { border-left-color: var(--accent-4); }
+  .req.cool { border-left-color: var(--accent-3); }
+
+  .ineq { border: 1px solid var(--border); border-radius: 10px; background: var(--bg-card-2); padding: 14px 16px; margin: 16px 0; font-family: var(--mono); font-size: 14px; line-height: 2.1; overflow-x: auto; }
+  .ineq b { color: var(--accent); font-weight: 700; }
+  .ineq .why { font-family: var(--sans); font-size: 12.5px; color: var(--text-dim); margin-left: 10px; }
+
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 16px 0; }
+  .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin: 16px 0; }
+  @media (max-width: 760px) { .grid-2, .grid-3 { grid-template-columns: 1fr; } }
+  .grid-2 > *, .grid-3 > * { min-width: 0; }
+  .panel { border: 1px solid var(--border); border-radius: 9px; padding: 12px 14px; background: var(--bg-card); min-width: 0; }
+  .panel > h4 { margin: 0 0 6px; font-size: 14px; }
+  .panel.good { border-left: 3px solid var(--accent-3); }
+  .panel.bad { border-left: 3px solid var(--danger); }
+  .panel.mid { border-left: 3px solid var(--accent-4); }
+  .panel.info { border-left: 3px solid var(--accent); }
+  .good-cell { background: color-mix(in srgb, var(--accent-3) 10%, transparent); }
+  .bad-cell { background: color-mix(in srgb, var(--danger) 10%, transparent); }
+  .mid-cell { background: color-mix(in srgb, var(--accent-4) 10%, transparent); }
+  .win { color: var(--accent-3); font-weight: 700; }
+  .lose { color: var(--danger); font-weight: 700; }
+
+  .fig { margin: 22px 0; overflow-x: auto; }
+  .fig svg { max-width: 100%; height: auto; }
+  .fig figcaption { font-size: 12.5px; color: var(--text-dim); margin-top: 8px; text-align: center; }
+  .fig .box   { fill: var(--bg-card-2); stroke: var(--border-2); stroke-width: 1.2; }
+  .fig .box-a { fill: color-mix(in srgb, var(--accent) 14%, var(--bg-card)); stroke: var(--accent); stroke-width: 1.2; }
+  .fig .box-g { fill: color-mix(in srgb, var(--accent-3) 14%, var(--bg-card)); stroke: var(--accent-3); stroke-width: 1.2; }
+  .fig .box-p { fill: color-mix(in srgb, var(--accent-2) 14%, var(--bg-card)); stroke: var(--accent-2); stroke-width: 1.2; }
+  .fig .box-y { fill: color-mix(in srgb, var(--accent-4) 14%, var(--bg-card)); stroke: var(--accent-4); stroke-width: 1.2; }
+  .fig .box-r { fill: color-mix(in srgb, var(--danger) 14%, var(--bg-card)); stroke: var(--danger); stroke-width: 1.2; }
+  .fig .t  { fill: var(--text); font-size: 12px; }
+  .fig .tb { fill: var(--text); font-size: 12.5px; font-weight: 700; }
+  .fig .ts { fill: var(--text-dim); font-size: 10.5px; }
+  .fig .tm { fill: var(--text-dim); font-size: 10.5px; font-family: var(--mono); }
+  .fig .ta { fill: var(--accent); font-size: 11.5px; font-weight: 700; }
+  .fig .tg { fill: var(--accent-3); font-size: 11px; font-weight: 600; }
+  .fig .ty { fill: var(--accent-4); font-size: 11px; font-weight: 600; }
+  .fig .tr { fill: var(--danger); font-size: 11px; font-weight: 600; }
+  .fig .tp { fill: var(--accent-2); font-size: 11px; font-weight: 600; }
+  .fig .ln   { stroke: var(--border-2); stroke-width: 1.4; fill: none; }
+  .fig .ln-a { stroke: var(--accent); stroke-width: 1.6; fill: none; }
+  .fig .ln-g { stroke: var(--accent-3); stroke-width: 1.6; fill: none; }
+  .fig .ln-r { stroke: var(--danger); stroke-width: 1.6; fill: none; }
+  .fig .ln-y { stroke: var(--accent-4); stroke-width: 1.6; fill: none; }
+  .fig .ln-d { stroke: var(--text-mute); stroke-width: 1.2; fill: none; stroke-dasharray: 4 3; }
+  .fig .ar-a { fill: var(--accent); }
+  .fig .ar-g { fill: var(--accent-3); }
+  .fig .ar-r { fill: var(--danger); }
+  .fig .grid { stroke: var(--border); stroke-width: .8; fill: none; }
+</style>
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="has-topnav tn-shell-overlay">
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="system_architecture_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 65 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="layout">
+<aside class="toc">
+  <h2>图片处理流水线架构 · Roadmap</h2>
+  <nav>
+    <ol>
+      <li><a href="#s1">「同时处理 10000 张」是一个未定义的需求</a>
+        <ol>
+          <li><a href="#s1-1">甲方原话与四轮追问</a></li>
+          <li><a href="#s1-2">六个可测指标</a></li>
+          <li><a href="#s1-3">「同时 10000 张」的三个答案，差五个数量级</a></li>
+          <li><a href="#s1-4">范围与非目标</a></li>
+        </ol>
+      </li>
+      <li><a href="#s2">三层并发度必须分开定容</a>
+        <ol>
+          <li><a href="#s2-1">三层的资源画像完全不同</a></li>
+          <li><a href="#s2-2">Little's Law：每层各算一遍</a></li>
+          <li><a href="#s2-3">有界队列是层间唯一合法的接口</a></li>
+          <li><a href="#s2-4">ADR-001 队列里放引用，不放数据</a></li>
+        </ol>
+      </li>
+      <li><a href="#s3">内存放大：解码后的位图才是杀手</a>
+        <ol>
+          <li><a href="#s3-1">4 MB 的 JPEG，处理峰值 72 MB</a></li>
+          <li><a href="#s3-2">所以配额单位必须是字节</a></li>
+          <li><a href="#s3-3">ADR-002 流式解码替代全解码</a></li>
+          <li><a href="#s3-4">缓冲池：mmap 阈值与 RSS 锯齿</a></li>
+        </ol>
+      </li>
+      <li><a href="#s4">摄取路径：为什么上传不走处理服务</a>
+        <ol>
+          <li><a href="#s4-1">预签名 URL 直传</a></li>
+          <li><a href="#s4-2">ADR-003 事件驱动而非轮询</a></li>
+        </ol>
+      </li>
+      <li><a href="#s5">C++ Worker：线程池分层与四个坑</a>
+        <ol>
+          <li><a href="#s5-1">单一线程池会互相饿死</a></li>
+          <li><a href="#s5-2">三个池各自的定容依据</a></li>
+          <li><a href="#s5-3">大对象分配：缺页才是成本</a></li>
+          <li><a href="#s5-4">超时与解码炸弹</a></li>
+          <li><a href="#s5-5">ADR-004 解码放进独立进程</a></li>
+        </ol>
+      </li>
+      <li><a href="#s6">尾延迟：P99 由最大的那张图决定</a>
+        <ol>
+          <li><a href="#s6-1">队头阻塞</a></li>
+          <li><a href="#s6-2">按体积分级的队列</a></li>
+          <li><a href="#s6-3">为什么加机器解决不了</a></li>
+        </ol>
+      </li>
+      <li><a href="#s7">GPU 批处理：吞吐与延迟的直接兑换</a>
+        <ol>
+          <li><a href="#s7-1">nvJPEG 的批量曲线</a></li>
+          <li><a href="#s7-2">ADR-005 在线 batch=4，离线 batch=128</a></li>
+          <li><a href="#s7-3">显存也要配额，而且它不能 swap</a></li>
+          <li><a href="#s7-4">CPU 回退路径</a></li>
+        </ol>
+      </li>
+      <li><a href="#s8">离线批：一千万张 / 24 小时</a>
+        <ol>
+          <li><a href="#s8-1">瓶颈不在 CPU，在对象存储</a></li>
+          <li><a href="#s8-2">分片、断点续跑与幂等键</a></li>
+          <li><a href="#s8-3">抢占式实例与检查点</a></li>
+        </ol>
+      </li>
+      <li><a href="#s9">反压失效的后果链</a>
+        <ol>
+          <li><a href="#s9-1">从 OOM Killer 到雪崩</a></li>
+          <li><a href="#s9-2">三个必须存在的背压点</a></li>
+          <li><a href="#s9-3">观测：看在途字节，不看任务数</a></li>
+        </ol>
+      </li>
+      <li><a href="#s10">速查、演进与反向判据</a>
+        <ol>
+          <li><a href="#s10-1">五条 ADR 汇总</a></li>
+          <li><a href="#s10-2">参数速查</a></li>
+          <li><a href="#s10-3">演进路线与触发信号</a></li>
+          <li><a href="#s10-4">这套架构什么时候不适用</a></li>
+        </ol>
+      </li>
+      <li><a href="#s11">高频面试题 · 高吞吐流水线</a>
+        <ol>
+          <li><a href="#s11-1">基础（必答）</a></li>
+          <li><a href="#s11-2">中级（区分熟练度）</a></li>
+          <li><a href="#s11-3">高级（体现深度）</a></li>
+        </ol>
+      </li>
+    </ol>
+  </nav>
+</aside>
+
+<main>
+
+<header class="hero">
+  <div class="badge">Architecture · Throughput · Case Study</div>
+  <h1>万级并发图片处理流水线</h1>
+  <p class="sub">「同时处理 10000 张图片」这句需求本身是未定义的——按字面实现要 360 GB 内存，按正确理解只要 640 KB。这一篇从这个五个数量级的差距出发，把 C++ 高吞吐流水线的三层并发度、内存放大、分级队列、GPU 批处理和反压逐个拆开算清楚。</p>
+  <div class="meta-row">
+    <span class="pill red">核心难度 ★★★★★</span>
+    <span class="pill cyan">端到端案例</span>
+    <span class="pill green">阅读时长 ~65 min</span>
+    <span class="pill amber">前置 C++ 并发 · 内存管理</span>
+  </div>
+</header>
+
+<!-- =========================================================== -->
+<!-- S1 -->
+<!-- =========================================================== -->
+<section class="chapter" id="s1">
+  <div class="ch-head">
+    <div class="num">01</div>
+    <div class="t">
+      <h2>「同时处理 10000 张」是一个未定义的需求</h2>
+      <div class="sub">这一章的产出不是架构，是把一句话拆成六个能验证的数字</div>
+    </div>
+  </div>
+
+  <h3 id="s1-1">1.1 甲方原话与四轮追问</h3>
+
+  <blockquote>「我们的 App 用户上传照片，要能同时处理一万张，出五档缩略图加水印。另外历史上还有一千万张老图要重刷一遍。要快，别让用户等。」</blockquote>
+
+  <p>和上一篇一样，先把形容词换成数字。四轮追问，每一轮的答案都会改掉一个架构决策：</p>
+
+  <table>
+    <thead><tr><th>追问</th><th>答案</th><th>它改变了什么</th></tr></thead>
+    <tbody>
+      <tr><td>图片多大、多少像素？</td><td>平均 4 MB / 12 MP（4000×3000），P95 12 MB，最大允许 100 MB</td><td class="bad-cell">决定内存预算。<strong>关键不是 4 MB，是解码之后的 36 MB</strong>（§3.1）</td></tr>
+      <tr><td>「同时一万张」是峰值到达率还是在途数量？</td><td>追问后发现是「后台积压任务数的报警阈值」，和并发处理能力根本不是一回事</td><td class="bad-cell">这是全篇最重要的一次澄清（§1.3）</td></tr>
+      <tr><td>「别让用户等」等的是什么？</td><td>上传完能立刻看到自己的照片；五档缩略图晚几百毫秒无感</td><td class="good-cell">意味着<strong>上传和处理可以解耦</strong>，用户等的是上传，不是处理（§4）</td></tr>
+      <tr><td>在线和离线批共用一套资源吗？</td><td>希望共用，成本敏感</td><td>决定要不要做优先级与配额隔离（§8.1）</td></tr>
+    </tbody>
+  </table>
+
+  <div class="box arch">
+    第二个追问的价值最大。「同时处理一万张」听起来是个容量需求，追问之后发现它是运维给的一个<strong>报警阈值</strong>——「积压超过一万张就告警」。这两者对架构的要求完全相反：前者要求系统能并行处理一万个任务（几乎不可能，见 §1.3），后者只要求系统<strong>在积压一万个任务时不崩溃，并按可预期的速度消化</strong>。<br><br>
+    <strong>「同时」「并发」「支持 N 个」这类词在需求里几乎总是有歧义的</strong>，而歧义的两端往往差几个数量级。听到就要追问，不要自己选一个理解往下做。
+  </div>
+
+  <h3 id="s1-2">1.2 六个可测指标</h3>
+
+  <div class="reqs">
+    <div class="req hot"><div class="rk">在线峰值到达率</div><div class="rv">1200 张/s</div><div class="rn">晚高峰；稳态 400 张/s</div></div>
+    <div class="req"><div class="rk">单张处理 CPU 时间</div><div class="rv">280 ms</div><div class="rn">解码 120 + 缩放 60 + 水印 10 + 哈希 10 + 编码 80</div></div>
+    <div class="req warm"><div class="rk">端到端 P99</div><div class="rv">800 ms</div><div class="rn">从对象存储事件到五档缩略图可访问</div></div>
+    <div class="req hot"><div class="rk">解码后位图</div><div class="rv">36 MB</div><div class="rn">4000×3000×3。处理峰值 72 MB，放大 18 倍</div></div>
+    <div class="req cool"><div class="rk">离线批</div><div class="rv">1000 万张</div><div class="rn">共 40 TB，夜间 8 h 窗口 → 347 张/s</div></div>
+    <div class="req"><div class="rk">机型</div><div class="rv">8 × 64C</div><div class="rn">2×32C / 256 GB / 1 张 A10 GPU（可选）</div></div>
+  </div>
+
+  <p>先做一次最粗的核算，确认这个需求在物理上成立：</p>
+
+  <div class="box num">
+    峰值 CPU 需求 = 1200 张/s × 0.28 s = <strong>336 核</strong>。<br>
+    集群 8 台 × 64 物理核 = 512 核，峰值利用率 <strong>66%</strong>。<br><br>
+    为什么不按 336 核买 6 台（利用率 87%）？因为排队论告诉我们，<strong>利用率越过 70% 之后排队延迟开始非线性上升</strong>，到 87% 时平均排队时间是空闲时的 6.7 倍——P99 800 ms 的目标会直接失守。详细推导见<a href="capacity_backpressure_design.html#s3">容量估算与背压 · 利用率与排队延迟</a>。<strong>「按峰值需求买机器」是容量规划里最常见的一个错误，它漏掉了排队。</strong>
+  </div>
+
+  <h3 id="s1-3">1.3 「同时 10000 张」的三个答案，差五个数量级</h3>
+
+  <p>现在回到那句需求。假设真的要让一万张图「同时在系统里」，内存要多少？答案完全取决于「在系统里」是指哪一层：</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 940 300" style="min-width:740px;height:auto" role="img" aria-label="一万张图片同时在系统里的三种含义与对应内存：如果一万张都处于解码后的位图状态需要三百六十GB完全不可行；如果都以压缩态驻留在内存队列里需要四十GB勉强但浪费；如果队列里只放对象存储的键引用只需要六百四十KB这才是正确做法">
+      <text class="tb" x="20" y="26">「一万张图同时在系统里」= 多少内存？</text>
+
+      <rect class="box-r" x="20" y="46" width="900" height="72" rx="9"/>
+      <text class="tb" x="36" y="70">① 一万张都处于「已解码的位图」状态</text>
+      <text class="t" x="36" y="90">10000 × 36 MB = <tspan class="tr">360 GB</tspan>　—— 单机 256 GB，集群 2 TB。就算买得起，也没有任何理由这么做</text>
+      <text class="tm" x="36" y="108">这正是「无脑给每个请求起一个线程去解码」会走到的地方</text>
+
+      <rect class="box-y" x="20" y="130" width="900" height="72" rx="9"/>
+      <text class="tb" x="36" y="154">② 一万张以「压缩态」驻留在内存队列里</text>
+      <text class="t" x="36" y="174">10000 × 4 MB = <tspan class="ty">40 GB</tspan>　—— 单机放得下，但这 40 GB 里 99% 的时间什么都没在做</text>
+      <text class="tm" x="36" y="192">而且进程一重启，这 40 GB 排队中的用户数据就全丢了</text>
+
+      <rect class="box-g" x="20" y="214" width="900" height="76" rx="9"/>
+      <text class="tb" x="36" y="238">③ 队列里只放对象存储的键，数据留在存储里 ✔</text>
+      <text class="t" x="36" y="258">10000 × 64 B = <tspan class="tg">640 KB</tspan>　—— 队列变成纯粹的「待办清单」，可持久化、可重投、可跨进程</text>
+      <text class="tm" x="36" y="276">真正在内存里的只有「正在处理」的那 360 张（§2.2 由 Little's Law 算出）× 36 MB = 13 GB</text>
+    </svg>
+    <figcaption>图 1 · 同一个数字「一万」，落在不同层上差 5 个数量级。这决定了整条流水线的形状。</figcaption>
+  </div>
+
+  <p>所以正确的解读是：<strong>系统要能在积压一万个待办时保持稳定，而真正「在处理中」的数量应该由 CPU 核数决定，不由积压量决定。</strong>这两个数字必须解耦，而解耦它们的东西就是一个<strong>只存引用的有界队列</strong>（§2.4）。</p>
+
+  <div class="box danger">
+    「并发 10000」这个说法在 IO 密集场景下是成立的——一万条 TCP 连接同时挂着等数据，是上一篇的题目，那里每条连接只占几 KB。但在<strong>计算密集</strong>场景下它几乎总是错的：一万个正在跑的解码任务需要一万个执行单元，而机器只有 512 个核。多出来的 9488 个「并发」只会变成上下文切换、缓存抖动和 36 MB 一份的内存占用。<br>
+    <strong>判断一个「并发 N」的需求是否合理，先问它是 IO 密集还是计算密集</strong>——两者的合理并发度分别由「等待时间」和「核数」决定，差几个数量级。
+  </div>
+
+  <h3 id="s1-4">1.4 范围与非目标</h3>
+
+  <div class="grid-2">
+    <div class="panel info">
+      <h4>本文范围</h4>
+      <p>从对象存储事件到五档缩略图落库这一段：并发度定容、内存与配额、线程池分层、尾延迟、GPU 批处理、离线批调度、反压。难点是<strong>吞吐与内存</strong>。</p>
+    </div>
+    <div class="panel mid">
+      <h4>明确的非目标</h4>
+      <p>① <strong>图像算法本身</strong>（缩放核、水印算法、感知哈希）——那是另一个领域；② <strong>CDN 与缓存策略</strong>；③ <strong>审核与内容安全</strong>（它是流水线上的一个消费者，不改变流水线的形状）。</p>
+    </div>
+  </div>
+
+  <p>还有一件事要提前说清楚：<strong>本文不讨论「实时转码」这条路线</strong>（不预生成缩略图，等 CDN 回源时按需转）。它在很多场景下是更优解——省掉 80% 从没被访问过的缩略图的存储和计算——但它把问题变成了一个<strong>缓存与冷启动</strong>问题，形状完全不同。选预生成的理由是本例的访问模式：图片上传后 24 小时内会被查看的比例超过 90%，按需转码省不下多少，反而给首次访问加了几百毫秒。<strong>这个判据（首访命中率）应该在选型时算一遍，而不是照抄别人的架构。</strong></p>
+</section>
+
+<!-- =========================================================== -->
+<!-- S2 -->
+<!-- =========================================================== -->
+<section class="chapter" id="s2">
+  <div class="ch-head">
+    <div class="num">02</div>
+    <div class="t">
+      <h2>三层并发度必须分开定容</h2>
+      <div class="sub">把一个「并发度」拆成三个，是这条流水线的骨架</div>
+    </div>
+  </div>
+
+  <h3 id="s2-1">2.1 三层的资源画像完全不同</h3>
+
+  <p>一张图从进入系统到产出缩略图，要跨过三种性质完全不同的工作：<strong>等网络、烧 CPU、等存储</strong>。它们的合理并发度分别由三个毫不相干的量决定：</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 960 320" style="min-width:780px;height:auto" role="img" aria-label="三层并发度分离图：接收层是IO密集合理并发度由等待时间决定可以上千；处理层是CPU密集合理并发度等于物理核数六十四；写回层受对象存储限流约束合理并发度是几十到几百；三层之间用有界队列解耦每层各自按自己的瓶颈定容">
+      <rect class="box-a" x="20" y="50" width="270" height="200" rx="10"/>
+      <text class="tb" x="36" y="74">① 接收层 · IO 密集</text>
+      <text class="t" x="36" y="98">工作：收对象存储事件、</text>
+      <text class="t" x="36" y="116">拉取原图字节流</text>
+      <text class="tm" x="36" y="138">瓶颈：网络往返，线程在等</text>
+      <rect class="box" x="36" y="152" width="238" height="46" rx="5"/>
+      <text class="ta" x="50" y="172">合理并发度：可以上千</text>
+      <text class="tm" x="50" y="190">由「等待时间 ÷ 处理时间」决定</text>
+      <text class="tg" x="36" y="220">✅ 协程 / 异步 IO，几个线程扛全部</text>
+      <text class="tr" x="36" y="240">❌ 一请求一线程 → 上千个栈</text>
+
+      <rect class="box-r" x="345" y="50" width="270" height="200" rx="10"/>
+      <text class="tb" x="361" y="74">② 处理层 · CPU 密集</text>
+      <text class="t" x="361" y="98">工作：解码、缩放、水印、</text>
+      <text class="t" x="361" y="116">哈希、编码（280 ms/张）</text>
+      <text class="tm" x="361" y="138">瓶颈：核数，线程在算</text>
+      <rect class="box-y" x="361" y="152" width="238" height="46" rx="5"/>
+      <text class="tr" x="375" y="172">合理并发度 = 物理核数 64</text>
+      <text class="tm" x="375" y="190">多一个都是纯损耗</text>
+      <text class="tg" x="361" y="220">✅ 固定大小线程池 + CPU 绑定</text>
+      <text class="tr" x="361" y="240">❌ 「10000 并发」在这里是灾难</text>
+
+      <rect class="box-g" x="670" y="50" width="270" height="200" rx="10"/>
+      <text class="tb" x="686" y="74">③ 写回层 · 受外部限流</text>
+      <text class="t" x="686" y="98">工作：五档缩略图上传、</text>
+      <text class="t" x="686" y="116">元数据落库</text>
+      <text class="tm" x="686" y="138">瓶颈：对方给的配额</text>
+      <rect class="box" x="686" y="152" width="238" height="46" rx="5"/>
+      <text class="tg" x="700" y="172">合理并发度：几十到几百</text>
+      <text class="tm" x="700" y="190">由对方的限流阈值决定，不由我们</text>
+      <text class="tg" x="686" y="220">✅ 自己限速，别等对方 429</text>
+      <text class="tr" x="686" y="240">❌ 打满对方，连累别的业务</text>
+
+      <path class="ln-a" d="M290 150 H337"/><path class="ar-a" d="M337 145 l8 5 -8 5 z"/>
+      <path class="ln-a" d="M615 150 H662"/><path class="ar-a" d="M662 145 l8 5 -8 5 z"/>
+      <text class="tm" x="286" y="140">有界队列</text>
+      <text class="tm" x="611" y="140">有界队列</text>
+      <text class="ta" x="20" y="290">三个数字分别是「等待时间 ÷ 处理时间」「物理核数」「对方的配额」——没有任何一个能推出另外两个</text>
+      <text class="ts" x="20" y="310">所以它们必须是三个独立的配置项，中间用有界队列隔开。合成一个「线程池大小」，无论取哪个值都会拖垮另外两层。</text>
+    </svg>
+    <figcaption>图 2 · 三层并发度。这张图是整条流水线的骨架，后面每一章都在给其中某一层填细节。</figcaption>
+  </div>
+
+  <div class="box arch">
+    很多流水线的性能问题，根源就是把这三个数字合成了一个。典型症状：把线程池调大，网络吞吐上去了但 CPU 上下文切换飙升、P99 变差；调小，CPU 打满了但一堆线程卡在等对象存储。<strong>无论怎么调都有一边不满意——这不是「没调好」，是这个旋钮本身不该只有一个。</strong>
+  </div>
+
+  <h3 id="s2-2">2.2 Little's Law：每层各算一遍</h3>
+
+  <p>三层各自要多大，用 Little's Law 算：<strong>在途数量 L = 到达率 λ × 单个任务的驻留时间 W</strong>。这个式子的价值在于它<strong>只需要两个容易测的量，就能算出一个很难直接观测的量</strong>（在途数量，而在途数量直接等于内存占用）。完整推导与它的三种用法见<a href="capacity_backpressure_design.html#s2">容量估算与背压 · Little's Law</a>，这里直接代数：</p>
+
+  <table>
+    <thead><tr><th>层</th><th>λ（峰值）</th><th>W</th><th>L = λW</th><th>它决定了什么</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>① 接收</td><td>1200 张/s</td><td>拉取 4 MB ≈ 80 ms</td><td>96 个在途请求</td>
+        <td>需要 96 个「等待槽」。用协程就是 96 个协程（每个几 KB）；用线程就是 96 个线程（每个 8 MB 栈 = 768 MB）</td>
+      </tr>
+      <tr class="bad-cell">
+        <td>② 处理</td><td>1200 张/s</td><td>280 ms CPU + 排队</td><td><strong>336 个在途</strong></td>
+        <td>但集群只有 512 核，所以 336 是<strong>并行跑着的</strong>，不是排队的。这也说明利用率 66% —— 见 §1.2</td>
+      </tr>
+      <tr>
+        <td>③ 写回</td><td>1200 × 5 = 6000 个对象/s</td><td>上传小文件 ≈ 30 ms</td><td>180 个在途上传</td>
+        <td>要么 180 个协程，要么按对象存储的并发配额限速排队</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="box num">
+    第二层那个 336 是全篇的关键数字。它乘上「解码后位图 36 MB」就是<strong>集群解码内存峰值 = 336 × 36 MB ≈ 12 GB</strong>，分摊到 8 台机是 1.5 GB/台——完全可控。<br><br>
+    而如果不设 in-flight 上限、让接收层有多少收多少，同样的 1200 张/s 在下游变慢时会在几秒内堆出上千个正在解码的任务：1000 × 36 MB = 36 GB/台，直接 OOM。<strong>Little's Law 算出来的 L 不只是一个观测值，它必须变成代码里一个真实存在的上限。</strong>
+  </div>
+
+  <h3 id="s2-3">2.3 有界队列是层间唯一合法的接口</h3>
+
+  <p>三层之间怎么连？只有一种做法是对的——<strong>有界队列</strong>。另外两种常见做法都会在某个时刻失效：</p>
+
+  <table>
+    <thead><tr><th>连接方式</th><th>正常时</th><th>下游变慢时</th></tr></thead>
+    <tbody>
+      <tr><td>直接函数调用（同一线程串起来）</td><td>最快，零开销</td><td class="bad-cell">三层并发度被强制相等——接收层的并发度等于处理层的，等于写回层的。§2.1 的三个数字被合并了</td></tr>
+      <tr><td>无界队列</td><td>解耦了，看起来很美</td><td class="bad-cell">上游继续全速生产，队列无限增长直到 OOM。<strong>无界队列不是「没有背压」，是「把背压推迟到 OOM 那一刻」</strong></td></tr>
+      <tr class="good-cell"><td>有界队列</td><td>解耦，且各层独立定容</td><td class="good-cell">队列满 → 上游阻塞或拒绝 → 压力<strong>在产生的地方</strong>被感知到。这就是背压</td></tr>
+    </tbody>
+  </table>
+
+  <p>「有界」这两个字看起来是个小配置，实际上它是整个系统<strong>唯一</strong>把「下游能力」传导回「上游速度」的机制。§9 会展开：这条链上有三个必须存在的背压点，缺任何一个，压力都会绕过去、在别的地方以看不懂的形态爆发。</p>
+
+  <h3 id="s2-4">2.4 ADR-001 队列里放引用，不放数据</h3>
+
+  <p>回到 §1.3 的三个答案。队列里到底放什么，决定了「积压一万张」是 40 GB 还是 640 KB：</p>
+
+  <div class="adr">
+    <div class="adr-head"><span class="adr-id">ADR-001</span><span class="adr-title">层间队列只传对象存储的键与元数据，不传图片字节；队列有界且外置</span><span class="adr-status">已接受</span></div>
+    <div class="adr-row"><div class="k">背景</div><div>积压量（可能上万）与在途处理量（由 Little's Law 算出为 336）必须解耦。若队列元素携带图片数据，积压 1 万张就是 40 GB 内存，且进程重启即丢失用户数据。</div></div>
+    <div class="adr-row"><div class="k">候选</div><div>① 进程内队列传 <code>shared_ptr&lt;Buffer&gt;</code> ② 进程内队列传对象键 ③ 外置消息队列（Kafka / SQS）传对象键</div></div>
+    <div class="adr-row"><div class="k">决策</div><div>选 ③ 作为跨阶段的主队列（上传事件 → 处理任务），选 ② 作为单进程内三层之间的队列。图片字节只在<strong>处理层内部</strong>存在，从拉取到写回是一条不落地的短路径。</div></div>
+    <div class="adr-row"><div class="k">后果</div><div><span class="win">得到</span>：积压量与内存脱钩（1 万张积压 = 640 KB）；任务可持久化、可重投、可跨进程与跨机器重新分配；worker 变成无状态的，可随意扩缩与抢占（§8.3 用到这一点）。<br><span class="lose">付出</span>：每个任务多一次对象存储读取（约 80 ms，已计入 §2.2 的 W）；多一个外部依赖；<strong>重投意味着可能重复处理，因此下游必须幂等</strong>（§8.2）。</div></div>
+    <div class="adr-row"><div class="k">何时重议</div><div>若将来出现「上传后 100 ms 内必须出图」这类硬实时需求，多一次对象存储往返就不可接受，需要为这条路径单开一个「上传即处理、数据不落地」的短路——但那应该是主流水线之外的一条<strong>额外</strong>快车道，而不是把主流水线改成同步的。</div></div>
+  </div>
+</section>
+
+<!-- =========================================================== -->
+<!-- S3 -->
+<!-- =========================================================== -->
+<section class="chapter" id="s3">
+  <div class="ch-head">
+    <div class="num">03</div>
+    <div class="t">
+      <h2>内存放大：解码后的位图才是杀手</h2>
+      <div class="sub">所有关于「4 MB 一张图」的直觉，在这一章都要作废</div>
+    </div>
+  </div>
+
+  <h3 id="s3-1">3.1 4 MB 的 JPEG，处理峰值 72 MB</h3>
+
+  <p>JPEG 是压缩格式，而所有图像处理都在<strong>未压缩的位图</strong>上进行。这中间的放大倍数才是这条流水线真正的内存模型：</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 940 250" style="min-width:740px;height:auto" role="img" aria-label="图片内存放大对比条形图：磁盘上的JPEG四MB，解码后的RGB位图三十六MB放大九倍，EXIF旋转需要第二份拷贝达到七十二MB放大十八倍，而五档缩略图合计只有七点五MB；结论是内存预算必须按处理峰值七十二MB算不能按四MB算">
+      <text class="tb" x="20" y="26">一张 4 MB / 12 MP 的 JPEG，在流水线各阶段的内存占用</text>
+
+      <text class="t" x="20" y="66">① 磁盘 / 网络上的 JPEG</text>
+      <rect class="box-a" x="270" y="50" width="26" height="24" rx="3"/>
+      <text class="ta" x="308" y="68">4 MB　（1×）</text>
+
+      <text class="t" x="20" y="106">② 解码后的 RGB 位图</text>
+      <rect class="box-y" x="270" y="90" width="234" height="24" rx="3"/>
+      <text class="ty" x="516" y="108">36 MB　（9×）　4000 × 3000 × 3 字节，没有任何压缩</text>
+
+      <text class="t" x="20" y="146">③ EXIF 旋转 / 色彩变换</text>
+      <rect class="box-y" x="270" y="130" width="234" height="24" rx="3"/>
+      <rect class="box-r" x="504" y="130" width="234" height="24" rx="3"/>
+      <text class="tr" x="750" y="148">72 MB　（18×）　源 + 目标同时驻留</text>
+
+      <text class="t" x="20" y="186">④ 五档缩略图（成品）</text>
+      <rect class="box-g" x="270" y="170" width="49" height="24" rx="3"/>
+      <text class="tg" x="330" y="188">7.5 MB　—— 最终要留下的东西，只占峰值的十分之一</text>
+
+      <path class="ln-r" d="M270 40 V210" stroke-dasharray="4 3"/>
+      <text class="tr" x="20" y="228">内存预算必须按 ③ 的 72 MB 算。按 ① 的 4 MB 算，会低估 18 倍——这是这类系统 OOM 最常见的原因。</text>
+    </svg>
+    <figcaption>图 3 · 18 倍的放大。而 100 MB 的大图（P99.9）解码后是 900 MB，一张就能吃掉一台机器的一大块。</figcaption>
+  </div>
+
+  <p>更要命的是这个倍数<strong>不是常数</strong>：它取决于像素数，而像素数和文件大小的关系很弱。一张 4 MB 的高压缩率照片可能是 24 MP（解码后 72 MB），一张 4 MB 的低压缩率截图可能只有 2 MP（解码后 6 MB）。也就是说<strong>光看文件大小无法预测内存占用</strong>——这直接推出下一节的结论。</p>
+
+  <div class="box danger">
+    极端情况有名字：<strong>解压炸弹（decompression bomb）</strong>。一个 1 MB 的 PNG 可以解码成几十 GB 的位图（全白图片的压缩率极高），这既是可用性问题也是安全问题。唯一可靠的防御是<strong>解码前先只读文件头拿到尺寸</strong>（<code>libjpeg</code> 的 <code>jpeg_read_header</code>、<code>libpng</code> 的 <code>png_read_info</code>），宽 × 高 × 通道数超限直接拒绝，一个像素都不解。§5.4 会给出更彻底的兜底。
+  </div>
+
+  <h3 id="s3-2">3.2 所以配额单位必须是字节</h3>
+
+  <p>既然文件大小预测不了内存，那么用「任务条数」做并发控制就是错的：</p>
+
+  <div class="box num">
+    假设限制「最多 40 个任务并行」。<br>
+    如果这 40 张恰好都是 2 MP 的截图：40 × 6 MB = <strong>240 MB</strong>，机器闲得发慌。<br>
+    如果这 40 张恰好都是 24 MP 的相机原图：40 × 72 MB = <strong>2.9 GB</strong>，还只是解码；加上旋转的第二份就是 5.8 GB。<br>
+    同一个配置，实际内存占用差 <strong>24 倍</strong>——这个配置项没有任何意义。
+  </div>
+
+  <p>正确的做法是<strong>按字节配额</strong>：一个进程级的信号量，单位是字节，容量是「允许用于位图的内存上限」。任务在解码<strong>之前</strong>先读头拿到尺寸、算出需要多少字节、申请配额；申请不到就等（这就是背压点之一）。处理完归还。</p>
+
+<pre><code><span class="cm">// 按字节而不是按条数的配额。这是这条流水线上最重要的一个不变量：</span>
+<span class="cm">//   任意时刻，所有正在解码/处理的位图字节数之和 &lt;= budget_</span>
+<span class="kw">class</span> <span class="type">ByteBudget</span> {
+  <span class="kw">const</span> <span class="type">size_t</span> budget_;
+  <span class="type">size_t</span> used_ = <span class="num">0</span>;
+  <span class="type">std</span>::<span class="type">mutex</span> m_;
+  <span class="type">std</span>::<span class="type">condition_variable</span> cv_;
+
+ <span class="kw">public</span>:
+  <span class="kw">explicit</span> <span class="fn">ByteBudget</span>(<span class="type">size_t</span> bytes) : <span class="fn">budget_</span>(bytes) {}
+
+  <span class="cm">// 返回 false = 超时，调用方应当把任务退回队列而不是硬等 —— 硬等会让</span>
+  <span class="cm">// 一张 900 MB 的巨图把所有 worker 都堵在这里（§6.1 的队头阻塞）。</span>
+  <span class="kw">template</span> &lt;<span class="kw">class</span> <span class="type">Rep</span>, <span class="kw">class</span> <span class="type">Period</span>&gt;
+  <span class="type">bool</span> <span class="fn">acquire</span>(<span class="type">size_t</span> n, <span class="type">std</span>::<span class="type">chrono</span>::<span class="type">duration</span>&lt;<span class="type">Rep</span>, <span class="type">Period</span>&gt; timeout) {
+    <span class="cm">// 单个任务就超过总预算时永远等不到 —— 必须在这里判掉，否则死等。</span>
+    <span class="kw">if</span> (n &gt; budget_) <span class="kw">return</span> <span class="kw">false</span>;
+    <span class="type">std</span>::<span class="type">unique_lock</span> lk(m_);
+    <span class="kw">if</span> (!cv_.<span class="fn">wait_for</span>(lk, timeout, [&amp;] { <span class="kw">return</span> used_ + n &lt;= budget_; }))
+      <span class="kw">return</span> <span class="kw">false</span>;
+    used_ += n;
+    <span class="kw">return</span> <span class="kw">true</span>;
+  }
+
+  <span class="type">void</span> <span class="fn">release</span>(<span class="type">size_t</span> n) {
+    { <span class="type">std</span>::<span class="type">lock_guard</span> lk(m_); used_ -= n; }
+    cv_.<span class="fn">notify_all</span>();   <span class="cm">// notify_one 不行：等待者要的字节数不同，被唤醒的那个未必满足</span>
+  }
+};
+
+<span class="cm">// 用法：先读头，再申请，最后才解码。顺序不能反 —— 这三步的顺序就是这段代码的全部价值。</span>
+<span class="type">ImageInfo</span> info = <span class="fn">peek_header</span>(bytes);                 <span class="cm">// 只解析头部，不碰像素</span>
+<span class="kw">if</span> (info.width * info.height &gt; kMaxPixels) <span class="kw">return</span> <span class="fn">reject</span>(<span class="str">"too large"</span>);
+<span class="type">size_t</span> need = <span class="type">size_t</span>(info.width) * info.height * <span class="num">3</span> * <span class="num">2</span>;  <span class="cm">// ×2：源 + 目标（§3.1）</span>
+<span class="kw">if</span> (!budget.<span class="fn">acquire</span>(need, <span class="num">200</span>ms)) <span class="kw">return</span> <span class="fn">requeue</span>(task);   <span class="cm">// 背压：退回队列，不硬等</span>
+<span class="type">BudgetGuard</span> <span class="fn">guard</span>(budget, need);                       <span class="cm">// RAII，异常路径也要归还</span>
+</code></pre>
+
+  <div class="box arch">
+    <code>notify_all</code> 那一行的注释值得展开。这不是普通的信号量——<strong>等待者请求的数量不同</strong>，所以「释放了 36 MB」并不意味着队首那个等 900 MB 的能走。用 <code>notify_one</code> 会出现「明明有空间，但被唤醒的那个不够用，又睡回去，而能用的那个没被叫醒」——一个典型的<strong>丢失唤醒</strong>。<br>
+    代价是惊群：每次归还都叫醒所有等待者。在 worker 数量只有几十个的场景下这完全可以接受；如果等待者上千，就该改成按需求量排序的显式等待队列。<strong>「用简单实现 + 说清它什么时候不够用」，比一上来写复杂版本更有价值。</strong>
+  </div>
+
+  <h3 id="s3-3">3.3 ADR-002 流式解码替代全解码</h3>
+
+  <p>上面那套配额把内存管住了，但它管的是「同时能解多少张」。还有一条正交的路：<strong>让单张图占用的内存本身变小。</strong></p>
+
+  <p>关键观察是：我们要的是最大 1600×1200 的缩略图，而源图是 4000×3000。传统流程「完整解码 36 MB → 缩放 → 编码」里，那 36 MB 有 84% 的像素解码出来就是为了被扔掉。两种成熟的规避手段：</p>
+
+  <table>
+    <thead><tr><th>手段</th><th>做法</th><th>省下多少</th><th>限制</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><strong>JPEG DCT 缩放解码</strong></td>
+        <td><code>libjpeg-turbo</code> 的 <code>scale_num/scale_denom</code>，在 DCT 域直接按 1/2、1/4、1/8 输出</td>
+        <td class="good-cell">1/4 缩放时位图从 36 MB 降到 2.25 MB，解码时间也降到约 1/3</td>
+        <td>只支持 N/8 这些固定比例，需要再做一次精细缩放收尾</td>
+      </tr>
+      <tr>
+        <td><strong>流式 / 分块处理</strong></td>
+        <td><code>libvips</code> 的按扫描线流式管道：解码一条、缩放一条、写出一条，整图从不完整驻留</td>
+        <td class="good-cell">峰值内存降到几 MB 量级，与图片尺寸<strong>基本无关</strong></td>
+        <td>只适用于能局部计算的算子；需要全局信息的（某些直方图操作）仍要全图</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="adr">
+    <div class="adr-head"><span class="adr-id">ADR-002</span><span class="adr-title">用 libvips 的流式管道做主处理路径，保留 libjpeg-turbo 直调作为快路径</span><span class="adr-status">已接受</span></div>
+    <div class="adr-row"><div class="k">背景</div><div>全解码路径下单张峰值 72 MB，而 84% 的解码像素最终被丢弃。内存是本流水线在线部分的主要约束（§3.1）。</div></div>
+    <div class="adr-row"><div class="k">候选</div><div>① ImageMagick / GraphicsMagick（全解码，生态最全）② libvips（流式，内存与尺寸解耦）③ 直接调 libjpeg-turbo + 自写缩放</div></div>
+    <div class="adr-row"><div class="k">决策</div><div>主路径选 ②。libvips 的按需流式模型让单张峰值内存从 72 MB 降到个位数 MB，<strong>使 §3.2 的字节配额可以设得宽松很多，进而提高并行度</strong>。对最常见的「JPEG 输入 + 等比缩放」这一条占 85% 流量的路径，另走 ③ 的 DCT 缩放快路径。</div></div>
+    <div class="adr-row"><div class="k">后果</div><div><span class="win">得到</span>：内存与图片尺寸基本解耦，一张 100 MB 的大图不再需要 900 MB；同样的内存预算下并行度提高一个数量级。<br><span class="lose">付出</span>：libvips 的算子集比 ImageMagick 小，遇到不支持的格式或算子要有回退分支（分支意味着两条路径都要测）；流式模型下<strong>错误发生在管道执行时而不是调用时</strong>，错误定位比同步 API 困难。</div></div>
+    <div class="adr-row"><div class="k">依赖</div><div>本决策放宽了 ADR-001 之外的内存约束，但<strong>不能取代 §3.2 的字节配额</strong>——回退到全解码分支时配额仍是唯一的保护。两者是互补的，不是二选一。</div></div>
+  </div>
+
+  <h3 id="s3-4">3.4 缓冲池：mmap 阈值与 RSS 锯齿</h3>
+
+  <p>就算用了流式解码，仍然有大量几 MB 到几十 MB 的缓冲要反复申请释放。这里有两个 glibc 层面的行为会直接变成性能问题和「看起来像内存泄漏」的现象。</p>
+
+  <p><strong>一、大块分配走 mmap，每次都要重新缺页。</strong>glibc 的 <code>malloc</code> 对超过 <code>M_MMAP_THRESHOLD</code>（默认 128 KB）的请求直接 <code>mmap</code>，<code>free</code> 时 <code>munmap</code> 还给内核。<code>mmap</code> 返回的是<strong>未映射的虚拟地址</strong>，第一次写每一页都要触发缺页中断：</p>
+
+  <div class="box num">
+    一块 36 MB 的位图缓冲 = 36 MB ÷ 4 KB = <strong>9216 个页面</strong>。每次缺页处理约 1–2 μs（分配物理页 + 清零 + 建页表项），合计 <strong>9–18 ms</strong>。<br>
+    这占单张 280 ms 处理时间的 3–6%，而且它是<strong>纯浪费</strong>——同一块内存刚刚才被释放。1200 张/s 下就是每秒 11–22 秒的 CPU 时间，接近 20 个核。
+  </div>
+
+  <p><strong>二、glibc 会自适应提高 mmap 阈值，于是 RSS 只涨不落。</strong>当你 <code>free</code> 一块 mmap 来的内存时，glibc 认为「这个大小以后还会用」，会把 <code>M_MMAP_THRESHOLD</code> 提高到这次的大小，后续同样大小的分配改从 arena 里切。这个自适应对性能是好事（避免反复 mmap），但它的副作用是<strong>那块内存不再归还给内核，RSS 曲线只涨不落</strong>——运维看到的就是一个疑似内存泄漏。</p>
+
+  <div class="grid-2">
+    <div class="panel bad">
+      <h4>❌ 每次 new 一块</h4>
+      <p>RSS 呈锯齿状剧烈波动然后单调爬升到一个高台；每张图付 9–18 ms 缺页；碎片化让高台越来越高。<strong>而且这个高台的高度是不可预测的</strong>，取决于历史上处理过的最大那批图。</p>
+    </div>
+    <div class="panel good">
+      <h4>✅ 分档缓冲池 + 显式配置</h4>
+      <p>按 2 的幂分档（4/8/16/32/64/128 MB）预分配一组缓冲，借还复用。首次使用后页面一直是映射着的，<strong>缺页只付一次</strong>。RSS 稳定在一个可预测的高度，正是我们在 §3.2 里配额的那个数。</p>
+    </div>
+  </div>
+
+  <p>配套要做的两件事：<strong>启动时 touch 一遍</strong>（或者 <code>mmap</code> 时带 <code>MAP_POPULATE</code>），把缺页成本一次性付在启动阶段而不是第一个用户请求上；以及考虑<strong>透明大页</strong>（THP），2 MB 的页让 36 MB 只需要 18 次缺页而不是 9216 次，代价是可能的内存浪费和分配延迟抖动——这个取舍要实测，不要照抄结论。</p>
+
+  <div class="box tip">
+    换用 jemalloc 或 tcmalloc 能缓解一部分问题，但要注意它们自己的归还策略：jemalloc 的 <code>dirty_decay_ms</code> / <code>muzzy_decay_ms</code> 控制多久把空闲页还给内核，默认 10 秒。<strong>值太小会让 RSS 上下抖动并反复缺页，太大会让容器的内存 limit 被撑爆。</strong>在容器里跑时通常还要开 <code>background_thread:true</code>，否则归还只在分配路径上顺带发生，而空闲期恰恰没有分配。<br>
+    但无论换哪个分配器，<strong>分档缓冲池仍然值得做</strong>——它解决的是「同一块内存反复缺页」，而这是分配器层面解决不了的（分配器不知道你下一次还要一块同样大的）。
+  </div>
+</section>
+
+<!-- =========================================================== -->
+<!-- S4 -->
+<!-- =========================================================== -->
+<section class="chapter" id="s4">
+  <div class="ch-head">
+    <div class="num">04</div>
+    <div class="t">
+      <h2>摄取路径：为什么上传不走处理服务</h2>
+      <div class="sub">最省钱的一条边，是让流量根本不经过你</div>
+    </div>
+  </div>
+
+  <h3 id="s4-1">4.1 预签名 URL 直传</h3>
+
+  <p>朴素设计是「App → 我们的服务 → 对象存储」。算一下这条边的成本：峰值 1200 张/s × 4 MB = <strong>4.8 GB/s 入向带宽</strong>，还要在服务里为每个上传维持一份缓冲。而这个服务在这条路径上<strong>什么也没做</strong>——它只是个搬运工。</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 940 300" style="min-width:740px;height:auto" role="img" aria-label="上传路径对比图：朴素方案App先把四点八GB每秒的图片流传给应用服务再由服务转存对象存储，服务白白承担全部带宽和缓冲；正确方案App先向服务申请一个预签名URL只有几百字节的往返然后直接把图片PUT到对象存储，存储产生事件通知触发处理流水线，应用服务的带宽降到接近零">
+      <rect class="box-r" x="20" y="34" width="900" height="106" rx="9"/>
+      <text class="tb" x="36" y="56">❌ 经过服务中转</text>
+      <rect class="box" x="40" y="70" width="110" height="46" rx="6"/><text class="t" x="72" y="98">App</text>
+      <rect class="box-r" x="330" y="70" width="150" height="46" rx="6"/><text class="t" x="352" y="90">应用服务</text><text class="tr" x="352" y="108">4.8 GB/s 白过</text>
+      <rect class="box" x="680" y="70" width="150" height="46" rx="6"/><text class="t" x="702" y="98">对象存储</text>
+      <path class="ln-r" d="M150 93 H322"/><path class="ar-r" d="M322 88 l8 5 -8 5 z"/>
+      <path class="ln-r" d="M480 93 H672"/><path class="ar-r" d="M672 88 l8 5 -8 5 z"/>
+      <text class="tr" x="176" y="86">4 MB × 1200/s</text>
+      <text class="tr" x="526" y="86">再发一遍</text>
+
+      <rect class="box-g" x="20" y="156" width="900" height="128" rx="9"/>
+      <text class="tb" x="36" y="178">✅ 预签名 URL 直传</text>
+      <rect class="box" x="40" y="192" width="110" height="46" rx="6"/><text class="t" x="72" y="220">App</text>
+      <rect class="box-a" x="330" y="192" width="150" height="46" rx="6"/><text class="t" x="352" y="212">应用服务</text><text class="tg" x="352" y="230">只发 URL，~300 B</text>
+      <rect class="box" x="680" y="192" width="150" height="46" rx="6"/><text class="t" x="702" y="220">对象存储</text>
+      <rect class="box-p" x="680" y="248" width="150" height="30" rx="5"/><text class="t" x="694" y="268">事件通知</text>
+      <path class="ln-a" d="M150 205 H322"/><path class="ar-a" d="M322 200 l8 5 -8 5 z"/>
+      <path class="ln-a" d="M322 226 H150"/><path class="ar-a" d="M150 221 l-8 5 8 5 z"/>
+      <text class="tm" x="176" y="200">① 申请上传许可</text>
+      <text class="tg" x="176" y="240">② 返回预签名 URL（限时、限大小、限类型）</text>
+      <path class="ln-g" d="M95 238 C 100 292, 500 296, 750 288 V244"/><path class="ar-g" d="M745 244 l5 -8 5 8 z"/>
+      <text class="tg" x="330" y="296">③ PUT 4 MB —— 完全不经过应用服务</text>
+      <path class="ln-p" stroke="var(--accent-2)" stroke-width="1.6" fill="none" d="M830 263 H880 V150"/>
+      <text class="tp" x="840" y="146">④ 触发流水线</text>
+    </svg>
+    <figcaption>图 4 · 应用服务的入向带宽从 4.8 GB/s 降到接近零。和上一篇的 OTA 分离是同一个手法：控制面走服务，数据面绕开。</figcaption>
+  </div>
+
+  <p>预签名 URL 不只是省带宽，它把三件事一起解决了。<strong>限时</strong>（URL 5 分钟过期，天然限制了被滥用的窗口）、<strong>限内容</strong>（签名里可以带 <code>Content-Length</code> 上限和 <code>Content-Type</code> 约束，超限的 PUT 会被存储直接拒绝，不需要我们写一行校验）、<strong>限路径</strong>（key 由服务生成，用户无法覆盖别人的文件）。这些约束由对象存储在<strong>它自己的边界上</strong>执行，比我们在应用层校验更可靠也更省。</p>
+
+  <div class="box arch">
+    这是「把职责下沉到已经在链路上的组件」的典型例子。带宽、限流、大小校验、鉴权——这四件事对象存储本来就在做，让它做一遍比我们再做一遍便宜得多。<strong>架构设计里一个反复出现的问题是「这件事非我做不可吗」，而答案通常取决于链路上有没有别的组件已经在那个位置上。</strong>上一篇的 OTA（ADR-004）和这里是同一个判断。
+  </div>
+
+  <h3 id="s4-2">4.2 ADR-003 事件驱动而非轮询</h3>
+
+  <p>图片进了对象存储，处理流水线怎么知道？两条路：轮询「列出新对象」，或者由存储推事件。这个选择看起来很小，但它决定了系统的延迟下界和存储的账单：</p>
+
+  <div class="adr">
+    <div class="adr-head"><span class="adr-id">ADR-003</span><span class="adr-title">用对象存储的事件通知驱动流水线，不轮询；事件先进消息队列再分发</span><span class="adr-status">已接受</span></div>
+    <div class="adr-row"><div class="k">背景</div><div>端到端 P99 目标 800 ms，其中留给「感知到新对象」的预算只有几十毫秒。同时对象存储的 LIST 操作在大桶上既慢又贵。</div></div>
+    <div class="adr-row"><div class="k">候选</div><div>① 定期 LIST 新前缀 ② 应用服务在返回预签名 URL 后自己排队（乐观地假设用户一定会上传成功）③ 对象存储事件通知 → 消息队列 → worker</div></div>
+    <div class="adr-row"><div class="k">决策</div><div>选 ③。事件是<strong>上传真正完成</strong>时才产生的，这一点很关键——候选 ② 会为大量「申请了 URL 但没上传」的请求生成幽灵任务，而移动端上传失败率并不低。事件不直连 worker 而是先进消息队列，是为了 ADR-001 的重投与削峰。</div></div>
+    <div class="adr-row"><div class="k">后果</div><div><span class="win">得到</span>：感知延迟从「轮询周期的一半」降到几十毫秒；不为未完成的上传生成任务；LIST 成本归零。<br><span class="lose">付出</span>：事件通知是<strong>至少一次</strong>投递，同一张图可能被处理两次——所以 §8.2 的幂等是必需的，不是可选的；事件也可能<strong>丢失</strong>（各家存储的 SLA 都不是 100%），因此必须保留一条低频的对账扫描作为兜底。</div></div>
+    <div class="adr-row"><div class="k">何时重议</div><div>若换到不提供事件通知的存储，或者出现「同一次上传要触发多条互不相干的流水线」的需求（此时事件扇出会变复杂），应考虑在应用服务侧写一张 outbox 表，由它统一分发。</div></div>
+  </div>
+
+  <div class="box tip">
+    「事件可能丢」这条后果最容易被忽略，因为它很少发生。<strong>兜底的对账扫描不需要实时</strong>——每小时扫一次「过去两小时内上传但没有缩略图记录」的对象即可，成本极低。<strong>凡是依赖「异步通知」的架构都要配一条低频对账</strong>，否则丢掉的那 0.01% 会变成永远查不出原因的用户投诉。
+  </div>
+</section>
+
+<!-- =========================================================== -->
+<!-- S5 -->
+<!-- =========================================================== -->
+<section class="chapter" id="s5">
+  <div class="ch-head">
+    <div class="num">05</div>
+    <div class="t">
+      <h2>C++ Worker：线程池分层与四个坑</h2>
+      <div class="sub">§2 那三个数字，在这一章变成三个线程池</div>
+    </div>
+  </div>
+
+  <h3 id="s5-1">5.1 单一线程池会互相饿死</h3>
+
+  <p>最常见的实现是一个线程池，每个任务从头做到尾：拉取 → 解码 → 处理 → 上传。线程数按核数设 64。问题在于这 64 个线程里，任意时刻有多少在真正用 CPU？</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 960 280" style="min-width:780px;height:auto" role="img" aria-label="单一线程池与分层线程池的时间线对比：单一线程池中每个线程的时间被拉取和上传的IO等待切成三段中间才是计算，实际CPU利用率只有百分之七十二且外部存储变慢时全部线程被堵死；分层线程池里IO由少量协程承担CPU池的六十四个线程始终满负荷计算">
+      <rect class="box-r" x="20" y="34" width="920" height="112" rx="9"/>
+      <text class="tb" x="36" y="56">❌ 单一线程池：每个线程从头做到尾</text>
+      <text class="tm" x="36" y="76">线程 1</text>
+      <rect class="box-y" x="90" y="64" width="70" height="18" rx="3"/><text class="ts" x="98" y="78">拉取 80</text>
+      <rect class="box-a" x="160" y="64" width="245" height="18" rx="3"/><text class="ts" x="240" y="78">计算 280 ms</text>
+      <rect class="box-y" x="405" y="64" width="80" height="18" rx="3"/><text class="ts" x="415" y="78">上传 90</text>
+      <text class="tm" x="36" y="104">线程 2</text>
+      <rect class="box-y" x="90" y="92" width="70" height="18" rx="3"/>
+      <rect class="box-a" x="160" y="92" width="245" height="18" rx="3"/>
+      <rect class="box-y" x="405" y="92" width="80" height="18" rx="3"/>
+      <text class="tr" x="510" y="80">CPU 有效利用率 = 280 / 450 = 62%，等于 24 个核在空等</text>
+      <text class="tr" x="510" y="100">存储抖动时 64 个线程全部堵在 IO —— CPU 掉到 0，任务却在堆积</text>
+      <text class="tm" x="36" y="132">这就是「调线程池大小无论怎么调都有一边不满意」的根源：一个旋钮，两种资源</text>
+
+      <rect class="box-g" x="20" y="160" width="920" height="112" rx="9"/>
+      <text class="tb" x="36" y="182">✅ 分层：IO 归 IO，CPU 归 CPU</text>
+      <text class="tm" x="36" y="202">IO 协程</text>
+      <rect class="box-y" x="110" y="190" width="46" height="18" rx="3"/>
+      <rect class="box-y" x="160" y="190" width="46" height="18" rx="3"/>
+      <rect class="box-y" x="210" y="190" width="46" height="18" rx="3"/>
+      <rect class="box-y" x="260" y="190" width="46" height="18" rx="3"/>
+      <text class="tm" x="316" y="204">4 个线程承载 96 个在途拉取（§2.2）</text>
+      <text class="tm" x="36" y="232">CPU 池</text>
+      <rect class="box-a" x="110" y="220" width="196" height="18" rx="3"/>
+      <rect class="box-a" x="308" y="220" width="196" height="18" rx="3"/>
+      <rect class="box-a" x="506" y="220" width="196" height="18" rx="3"/>
+      <rect class="box-a" x="704" y="220" width="180" height="18" rx="3"/>
+      <text class="tg" x="36" y="258">CPU 池的 64 个线程始终在算；存储抖动只会让队列变长，不会让 CPU 停下来</text>
+    </svg>
+    <figcaption>图 5 · 同样 64 个线程，分层之后 CPU 利用率从 62% 到接近 100%，而且外部依赖抖动不再传导成 CPU 空转。</figcaption>
+  </div>
+
+  <p>「饿死」这个词的准确含义在下半张图里：单一线程池下，<strong>对象存储变慢会让 CPU 停摆</strong>——64 个线程全堵在 <code>read()</code> 上，机器的 CPU 使用率掉到个位数，而任务队列在疯涨。这时候如果按「CPU 不高」去扩容，加的机器同样会堵在 IO 上，一点用没有。<strong>分层之后，外部依赖的抖动被限制在它自己那一层</strong>，表现为「IO 队列变长」而不是「整个系统停摆」。</p>
+
+  <h3 id="s5-2">5.2 三个池各自的定容依据</h3>
+
+  <table>
+    <thead><tr><th>池</th><th>大小</th><th>依据</th><th>调错了会怎样</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>IO 池（拉取 + 上传）</td>
+        <td>4–8 线程 / 数百协程</td>
+        <td>线程数只要够跑完成回调；<strong>在途数量由 §2.2 的 96 和 180 决定，用协程或异步 IO 承载，不是用线程</strong></td>
+        <td>用线程承载在途数：276 个线程 × 8 MB 栈 = 2.2 GB，还有上下文切换</td>
+      </tr>
+      <tr class="good-cell">
+        <td>CPU 池（解码 + 处理 + 编码）</td>
+        <td><strong>= 物理核数 64</strong></td>
+        <td>纯计算，多一个线程不会多算一点，只会多一次上下文切换和一份缓存污染</td>
+        <td>调大：P99 变差（每个任务都被切得更碎）；调小：核空转</td>
+      </tr>
+      <tr>
+        <td>GPU 提交池</td>
+        <td>2–4 线程</td>
+        <td>只负责攒批、拷贝到显存、提交 kernel、取回。<strong>GPU 的并行度在设备里，不在线程数上</strong></td>
+        <td>调大：多个 stream 互相抢显存与 SM，吞吐反降（§7.3）</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="box arch">
+    「CPU 池 = 物理核数」这条要说清一个细节：<strong>是物理核，不是逻辑核（超线程）。</strong>图像处理是典型的高 IPC、大量 SIMD、访存密集的负载，两个超线程共享同一套执行单元和 L1/L2，收益通常只有 10–20%，却会让每个任务的<strong>单张耗时翻倍</strong>——吞吐微涨、延迟明显变差。在有 P99 目标的在线路径上这是亏的；在只看吞吐的离线批上可以打开。<strong>同一台机器上，在线和离线应该用不同的线程数配置</strong>，这也是 §8.1 要做资源隔离的一个理由。
+  </div>
+
+  <h3 id="s5-3">5.3 大对象分配：缺页才是成本</h3>
+
+  <p>§3.4 已经算过这笔账：一块 36 MB 的缓冲首次写入要付 9216 次缺页、9–18 ms。这里补充两个只有在这个量级才会遇到的具体问题。</p>
+
+  <p><strong>一、<code>std::vector</code> 会白清零一遍。</strong><code>std::vector&lt;uint8_t&gt; buf(36 * 1024 * 1024)</code> 会值初始化——也就是 <code>memset</code> 36 MB。而这块内存马上就要被解码器完整覆写，这次清零是纯浪费。36 MB 的 <code>memset</code> 在内存带宽 10 GB/s 下约 3.6 ms，占单张处理时间的 1.3%。用缓冲池 + <code>resize</code> 到已有容量，或者用不做值初始化的分配器，能省掉它。<strong>注意这不是「过早优化」——在 1200 张/s 下这 3.6 ms 等于 4.3 个核。</strong></p>
+
+  <p><strong>二、内存带宽本身会成为瓶颈。</strong>处理一张图要至少完整走几遍 36 MB：解码写入、缩放读取、色彩变换。假设 4 遍，就是 144 MB 的内存流量。64 个核同时干这件事：<code>64 × 144 MB ÷ 0.28 s ≈ 33 GB/s</code>——已经逼近双路服务器的实际可用内存带宽。这意味着<strong>加核到某个点之后吞吐不再线性增长</strong>，因为大家在抢内存总线。<a href="capacity_backpressure_design.html#s4">USL：加核为什么会变慢</a>讲的就是这个现象的一般形式。</p>
+
+  <div class="box tip">
+    这条推论直接支持了 ADR-002：流式解码不只是省内存峰值，它<strong>也省内存带宽</strong>——数据在 L2/L3 里就被消费掉了，不必往返主存。在核数多的机器上，这个收益经常比省内存本身更大，而且不会体现在任何「内存使用率」的监控图上。
+  </div>
+
+  <h3 id="s5-4">5.4 超时与解码炸弹</h3>
+
+  <p>一个任务卡住了怎么办？在这条流水线上这不是假设：</p>
+
+  <ul>
+    <li>恶意构造的解压炸弹（§3.1），一张图能解出几十 GB；</li>
+    <li>格式损坏导致第三方库进入病态路径，某些 TIFF / WebP 的畸形文件能让解码器跑几分钟；</li>
+    <li>就是单纯的大图——100 MB 的全景图合法且真实存在，处理它要几秒。</li>
+  </ul>
+
+  <p>问题在于 <code>libjpeg</code>、<code>libpng</code>、<code>libtiff</code> 都是<strong>同步的 C 接口，没有取消点</strong>。你不能从外面「中断」一次 <code>jpeg_finish_decompress()</code>。可用的手段按可靠性排序：</p>
+
+  <table>
+    <thead><tr><th>手段</th><th>能挡住什么</th><th>挡不住什么</th></tr></thead>
+    <tbody>
+      <tr><td class="good-cell">解码前读头 + 尺寸上限</td><td class="good-cell">绝大多数解压炸弹，成本几乎为零</td><td>畸形文件导致的病态循环（尺寸是合法的）</td></tr>
+      <tr><td>库的进度回调（libjpeg 的 <code>progress_monitor</code>）</td><td>协作式取消，能中断长时间解码</td><td class="bad-cell">只在库愿意回调的地方生效；库内部的紧循环、以及库本身的崩溃都挡不住</td></tr>
+      <tr><td>线程 + 超时后放弃等待</td><td>让调用方不被卡住</td><td class="bad-cell">那个线程<strong>永远回不来</strong>，它占的核和内存都收不回；跑几小时之后线程池就空了</td></tr>
+      <tr class="good-cell"><td><strong>独立进程 + 超时 kill</strong></td><td class="good-cell">全部：病态循环、内存爆炸（配 cgroup 限额）、段错误、库里的安全漏洞</td><td>进程创建与 IPC 的开销</td></tr>
+    </tbody>
+  </table>
+
+  <div class="box danger">
+    第三行那个陷阱值得单独记住：<strong>「起个线程做，超时就不管它了」不是超时控制，是资源泄漏。</strong>调用方确实按时返回了，但那个线程还占着一个核在死循环、还持有着 §3.2 申请的字节配额（如果配额是 RAII 释放的，那它永远不会释放）。表现是服务运行几小时后「吞吐缓慢下降」，重启就好——一个非常难查的问题，因为每一次单独看都是正常的。
+  </div>
+
+  <h3 id="s5-5">5.5 ADR-004 解码放进独立进程</h3>
+
+  <div class="adr">
+    <div class="adr-head"><span class="adr-id">ADR-004</span><span class="adr-title">图片解码在独立的沙箱子进程里执行，通过共享内存传递数据，超时即 kill</span><span class="adr-status">已接受</span></div>
+    <div class="adr-row"><div class="k">背景</div><div>解码库是同步 C 接口、无取消点，且历来是内存安全漏洞的重灾区；处理的又是完全不可信的用户上传内容。超时、资源爆炸、崩溃、安全，四个问题指向同一个位置。</div></div>
+    <div class="adr-row"><div class="k">候选</div><div>① 同进程 + 尺寸校验 ② 同进程 + 进度回调协作式取消 ③ 独立进程池 + 共享内存 + cgroup 限额 + seccomp</div></div>
+    <div class="adr-row"><div class="k">决策</div><div>选 ③。维护一个常驻的解码子进程池（避免每次 fork 的开销），原始字节和输出位图通过共享内存传递（避免拷贝 36 MB），子进程用 cgroup 限住内存、用 seccomp 砍掉文件与网络系统调用。超时直接 <code>SIGKILL</code>，主进程回收共享内存并把任务标记为失败。</div></div>
+    <div class="adr-row"><div class="k">后果</div><div><span class="win">得到</span>：超时是<strong>真正可强制执行</strong>的；解码器崩溃只损失一个任务而不是整个 worker；一个 CVE 的爆炸半径被 seccomp 限制住；内存爆炸被 cgroup 挡在子进程里。<br><span class="lose">付出</span>：一次跨进程往返（共享内存下约几百微秒，相对 280 ms 可忽略）；子进程池的生命周期管理是新增的复杂度（僵尸回收、崩溃后重建、共享内存段泄漏）；调试变难，栈跨了进程边界。</div></div>
+    <div class="adr-row"><div class="k">何时重议</div><div>若输入源变为完全可信（例如只处理自家管线产出的内部图片），这套隔离的收益会大幅下降，同进程方案的简单性会重新占优。判据是「输入是否可信」，不是「有没有出过事」。</div></div>
+  </div>
+
+  <div class="box arch">
+    这个决策的说服力不在于任何单一理由——只为了超时，或只为了安全，都不太值得付这份复杂度。它的价值在于<strong>一个手段同时解决了四个原本要分别处理的问题</strong>（超时、崩溃隔离、内存爆炸、安全漏洞）。<br>
+    架构决策的性价比经常是这样体现的：<strong>与其为四个问题各打一个补丁，不如找一个位置把它们一次性挡住。</strong>找这个位置的方法是把问题列在一起看它们有没有共同的边界——这四个问题的共同边界都是「解码这段不可信代码的执行环境」。
+  </div>
+</section>
+
+<!-- =========================================================== -->
+<!-- S6 -->
+<!-- =========================================================== -->
+<section class="chapter" id="s6">
+  <div class="ch-head">
+    <div class="num">06</div>
+    <div class="t">
+      <h2>尾延迟：P99 由最大的那张图决定</h2>
+      <div class="sub">平均值完全正常，而用户在抱怨——这一章解释为什么</div>
+    </div>
+  </div>
+
+  <h3 id="s6-1">6.1 队头阻塞</h3>
+
+  <p>处理时间和像素数近似成正比，而像素数的分布是重尾的：中位数 12 MP（280 ms），P99 是 50 MP（1.2 s），P99.9 是 100 MP 的全景图（2.5 s 以上）。<strong>千分之一的图，耗时是中位数的十倍。</strong></p>
+
+  <p>如果所有任务共用一个 FIFO 队列，这千分之一会把它前面排着的所有人一起拖慢：</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 940 290" style="min-width:740px;height:auto" role="img" aria-label="队头阻塞与分级队列的对比：单一FIFO队列里一张巨图占住一个worker两点五秒排在它后面的八张小图各自多等两秒P99被彻底污染；分级队列按图片体积路由小图走快车道大图走独立慢通道两者互不影响小图的P99回到正常水平">
+      <rect class="box-r" x="20" y="34" width="900" height="110" rx="9"/>
+      <text class="tb" x="36" y="56">❌ 单一 FIFO：一张巨图堵住整条队</text>
+      <text class="tm" x="36" y="80">worker A</text>
+      <rect class="box-r" x="110" y="68" width="330" height="20" rx="3"/><text class="ts" x="220" y="83">100 MP 全景图 · 2500 ms</text>
+      <rect class="box-a" x="440" y="68" width="38" height="20" rx="3"/>
+      <rect class="box-a" x="480" y="68" width="38" height="20" rx="3"/>
+      <text class="tm" x="36" y="108">队列里等着</text>
+      <rect class="box-y" x="110" y="96" width="38" height="20" rx="3"/><text class="ts" x="118" y="111">4MP</text>
+      <rect class="box-y" x="150" y="96" width="38" height="20" rx="3"/>
+      <rect class="box-y" x="190" y="96" width="38" height="20" rx="3"/>
+      <rect class="box-y" x="230" y="96" width="38" height="20" rx="3"/>
+      <rect class="box-y" x="270" y="96" width="38" height="20" rx="3"/>
+      <text class="tr" x="330" y="111">这 5 张本来 280 ms 就好，现在各等 2.5 s —— P99 被一张图定义</text>
+      <text class="tm" x="36" y="136">而且它们「变慢」的原因和自己毫无关系，任何针对它们的优化都不会有效果</text>
+
+      <rect class="box-g" x="20" y="160" width="900" height="118" rx="9"/>
+      <text class="tb" x="36" y="182">✅ 按体积分级：两条互不干扰的通道</text>
+      <text class="tm" x="36" y="206">快车道 · 56 worker</text>
+      <rect class="box-a" x="170" y="194" width="38" height="20" rx="3"/>
+      <rect class="box-a" x="210" y="194" width="38" height="20" rx="3"/>
+      <rect class="box-a" x="250" y="194" width="38" height="20" rx="3"/>
+      <rect class="box-a" x="290" y="194" width="38" height="20" rx="3"/>
+      <rect class="box-a" x="330" y="194" width="38" height="20" rx="3"/>
+      <rect class="box-a" x="370" y="194" width="38" height="20" rx="3"/>
+      <text class="tg" x="420" y="209">≤ 20 MP 走这里，P99 回到 450 ms</text>
+      <text class="tm" x="36" y="240">慢通道 · 8 worker</text>
+      <rect class="box-y" x="170" y="228" width="240" height="20" rx="3"/><text class="ts" x="250" y="243">100 MP · 2500 ms</text>
+      <text class="ty" x="420" y="243">&gt; 20 MP 走这里，它慢它的，不影响别人</text>
+      <text class="tm" x="36" y="268">代价：慢通道的容量是固定的，大图突增时它们会排队变得更慢 —— 这是<tspan class="tg">刻意选择</tspan>的牺牲对象</text>
+    </svg>
+    <figcaption>图 6 · 分级不是让大图变快，是<strong>不让大图拖慢小图</strong>。这是一次明确的偏袒，而偏袒谁是业务决策。</figcaption>
+  </div>
+
+  <h3 id="s6-2">6.2 按体积分级的队列</h3>
+
+  <p>实现上有三个要点，每一个都容易做错：</p>
+
+  <p><strong>一、分级依据必须是像素数，不是文件大小。</strong>§3.1 已经说过两者关系很弱。而像素数在 §3.2 的「读头」那一步就已经拿到了，不需要额外成本。</p>
+
+  <p><strong>二、慢通道要有独立的 worker，而不是共享 worker 池 + 优先级。</strong>如果只是给小图更高的优先级、共用 64 个 worker，那么当 64 个 worker 恰好都在处理大图时，小图仍然要等——优先级只影响<strong>排队顺序</strong>，不影响<strong>已经开始执行</strong>的任务。要真正隔离，必须是物理上分开的执行资源。这和 <a href="resilience_patterns.html#s5">舱壁隔离</a>是同一个道理。</p>
+
+  <p><strong>三、慢通道的容量是一次业务取舍，要写下来。</strong>给慢通道 8 个 worker 意味着：大图的吞吐上限是 <code>8 / 2.5 s = 3.2 张/s</code>，超过这个速率大图就会积压。这个数字必须和业务对齐——如果哪天有个活动导致大量全景图上传，慢通道会堵，而这是<strong>设计时就接受的结果</strong>，不是故障。</p>
+
+<pre><code><span class="cm">// 分级路由：读头拿到像素数之后立刻决定走哪条通道，此后两条路完全独立。</span>
+<span class="kw">enum</span> <span class="kw">class</span> <span class="type">Lane</span> { kFast, kSlow, kReject };
+
+<span class="type">Lane</span> <span class="fn">route</span>(<span class="kw">const</span> <span class="type">ImageInfo</span>&amp; info) {
+  <span class="type">uint64_t</span> px = <span class="type">uint64_t</span>(info.width) * info.height;
+  <span class="kw">if</span> (px &gt; kMaxPixels)     <span class="kw">return</span> <span class="type">Lane</span>::kReject;   <span class="cm">// 解压炸弹与超规格，直接拒（§3.1）</span>
+  <span class="kw">if</span> (px &gt; kFastLanePixels) <span class="kw">return</span> <span class="type">Lane</span>::kSlow;    <span class="cm">// 20 MP 分界，覆盖 99.4% 的流量走快车道</span>
+  <span class="kw">return</span> <span class="type">Lane</span>::kFast;
+}
+
+<span class="cm">// 两条通道各自持有独立的 worker 与独立的字节配额。</span>
+<span class="cm">// 配额也要分开：共用一个 ByteBudget 的话，几张巨图就能把快车道的额度吃光 ——</span>
+<span class="cm">// worker 分开了但内存没分开，隔离只做了一半，故障时依然会互相拖累。</span>
+<span class="kw">struct</span> <span class="type">LaneRuntime</span> {
+  <span class="type">BoundedQueue</span>&lt;<span class="type">Task</span>&gt; queue;
+  <span class="type">ThreadPool</span>          workers;
+  <span class="type">ByteBudget</span>          budget;
+};
+<span class="type">LaneRuntime</span> fast{ <span class="cm">/*queue*/</span> <span class="num">4096</span>, <span class="cm">/*workers*/</span> <span class="num">56</span>, <span class="cm">/*budget*/</span> <span class="num">24</span>_GB };
+<span class="type">LaneRuntime</span> slow{ <span class="cm">/*queue*/</span>  <span class="num">256</span>, <span class="cm">/*workers*/</span>  <span class="num">8</span>, <span class="cm">/*budget*/</span>  <span class="num">8</span>_GB };
+</code></pre>
+
+  <div class="box arch">
+    注释里那句「隔离只做了一半」是这类设计最常见的漏洞。<strong>做资源隔离时要把所有共享资源列一遍</strong>：线程、内存配额、连接池、限流令牌、甚至日志缓冲。只隔离最显眼的那一个（通常是线程），剩下的任何一个都足以让两条通道在故障时重新耦合起来。上一篇 §8.2 把握手线程池独立出来时，也必须同时给它独立的入口队列，是同一件事。
+  </div>
+
+  <h3 id="s6-3">6.3 为什么加机器解决不了</h3>
+
+  <p>遇到 P99 高，最直觉的反应是加机器。但队头阻塞造成的尾延迟，加机器的效果非常有限：</p>
+
+  <div class="box num">
+    假设集群从 8 台加到 16 台，总 worker 从 512 到 1024。一张 100 MP 的巨图仍然占住<strong>一个</strong> worker 2.5 秒——它不会因为集群变大而变快。<br>
+    变的只是「一张巨图占住的 worker 占总量的比例」从 1/512 变成 1/1024，也就是<strong>被它挡住的小图变少了</strong>。但由于巨图的数量也是按比例增长的（流量涨了才需要加机器），这个比例并不会改善。<strong>加机器改善的是排队，改善不了「单个任务本身就慢」。</strong>
+  </div>
+
+  <p>这是理解尾延迟的一个通用要点：<strong>P99 有两个来源，排队和服务时间本身，两者的解法完全不同。</strong>排队造成的尾延迟靠加容量或降利用率解决（<a href="capacity_backpressure_design.html#s3">利用率与排队延迟</a>）；服务时间本身的长尾只能靠<strong>隔离</strong>（不让慢的拖累快的）或者<strong>让慢的变快</strong>（比如给巨图专门走 GPU 路径）。诊断的第一步是把两者分开测：在队列里的时间和在 worker 上的时间要分别打点。</p>
+</section>
+
+<!-- =========================================================== -->
+<!-- S7 -->
+<!-- =========================================================== -->
+<section class="chapter" id="s7">
+  <div class="ch-head">
+    <div class="num">07</div>
+    <div class="t">
+      <h2>GPU 批处理：吞吐与延迟的直接兑换</h2>
+      <div class="sub">批大小是一个旋钮，它两端接的东西正好相反</div>
+    </div>
+  </div>
+
+  <h3 id="s7-1">7.1 nvJPEG 的批量曲线</h3>
+
+  <p>GPU 解码 JPEG（nvJPEG）单张比 CPU 快一个数量级，但它的优势要靠<strong>批量</strong>才能兑现——每次提交都有固定的开销（PCIe 传输的启动延迟、kernel launch、同步），批越大越能摊薄。同时批越大，第一张图要等的时间越长：</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 940 300" style="min-width:740px;height:auto" role="img" aria-label="GPU批大小与吞吐延迟的关系曲线：吞吐随批大小增长先快速上升在批大小三十二之后趋于饱和；而单张延迟从批大小一开始就随批大小线性增长；在线场景取批四兼顾延迟离线场景取批一百二十八追求吞吐">
+      <path class="grid" d="M70 50 H880 M70 100 H880 M70 150 H880 M70 200 H880"/>
+      <path class="ln" d="M70 40 V230 H880"/>
+      <text class="tm" x="10" y="54">高</text>
+      <text class="tm" x="10" y="230">低</text>
+      <text class="tm" x="70" y="250">1</text>
+      <text class="tm" x="180" y="250">4</text>
+      <text class="tm" x="330" y="250">16</text>
+      <text class="tm" x="480" y="250">32</text>
+      <text class="tm" x="650" y="250">64</text>
+      <text class="tm" x="840" y="250">128</text>
+      <text class="ts" x="760" y="270">batch size（对数轴）</text>
+
+      <path class="ln-g" d="M70 220 C 130 180, 200 120, 330 84 C 460 66, 640 58, 880 54"/>
+      <text class="tg" x="520" y="78">吞吐：32 之后基本饱和，再加只换来一点点</text>
+      <path class="ln-r" d="M70 224 L880 60"/>
+      <text class="tr" x="600" y="120">单张延迟：从头到尾线性增长，没有拐点</text>
+
+      <path class="ln-d" d="M180 40 V230"/>
+      <text class="ta" x="188" y="52">在线 batch=4</text>
+      <text class="tm" x="188" y="68">吞吐拿到 55%，延迟只加 3 ms</text>
+      <path class="ln-d" d="M840 40 V230"/>
+      <text class="ta" x="700" y="196">离线 batch=128</text>
+      <text class="tm" x="676" y="212">吞吐拉满，延迟无所谓</text>
+
+      <text class="ts" x="70" y="288">两条曲线形状不同，这才是「批大小」值得做成一个可配置旋钮的原因：同一个系统的两条路径应该取不同的值。</text>
+    </svg>
+    <figcaption>图 7 · 吞吐有饱和点，延迟没有。所以「批越大越好」只在不看延迟时成立。</figcaption>
+  </div>
+
+  <p>攒批本身也有一个必须注意的点，和上一篇 §9.3 的 Kafka 攒批完全一样：<strong>必须有超时兜底</strong>。低谷期到达率可能只有 50 张/s，攒够 128 张要 2.5 秒；如果只按条数触发，这 2.5 秒会直接进入延迟。三个触发条件缺一不可——条数、字节（显存约束，见 §7.3）、超时。</p>
+
+<pre><code><span class="cm">// GPU 攒批。三个触发条件里，超时是唯一保证延迟上界的那个。</span>
+<span class="type">void</span> <span class="type">BatchSubmitter</span>::<span class="fn">run</span>() {
+  <span class="type">std</span>::<span class="type">vector</span>&lt;<span class="type">Task</span>&gt; batch;
+  <span class="type">size_t</span> vram_needed = <span class="num">0</span>;
+  <span class="kw">auto</span> deadline = <span class="type">Clock</span>::<span class="fn">now</span>() + linger_;
+
+  <span class="kw">while</span> (running_) {
+    <span class="type">Task</span> t;
+    <span class="cm">// 注意超时用「距离 deadline 还有多久」，不是每次都等一个完整的 linger_ ——</span>
+    <span class="cm">// 后者会让批次在持续小流量下被无限推迟，延迟上界失效。</span>
+    <span class="kw">if</span> (queue_.<span class="fn">pop_until</span>(t, deadline)) {
+      batch.<span class="fn">push_back</span>(<span class="type">std</span>::<span class="fn">move</span>(t));
+      vram_needed += batch.<span class="fn">back</span>().<span class="fn">vram_estimate</span>();
+    }
+    <span class="type">bool</span> full  = batch.<span class="fn">size</span>() &gt;= max_batch_ || vram_needed &gt;= vram_budget_;
+    <span class="type">bool</span> timed = <span class="type">Clock</span>::<span class="fn">now</span>() &gt;= deadline;
+    <span class="kw">if</span> (!batch.<span class="fn">empty</span>() &amp;&amp; (full || timed)) {
+      <span class="fn">submit</span>(batch);            <span class="cm">// H2D 拷贝 + nvjpegDecodeBatched + D2H</span>
+      batch.<span class="fn">clear</span>(); vram_needed = <span class="num">0</span>;
+    }
+    <span class="kw">if</span> (timed) deadline = <span class="type">Clock</span>::<span class="fn">now</span>() + linger_;
+  }
+}
+</code></pre>
+
+  <h3 id="s7-2">7.2 ADR-005 在线 batch=4，离线 batch=128</h3>
+
+  <div class="adr">
+    <div class="adr-head"><span class="adr-id">ADR-005</span><span class="adr-title">GPU 解码按路径取不同批大小：在线 batch=4 / linger 5 ms，离线 batch=128 / linger 200 ms</span><span class="adr-status">已接受</span></div>
+    <div class="adr-row"><div class="k">背景</div><div>批大小同时影响吞吐（有饱和点）与单张延迟（线性增长）。在线路径 P99 预算 800 ms，离线路径只关心 8 小时窗口内的总吞吐。</div></div>
+    <div class="adr-row"><div class="k">决策</div><div>两条路径用<strong>同一份代码、不同配置</strong>，各自独立的批处理器和显存配额。在线取 batch=4：吞吐拿到饱和值的 55%，而批内等待只增加约 3 ms。离线取 batch=128：吞吐拉满，200 ms 的攒批延迟在 8 小时窗口里可忽略。</div></div>
+    <div class="adr-row"><div class="k">后果</div><div><span class="win">得到</span>：一个旋钮服务两个目标相反的场景，不需要两套实现。<br><span class="lose">付出</span>：两条路径要共享同一块 GPU 的显存和算力，必须做配额与优先级（见 §7.3）；<strong>离线的大批次一旦提交就占住 GPU 直到完成，在线批次要等——这会给在线路径引入一个不可抢占的延迟毛刺</strong>。这是本决策最主要的代价，缓解手段是给离线批也设一个批大小上限，让单次占用时间可控。</div></div>
+  </div>
+
+  <h3 id="s7-3">7.3 显存也要配额，而且它不能 swap</h3>
+
+  <p>显存和主存有一个关键差别：<strong>它没有 swap，也没有 OOM Killer 帮你挑一个进程杀。</strong>显存不足时 CUDA 调用直接返回 <code>cudaErrorMemoryAllocation</code>，如果代码没处理好，通常是整个进程崩掉——而这个进程里可能还有几十个正在处理的任务。</p>
+
+  <p>所以 §3.2 的字节配额在 GPU 这一侧要再做一遍，而且要更保守：</p>
+
+  <ul>
+    <li><strong>配额按批估算，不按单张。</strong>一批 128 张 12 MP 的图，显存需求是 128 × (压缩输入 + 解码输出) ≈ 128 × 40 MB = 5 GB。A10 有 24 GB，但要留给别的东西。</li>
+    <li><strong>在线和离线各有独立配额</strong>，理由同 §6.2：只隔离算力不隔离显存，隔离只做了一半。</li>
+    <li><strong>用显存池，不要反复 <code>cudaMalloc</code>。</strong><code>cudaMalloc</code> 是同步的、会隐式同步整个设备，在热路径上调它会让流水线的所有 stream 停顿。启动时一次性分配，之后自己管。这和 §3.4 的主存缓冲池是同一个道理，只是后果更严重。</li>
+  </ul>
+
+  <h3 id="s7-4">7.4 CPU 回退路径</h3>
+
+  <p>GPU 路径必须有回退，理由有三个层次，越往后越现实：</p>
+
+  <table>
+    <thead><tr><th>为什么需要回退</th><th>触发频率</th></tr></thead>
+    <tbody>
+      <tr><td>nvJPEG 只支持基线和渐进式 JPEG 的一部分子集，遇到不支持的编码变体要退回 CPU</td><td class="bad-cell">经常——真实世界的图片格式远比想象中杂</td></tr>
+      <tr><td>PNG / WebP / HEIC / TIFF 的 GPU 解码支持远不如 JPEG 成熟</td><td>取决于流量构成</td></tr>
+      <tr><td>GPU 故障、驱动升级、显存耗尽、机器上根本没有 GPU</td><td>偶尔，但影响面大</td></tr>
+    </tbody>
+  </table>
+
+  <div class="box danger">
+    回退路径的容量必须被算进去，否则它是个陷阱：如果按「90% 走 GPU」来配 CPU 核数，那么 GPU 一挂，100% 的流量涌向只有 10% 容量的 CPU 路径，系统立刻雪崩——<strong>一个为了提高性能而引入的组件，故障时反而成了单点。</strong><br>
+    正确做法是把 GPU 当成<strong>加速器而不是依赖</strong>：CPU 路径的容量按「能扛住全量的降级服务水平」来配（比如全量但 P99 放宽到 3 s），GPU 负责把正常情况下的延迟和成本压下去。这条判据同样适用于任何「快路径 + 慢路径」的设计。
+  </div>
+</section>
+
+<!-- =========================================================== -->
+<!-- S8 -->
+<!-- =========================================================== -->
+<section class="chapter" id="s8">
+  <div class="ch-head">
+    <div class="num">08</div>
+    <div class="t">
+      <h2>离线批：一千万张 / 24 小时</h2>
+      <div class="sub">同一套 worker，完全不同的约束</div>
+    </div>
+  </div>
+
+  <h3 id="s8-1">8.1 瓶颈不在 CPU，在对象存储</h3>
+
+  <p>1000 万张、夜间 8 小时窗口，平均 347 张/s。CPU 需求 <code>347 × 0.28 = 97 核</code>——集群有 512 核，看起来轻松。但换个维度算：</p>
+
+  <div class="box num">
+    读取带宽 = 347 张/s × 4 MB = <strong>1.4 GB/s</strong>，八小时共读 40 TB。<br>
+    这个流量打到<strong>和线上业务共用的对象存储</strong>上。即使存储扛得住，它的带宽、IOPS 和请求配额是共享的——离线批把它们吃掉，线上的图片访问就会变慢。<strong>离线批的真正约束不是「我需要多少」，是「我能占多少而不伤到别人」。</strong>
+  </div>
+
+  <p>所以离线批必须自带限速，而且限速的依据是外部约束，不是自己的能力。三个层次的隔离：</p>
+
+  <div class="grid-3">
+    <div class="panel info">
+      <h4>存储侧限速</h4>
+      <p>读取速率设一个明确上限（比如 800 MB/s），并且按<strong>时段</strong>调整：白天压到 200 MB/s，夜间放开。如果存储支持请求分级（不同 access key 不同配额），用它比自己限速更可靠。</p>
+    </div>
+    <div class="panel info">
+      <h4>CPU 侧优先级</h4>
+      <p>离线任务的 worker 用较低的调度优先级（<code>nice</code> 或 cgroup 的 <code>cpu.weight</code>），保证在线任务突增时能立刻抢到核。<strong>注意这只在超线程关闭或核未打满时有效</strong>，真要硬隔离得用 <code>cpuset</code> 分核。</p>
+    </div>
+    <div class="panel info">
+      <h4>内存与显存配额</h4>
+      <p>独立的 <code>ByteBudget</code> 与显存配额（§6.2、§7.3）。离线批可以用大得多的批次和更激进的并行度，但它的总额度必须是<strong>剩余量</strong>，不能挤占在线的保留额。</p>
+    </div>
+  </div>
+
+  <h3 id="s8-2">8.2 分片、断点续跑与幂等键</h3>
+
+  <p>一千万个任务不能一次性塞进队列（ADR-001 算过：640 KB 的引用倒是放得下，但一次性投递会让消费顺序完全不可控，也没法中途调速）。标准做法是分片 + 游标：</p>
+
+  <p><strong>分片</strong>按对象 key 的哈希前缀切成固定数量（比如 4096 片），每片是一个独立的工作单元。每片记录一个游标（处理到哪个 key）和状态。这样做的好处是<strong>片数固定、与数据量无关</strong>，扩缩 worker 只是重新分配片，不需要重新切分。</p>
+
+  <p><strong>断点续跑</strong>就是游标的持久化。要注意的是游标推进的时机：必须在<strong>确认处理成功之后</strong>才推进，否则崩溃时会跳过一批。而「确认成功之后推进」意味着崩溃时会<strong>重复处理</strong>已完成但没来得及记录的那些——这就把问题推给了幂等。</p>
+
+  <p><strong>幂等键</strong>是这里的关键设计。用什么做键，决定了重复处理是无害的还是有害的：</p>
+
+  <table>
+    <thead><tr><th>幂等键</th><th>重复处理时</th><th>问题</th></tr></thead>
+    <tbody>
+      <tr><td>任务 ID / 消息 ID</td><td>需要维护一张「已处理」表并查询</td><td class="bad-cell">这张表和任务量同量级（1000 万条），且它自己的写入也可能失败——把问题推迟了一层</td></tr>
+      <tr><td>源对象 key</td><td>输出路径固定，第二次覆盖第一次</td><td class="mid-cell">可行，但如果处理逻辑有版本变化，无法区分「旧版本产物」和「新版本产物」</td></tr>
+      <tr class="good-cell"><td><strong>源内容哈希 + 处理版本号</strong></td><td class="good-cell">输出路径由它决定，重复处理产生<strong>逐字节相同</strong>的结果，覆盖与否都无所谓</td><td>要读完整内容才能算哈希（但反正要读）；换处理版本会产生新产物，旧的需要清理</td></tr>
+    </tbody>
+  </table>
+
+  <div class="box arch">
+    第三行才是真正的幂等：<strong>它不需要任何「已处理」的记录，因为重复执行的结果和执行一次完全一样。</strong>前两行是「靠查表避免重复执行」，而查表本身又需要一致性保证，是把问题往下推。<br>
+    这两种思路的区别值得记住：<strong>「去重」需要状态，「幂等」不需要。</strong>能把操作设计成天然幂等（输出由输入唯一决定）时，整条链路上所有的「至少一次」投递语义都变得无害——ADR-001 的重投、ADR-003 的事件重复，一次性全部解决。上一篇 §10.2 说「把指令设计成声明目标状态而不是增量」，是同一条原则在控制面的形态。
+  </div>
+
+<pre><code><span class="cm">// 输出路径完全由「内容 + 处理逻辑版本」决定。</span>
+<span class="cm">// 于是同一张图被处理 100 次，产出的 100 份结果逐字节相同、路径也相同 ——</span>
+<span class="cm">// 「重复」这件事在下游根本不可观测，也就不需要任何去重表。</span>
+<span class="type">std</span>::<span class="type">string</span> <span class="fn">derive_key</span>(<span class="type">std</span>::<span class="type">span</span>&lt;<span class="kw">const</span> <span class="type">uint8_t</span>&gt; src, <span class="type">Variant</span> v) {
+  <span class="cm">// 用内容哈希而不是源 key：同一张图被不同用户重复上传时，还能顺带命中已有产物。</span>
+  <span class="type">std</span>::<span class="type">string</span> h = <span class="fn">blake3_hex</span>(src);
+  <span class="kw">return</span> <span class="fn">fmt</span>(<span class="str">"thumb/v{}/{}/{}/{}.jpg"</span>, kPipelineVersion, h.<span class="fn">substr</span>(<span class="num">0</span>, <span class="num">2</span>), h, <span class="fn">name_of</span>(v));
+  <span class="cm">//               ↑ 版本号在路径里：改了缩放算法就是一批新产物，</span>
+  <span class="cm">//                 新旧共存、可灰度、可回滚，不需要「原地更新」这种危险操作。</span>
+  <span class="cm">//               ↑ 哈希前两位做目录分片：避免单目录下千万级对象，</span>
+  <span class="cm">//                 也让对象存储的分区键分布均匀（很多存储按 key 前缀分区）。</span>
+}
+</code></pre>
+
+  <div class="box tip">
+    <code>h.substr(0, 2)</code> 那个细节在千万级规模下很要紧。不少对象存储按 key 的<strong>字典序前缀</strong>划分内部分区，如果所有 key 都以 <code>thumb/v3/2026-09-11/</code> 这类递增前缀开头，写入会全部集中到同一个分区上，形成热点——表现为写入速率莫名其妙地卡在某个值上不去。<strong>把高熵的哈希放在路径靠前的位置</strong>，是这类系统的一条常规做法。
+  </div>
+
+  <h3 id="s8-3">8.3 抢占式实例与检查点</h3>
+
+  <p>离线批对延迟不敏感、可重试、无状态（ADR-001 的红利），这三条正好是抢占式实例（Spot / 竞价实例）的适用条件，成本能降到按需实例的 20–30%。要用好它，只需要保证两件事：</p>
+
+  <p><strong>一、被抢占时正在处理的任务不能丢。</strong>因为任务在队列里有「未确认」状态，worker 被杀之后消息会重新可见、被别的 worker 领走。这依赖 §8.2 的幂等——被抢占的任务很可能<strong>已经完成了一半甚至全部，只是没来得及确认</strong>。</p>
+
+  <p><strong>二、抢占通知要被利用。</strong>云厂商通常给 30 秒到 2 分钟的预告。收到通知后应当：停止领新任务、尽快完成手上的、主动确认，然后退出。这能把「被抢占的浪费」从「整批任务重做」降到接近零。</p>
+
+  <div class="box danger">
+    抢占式实例有一个容易忽略的连锁风险：<strong>同一可用区、同一机型的抢占往往是同时发生的</strong>——不是随机掉一台，而是一批一起没。如果整个离线集群都在抢占实例上，可能瞬间从 200 个 worker 掉到 0，然后队列里几万条未确认消息同时超时重投。<br>
+    两个缓解：<strong>混合部署</strong>（保底一部分按需实例，保证进度不归零）和<strong>跨机型分散</strong>（不要把所有 worker 都放在同一个机型上，它们的抢占是强相关的）。这和「不要把同一个变电站的设备放进同一个 OTA 批次」是同一类思路——<strong>识别出隐藏的相关性，然后打散它。</strong>
+  </div>
+</section>
+
+<!-- =========================================================== -->
+<!-- S9 -->
+<!-- =========================================================== -->
+<section class="chapter" id="s9">
+  <div class="ch-head">
+    <div class="num">09</div>
+    <div class="t">
+      <h2>反压失效的后果链</h2>
+      <div class="sub">把「内存涨了」和「服务雪崩」之间的每一步写出来</div>
+    </div>
+  </div>
+
+  <h3 id="s9-1">9.1 从 OOM Killer 到雪崩</h3>
+
+  <p>假设某一个环节的背压缺失（比如队列写成了无界的，或者字节配额只按条数算）。故障不会立刻发生，它会沿着一条固定的路径走完：</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 940 300" style="min-width:740px;height:auto" role="img" aria-label="反压失效的后果链因果图：下游变慢导致队列增长，因为队列无界所以内存持续上涨，进程被OOM Killer杀死，正在处理的任务全部未确认，消息队列重新投递这批任务，重启的进程同时面对原有流量和重投流量，负载高于之前于是更快被杀，形成不收敛的正反馈循环">
+      <rect class="box" x="20" y="40" width="150" height="52" rx="7"/>
+      <text class="t" x="34" y="62">① 下游变慢</text>
+      <text class="tm" x="34" y="80">存储抖动 / 大图突增</text>
+
+      <rect class="box-y" x="210" y="40" width="150" height="52" rx="7"/>
+      <text class="t" x="224" y="62">② 队列增长</text>
+      <text class="tm" x="224" y="80">正常现象，本该在此止步</text>
+
+      <rect class="box-r" x="400" y="40" width="150" height="52" rx="7"/>
+      <text class="t" x="414" y="62">③ 内存持续上涨</text>
+      <text class="tr" x="414" y="80">← 缺失背压在这里</text>
+
+      <rect class="box-r" x="590" y="40" width="150" height="52" rx="7"/>
+      <text class="t" x="604" y="62">④ OOM Killer</text>
+      <text class="tm" x="604" y="80">进程整个被杀</text>
+
+      <rect class="box-r" x="780" y="40" width="140" height="52" rx="7"/>
+      <text class="t" x="794" y="62">⑤ 在途任务</text>
+      <text class="tm" x="794" y="80">全部未确认</text>
+
+      <rect class="box-r" x="780" y="140" width="140" height="52" rx="7"/>
+      <text class="t" x="794" y="162">⑥ 队列重投</text>
+      <text class="tm" x="794" y="180">这批任务又回来了</text>
+
+      <rect class="box-r" x="530" y="140" width="210" height="52" rx="7"/>
+      <text class="t" x="544" y="162">⑦ 重启后负载 = 原流量 + 重投</text>
+      <text class="tr" x="544" y="180">比崩溃前更高</text>
+
+      <rect class="box-r" x="300" y="140" width="180" height="52" rx="7"/>
+      <text class="t" x="314" y="162">⑧ 更快地被 OOM</text>
+      <text class="tr" x="314" y="180">循环不收敛</text>
+
+      <path class="ln" d="M170 66 H202"/><path class="ar-a" d="M202 61 l8 5 -8 5 z"/>
+      <path class="ln-r" d="M360 66 H392"/><path class="ar-r" d="M392 61 l8 5 -8 5 z"/>
+      <path class="ln-r" d="M550 66 H582"/><path class="ar-r" d="M582 61 l8 5 -8 5 z"/>
+      <path class="ln-r" d="M740 66 H772"/><path class="ar-r" d="M772 61 l8 5 -8 5 z"/>
+      <path class="ln-r" d="M850 92 V132"/><path class="ar-r" d="M845 132 l5 8 5 -8 z"/>
+      <path class="ln-r" d="M780 166 H748"/><path class="ar-r" d="M748 161 l-8 5 8 5 z"/>
+      <path class="ln-r" d="M530 166 H488"/><path class="ar-r" d="M488 161 l-8 5 8 5 z"/>
+      <path class="ln-r" d="M300 166 C 240 166, 240 110, 300 92 H392"/><path class="ar-r" d="M392 87 l8 5 -8 5 z"/>
+
+      <rect class="box-g" x="20" y="216" width="900" height="64" rx="8"/>
+      <text class="tb" x="36" y="238">链条上唯一能斩断它的地方是 ③</text>
+      <text class="t" x="36" y="258">②→③ 之间加一个有界，故障就停在「队列变长、上游被拒绝」这个可以观测、可以告警、可以自愈的状态上。</text>
+      <text class="tm" x="36" y="274">加大内存只是把 ③ 推迟；加机器会让每台都走一遍这条链；重启更是直接进入 ⑦。三种最直觉的应对都会加速它。</text>
+    </svg>
+    <figcaption>图 8 · 这条链的每一步都是「正确的行为」，合起来却不收敛。这类故障的特征是<strong>越救越糟</strong>。</figcaption>
+  </div>
+
+  <p>最后那行值得展开，因为它解释了为什么这类故障在现场特别难处理：<strong>三个最直觉的应对措施都会让情况变糟。</strong>加内存只是把 OOM 推迟几分钟；加机器会让新机器也走一遍同样的链条（而且它们启动时会一起去抢重投的任务）；重启是最糟的，因为重启后面对的是 ⑦ 那个「原流量 + 全部重投」的更高负载。<strong>唯一有效的现场措施是从入口限流</strong>——而如果架构里没有这个开关，现场就只能等它自己烧完。</p>
+
+  <h3 id="s9-2">9.2 三个必须存在的背压点</h3>
+
+  <p>顺着数据流走一遍，这条流水线上有三个位置必须能说「不」。少任何一个，压力都会绕过去：</p>
+
+  <table>
+    <thead><tr><th>位置</th><th>机制</th><th>拒绝时的行为</th><th>缺了它会怎样</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>① 领取任务</td>
+        <td>worker 只在有空闲容量时才从消息队列拉取（拉模式而非推模式）</td>
+        <td>不拉就是不拉，任务留在队列里</td>
+        <td class="bad-cell">推模式下队列会把任务硬塞进来，worker 只能自己缓冲——无界队列就是这么出现的</td>
+      </tr>
+      <tr>
+        <td>② 申请解码内存</td>
+        <td>§3.2 的 <code>ByteBudget</code>，按字节</td>
+        <td class="good-cell">超时后<strong>退回队列</strong>而不是硬等（硬等会让 worker 全堵在这里）</td>
+        <td class="bad-cell">这是最核心的一个。缺了它，内存占用与像素数直接挂钩、完全不可控</td>
+      </tr>
+      <tr>
+        <td>③ 写回上传</td>
+        <td>有界的上传队列 + 对下游的自适应限速</td>
+        <td>队列满时阻塞处理层，进而阻塞 ①</td>
+        <td class="bad-cell">缺了它，下游 429 会变成无限重试，把已完成的位图一直留在内存里</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="box arch">
+    三个背压点的共同点是<strong>它们都把压力挡在「产生新内存占用」之前</strong>。②之所以最关键，是因为它是唯一一个能挡住「单个任务的内存需求本身很大」这种情况的——①和③都只能控制任务的<strong>数量</strong>。<br>
+    这也是设计背压时的一个通用检查：<strong>把系统里所有会显著增长内存的动作列出来，确认每一个前面都有一道闸。</strong>只在入口限流是不够的，因为入口不知道每个请求会消耗多少。
+  </div>
+
+  <h3 id="s9-3">9.3 观测：看在途字节，不看任务数</h3>
+
+  <p>监控指标的选择要和 §3.2 保持一致——既然配额单位是字节，那么告警和容量判断也必须看字节：</p>
+
+  <table>
+    <thead><tr><th>指标</th><th>为什么是它</th></tr></thead>
+    <tbody>
+      <tr><td class="good-cell"><strong>在途位图字节数</strong>（配额已用量 / 总量）</td><td>直接对应内存风险。「32 个任务在处理」什么也说明不了，「用了 22 GB / 24 GB 配额」说明马上要限流了</td></tr>
+      <tr><td><strong>配额等待时间</strong>的分位数</td><td>比「队列长度」更早暴露问题：还没开始堆积时，等待时间就已经在涨了</td></tr>
+      <tr><td><strong>队列时间 vs 处理时间</strong>分开打点</td><td>§6.3 的诊断依据：P99 高是排队造成的还是服务时间本身长，两者解法完全不同</td></tr>
+      <tr><td><strong>按通道分开的分位数</strong>（快车道 / 慢通道）</td><td>混在一起算，慢通道的 2.5 s 会污染整体 P99，让 §6.2 的隔离效果完全看不出来</td></tr>
+      <tr><td><strong>拒绝率与重投率</strong></td><td>背压真正生效时会体现在这里。<strong>拒绝率为零不一定是好事</strong>，可能说明背压点根本没起作用</td></tr>
+      <tr><td>RSS 与配额上限的差值</td><td>§3.4 的分配器行为会让 RSS 高于配额，这个差值就是碎片与分配器缓存，涨得不对就该查</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- =========================================================== -->
+<!-- S10 -->
+<!-- =========================================================== -->
+<section class="chapter" id="s10">
+  <div class="ch-head">
+    <div class="num">10</div>
+    <div class="t">
+      <h2>速查、演进与反向判据</h2>
+      <div class="sub">最后一节说清这套架构什么时候是错的</div>
+    </div>
+  </div>
+
+  <h3 id="s10-1">10.1 五条 ADR 汇总</h3>
+
+  <table>
+    <thead><tr><th>编号</th><th>决策</th><th>核心理由</th><th>付出的代价</th></tr></thead>
+    <tbody>
+      <tr><td>ADR-001</td><td>队列只传对象键，不传字节；有界且外置</td><td>积压量与在途量必须解耦，否则积压 1 万张 = 40 GB</td><td>每任务多一次存储读取；重投要求下游幂等</td></tr>
+      <tr><td>ADR-002</td><td>libvips 流式管道为主，libjpeg-turbo DCT 缩放为快路径</td><td>84% 的解码像素本来就要被丢弃</td><td>算子集较小需要回退分支；流式模型的错误定位更难</td></tr>
+      <tr><td>ADR-003</td><td>对象存储事件驱动，不轮询；事件先进消息队列</td><td>感知延迟从轮询周期一半降到几十毫秒；不为未完成的上传建任务</td><td>至少一次投递 + 可能丢事件，必须配幂等与低频对账</td></tr>
+      <tr><td>ADR-004</td><td>解码在沙箱子进程里，共享内存传数据，超时即 kill</td><td>一个手段同时解决超时、崩溃隔离、内存爆炸、安全漏洞</td><td>子进程池的生命周期管理；调试跨进程边界</td></tr>
+      <tr><td>ADR-005</td><td>GPU 批大小按路径分开：在线 4，离线 128</td><td>吞吐有饱和点，延迟没有，两条路径目标相反</td><td>共享 GPU 需要配额；离线大批次会给在线引入不可抢占的毛刺</td></tr>
+    </tbody>
+  </table>
+
+  <h3 id="s10-2">10.2 参数速查</h3>
+
+  <table>
+    <thead><tr><th>参数</th><th>本例取值</th><th>由什么反推</th></tr></thead>
+    <tbody>
+      <tr><td>集群规模</td><td>8 × 64 核</td><td>峰值 336 核 ÷ 目标利用率 66%（§1.2）</td></tr>
+      <tr><td>接收层在途数</td><td>96</td><td>Little's Law：1200/s × 80 ms（§2.2）</td></tr>
+      <tr><td>CPU 池线程数</td><td>= 物理核数 64</td><td>纯计算，多一个都是损耗；<strong>物理核不是逻辑核</strong>（§5.2）</td></tr>
+      <tr><td>写回在途数</td><td>180</td><td>Little's Law + 对象存储的并发配额取小（§2.2）</td></tr>
+      <tr><td>字节配额（快车道）</td><td>24 GB</td><td>可用内存扣掉分配器缓存与其它开销（§3.2）</td></tr>
+      <tr><td>快 / 慢通道分界</td><td>20 MP</td><td>覆盖 99.4% 流量走快车道（§6.2）</td></tr>
+      <tr><td>慢通道 worker</td><td>8</td><td>大图吞吐上限 3.2 张/s，是一次明确的业务取舍（§6.2）</td></tr>
+      <tr><td>GPU 批大小</td><td>在线 4 / 离线 128</td><td>吞吐饱和点与延迟预算（§7.1）</td></tr>
+      <tr><td>解码超时</td><td>快车道 2 s / 慢通道 15 s</td><td>各通道 P99 服务时间的若干倍；由子进程强制执行（§5.5）</td></tr>
+      <tr><td>离线读取限速</td><td>白天 200 / 夜间 800 MB/s</td><td>对象存储的共享配额，不是我们的能力（§8.1）</td></tr>
+      <tr><td>分片数</td><td>4096</td><td>固定值，与数据量无关，便于扩缩重分配（§8.2）</td></tr>
+    </tbody>
+  </table>
+
+  <h3 id="s10-3">10.3 演进路线与触发信号</h3>
+
+  <div class="grid-3">
+    <div class="panel good">
+      <h4>v1 · ≤ 50 张/s</h4>
+      <p>一个线程池从头做到尾，全解码，同进程，单队列。<strong>在这个规模下它完全正确</strong>，而且两周能上线。别提前上分层和沙箱。</p>
+    </div>
+    <div class="panel mid">
+      <h4>v2 · 50 → 2000 张/s</h4>
+      <p>本文。触发信号：RSS 曲线出现无法解释的锯齿或高台；P99 与中位数拉开 5 倍以上；存储抖动会让 CPU 掉到个位数；出现过一次以上因大图导致的 OOM。</p>
+    </div>
+    <div class="panel info">
+      <h4>v3 · 多区域 / 按需转码</h4>
+      <p>就近处理 + 冷数据按需转码（首访命中率降到 50% 以下时才划算，§1.4）。新问题：转码结果的跨区一致性与缓存击穿。</p>
+    </div>
+  </div>
+
+  <h3 id="s10-4">10.4 这套架构什么时候不适用</h3>
+
+  <table>
+    <thead><tr><th>如果……</th><th>哪个决策会失效</th><th>该怎么做</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>吞吐 &lt; 50 张/s</td>
+        <td class="bad-cell">分层线程池、沙箱子进程、分级队列的复杂度全都收不回来</td>
+        <td>v1：一个线程池，一个队列，尺寸校验就够了</td>
+      </tr>
+      <tr>
+        <td>图片很小且尺寸一致（例如固定 512×512 的头像）</td>
+        <td class="bad-cell">§3 整章的前提（内存放大不可预测）不成立；§6 的队头阻塞也不存在</td>
+        <td>按条数配额就够，不需要字节配额；不需要分级队列</td>
+      </tr>
+      <tr>
+        <td>处理是同步的、用户在等结果</td>
+        <td class="bad-cell">ADR-001 的「队列 + 重投」和 ADR-003 的事件驱动都建立在异步之上</td>
+        <td>要么改需求（让用户等的是上传，见 §1.1 第三问），要么走同步短路径并接受严格的容量上限</td>
+      </tr>
+      <tr>
+        <td>输入完全可信（自家管线产出）</td>
+        <td class="mid-cell">ADR-004 的沙箱隔离收益大幅下降</td>
+        <td>退回同进程 + 尺寸校验 + 进度回调，省掉一大块复杂度</td>
+      </tr>
+      <tr>
+        <td>要处理视频而不是图片</td>
+        <td class="bad-cell">几乎全部。视频是<strong>流式且有时间维度</strong>：内存模型变成滑动窗口，任务粒度变成分片而不是文件，GPU 编解码器有独立的会话数上限</td>
+        <td>形状不同的问题，不要套用。可复用的只有「三层并发度分开定容」和「字节配额」这两条原则</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="box arch">
+    把这五条读下来，会发现失效判据集中在两个量上：<strong>单任务资源消耗的可预测性</strong>，以及<strong>单任务耗时的分布形状</strong>。<br>
+    消耗可预测（固定尺寸头像）→ 不需要字节配额；耗时分布窄（没有长尾）→ 不需要分级队列。本文之所以需要这一整套，正是因为这两个量在图片场景下都很糟：内存消耗和文件大小的相关性很弱，耗时分布是重尾的。<strong>下次遇到一个新的流水线，先测这两个分布，架构的形状基本就定了。</strong>
+  </div>
+</section>
+
+<!-- =========================================================== -->
+<!-- S11 · INTERVIEW -->
+<!-- =========================================================== -->
+<section class="chapter" id="s11">
+  <div class="ch-head">
+    <div class="num">11</div>
+    <div class="t">
+      <h2>高频面试题 · 高吞吐流水线</h2>
+      <div class="sub">12 道，按难度分三档</div>
+    </div>
+  </div>
+
+  <p class="qa-hint">点击每道题展开参考答案（先自测，再对照）。</p>
+
+  <h3 id="s11-1">11.1 基础（必答）</h3>
+
+  <ol class="qa-list">
+    <li><details class="qa">
+      <summary><span class="lvl basic">基础</span>需求写着「要能同时处理 10000 张图片」，你会怎么做？</summary>
+      <div class="ans">
+        <p><strong>先追问，不要直接设计。</strong>「同时」这个词至少有三种含义，对应的内存需求差五个数量级（§1.3）：</p>
+        <ul>
+          <li>一万张都是<strong>已解码的位图</strong>：10000 × 36 MB = <strong>360 GB</strong>，不可行</li>
+          <li>一万张<strong>压缩态</strong>驻留在内存队列：10000 × 4 MB = <strong>40 GB</strong>，放得下但毫无意义，且重启即丢</li>
+          <li>队列里只放<strong>对象存储的键</strong>：10000 × 64 B = <strong>640 KB</strong>，真正在处理的只有几百张</li>
+        </ul>
+        <div class="point good"><div class="label">正确解读</div><div>它通常是「积压报警阈值」而不是「并行处理能力」。系统要能在积压一万时保持稳定并按可预期速度消化，<strong>而真正在途的数量应该由核数决定</strong>。这两个数字必须解耦，解耦它们的就是一个只存引用的有界队列。</div></div>
+        <div class="point deep"><div class="label">更一般的判据</div><div>「并发 N」在 IO 密集场景下可能是合理的（一万条连接各占几 KB），在<strong>计算密集</strong>场景下几乎总是错的——一万个解码任务需要一万个执行单元，而机器只有几百个核。<strong>看到「并发 N」先问它是 IO 还是 CPU 密集。</strong></div></div>
+      </div>
+    </details></li>
+
+    <li><details class="qa">
+      <summary><span class="lvl basic">基础</span>一张 4 MB 的 JPEG，处理它要准备多少内存？</summary>
+      <div class="ans">
+        <p>不是 4 MB，是 <strong>36–72 MB</strong>（§3.1）。JPEG 是压缩格式，处理在未压缩的位图上进行：4000×3000×3 = 36 MB；EXIF 旋转或色彩变换需要源与目标同时驻留，峰值 72 MB。<strong>放大 18 倍。</strong></p>
+        <div class="point warn"><div class="label">而且倍数不是常数</div><div>内存取决于<strong>像素数</strong>，而像素数与文件大小的相关性很弱：4 MB 的高压缩照片可能 24 MP（72 MB），4 MB 的截图可能 2 MP（6 MB）。所以<strong>光看文件大小无法预测内存</strong>。</div></div>
+        <div class="point bad"><div class="label">推论：按条数限流是错的</div><div>「最多 40 个任务并行」这个配置，实际内存占用可能是 240 MB 也可能是 5.8 GB，差 24 倍。<strong>配额单位必须是字节</strong>：先读头拿尺寸、算字节数、申请配额，再解码。</div></div>
+        <div class="point"><div class="label">加分</div><div>提到解压炸弹：1 MB 的 PNG 能解出几十 GB。唯一可靠防御是解码前只读文件头做尺寸校验，一个像素都不解。</div></div>
+      </div>
+    </details></li>
+
+    <li><details class="qa">
+      <summary><span class="lvl basic">基础</span>为什么图片上传不应该经过你的应用服务？</summary>
+      <div class="ans">
+        <p>峰值 1200 张/s × 4 MB = <strong>4.8 GB/s 入向带宽</strong>，而服务在这条路径上什么也没做，只是搬运（§4.1）。</p>
+        <div class="point good"><div class="label">预签名 URL 直传</div><div>App 先向服务要一个预签名 URL（几百字节的往返），然后直接 PUT 到对象存储。服务的带宽降到接近零。</div></div>
+        <div class="point deep"><div class="label">它不只是省带宽</div><div>签名里可以带 <code>Content-Length</code> 上限、<code>Content-Type</code> 约束和固定的 key，这三条校验由<strong>对象存储在它自己的边界上执行</strong>——比我们在应用层再写一遍更可靠也更省。URL 限时过期还顺便限制了滥用窗口。</div></div>
+        <div class="point"><div class="label">背后的原则</div><div>「这件事非我做不可吗」——带宽、限流、大小校验、鉴权，对象存储本来就在做。<strong>把职责下沉到已经在链路上的组件。</strong></div></div>
+      </div>
+    </details></li>
+
+    <li><details class="qa">
+      <summary><span class="lvl basic">基础</span>为什么不能用一个线程池把「拉取 → 处理 → 上传」从头做到尾？</summary>
+      <div class="ans">
+        <p>因为这三段的资源画像完全不同，合理并发度由三个毫不相干的量决定（§2.1）：<strong>接收层</strong>是 IO 密集，由「等待时间 ÷ 处理时间」决定，可以上千；<strong>处理层</strong>是 CPU 密集，等于物理核数；<strong>写回层</strong>受对象存储的配额约束，是几十到几百。</p>
+        <div class="point bad"><div class="label">合成一个旋钮的后果</div><div>调大：网络吞吐上去了但上下文切换飙升、P99 变差。调小：CPU 打满了但一堆线程卡在等存储。<strong>无论怎么调都有一边不满意——不是没调好，是这个旋钮本身不该只有一个。</strong></div></div>
+        <div class="point deep"><div class="label">更严重的是故障传导</div><div>单一线程池下，<strong>对象存储变慢会让 CPU 停摆</strong>：64 个线程全堵在 <code>read()</code> 上，CPU 使用率掉到个位数而队列在疯涨。这时按「CPU 不高」去扩容，加的机器同样堵在 IO 上。分层之后外部抖动被限制在它那一层，只表现为「IO 队列变长」。</div></div>
+        <div class="point good"><div class="label">三层之间</div><div>用<strong>有界</strong>队列连接。无界队列不是「没有背压」，是「把背压推迟到 OOM 那一刻」。</div></div>
+      </div>
+    </details></li>
+  </ol>
+
+  <h3 id="s11-2">11.2 中级（区分熟练度）</h3>
+
+  <ol class="qa-list" start="5">
+    <li><details class="qa">
+      <summary><span class="lvl mid">中级</span>用 Little's Law 算一下这条流水线各层要多大。</summary>
+      <div class="ans">
+        <p><strong>L = λ × W</strong>：在途数量 = 到达率 × 单个任务驻留时间。它的价值在于用两个容易测的量，算出一个很难直接观测、却直接等于内存占用的量（§2.2）。</p>
+        <table>
+          <thead><tr><th>层</th><th>λ</th><th>W</th><th>L</th><th>含义</th></tr></thead>
+          <tbody>
+            <tr><td>接收</td><td>1200/s</td><td>80 ms</td><td>96</td><td>96 个等待槽。用协程是 96 × 几 KB，用线程是 96 × 8 MB 栈</td></tr>
+            <tr><td>处理</td><td>1200/s</td><td>280 ms</td><td>336</td><td>× 36 MB = 12 GB 解码内存；集群 512 核 → 利用率 66%</td></tr>
+            <tr><td>写回</td><td>6000 对象/s</td><td>30 ms</td><td>180</td><td>180 个在途上传</td></tr>
+          </tbody>
+        </table>
+        <div class="point good"><div class="label">关键一步</div><div>算出来的 L <strong>必须变成代码里一个真实的上限</strong>，不能只是一个观测值。不设上限的话，下游一慢，在途数会在几秒内翻十倍，内存跟着翻十倍。</div></div>
+        <div class="point deep"><div class="label">容量规划的常见错误</div><div>按峰值 CPU 需求（336 核）买 6 台（利用率 87%）。<strong>排队论告诉我们利用率越过 70% 之后排队延迟非线性上升</strong>，87% 时平均排队时间是空闲时的 6.7 倍，P99 目标直接失守。所以买 8 台。</div></div>
+      </div>
+    </details></li>
+
+    <li><details class="qa">
+      <summary><span class="lvl mid">中级</span>P99 是中位数的十倍，平均值却完全正常。怎么查、怎么改？</summary>
+      <div class="ans">
+        <p>先分清 P99 的两个来源，<strong>它们的解法完全相反</strong>（§6.3）：排队造成的，还是服务时间本身长。诊断的第一步是<strong>把「在队列里的时间」和「在 worker 上的时间」分开打点</strong>。</p>
+        <div class="point"><div class="label">本例是后者：队头阻塞</div><div>处理时间与像素数成正比，而像素分布重尾：中位数 12 MP（280 ms），P99.9 是 100 MP（2.5 s）。单一 FIFO 下，千分之一的巨图会把排在它后面的所有小图一起拖慢——<strong>那些小图变慢的原因和它们自己毫无关系</strong>。</div></div>
+        <div class="point good"><div class="label">解法：按体积分级</div><div>读头拿到像素数就分流：≤20 MP 走快车道（56 worker），&gt;20 MP 走慢通道（8 worker）。<strong>分级不是让大图变快，是不让大图拖慢小图</strong>——这是一次明确的偏袒，偏袒谁是业务决策。</div></div>
+        <div class="point warn"><div class="label">两个容易做错的地方</div><div>① 用文件大小分级——它和像素数相关性很弱，要用像素数。② 用「优先级 + 共享 worker 池」代替独立 worker——<strong>优先级只影响排队顺序，不影响已经开始执行的任务</strong>，64 个 worker 都在跑大图时小图照样等。</div></div>
+        <div class="point deep"><div class="label">为什么加机器没用</div><div>一张巨图仍然占住<strong>一个</strong> worker 2.5 秒，不会因为集群变大而变快。加机器改善排队，改善不了服务时间本身的长尾。</div></div>
+      </div>
+    </details></li>
+
+    <li><details class="qa">
+      <summary><span class="lvl mid">中级</span>反复 <code>new</code> 一块 36 MB 的缓冲，会有什么问题？</summary>
+      <div class="ans">
+        <p>两个都跟 glibc <code>malloc</code> 的大块行为有关（§3.4）。</p>
+        <div class="point bad"><div class="label">一、每次都要重新缺页</div><div>超过 <code>M_MMAP_THRESHOLD</code>（默认 128 KB）的分配直接 <code>mmap</code>，<code>free</code> 时 <code>munmap</code>。mmap 返回的是<strong>未映射的虚拟地址</strong>，第一次写每页都缺页：36 MB ÷ 4 KB = <strong>9216 次缺页 × 1–2 μs = 9–18 ms</strong>，占 280 ms 处理时间的 3–6%，1200 张/s 下相当于近 20 个核在白干。</div></div>
+        <div class="point bad"><div class="label">二、RSS 只涨不落，像内存泄漏</div><div>glibc 会在 free 时<strong>自适应提高 mmap 阈值</strong>（认为这个大小还会再用），此后同尺寸分配改从 arena 切，不再归还内核。对性能是好事，但 RSS 曲线单调爬升到一个不可预测的高台，运维会当成泄漏来查。</div></div>
+        <div class="point good"><div class="label">解法</div><div>按 2 的幂分档的缓冲池（4/8/16/…/128 MB），借还复用，<strong>缺页只付一次</strong>；启动时 touch 一遍或用 <code>MAP_POPULATE</code>，把这笔成本付在启动而不是第一个用户请求上。RSS 稳定在配额那个可预测的值。</div></div>
+        <div class="point deep"><div class="label">还有两条</div><div>① <code>std::vector&lt;uint8_t&gt; buf(36MB)</code> 会值初始化，白 memset 36 MB（约 3.6 ms，1200 张/s 下等于 4.3 个核）——这块内存马上就要被解码器完整覆写。② 换 jemalloc 能缓解但不能替代池化，还要调 <code>dirty_decay_ms</code> 并开 <code>background_thread</code>，否则空闲期根本不归还。</div></div>
+      </div>
+    </details></li>
+
+    <li><details class="qa">
+      <summary><span class="lvl mid">中级</span>一个解码任务卡死了，怎么把它超时掉？</summary>
+      <div class="ans">
+        <p>难点在于 <code>libjpeg</code> / <code>libpng</code> / <code>libtiff</code> 都是<strong>同步 C 接口，没有取消点</strong>，你无法从外面中断一次 <code>jpeg_finish_decompress()</code>（§5.4）。</p>
+        <div class="point bad"><div class="label">最常见的错误答案</div><div>「起个线程去做，超时就不等它了」。<strong>这不是超时控制，是资源泄漏</strong>：调用方按时返回了，但那个线程永远回不来，还占着一个核死循环、还持有着字节配额（RAII 也救不了，因为析构永远不会执行）。症状是服务跑几小时后吞吐缓慢下降，重启就好——极难定位。</div></div>
+        <div class="point"><div class="label">可用手段，按可靠性排序</div><div>① 解码前读头做尺寸上限——挡住绝大多数解压炸弹，成本几乎为零，但挡不住畸形文件的病态循环；② 库的进度回调做协作式取消——只在库愿意回调的地方生效；③ <strong>独立进程 + 超时 SIGKILL</strong>——唯一能真正强制执行的。</div></div>
+        <div class="point good"><div class="label">为什么值得上进程隔离</div><div>不是单为了超时。<strong>一个手段同时解决四个问题</strong>：超时可强制、解码器崩溃只损失一个任务、内存爆炸被 cgroup 挡住、解码库的 CVE 被 seccomp 限制爆炸半径（处理的是完全不可信的用户上传）。四个问题的共同边界都是「解码这段不可信代码的执行环境」。</div></div>
+        <div class="point warn"><div class="label">代价</div><div>常驻子进程池（避免每次 fork）、共享内存传数据（避免拷贝 36 MB）、僵尸回收与共享内存段泄漏的处理、以及跨进程的调试困难。<strong>输入完全可信时不值得付这份复杂度</strong>——判据是「输入是否可信」，不是「有没有出过事」。</div></div>
+      </div>
+    </details></li>
+  </ol>
+
+  <h3 id="s11-3">11.3 高级（体现深度）</h3>
+
+  <ol class="qa-list" start="9">
+    <li><details class="qa">
+      <summary><span class="lvl adv">高级</span>设计一个「按字节而不是按条数」的并发配额，有哪些坑？</summary>
+      <div class="ans">
+        <p>核心不变量是：<strong>任意时刻所有在处理的位图字节数之和 ≤ 预算</strong>（§3.2）。四个坑：</p>
+        <div class="point deep"><div class="label">① 必须 notify_all，不能 notify_one</div><div>这不是普通信号量，<strong>等待者请求的数量不同</strong>。释放 36 MB 并不意味着队首那个等 900 MB 的能走。用 <code>notify_one</code> 会出现「明明有空间，被唤醒的那个不够用又睡回去，而能用的那个没被叫醒」——典型的丢失唤醒。代价是惊群，等待者只有几十个时可接受。</div></div>
+        <div class="point warn"><div class="label">② 单个请求超过总预算时要提前判掉</div><div>否则它永远等不到，死等在那里。</div></div>
+        <div class="point warn"><div class="label">③ 获取不到时要退回队列，不能硬等</div><div>硬等会让一张 900 MB 的巨图把所有 worker 都堵在配额上——把内存问题变成了队头阻塞问题。</div></div>
+        <div class="point bad"><div class="label">④ 顺序：读头 → 校验 → 申请 → 解码</div><div>颠倒任何一步这套机制就失效了。特别是<strong>必须在解码之前申请</strong>——解码到一半才发现超预算，内存已经花掉了。</div></div>
+        <div class="point good"><div class="label">还有一条隔离要求</div><div>做了分级队列之后，<strong>每条通道要有独立的配额</strong>。共用一个的话，几张巨图就能把快车道的额度吃光——worker 分开了但内存没分开，隔离只做了一半。做资源隔离时要把所有共享资源列一遍：线程、内存配额、连接池、限流令牌。</div></div>
+      </div>
+    </details></li>
+
+    <li><details class="qa">
+      <summary><span class="lvl adv">高级</span>把 GPU 加进来，批大小怎么定？</summary>
+      <div class="ans">
+        <p>批大小同时接着两条形状不同的曲线（§7.1）：<strong>吞吐随批大小上升但在 32 附近饱和；单张延迟从头到尾线性增长，没有拐点。</strong>所以「批越大越好」只在不看延迟时成立。</p>
+        <div class="point good"><div class="label">按路径取不同的值</div><div>在线 batch=4 / linger 5 ms：吞吐拿到饱和值的 55%，批内等待只加约 3 ms。离线 batch=128 / linger 200 ms：吞吐拉满，攒批延迟在 8 小时窗口里可忽略。<strong>同一份代码、两套配置。</strong></div></div>
+        <div class="point warn"><div class="label">攒批必须有超时兜底</div><div>低谷期到达率可能只有 50 张/s，攒够 128 张要 2.5 秒。只按条数触发，这 2.5 秒会直接进入延迟。三个触发条件：条数、字节（显存约束）、超时。而且超时要用「距离 deadline 还有多久」，不是每次都等一个完整的 linger——后者在持续小流量下会把批次无限推迟。</div></div>
+        <div class="point deep"><div class="label">显存和主存不一样</div><div><strong>显存没有 swap，也没有 OOM Killer 帮你挑进程杀</strong>，不足时 CUDA 直接返回错误，处理不好就是整个进程崩掉，带走里面几十个正在处理的任务。所以配额要更保守，而且在线/离线各自独立。另外<strong><code>cudaMalloc</code> 是同步的、会隐式同步整个设备</strong>，绝不能在热路径上调，必须用显存池。</div></div>
+        <div class="point bad"><div class="label">最容易被忽略的：回退路径的容量</div><div>nvJPEG 只支持部分 JPEG 变体，PNG/WebP/HEIC 支持也差，加上 GPU 本身会故障。如果按「90% 走 GPU」配 CPU 核数，GPU 一挂，100% 流量涌向 10% 容量的路径，立刻雪崩——<strong>为提高性能引入的组件，故障时成了单点</strong>。CPU 路径要按「能扛住全量的降级服务水平」来配。</div></div>
+      </div>
+    </details></li>
+
+    <li><details class="qa">
+      <summary><span class="lvl adv">高级</span>下游变慢，进程被 OOM Killer 杀了，重启之后更快被杀。发生了什么？</summary>
+      <div class="ans">
+        <p>这是一条<strong>每一步都「正确」但合起来不收敛</strong>的因果链（§9.1）：</p>
+        <p>下游变慢 → 队列增长（正常，本该止步于此）→ <strong>队列无界，内存持续上涨</strong> → OOM Killer → 在途任务全部未确认 → 消息队列重投 → 重启后负载 = 原流量 + 全部重投，<strong>比崩溃前更高</strong> → 更快被杀。</p>
+        <div class="point bad"><div class="label">三个最直觉的应对都会加速它</div><div>加内存只是把 OOM 推迟几分钟；加机器让每台都走一遍这条链，而且新机器启动时会一起去抢重投的任务；<strong>重启是最糟的</strong>，因为它直接进入「原流量 + 重投」那一步。</div></div>
+        <div class="point good"><div class="label">唯一有效的现场措施</div><div>从入口限流。<strong>而如果架构里没有这个开关，现场就只能等它自己烧完。</strong></div></div>
+        <div class="point deep"><div class="label">根治：链上唯一能斩断它的位置</div><div>「队列增长 → 内存上涨」之间加一个有界。故障就停在「队列变长、上游被拒绝」这个<strong>可观测、可告警、可自愈</strong>的状态上。这条流水线上有三个必须存在的背压点：领取任务（拉模式而非推模式）、申请解码内存（字节配额）、写回上传（有界队列 + 自适应限速）。<strong>共同点是它们都挡在「产生新内存占用」之前。</strong></div></div>
+        <div class="point warn"><div class="label">监控上的推论</div><div>看<strong>在途字节数</strong>而不是任务数（「32 个任务在处理」什么也说明不了，「用了 22/24 GB 配额」说明马上要限流）；看<strong>配额等待时间的分位数</strong>，它比队列长度更早暴露问题；还要注意<strong>拒绝率为零不一定是好事</strong>，可能说明背压点根本没生效。</div></div>
+      </div>
+    </details></li>
+
+    <li><details class="qa">
+      <summary><span class="lvl adv">高级</span>一千万张图重刷，任务会重复投递，怎么保证不出错？</summary>
+      <div class="ans">
+        <p>重复是必然的：事件通知是至少一次（ADR-003）、队列重投是至少一次（ADR-001）、断点续跑的游标推进在确认之后（§8.2）。<strong>与其消除重复，不如让重复无害。</strong></p>
+        <div class="point bad"><div class="label">「去重」方案的问题</div><div>维护一张「已处理」表：1000 万条，和任务量同量级，而且这张表自己的写入也可能失败——<strong>只是把一致性问题往下推了一层</strong>。</div></div>
+        <div class="point good"><div class="label">真正的幂等：输出由输入唯一决定</div><div>产物路径 = <code>thumb/v{版本}/{哈希前两位}/{内容哈希}/{档位}.jpg</code>。同一张图处理 100 次，产出 100 份<strong>逐字节相同</strong>、路径也相同的结果——「重复」这件事在下游根本不可观测，不需要任何去重表。<strong>去重需要状态，幂等不需要。</strong></div></div>
+        <div class="point deep"><div class="label">这个 key 里的两个设计</div><div>① <strong>版本号在路径里</strong>：改了缩放算法就是一批新产物，新旧共存、可灰度、可回滚，避免「原地更新」这种危险操作。② <strong>哈希前两位做目录分片</strong>：很多对象存储按 key 的字典序前缀划分内部分区，用递增日期前缀会让写入全部集中到一个分区形成热点，表现为写入速率莫名卡住。把高熵的哈希放在路径靠前的位置。</div></div>
+        <div class="point"><div class="label">额外收益</div><div>用内容哈希而不是源 key，同一张图被不同用户重复上传时还能直接命中已有产物。</div></div>
+        <div class="point warn"><div class="label">这条幂等还打开了另一扇门</div><div>因为重复无害、worker 无状态，离线批可以跑在<strong>抢占式实例</strong>上，成本降到 20–30%。但要注意抢占往往是<strong>成批发生</strong>的（同可用区同机型强相关），需要混合部署保底 + 跨机型分散。</div></div>
+      </div>
+    </details></li>
+  </ol>
+</section>
+
+<div class="footer-nav">
+  <a href="high_concurrency_gateway.html">← 上一篇 · IoT 接入网关（30 万长连接）</a>
+  <a href="capacity_backpressure_design.html">下一篇 · 容量估算与背压 →</a>
+  <a href="../communication/high_performance.html#s5">相关 · 内存池与零拷贝</a>
+  <a href="resilience_patterns.html">相关 · 限流 · 熔断 · 降级 · 隔离</a>
+  <a href="architecture_methodology.html">相关 · 架构方法论</a>
+  <a href="system_architecture_directory.html">目录</a>
+  <a href="../index.html">主页</a>
+</div>
+
+
+
+</main>
+</div>
+
+<script>
+(function () {
+  var sections = document.querySelectorAll('section.chapter');
+  var links = document.querySelectorAll('aside.toc nav a');
+  if (!sections.length || !links.length) return;
+  var obs = new IntersectionObserver(function (entries) {
+    entries.forEach(function (e) {
+      if (!e.isIntersecting) return;
+      var href = '#' + e.target.id;
+      links.forEach(function (a) { a.classList.toggle('active', a.getAttribute('href') === href); });
+    });
+  }, { rootMargin: '-30% 0px -60% 0px' });
+  sections.forEach(function (s) { obs.observe(s); });
+})();
+</script>
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>
