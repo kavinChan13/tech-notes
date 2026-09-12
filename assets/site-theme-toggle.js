@@ -137,6 +137,90 @@
     document.body.appendChild(backdrop);
   }
 
+  // --- Second TOC level. Long guides list only their chapters in the rail:
+  //     management_knowledge_system.html offers 18 links for 112 subsections,
+  //     so the only way to reach 11.3 was to scroll the article hunting for it.
+  //     The subsections are already anchored (`h3[id]`), so the rail can be
+  //     derived rather than hand-maintained — nothing per-page changes.
+  //
+  //     Only the current chapter's sub-list is expanded: showing all 112 at
+  //     once would turn the rail into a wall longer than the viewport. ---
+  function buildTocSubnav() {
+    var nav = document.querySelector('aside.toc nav');
+    var main = document.querySelector('main');
+    if (!nav || !main) return;
+    // Pages that already ship a two-level TOC (159 of them) keep theirs.
+    if (nav.querySelector('ol ol, ul ul, ol ul, ul ol')) return;
+
+    var tops = [];
+    nav.querySelectorAll(':scope > ol > li > a[href^="#"], :scope > ul > li > a[href^="#"]')
+      .forEach(function (a) {
+        var el = document.getElementById(a.getAttribute('href').slice(1));
+        if (el) tops.push({ link: a, li: a.parentNode, el: el });
+      });
+    if (tops.length < 2) return;
+
+    var subs = Array.prototype.slice.call(main.querySelectorAll('h3[id]'));
+    if (subs.length < 4) return;
+
+    // Assign each h3 to the last chapter that starts before it. Comparing
+    // document position rather than offsetTop: this runs before images and
+    // mermaid diagrams settle, so measured offsets are not final yet.
+    var groups = tops.map(function () { return []; });
+    subs.forEach(function (h) {
+      var idx = -1;
+      for (var i = 0; i < tops.length; i++) {
+        var pos = tops[i].el.compareDocumentPosition(h);
+        if (pos & Node.DOCUMENT_POSITION_FOLLOWING || tops[i].el.contains(h)) idx = i;
+        else break;
+      }
+      if (idx >= 0) groups[idx].push(h);
+    });
+
+    var built = 0;
+    groups.forEach(function (list, i) {
+      if (list.length < 2) return;
+      var ol = document.createElement('ol');
+      ol.className = 'toc-sub';
+      list.forEach(function (h) {
+        var li = document.createElement('li');
+        var a = document.createElement('a');
+        a.href = '#' + h.id;
+        // Drop a leading "11.3" — the parent link already gives the chapter.
+        a.textContent = (h.textContent || '').trim().replace(/^\d+(\.\d+)*[.、\s]\s*/, '');
+        li.appendChild(a);
+        ol.appendChild(li);
+      });
+      tops[i].li.appendChild(ol);
+      tops[i].li.classList.add('toc-has-sub');
+      built++;
+    });
+    if (!built) return;
+
+    function current() {
+      var y = window.scrollY + 100;
+      // Default to the first chapter: at the very top of the page no heading
+      // has passed the line yet, and leaving every group shut there makes the
+      // feature look broken exactly where the reader first sees the rail.
+      var found = tops[0];
+      for (var i = 0; i < tops.length; i++) {
+        if (tops[i].el.getBoundingClientRect().top + window.scrollY <= y) found = tops[i];
+        else break;
+      }
+      for (var j = 0; j < tops.length; j++) {
+        tops[j].li.classList.toggle('toc-open-sub', tops[j] === found);
+      }
+    }
+
+    var ticking = false;
+    window.addEventListener('scroll', function () {
+      if (ticking) return;
+      ticking = true;
+      window.requestAnimationFrame(function () { current(); ticking = false; });
+    }, { passive: true });
+    current();
+  }
+
   function bind() {
     syncButtons(currentTheme());
     ['tn-theme-toggle', 'themeBtn'].forEach(function (id) {
@@ -150,6 +234,7 @@
     ensureBackTop();
     wrapWideTables();
     setupTocDrawer();
+    buildTocSubnav();
   }
 
   if (document.readyState === 'loading') {

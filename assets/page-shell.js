@@ -3,8 +3,12 @@
  * ---------------------------------------------------------------------
  * Per-document interactions for the `.ps` page-shell layout:
  *   1) Sidebar scroll-spy (highlight current chapter while scrolling)
- *   2) Back-to-top button (shown after scrolling N px)
- *   3) Smooth anchor scrolling (CSS handles most; this fixes some edge cases)
+ *   2) Smooth anchor scrolling (CSS handles most; this fixes some edge cases)
+ *
+ * Back-to-top is deliberately NOT here: site-theme-toggle.js ships it for all
+ * 481 pages with a single >400px threshold, and all 58 `.ps` pages load both
+ * files. A second implementation here would only re-introduce two scroll
+ * listeners disagreeing about when the button appears.
  *
  * Auto-init on DOMContentLoaded. No-ops if `.ps` markup isn't present.
  * ===================================================================== */
@@ -52,30 +56,7 @@
     update();
   }
 
-  /* ---------- 2. Back-to-top button ---------- */
-  function bindBackTop() {
-    if (!$('.ps')) return;
-    var btn = $('.ps .back-top');
-    if (!btn) {
-      btn = document.createElement('button');
-      btn.className = 'back-top';
-      btn.type = 'button';
-      btn.setAttribute('aria-label', '回到顶部');
-      btn.innerHTML = '↑';
-      document.body.appendChild(btn);
-    }
-    btn.addEventListener('click', function () {
-      window.scrollTo({ top: 0, behavior: 'smooth' });
-    });
-    function toggle() {
-      if (window.scrollY > 600) btn.classList.add('show');
-      else btn.classList.remove('show');
-    }
-    window.addEventListener('scroll', toggle, { passive: true });
-    toggle();
-  }
-
-  /* ---------- 3. Smooth anchor scrolling (with topbar offset) ---------- */
+  /* ---------- 2. Smooth anchor scrolling (with topbar offset) ---------- */
   function bindAnchorJump() {
     document.addEventListener('click', function (e) {
       var a = e.target.closest && e.target.closest('a[href^="#"]');
@@ -94,7 +75,6 @@
   function boot() {
     if (!$('.ps')) return;
     bindScrollSpy();
-    /* back-to-top is handled globally by site-theme-toggle.js (single handler) */
     bindAnchorJump();
   }
 

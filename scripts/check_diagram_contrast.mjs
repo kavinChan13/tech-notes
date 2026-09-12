@@ -82,8 +82,12 @@ const probe = () => {
 
 const browser = await launch();
 let bad = 0;
+let failed = 0;
 for (const page of pages) {
-  const url = pathToFileURL(path.join(root, page)).href;
+  // resolve, not join: an absolute path (what a shell glob expands to) got
+  // appended to root and turned into a nonexistent C:/repo/C:/repo/... path,
+  // so every page "failed to open" and was then counted as a contrast problem.
+  const url = pathToFileURL(path.resolve(root, page)).href;
   for (const mode of ['light', 'dark']) {
     const ctx = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
     await ctx.addInitScript((m) => {
@@ -116,12 +120,16 @@ for (const page of pages) {
         }
       }
     } catch (e) {
+      // Counted separately from `bad`: "could not look" and "looked, and the
+      // colours are wrong" are different failures, and folding them into one
+      // number sent someone chasing a colour bug that did not exist.
       console.log(`  ${page} [${mode}] 打开失败: ${e.message.split('\n')[0]}`);
-      bad++;
+      failed++;
     }
     await ctx.close();
   }
 }
 await browser.close();
 console.log(`\n--- ${bad} 处配色与当前主题相反（${pages.length} 个页面）`);
-process.exit(bad ? 1 : 0);
+if (failed) console.log(`--- 另有 ${failed} 次页面打不开，这些页没有被检查`);
+process.exit(bad || failed ? 1 : 0);

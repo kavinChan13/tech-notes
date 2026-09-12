@@ -84,11 +84,13 @@ python scripts/audit_links.py          # 跨文件链接与锚点
 python scripts/audit_html_nesting.py   # 块级嵌套
 python scripts/audit_interview_qa.py   # 面试题格式（见 interview-qa-format 规则）
 python scripts/audit_page_shell.py     # 离线自包含 / 主题初始化 / 样式表顺序 / a11y
-python scripts/audit_counts.py         # 首页与目录页的篇数计数（`--fix` 可自动改写）
+python scripts/audit_counts.py         # 篇数、首页两处日期、最新列表去重（`--fix` 可自动改写）
 python scripts/audit_read_time.py      # 阅读时长标注三处一致（`--fix` 可自动改写）
-python scripts/build_search_index.py   # 刷新全文索引
+python scripts/gen_social_meta.py --check     # canonical / og / favicon 区块是否过期
+python scripts/build_search_index.py   # 刷新轻索引 + 19 个主题分片
 python scripts/build_sitemap.py        # 刷新 sitemap.xml + robots.txt
-node   scripts/test_search_index_loader.mjs   # 懒加载器行为
+node   scripts/test_search_index_loader.mjs   # 索引加载器（分层 / 只拉自己那片）
+npm    run build:cards:check                  # 面试卡片 HTML 与 interview/data/*.json 同步
 ```
 
 **这几条已全部清零，任何一条不为 0 都是回归。** `.github/workflows/audit.yml`
@@ -97,6 +99,22 @@ node   scripts/test_search_index_loader.mjs   # 懒加载器行为
 ⚠️ **生成脚本必须跨平台产出同样的字节。** `sorted(path_list)` 直接比较 `Path` 对象，
 在 Windows 上不区分大小写、在 Linux 上区分——`interview/STUDY_PATH.html`
 （全站唯一带大写字母的文件名）因此在两边排到不同位置，本地跑干净、CI 却报索引过期。
+
+### 🚨 `--check` 不能比较行尾，也不能写文件
+
+两个真实教训，都属于「脚本本身坏了，而它报出来的却是内容坏了」：
+
+- **行尾**：`build-cards.mjs` 生成的区块用 `\n`，而它拿 `newHtml === html` 和磁盘文件裸比较。
+ Windows 检出的 `interview/*_cards.html` 是 CRLF（`.gitattributes` 的 `text eol=lf`
+ 是后加的，旧工作副本没跟上），于是 `--check` **永远报 4 个文件 OUT OF DATE**。
+ 一个永远是红的检查等于没有检查：没人会信它，真漂移也就发现不了。
+ 而照提示跑一次生成，会把 518 KB 的文件整体改写成 LF、产出几千行假 diff。
+ **比较前一律 `replace(/\r\n/g, '\n')`；写出去用 LF（git 存的就是 LF，所以不产生 diff）。**
+- **副作用**：`gen_social_meta.py` 的第一版 `--check` 是「调用写入函数、再把原文写回去」。
+ 于是**检查这个动作本身**会静默把 CRLF 工作副本重写成 LF。
+ `--check` 必须是纯函数：渲染出新内容、和磁盘比较、**不写**。
+
+一般化：`--check` 路径与 `--fix` 路径要共用同一套渲染逻辑，但**只有 `--fix` 允许写盘**。
 排序一律用 `key=lambda p: p.as_posix()`。
 
 ## 标题被吃掉前导数字

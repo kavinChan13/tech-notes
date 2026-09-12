@@ -26,6 +26,14 @@ ID = re.compile(r'\bid="([^"]+)"')
 
 EXTERNAL = ("http://", "https://", "mailto:", "javascript:", "data:", "tel:", "//")
 
+# GitHub Pages serves the site under a project sub-path, so a page that must use
+# root-absolute links carries that prefix. Only 404.html does: Pages reuses the
+# same file for a bad URL at any depth (/tech-notes/a.html and
+# /tech-notes/x/y/z.html both get it), and relative links would resolve against
+# the wrong folder for the latter. Strip the prefix and check from the repo root
+# rather than exempting the page, or its 23 links go unverified.
+SITE_BASE = "/tech-notes/"
+
 
 def is_dynamic(href: str) -> bool:
     """Skip hrefs built by JS at runtime (template strings / concatenation)."""
@@ -42,7 +50,13 @@ def audit(path: Path, id_cache: dict[Path, set[str]]) -> list[str]:
         href = unquote(raw.split("?", 1)[0])
         if not href:
             continue
-        target = (path.parent / href).resolve()
+        if href.startswith(SITE_BASE):
+            target = (ROOT / href[len(SITE_BASE):]).resolve()
+        elif href.startswith("/"):
+            problems.append(f"  root-absolute href outside {SITE_BASE}  {raw}")
+            continue
+        else:
+            target = (path.parent / href).resolve()
         if not target.exists():
             problems.append(f"  missing file  {raw}")
             continue

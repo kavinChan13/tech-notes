@@ -16,8 +16,8 @@ consistency, search-index):
   5. topnav is wrapped in <!-- tn-nav:v2 --> markers and <body> has has-topnav
   6. scroll-spy targets `aside.toc nav a`, never a bare/negated nav selector
   7. no hardcoded dark background/border hexes in inline <style>
-  8. the 12 MB search index is pulled in through search-index-loader.js, never
-     linked directly
+  8. the search index (lite tier + per-topic shards) is pulled in through
+     search-index-loader.js, never linked directly
   9. a vendored library (mermaid / chart.js) is never a render-blocking
      <script> in <head>, and is only loaded by pages that actually use it
  10. icon-only buttons carry an aria-label, and every page has a
@@ -71,8 +71,9 @@ def luminance(hexstr: str) -> float:
 
 
 def is_chrome(path: Path) -> bool:
+    """Shell pages: they style themselves via directory-theme.css, not article.css."""
     n = path.name
-    return n == "index.html" or n.endswith("_directory.html")
+    return n in {"index.html", "404.html"} or n.endswith("_directory.html")
 
 
 def audit(path: Path) -> list[str]:
@@ -146,9 +147,10 @@ def audit(path: Path) -> list[str]:
                     f"inline <style> hardcodes a dark colour: {m.group(1)}:{m.group(2)} "
                     "(use a var(--*) token)")
 
-    # 8. search index must be lazy
-    if re.search(r'src="[^"]*assets/search-index\.js"', text):
-        out.append("links assets/search-index.js directly; use search-index-loader.js")
+    # 8. search index must be lazy — neither the lite tier nor a full-text shard
+    #    may be a plain <script src>; both go through the loader.
+    for m in re.finditer(r'src="[^"]*assets/(search-index-lite\.js|search-index/[^"]+)"', text):
+        out.append(f"links assets/{m.group(1)} directly; use search-index-loader.js")
 
     # 9. vendored libraries must not block rendering, and must be used
     for m in VENDOR_TAG.finditer(text):
@@ -182,7 +184,10 @@ def audit(path: Path) -> list[str]:
 def main(argv: list[str]) -> int:
     targets = content_files(argv or None)
     if not argv:
-        targets = [ROOT / "index.html"] + targets
+        # Root-level shells (index.html, 404.html) live outside every topic
+        # folder, so content_files() never sees them. Glob instead of listing
+        # names, or the next root page added is silently exempt from all of this.
+        targets = sorted(ROOT.glob("*.html"), key=lambda p: p.name) + targets
     total = 0
     for path in targets:
         problems = audit(path)

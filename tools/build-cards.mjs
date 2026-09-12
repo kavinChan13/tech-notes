@@ -35,6 +35,15 @@ function fail(msg) {
   process.exit(1);
 }
 
+// The generated block always uses \n, so a CRLF working copy (Windows checkout
+// predating `*.html text eol=lf` in .gitattributes) made `--check` report every
+// file as out of date forever — a permanently red check nobody can trust, and
+// one that hides real drift. Compare and write LF only; git stores LF anyway,
+// so rewriting a CRLF copy produces no diff.
+function toLf(s) {
+  return s.replace(/\r\n/g, '\n');
+}
+
 function buildBlock(data) {
   // 用 JSON.stringify 生成 JS 字面量。
   // JSON 是 JS 对象字面量的严格子集 (键名带双引号、值是 JSON 类型),
@@ -84,7 +93,7 @@ function buildOne(slug, opts) {
     fail(`Data slug mismatch: file is for "${data.slug}" but you asked for "${slug}".`);
   }
 
-  const html = readFileSync(htmlPath, 'utf8');
+  const html = toLf(readFileSync(htmlPath, 'utf8'));
   const newBlock = buildBlock(data);
   const newHtml = injectBlock(html, newBlock, slug);
 

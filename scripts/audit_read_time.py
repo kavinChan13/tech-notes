@@ -80,6 +80,13 @@ def is_note(path: Path) -> bool:
 def estimate(src: str) -> int:
     body = re.sub(r"<(script|style)[^>]*>.*?</\1>", "", src, flags=re.S)
     body = re.sub(r"<svg\b.*?</svg>", "", body, flags=re.S)
+    # Navigation is not prose. The page-tail .footer-nav quotes the titles of
+    # neighbouring articles, and adding it to 309 pages pushed 18 of them across
+    # a rounding step — the estimate has to ignore chrome, or every navigation
+    # change silently rewrites reading times.
+    body = re.sub(r'<div class="footer-nav">.*?</div>', "", body, flags=re.S)
+    body = re.sub(r'<nav class="tn-topnav">.*?</nav>', "", body, flags=re.S)
+    body = re.sub(r'<aside class="toc"\b.*?</aside>', "", body, flags=re.S)
     code = "".join(re.findall(r"<pre\b.*?</pre>", body, re.S))
     code_n = len(re.sub(r"\s+", "", re.sub(r"<[^>]+>", "", code)))
     prose = re.sub(r"<pre\b.*?</pre>", "", body, flags=re.S)

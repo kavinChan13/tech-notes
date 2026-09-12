@@ -22,35 +22,18 @@ removed without regenerating), so that is what CI enforces.
 from __future__ import annotations
 
 import re
-import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from xml.sax.saxutils import escape
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _site import ROOT, content_dirs  # noqa: E402
+from _site import ROOT, content_dirs, git_lastmod  # noqa: E402
 
 BASE = "https://kavinchan13.github.io/tech-notes/"
 
 # Pages a search engine should not spend crawl budget on.
 SKIP_NAMES = {"index.html"}          # only at nested levels; the root one is kept
-
-
-def git_lastmod() -> dict[str, str]:
-    """path -> YYYY-MM-DD of the commit that last touched it."""
-    out = subprocess.run(
-        ["git", "log", "--name-only", "--format=%x00%cI", "--diff-filter=AM"],
-        capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=ROOT,
-    ).stdout
-    dates: dict[str, str] = {}
-    current = ""
-    for line in out.splitlines():
-        if line.startswith("\x00"):
-            current = line[1:11]
-        elif line.strip() and line not in dates:
-            dates[line.strip()] = current
-    return dates
 
 
 def priority(rel: str) -> str:

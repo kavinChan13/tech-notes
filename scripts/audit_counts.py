@@ -36,7 +36,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _site import ROOT, content_dirs  # noqa: E402
+from _site import ROOT, content_dirs, git_lastmod  # noqa: E402
 
 INDEX = ROOT / "index.html"
 
@@ -55,6 +55,19 @@ LATEST_BLOCK = re.compile(r'<div class="latest">([\s\S]*?)\n\s*</div>')
 LATEST_ROW = re.compile(
     r'<a class="l-row" href="([^"]+)"[\s\S]*?<span class="l-date">([^<]+)</span>')
 
+# `.upd` used to carry a relative date typed by hand ("今天更新", "2 个月前更新").
+# Nothing recomputed it, so every one of them was a lie within days — a home
+# page that is wrong while every audit stays green. Derive it from the linked
+# page's last commit date and print an absolute month, which cannot rot.
+FEATURED_CARD = re.compile(
+    r'<a class="f-card" href="\./(?P<href>[^"]+)"[\s\S]*?'
+    r'<span class="upd">(?P<upd>[^<]*)</span>')
+FOOTER_UPDATED = re.compile(r"(最后更新[：:]\s*)(\d{4}-\d{2})")
+
+
+def upd_text(month: str) -> str:
+    return f"{month} 更新"
+
 
 def directory_pages() -> dict[str, Path]:
     out = {}
@@ -68,11 +81,23 @@ def item_count(path: Path) -> int:
     return len(ITEM.findall(path.read_text(encoding="utf-8")))
 
 
+def site_dates() -> tuple[dict[str, str], str]:
+    """(path -> YYYY-MM-DD, newest month across all notes as YYYY-MM)."""
+    lastmod = git_lastmod()
+    note_dates = [
+        d for rel_path, d in lastmod.items()
+        if rel_path.endswith(".html") and d and not rel_path.startswith(".")
+    ]
+    newest = max(note_dates)[:7] if note_dates else ""
+    return lastmod, newest
+
+
 def main(argv: list[str]) -> int:
     fix = "--fix" in argv
     index_src = INDEX.read_text(encoding="utf-8")
     dirs = directory_pages()
     problems: list[str] = []
+    lastmod, site_month = site_dates()
 
     # ---- per-topic: home cnt == directory meta == directory .item count ----
     seen_dirs = set()
@@ -107,6 +132,7 @@ def main(argv: list[str]) -> int:
         "文章总数": f"{sum(counts) // 10 * 10}+",
         "分类": str(n_domains),
         "学习路径": str(n_paths),
+        "最后更新": site_month,
     }
     stats = {m.group("label"): m.group("value") for m in STAT.finditer(index_src)}
     for label, want in expected.items():
@@ -141,6 +167,37 @@ def main(argv: list[str]) -> int:
                 problems.append(
                     f"index.html 最新更新 out of order: {href} ({date}) sits below "
                     f"{prev_href} ({prev_date}); new entries go at the top of the list")
+        # One target, several rows: the reader sees the same link repeatedly and
+        # the duplicates push genuinely different entries out of the visible
+        # window (the list renders only the first LATEST_MAX rows).
+        seen: dict[str, str] = {}
+        for href, date in rows:
+            if href in seen:
+                problems.append(
+                    f"index.html 最新更新 lists {href} twice ({seen[href]} and {date}); "
+                    f"fold repeat updates of one target into a single row")
+            else:
+                seen[href] = date
+
+    # ---- 精选卡片 .upd and the two 最后更新 labels must come from git ----
+    for m in FEATURED_CARD.finditer(index_src):
+        href = m.group("href")
+        date = lastmod.get(href)
+        if not date:
+            problems.append(f"index.html 精选卡片 links to {href}, which git has no commit for")
+            continue
+        want = upd_text(date[:7])
+        if m.group("upd") != want:
+            problems.append(
+                f"index.html 精选卡片 {href}: .upd says 「{m.group('upd')}」, expected 「{want}」")
+
+    footer = FOOTER_UPDATED.search(index_src)
+    if footer is None:
+        problems.append("index.html footer has no 「最后更新：YYYY-MM」")
+    elif footer.group(2) != site_month:
+        problems.append(
+            f"index.html footer 最后更新 = {footer.group(2)}, expected {site_month} "
+            f"(the stat block says {stats.get('最后更新')})")
 
     # ---- notes nothing else on the site links to ----
     # A page can legitimately live outside its directory listing (cross-topic
@@ -198,6 +255,30 @@ def apply_fix(index_src: str, dirs: dict[str, Path]) -> int:
             dir_page.write_text(new, encoding="utf-8", newline="")
             changed.append(f"{dir_page.name} meta -> {actual} 篇")
 
+    lastmod, site_month = site_dates()
+
+    def fix_upd(m: re.Match) -> str:
+        date = lastmod.get(m.group("href"))
+        if not date:
+            return m.group(0)
+        want_upd = upd_text(date[:7])
+        if m.group("upd") == want_upd:
+            return m.group(0)
+        changed.append(f"index.html 精选 {m.group('href')} .upd -> {want_upd}")
+        return m.group(0).replace(
+            f'<span class="upd">{m.group("upd")}</span>',
+            f'<span class="upd">{want_upd}</span>')
+
+    src = FEATURED_CARD.sub(fix_upd, src)
+
+    def fix_footer(m: re.Match) -> str:
+        if m.group(2) == site_month:
+            return m.group(0)
+        changed.append(f"index.html footer 最后更新: {m.group(2)} -> {site_month}")
+        return f"{m.group(1)}{site_month}"
+
+    src = FOOTER_UPDATED.sub(fix_footer, src)
+
     counts = [int(m.group("cnt")) for m in DOMAIN_CARD.finditer(src)]
     n_domains = len(DOMAIN_H3.findall(src))
     n_paths = len(PATH_CARD.findall(src.split('id="paths"', 1)[-1]))
@@ -205,6 +286,7 @@ def apply_fix(index_src: str, dirs: dict[str, Path]) -> int:
         "文章总数": f"{sum(counts) // 10 * 10}+",
         "分类": str(n_domains),
         "学习路径": str(n_paths),
+        "最后更新": site_month,
     }
 
     def fix_stat(m: re.Match) -> str:

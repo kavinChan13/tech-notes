@@ -1,8 +1,10 @@
 /* Directory-page filter with in-directory full-text search.
- * Requires assets/search-index-loader.js to be loaded first; the ~12 MB index
- * itself is fetched lazily on the first interaction with #q, so a directory
- * page that is only browsed (not searched) never pays for it. Until the index
- * arrives, filtering falls back to title + data-search matching, then re-runs.
+ * Requires assets/search-index-loader.js to be loaded first. Only this topic's
+ * shard is fetched, and only on the first interaction with #q: filtering is
+ * scoped to the current directory anyway, so pulling the whole index (14.7 MB)
+ * to search 6–186 pages was 16 topics of waste. Shards run 22 KB – 2 MB.
+ * Until the shard arrives, filtering falls back to title + data-search
+ * matching, then re-runs.
  * DOM contract (shared by all *_directory.html):
  *   #q        search input
  *   .item     each card, containing an <a href> to a note in this directory
@@ -26,7 +28,7 @@
     byPath = {};
     idx.forEach(function (e) {
       var t = e.t + ' ';
-      (e.s || []).forEach(function (s) { t += s.x + ' '; });
+      (e.s || []).forEach(function (s) { t += (s.h || '') + ' ' + (s.x || '') + ' '; });
       byPath[e.u.toLowerCase()] = t.toLowerCase();
     });
   }
@@ -74,15 +76,15 @@
   }
 
   function ensureIndex() {
-    if (!window.TNSearchIndex) return;
-    window.TNSearchIndex.load(function (idx) {
+    if (!window.TNSearchIndex || !folder) return;
+    window.TNSearchIndex.loadTopic(folder, function (idx) {
       indexBodies(idx);
       attachBodies();
       f();
     });
   }
 
-  // Warm the index as soon as the user shows intent, so the body-text upgrade
+  // Warm the shard as soon as the user shows intent, so the body-text upgrade
   // is usually already in place by the time they finish typing.
   q.addEventListener('focus', ensureIndex, { once: true });
   q.addEventListener('input', function () { ensureIndex(); f(); });
