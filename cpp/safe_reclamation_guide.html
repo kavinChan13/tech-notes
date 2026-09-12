@@ -1,0 +1,1072 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>用户态安全内存回收 · Hazard Pointer / EBR / 用户态 RCU · 摘除与回收的两阶段</title>
+<meta name="description" content="无锁数据结构真正难的不是把节点摘下来，而是摘下来之后什么时候才能 delete。本文讲透摘除与回收为什么必须分成两个阶段、它和 ABA 是两个不同的问题，Hazard Pointer 的 publish 与重新验证为什么缺一不可，EBR 三个 epoch 的滚动与它对阻塞线程的零容忍，liburcu 的 QSBR / memb / signal 取舍，以及 C++26 的 std::hazard_pointer 与 std::rcu">
+<!-- tn-social:v1 -->
+<link rel="canonical" href="https://kavinchan13.github.io/tech-notes/cpp/safe_reclamation_guide.html">
+<link rel="icon" type="image/svg+xml" href="../assets/favicon.svg">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0b0d12" media="(prefers-color-scheme: dark)">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="Kavin Tech Notes">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:url" content="https://kavinchan13.github.io/tech-notes/cpp/safe_reclamation_guide.html">
+<meta property="og:title" content="用户态安全内存回收 · Hazard Pointer / EBR / 用户态 RCU · 摘除与回收的两阶段">
+<meta property="og:description" content="无锁数据结构真正难的不是把节点摘下来，而是摘下来之后什么时候才能 delete。本文讲透摘除与回收为什么必须分成两个阶段、它和 ABA 是两个不同的问题，Hazard Pointer 的 publish 与重新验证为什么缺一不可，EBR 三个 epoch 的滚动与它对阻塞线程的零容忍，liburcu 的 QSBR / memb / signal 取舍，以及 C++26 的 std::hazard_pointer 与 std::rcu">
+<meta property="og:image" content="https://kavinchan13.github.io/tech-notes/assets/og-cover.jpg">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="628">
+<meta property="og:image:alt" content="技术笔记 · 系统 / 架构 / 工程">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="用户态安全内存回收 · Hazard Pointer / EBR / 用户态 RCU · 摘除与回收的两阶段">
+<meta name="twitter:description" content="无锁数据结构真正难的不是把节点摘下来，而是摘下来之后什么时候才能 delete。本文讲透摘除与回收为什么必须分成两个阶段、它和 ABA 是两个不同的问题，Hazard Pointer 的 publish 与重新验证为什么缺一不可，EBR 三个 epoch 的滚动与它对阻塞线程的零容忍，liburcu 的 QSBR / memb / signal 取舍，以及 C++26 的 std::hazard_pointer 与 std::rcu">
+<meta name="twitter:image" content="https://kavinchan13.github.io/tech-notes/assets/og-cover.jpg">
+<!-- /tn-social:v1 -->
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<style>
+  html { scroll-behavior: smooth; }
+  body { line-height: 1.75; min-height: 100vh; overflow-x: hidden; }
+  main { min-width: 0; }
+  pre { font-family: var(--mono); font-size: .85rem; line-height: 1.6; }
+  code { font-family: var(--mono); }
+  svg text { font-family: var(--sans); }
+  table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: .9rem; }
+  th, td { border: 1px solid var(--border); padding: .55rem .85rem; text-align: left; vertical-align: top; }
+  th { background: var(--bg-card-2); color: var(--accent); }
+  tr:nth-child(even) { background: color-mix(in srgb, var(--text) 3%, transparent); }
+  .analogy::before { content: "🏠 生活类比 · "; color: var(--accent-4); font-weight: 700; font-size: .86rem; }
+  .def > strong:first-child { color: var(--accent); }
+  .fig { margin: 22px 0; overflow-x: auto; }
+  .fig svg { max-width: 100%; height: auto; }
+  .fig .box   { fill: var(--bg-card-2); stroke: var(--border-2); stroke-width: 1.2; }
+  .fig .box-a { fill: color-mix(in srgb, var(--accent) 14%, var(--bg-card)); stroke: var(--accent); stroke-width: 1.2; }
+  .fig .box-g { fill: color-mix(in srgb, var(--accent-3) 14%, var(--bg-card)); stroke: var(--accent-3); stroke-width: 1.2; }
+  .fig .box-p { fill: color-mix(in srgb, var(--accent-2) 14%, var(--bg-card)); stroke: var(--accent-2); stroke-width: 1.2; }
+  .fig .box-y { fill: color-mix(in srgb, var(--accent-4) 14%, var(--bg-card)); stroke: var(--accent-4); stroke-width: 1.2; }
+  .fig .box-r { fill: color-mix(in srgb, var(--danger) 14%, var(--bg-card)); stroke: var(--danger); stroke-width: 1.2; }
+  .fig .t   { fill: var(--text); font-size: 12px; }
+  .fig .tb  { fill: var(--text); font-size: 12.5px; font-weight: 700; }
+  .fig .ts  { fill: var(--text-dim); font-size: 10.5px; }
+  .fig .tm  { fill: var(--text-dim); font-size: 10.5px; font-family: var(--mono); }
+  .fig .ta  { fill: var(--accent); font-size: 12px; font-weight: 700; }
+  .fig .tg  { fill: var(--accent-3); font-size: 11px; font-weight: 600; }
+  .fig .tp  { fill: var(--accent-2); font-size: 11px; font-weight: 600; }
+  .fig .ty  { fill: var(--accent-4); font-size: 11px; font-weight: 600; }
+  .fig .tr  { fill: var(--danger); font-size: 11px; font-weight: 600; }
+  .fig .ln  { stroke: var(--border-2); stroke-width: 1.4; fill: none; }
+  .fig .ln-a{ stroke: var(--accent); stroke-width: 1.6; fill: none; }
+  .fig .ln-g{ stroke: var(--accent-3); stroke-width: 1.6; fill: none; }
+  .fig .ln-r{ stroke: var(--danger); stroke-width: 1.6; fill: none; stroke-dasharray: 5 4; }
+  .fig .ln-d{ stroke: var(--text-mute); stroke-width: 1.2; fill: none; stroke-dasharray: 4 3; }
+  .fig .ar-a{ fill: var(--accent); }
+  .fig .ar-g{ fill: var(--accent-3); }
+  .fig .ar-r{ fill: var(--danger); }
+  .vs { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 16px 0; }
+  @media (max-width: 860px) { .vs { grid-template-columns: 1fr; } }
+  .vs > div > h5 { margin: 0 0 6px; font-size: .88rem; }
+  .vs .bad  { border-color: color-mix(in srgb, var(--danger) 45%, var(--border)); background: color-mix(in srgb, var(--danger) 6%, var(--bg-card)); }
+  .vs .bad  > h5 { color: var(--danger); }
+  .vs .good { border-color: color-mix(in srgb, var(--accent-3) 45%, var(--border)); background: color-mix(in srgb, var(--accent-3) 6%, var(--bg-card)); }
+  .vs .good > h5 { color: var(--accent-3); }
+  .vs pre { margin: 6px 0 0; font-size: .78rem; }
+</style>
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="tn-shell-overlay has-topnav">
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="modern_cpp_stl_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 35 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="progress" id="progress"></div>
+<div class="layout">
+  <aside class="toc">
+    <h2>安全内存回收</h2>
+    <nav>
+      <ol>
+        <li><a href="#s1">摘下来之后，什么时候才能 delete</a>
+          <ol>
+            <li><a href="#s1-1">1.1 一条能复现的 UAF 时间线</a></li>
+            <li><a href="#s1-2">1.2 摘除与回收是两个阶段</a></li>
+            <li><a href="#s1-3">1.3 它和 ABA 是两个问题</a></li>
+          </ol>
+        </li>
+        <li><a href="#s2">Hazard Pointer：让读者举手</a>
+          <ol>
+            <li><a href="#s2-1">2.1 读者侧的四步循环</a></li>
+            <li><a href="#s2-2">2.2 少了重新验证就整个失效</a></li>
+            <li><a href="#s2-3">2.3 写者侧：retire 与 scan</a></li>
+            <li><a href="#s2-4">2.4 摊销复杂度与 slot 数量</a></li>
+          </ol>
+        </li>
+        <li><a href="#s3">Epoch-Based Reclamation</a>
+          <ol>
+            <li><a href="#s3-1">3.1 全局 epoch 与 pin / unpin</a></li>
+            <li><a href="#s3-2">3.2 为什么是三个 epoch</a></li>
+            <li><a href="#s3-3">3.3 致命弱点：一个人卡住全场</a></li>
+          </ol>
+        </li>
+        <li><a href="#s4">用户态 RCU（liburcu）</a>
+          <ol>
+            <li><a href="#s4-1">4.1 三种风格的取舍</a></li>
+            <li><a href="#s4-2">4.2 QSBR 的零成本与它的账单</a></li>
+            <li><a href="#s4-3">4.3 和内核 RCU 的对照</a></li>
+          </ol>
+        </li>
+        <li><a href="#s5">选型</a>
+          <ol>
+            <li><a href="#s5-1">5.1 六维判据表</a></li>
+            <li><a href="#s5-2">5.2 什么时候其实不该无锁</a></li>
+          </ol>
+        </li>
+        <li><a href="#s6">标准化与现成实现</a></li>
+        <li><a href="#s7">验证：为什么 TSan 靠不住</a>
+          <ol>
+            <li><a href="#s7-1">7.1 窗口有多窄</a></li>
+            <li><a href="#s7-2">7.2 压力测试怎么设计</a></li>
+          </ol>
+        </li>
+        <li><a href="#s8">面试题集（12 道）</a>
+          <ol>
+            <li><a href="#s8-1">8.1 基础</a></li>
+            <li><a href="#s8-2">8.2 中级</a></li>
+            <li><a href="#s8-3">8.3 高级</a></li>
+          </ol>
+        </li>
+      </ol>
+    </nav>
+  </aside>
+
+<main>
+
+  <header class="hero">
+    <div class="badge">Lock-free · SMR · Hazard Pointer · RCU · 2026</div>
+    <h1>用户态安全内存回收</h1>
+    <p class="sub">写一个无锁链表，难的从来不是<strong>怎么把节点摘下来</strong>——一个 CAS 就够了。难的是摘下来之后<strong>什么时候才能 <code>delete</code></strong>：此刻可能还有三个读者握着指向它的指针，而你无法询问它们，因为一问就不是无锁了。这个问题有专门的名字：<strong>安全内存回收（Safe Memory Reclamation, SMR）</strong>，它是无锁数据结构从「能跑」到「敢上线」之间的全部距离。</p>
+    <div class="meta-row">
+      <span class="pill red">核心难度 ★★★★★</span>
+      <span class="pill cyan">线上事故密度 极高</span>
+      <span class="pill green">阅读时长 ~35 min</span>
+      <span class="pill amber">前置 内存模型 · 原子操作 · CAS</span>
+    </div>
+    <div class="meta">
+      <span>Hazard Pointer</span>
+      <span>Epoch-Based Reclamation</span>
+      <span>liburcu QSBR</span>
+      <span>C++26 std::rcu</span>
+    </div>
+  </header>
+
+<!-- ================================================================ §1 -->
+<section class="chapter" id="s1">
+  <div class="ch-head">
+    <div class="num">01</div>
+    <div class="t"><h2>摘下来之后，什么时候才能 delete</h2><p class="sub">无锁算法的教科书章节通常在 CAS 成功那一行就结束了，而真正的工程问题从下一行开始</p></div>
+  </div>
+
+  <p>把一个节点从无锁链表里摘掉，代码大概是这样：<code>head.compare_exchange_weak(p, p-&gt;next)</code>。CAS 成功了，链表里再也找不到 <code>p</code>，从数据结构的角度它已经不存在。于是很自然地写下一行 <code>delete p;</code>——这一行就是 bug。</p>
+
+  <p>因为「链表里找不到它」和「没有人正在用它」是两件完全不同的事。另一个线程可能在你 CAS 之前的半纳秒读到了 <code>head</code>，此刻正握着同一个 <code>p</code>，准备解引用。它没有做错任何事：它读到的确实是当时的合法状态。</p>
+
+  <div class="def"><strong>安全内存回收（SMR）</strong>：在无锁数据结构中，确定「一块已被逻辑移除的内存何时不再可能被任何线程访问」的机制。它必须自己是无锁的——如果靠加锁来判断，整个数据结构的无锁性就白费了。</div>
+
+  <div class="analogy">图书馆把一本书从检索目录里划掉了，这一步瞬间完成、不影响任何人借书。但此刻阅览室里还有三个人正捧着这本书在读。管理员不能因为「目录里已经没有它」就把书扔进碎纸机——他得先知道<strong>最后一个读者什么时候放下它</strong>。而阅览室不允许广播喊话（那就是加锁），所以只剩两种办法：<strong>要读就在门口的登记板上写下书名</strong>（Hazard Pointer），或者<strong>按批次清场，只销毁上上一批之前就没人碰的书</strong>（Epoch / RCU）。本文就是这两种办法。</div>
+
+  <h3 id="s1-1">1.1 一条能复现的 UAF 时间线</h3>
+
+  <p>先把竞态画清楚。下面只有两个线程、四个时刻，没有任何复杂结构，但它足以解释后面所有机制存在的理由。</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 960 296" role="img" aria-label="两线程 use-after-free 时间线：读者先从 head 读出指针 p，写者随后用 CAS 把 p 摘出链表并 delete，读者再解引用 p 时内存已归还分配器，读者本身没有做错任何事">
+      <text class="tb" x="480" y="20" text-anchor="middle">节点已经从链表里摘掉了，可读者手里那根指针还在</text>
+
+      <text class="ta" x="20" y="82">读者 T1</text>
+      <path class="ln-d" d="M110 76 L935 76"/>
+      <rect class="box-a" x="120" y="44" width="210" height="46" rx="7"/>
+      <text class="tm" x="225" y="64" text-anchor="middle">p = head.load()</text>
+      <text class="ts" x="225" y="82" text-anchor="middle">① 读到的是当时的合法状态</text>
+
+      <rect class="box-r" x="690" y="44" width="240" height="46" rx="7"/>
+      <text class="tm" x="810" y="64" text-anchor="middle">use(p-&gt;value)</text>
+      <text class="tr" x="810" y="82" text-anchor="middle">④ use-after-free</text>
+
+      <rect class="box-g" x="120" y="120" width="530" height="22" rx="4"/>
+      <text class="tg" x="385" y="136" text-anchor="middle">p 指向的内存有效</text>
+      <rect class="box-r" x="650" y="120" width="285" height="22" rx="4"/>
+      <text class="tr" x="792" y="136" text-anchor="middle">已归还分配器，随时可能被别的对象复用</text>
+
+      <text class="ta" x="20" y="208">写者 T2</text>
+      <path class="ln-d" d="M110 202 L935 202"/>
+      <rect class="box-a" x="330" y="170" width="230" height="46" rx="7"/>
+      <text class="tm" x="445" y="190" text-anchor="middle">CAS(head, p, p-&gt;next)</text>
+      <text class="ts" x="445" y="208" text-anchor="middle">② 摘除成功，链表里没有 p 了</text>
+
+      <rect class="box-r" x="580" y="170" width="180" height="46" rx="7"/>
+      <text class="tm" x="670" y="190" text-anchor="middle">delete p</text>
+      <text class="tr" x="670" y="208" text-anchor="middle">③ 这一行就是 bug</text>
+
+      <path class="ln-r" d="M670 170 L670 142"/>
+      <path class="ln-r" d="M810 120 L810 90"/>
+      <polygon class="ar-r" points="805,94 815,94 810,84"/>
+
+      <text class="ts" x="480" y="250" text-anchor="middle">T1 没有做错任何事：① 处它读到的确实是当时的合法 <tspan class="tm">head</tspan>。错的是 T2 假定「摘除完成 = 没人在用」</text>
+      <text class="ts" x="480" y="270" text-anchor="middle">窗口宽度通常是<tspan class="tr">几十纳秒</tspan>——足够天天触发，又窄到压测一小时都碰不上一次（见 §7）</text>
+      <text class="ts" x="480" y="290" text-anchor="middle">加锁能解决它，但那正是我们当初写无锁的理由；<tspan class="ta">SMR 要在不加锁的前提下回答同一个问题</tspan></text>
+    </svg>
+  </div>
+
+  <h3 id="s1-2">1.2 摘除与回收是两个阶段</h3>
+
+  <p>看清上图之后，结论几乎是被逼出来的：<strong>一次删除必须拆成两个在时间上分离的阶段</strong>。</p>
+
+  <table>
+    <thead><tr><th>阶段</th><th>做什么</th><th>完成的判据</th><th>谁能做</th></tr></thead>
+    <tbody>
+      <tr><td><strong>① 摘除（unlink / retire）</strong></td><td>一次 CAS 让节点从数据结构里不可达；然后把它挂进一个「待回收」列表</td><td>CAS 成功，<strong>此刻立即完成</strong></td><td>任何写者，无锁</td></tr>
+      <tr><td><strong>② 回收（reclaim / free）</strong></td><td>真正调用 <code>delete</code> / <code>free</code>，把内存还给分配器</td><td><strong>所有在摘除之前就开始的读者都已结束</strong></td><td>需要 SMR 机制来判定</td></tr>
+    </tbody>
+  </table>
+
+  <p>两个阶段之间的时间差，就是<strong>宽限期（grace period）</strong>。所有 SMR 方案的差别，本质上只有一句话：<strong>它用什么办法判断宽限期结束了</strong>。Hazard Pointer 让每个读者显式登记自己正在用哪几个指针，写者去查这张表；Epoch 和 RCU 则不查具体指针，而是判断「所有线程都已经离开过临界区一次」——后者粒度粗得多，但读者侧几乎不花钱。</p>
+
+  <p>还有一个必然推论：<strong>回收一定是延迟且批量的</strong>。每摘一个节点就去跑一次判定，开销会高到不可接受，所以所有实现都是攒一批再判一次。这直接决定了「内存用量会比逻辑用量高一截」，而这一截有没有上界，是 §5 选型表里最关键的一列。</p>
+
+  <h3 id="s1-3">1.3 它和 ABA 是两个问题</h3>
+
+  <p>这两件事被混为一谈的频率高得惊人，面试里几乎每次都要澄清一遍。它们都出现在无锁代码里，都跟「节点被删了」有关，但性质完全不同。</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 960 286" role="img" aria-label="ABA 问题与内存回收问题的对照：ABA 是值的歧义，CAS 无法区分未变与变回来，解法是给指针加标签；回收是生命周期问题，读者握着已释放的指针，解法是安全内存回收机制。两者正交，标签指针不能防 UAF">
+      <text class="tb" x="480" y="20" text-anchor="middle">同一段无锁代码里的两个独立缺陷</text>
+
+      <rect class="box-y" x="20" y="38" width="450" height="178" rx="9"/>
+      <text class="ty" x="245" y="60" text-anchor="middle">ABA · 值的歧义</text>
+      <text class="ts" x="245" y="84" text-anchor="middle">CAS 只比较「值等不等」</text>
+      <text class="tm" x="245" y="106" text-anchor="middle">A → B → A</text>
+      <text class="ts" x="245" y="128" text-anchor="middle">中间发生过变化，而 CAS 看不出来，误判为</text>
+      <text class="ts" x="245" y="146" text-anchor="middle">「没人动过」，于是把陈旧的 next 写了回去</text>
+      <text class="tg" x="245" y="174" text-anchor="middle">解法：tagged pointer / 双宽 CAS / LL-SC</text>
+      <text class="tr" x="245" y="198" text-anchor="middle">即使全部解决，delete 仍然不安全</text>
+
+      <rect class="box-r" x="490" y="38" width="450" height="178" rx="9"/>
+      <text class="tr" x="715" y="60" text-anchor="middle">回收 · 生命周期</text>
+      <text class="ts" x="715" y="84" text-anchor="middle">读者手里的指针指向已释放的内存</text>
+      <text class="tm" x="715" y="106" text-anchor="middle">load(p) … delete p … use(p)</text>
+      <text class="ts" x="715" y="128" text-anchor="middle">和 CAS 没有半点关系：哪怕全程只有一个</text>
+      <text class="ts" x="715" y="146" text-anchor="middle">写者、一次删除、零次 CAS 重试，照样 UAF</text>
+      <text class="tg" x="715" y="174" text-anchor="middle">解法：Hazard Pointer / EBR / RCU</text>
+      <text class="tr" x="715" y="198" text-anchor="middle">即使全部解决，ABA 仍可能发生</text>
+
+      <path class="ln-d" d="M480 44 L480 210"/>
+
+      <text class="ts" x="480" y="246" text-anchor="middle">唯一的联系是<tspan class="ta">单向</tspan>的：SMR 让节点不被释放，地址就不会被复用成同一个值，所以它<tspan class="tg">顺带消掉了大部分 ABA</tspan></text>
+      <text class="ts" x="480" y="266" text-anchor="middle">反过来不成立——<tspan class="tr">tagged pointer 对 UAF 一点用都没有</tspan>，标签只保护了那一个原子字，保护不了它指向的整块内存</text>
+      <text class="ts" x="480" y="284" text-anchor="middle">所以正确的顺序是：先选 SMR，再看剩下的 ABA 面还有多大</text>
+    </svg>
+  </div>
+
+  <div class="box tip">ABA 本身的时间线推演与四种解法对照在 <a href="../communication/high_performance.html#s3-2">高性能通信编程 §3.2</a>，那里还有 <a href="../communication/high_performance.html#s3-1">§3.1 的 Treiber 栈 + CAS 实现</a>与 <a href="../communication/high_performance.html#s2">§2 逐行标注内存序的 SPSC 环</a>；内存序的选择依据、三级进度保证与 Michael-Scott 队列的选型见 <a href="./memory_model.html#s14">C++ 内存模型 §14</a>。<strong>本文不重复这些内容</strong>，只处理它们之后剩下的那个问题：什么时候能 <code>delete</code>。</div>
+</section>
+
+<!-- ================================================================ §2 -->
+<section class="chapter" id="s2">
+  <div class="ch-head">
+    <div class="num">02</div>
+    <div class="t"><h2>Hazard Pointer：让读者举手</h2><p class="sub">最直接的思路——既然不能问读者，就让读者主动登记</p></div>
+  </div>
+
+  <p>Hazard Pointer（Maged Michael，2004）的想法朴素得几乎像作弊：既然写者无法询问读者「你在用哪些指针」，那就让每个读者<strong>把答案预先写在一块所有人都能读到的地方</strong>。写者要 <code>delete</code> 之前先扫一遍这块地方，名单上有的就跳过。</p>
+
+  <p>一个「地方」就是一个 <strong>hazard slot</strong>：一个单写多读的原子指针，归某个线程独占写、所有人可读。线程同时要保护几个指针，就占几个 slot——Michael-Scott 队列的出队最多同时保护 2 个，Harris 链表删除要 3 个。</p>
+
+  <h3 id="s2-1">2.1 读者侧的四步循环</h3>
+
+  <p>读者要做的不是「读一个指针」，而是「读一个指针<strong>并确保它在我用完之前不会被释放</strong>」。这两件事无法一步完成，所以必然是一个循环。</p>
+
+  <pre><code>// 读者：把 src 里的指针安全地取出来
+// 四步缺一不可，第 ③ 步是整个算法的支点
+template &lt;class T&gt;
+T* protect(std::atomic&lt;T*&gt;&amp; src, hazard_slot&amp; hp) {
+    T* p = src.load(std::memory_order_acquire);
+    for (;;) {
+        // ① publish：向全世界宣告「我要用 p，别删它」
+        hp.ptr.store(p, std::memory_order_release);
+
+        // ② 屏障：禁止把 ① 的写重排到 ③ 的读之后。
+        //    x86 上这是唯一真正花钱的一条指令（约 20–40 周期）。
+        //    去掉它，store-load 重排会让 ③ 的验证形同虚设。
+        std::atomic_thread_fence(std::memory_order_seq_cst);
+
+        // ③ 重新验证：src 还是 p 吗？
+        T* p2 = src.load(std::memory_order_acquire);
+        if (p2 == p) return p;   // 是 → p 此刻仍可达，写者的 scan 必然看得见 ①
+        p = p2;                  // 否 → 可能已被摘除，丢掉重来
+    }
+}
+
+// 使用方：hazard slot 必须在最后一次解引用之后才清
+void consume(std::atomic&lt;Node*&gt;&amp; head) {
+    auto&amp; hp = tls_slot(0);
+    Node* p = protect(head, hp);
+    if (p) do_work(p-&gt;payload);            // ④ 这段期间 p 一定活着
+    hp.ptr.store(nullptr, std::memory_order_release);  // ⑤ clear，越早越好
+}</code></pre>
+
+  <div class="fig">
+    <svg viewBox="0 0 960 340" role="img" aria-label="Hazard Pointer 读者侧四步循环示意，以及缺少重新验证一步时写者 scan 与读者 publish 交错导致的竞态时间线">
+      <text class="tb" x="480" y="20" text-anchor="middle">读者侧循环：publish → 屏障 → 重新验证 → 使用 → clear</text>
+
+      <rect class="box-a" x="18" y="38" width="170" height="58" rx="8"/>
+      <text class="ta" x="103" y="60" text-anchor="middle">① publish</text>
+      <text class="tm" x="103" y="80" text-anchor="middle">hp = p</text>
+
+      <rect class="box-p" x="204" y="38" width="170" height="58" rx="8"/>
+      <text class="tp" x="289" y="60" text-anchor="middle">② seq_cst 屏障</text>
+      <text class="ts" x="289" y="80" text-anchor="middle">挡住 store-load 重排</text>
+
+      <rect class="box-y" x="390" y="38" width="176" height="58" rx="8"/>
+      <text class="ty" x="478" y="60" text-anchor="middle">③ 重新读 src</text>
+      <text class="ts" x="478" y="80" text-anchor="middle">还等于 p 吗？</text>
+
+      <rect class="box-g" x="582" y="38" width="170" height="58" rx="8"/>
+      <text class="tg" x="667" y="60" text-anchor="middle">④ 使用 p</text>
+      <text class="ts" x="667" y="80" text-anchor="middle">这期间保证不被释放</text>
+
+      <rect class="box-a" x="768" y="38" width="174" height="58" rx="8"/>
+      <text class="ta" x="855" y="60" text-anchor="middle">⑤ clear</text>
+      <text class="tm" x="855" y="80" text-anchor="middle">hp = nullptr</text>
+
+      <path class="ln-a" d="M188 67 L198 67 M374 67 L384 67 M566 67 L576 67 M752 67 L762 67"/>
+      <polygon class="ar-a" points="198,62 198,72 206,67"/>
+      <polygon class="ar-a" points="384,62 384,72 392,67"/>
+      <polygon class="ar-a" points="576,62 576,72 584,67"/>
+      <polygon class="ar-a" points="762,62 762,72 770,67"/>
+
+      <path class="ln-r" d="M478 96 L478 116 L103 116 L103 100"/>
+      <polygon class="ar-r" points="98,104 108,104 103,94"/>
+      <text class="tr" x="290" y="132" text-anchor="middle">③ 不等 → 整轮作废，用新值重来（所以是 lock-free，不是 wait-free）</text>
+
+      <path class="ln-d" d="M20 150 L940 150"/>
+      <text class="tr" x="20" y="174">如果去掉 ③，下面这个交错就无法被发现</text>
+
+      <text class="ta" x="20" y="216">写者 T2</text>
+      <path class="ln-d" d="M120 210 L935 210"/>
+      <rect class="box-a" x="130" y="188" width="160" height="40" rx="6"/>
+      <text class="ts" x="210" y="212" text-anchor="middle">摘除 p（CAS）</text>
+      <rect class="box-y" x="320" y="188" width="200" height="40" rx="6"/>
+      <text class="ts" x="420" y="205" text-anchor="middle">scan 所有 hazard slot</text>
+      <text class="ts" x="420" y="221" text-anchor="middle">名单里没有 p</text>
+      <rect class="box-r" x="700" y="188" width="150" height="40" rx="6"/>
+      <text class="tr" x="775" y="212" text-anchor="middle">delete p</text>
+
+      <text class="ta" x="20" y="286">读者 T1</text>
+      <path class="ln-d" d="M120 280 L935 280"/>
+      <rect class="box-a" x="130" y="258" width="160" height="40" rx="6"/>
+      <text class="ts" x="210" y="282" text-anchor="middle">p = src.load()</text>
+      <rect class="box-r" x="540" y="258" width="140" height="40" rx="6"/>
+      <text class="tr" x="610" y="275" text-anchor="middle">publish hp = p</text>
+      <text class="ts" x="610" y="291" text-anchor="middle">晚了一步</text>
+      <rect class="box-r" x="700" y="258" width="150" height="40" rx="6"/>
+      <text class="tr" x="775" y="282" text-anchor="middle">use(p) → UAF</text>
+
+      <path class="ln-r" d="M610 258 L610 240 L420 240 L420 228"/>
+      <polygon class="ar-r" points="415,232 425,232 420,222"/>
+
+      <text class="ts" x="480" y="322" text-anchor="middle">有了 ③ 之后：p 已被摘除 ⇒ 重读 <tspan class="tm">src</tspan> 必然不等于 p ⇒ 读者主动放弃。<tspan class="ta">读者要么赶在 scan 前登记上，要么自己发现来晚了</tspan></text>
+      <text class="ts" x="480" y="338" text-anchor="middle">没有第三种可能，这就是正确性证明的全部</text>
+    </svg>
+  </div>
+
+  <h3 id="s2-2">2.2 少了重新验证就整个失效</h3>
+
+  <p>上图下半部分值得再用文字说一遍，因为它是这套机制里唯一不直观的一步，也是自己动手实现时最常省掉的一步——省掉之后代码照样跑，测试照样过。</p>
+
+  <p>论证只有两句话。<strong>写者的顺序是固定的：先摘除（改 <code>src</code>），后 scan。</strong>那么读者在 publish 之后重读 <code>src</code>，只有两种结果：</p>
+
+  <ul>
+    <li>读到的<strong>还是 <code>p</code></strong>：说明此刻摘除尚未发生。而摘除在 scan 之前，所以 scan 一定发生在这之后——读者的 publish 已经落在 scan 的可见范围内，<code>p</code> 会被跳过。<strong>安全。</strong></li>
+    <li>读到的<strong>不是 <code>p</code></strong>：说明摘除可能已经发生，读者无法判断自己的 publish 有没有赶上，于是<strong>不赌</strong>，丢弃重来。</li>
+  </ul>
+
+  <p>关键在于「先摘除后 scan」与「先 publish 后重读」这两组顺序必须都是真的。前者靠写者代码的书写顺序加上 release/acquire；后者就是 ② 那条 <code>seq_cst</code> 屏障——<strong>store 后面跟一个 load，恰好是 x86 TSO 唯一允许重排的组合</strong>。所以这条屏障不是可有可无的保险，它是本算法在 x86 上唯一必须付的那笔钱。在 ARM 这类弱序机器上更是如此。</p>
+
+  <div class="box warn">这也是为什么<strong>不要自己手写 hazard pointer</strong>。去掉屏障、或把它写成 <code>release</code>，在 x86 上跑百亿次都可能不出事，换到 aarch64 服务器上第二天就崩。用 folly 或等 C++26（§6）。自己写的唯一正当理由是学习，而学习的产物不应该进生产。</div>
+
+  <h3 id="s2-3">2.3 写者侧：retire 与 scan</h3>
+
+  <p>写者侧简单得多，只有一个设计决策：<strong>什么时候去 scan</strong>。答案是攒够一批再去，因为 scan 的成本与线程数成正比，而摘除的次数与业务量成正比。</p>
+
+  <pre><code>// 摘除后不 delete，先进本线程的待回收列表
+void retire(Node* p) {
+    auto&amp; bag = tls_retired();
+    bag.push_back(p);
+    if (bag.size() &gt;= kThreshold)   // kThreshold 取 2H，H = 全局 slot 总数
+        scan();
+}
+
+void scan() {
+    // ① 快照全体 hazard slot —— 只读遍历，不需要任何锁
+    std::vector&lt;void*&gt; guarded;
+    for (hazard_slot* s = g_slots.load(std::memory_order_acquire); s; s = s-&gt;next)
+        if (void* h = s-&gt;ptr.load(std::memory_order_acquire))
+            guarded.push_back(h);
+    std::sort(guarded.begin(), guarded.end());
+
+    // ② 分流：名单上的留到下一轮，其余立刻释放
+    auto&amp; bag = tls_retired();
+    std::vector&lt;Node*&gt; keep;
+    for (Node* p : bag) {
+        if (std::binary_search(guarded.begin(), guarded.end(), p)) keep.push_back(p);
+        else delete p;                    // 此刻没有任何线程登记过它
+    }
+    bag.swap(keep);
+}</code></pre>
+
+  <p>注意 <code>scan()</code> 里<strong>没有任何同步原语</strong>：它只是把别人的 slot 读一遍。一个线程正好在这期间 publish 了某个指针也不要紧——若那个指针指向的节点已被摘除，该读者自己会在重新验证那一步放弃。整套机制的正确性全部压在 §2.2 那两句话上。</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 960 292" role="img" aria-label="Hazard Pointer 写者侧回收流程：本线程待回收列表攒够阈值后触发 scan，scan 快照全体 hazard slot 得到保护名单，待回收节点被分流成立刻释放与留到下一轮两类">
+      <text class="tb" x="480" y="20" text-anchor="middle">retire 只是记账，delete 要等 scan 说了算</text>
+
+      <rect class="box-a" x="18" y="40" width="240" height="150" rx="9"/>
+      <text class="ta" x="138" y="62" text-anchor="middle">本线程待回收列表</text>
+      <rect class="box" x="44" y="78" width="42" height="26" rx="4"/>
+      <rect class="box" x="94" y="78" width="42" height="26" rx="4"/>
+      <rect class="box" x="144" y="78" width="42" height="26" rx="4"/>
+      <rect class="box" x="194" y="78" width="42" height="26" rx="4"/>
+      <rect class="box" x="44" y="112" width="42" height="26" rx="4"/>
+      <rect class="box" x="94" y="112" width="42" height="26" rx="4"/>
+      <rect class="box" x="144" y="112" width="42" height="26" rx="4"/>
+      <rect class="box" x="194" y="112" width="42" height="26" rx="4"/>
+      <text class="ts" x="138" y="158" text-anchor="middle">每线程一份，push 是纯本地操作</text>
+      <text class="tg" x="138" y="178" text-anchor="middle">攒够 R = 2H 个才触发一次 scan</text>
+
+      <path class="ln-a" d="M258 115 L296 115"/>
+      <polygon class="ar-a" points="296,110 296,120 306,115"/>
+
+      <rect class="box-p" x="310" y="40" width="300" height="150" rx="9"/>
+      <text class="tp" x="460" y="62" text-anchor="middle">scan：快照全体 hazard slot</text>
+      <rect class="box" x="332" y="78" width="80" height="24" rx="4"/>
+      <text class="tm" x="372" y="95" text-anchor="middle">T1 slot0</text>
+      <rect class="box" x="422" y="78" width="80" height="24" rx="4"/>
+      <text class="tm" x="462" y="95" text-anchor="middle">T1 slot1</text>
+      <rect class="box" x="512" y="78" width="80" height="24" rx="4"/>
+      <text class="tm" x="552" y="95" text-anchor="middle">T2 slot0</text>
+      <rect class="box" x="332" y="108" width="80" height="24" rx="4"/>
+      <text class="tm" x="372" y="125" text-anchor="middle">T2 slot1</text>
+      <rect class="box" x="422" y="108" width="80" height="24" rx="4"/>
+      <text class="tm" x="462" y="125" text-anchor="middle">T3 slot0</text>
+      <rect class="box" x="512" y="108" width="80" height="24" rx="4"/>
+      <text class="tm" x="552" y="125" text-anchor="middle">T3 slot1</text>
+      <text class="ts" x="460" y="152" text-anchor="middle">纯读遍历，不加锁、不阻塞任何人</text>
+      <text class="ts" x="460" y="172" text-anchor="middle">排序或塞进 hash 集合 → 得到保护名单</text>
+
+      <path class="ln-g" d="M610 90 L652 90"/>
+      <polygon class="ar-g" points="652,85 652,95 662,90"/>
+      <path class="ln-r" d="M610 146 L652 146"/>
+      <polygon class="ar-r" points="652,141 652,151 662,146"/>
+
+      <rect class="box-g" x="666" y="40" width="276" height="68" rx="9"/>
+      <text class="tg" x="804" y="62" text-anchor="middle">不在名单 → 立刻 delete</text>
+      <text class="ts" x="804" y="84" text-anchor="middle">至少 R − H = H 个，所以每次 scan</text>
+      <text class="ts" x="804" y="100" text-anchor="middle">一定有实质产出，不会空跑</text>
+
+      <rect class="box-r" x="666" y="122" width="276" height="68" rx="9"/>
+      <text class="tr" x="804" y="144" text-anchor="middle">在名单 → 留到下一轮</text>
+      <text class="ts" x="804" y="166" text-anchor="middle">最多 H 个（每个 slot 至多护住一个）</text>
+      <text class="ts" x="804" y="182" text-anchor="middle">这就是内存上界的来源</text>
+
+      <text class="ts" x="480" y="226" text-anchor="middle">全局未回收节点数 ≤ 线程数 × R = <tspan class="tg">O(N·H)</tspan>，H 又正比于 N ⇒ <tspan class="tg">O(N²K)</tspan>，K = 每线程 slot 数（通常 1~3）</text>
+      <text class="ts" x="480" y="248" text-anchor="middle">数字听着吓人，但它是<tspan class="tg">常数上界</tspan>：与业务吞吐、与某个线程卡多久<tspan class="ta">完全无关</tspan>。这一点 EBR 和 RCU 都做不到（§3.3）</text>
+      <text class="ts" x="480" y="272" text-anchor="middle">64 线程 × 2 slot ⇒ 约 16K 个待回收节点封顶；每节点 64 B 就是 1 MB，在任何负载下都不会再涨</text>
+    </svg>
+  </div>
+
+  <h3 id="s2-4">2.4 摊销复杂度与 slot 数量</h3>
+
+  <p>阈值取 <code>R = 2H</code> 不是随手写的常数，它是让摊销成本降到 O(1) 的最小选择。一次 scan 的成本是 O(H) 收集加上 O(R) 查表；而由于 hazard slot 总共只有 H 个，最多护住 H 个节点，所以这一批 R 个里<strong>至少有 R − H = H 个会被真正释放</strong>。用 O(R) 的成本换至少 H 次释放，摊销到每个节点就是常数。</p>
+
+  <table>
+    <thead><tr><th>参数</th><th>含义</th><th>调大的后果</th><th>调小的后果</th></tr></thead>
+    <tbody>
+      <tr><td><strong>K</strong>（每线程 slot 数）</td><td>由算法决定，不是调优项</td><td>——</td><td>不够用就写不出正确代码：MS 队列出队要 2，Harris 链表删除要 3</td></tr>
+      <tr><td><strong>H = N·K</strong>（全局 slot 总数）</td><td>scan 要遍历的长度</td><td>scan 变慢，内存上界抬高</td><td>不可调，由线程数决定；线程池规模因此直接影响内存上界</td></tr>
+      <tr><td><strong>R</strong>（触发阈值）</td><td>攒多少个才 scan</td><td>scan 更稀疏，内存峰值更高，但 CPU 更省</td><td>小于 H 时可能整批都被护住，<strong>scan 空跑</strong>，退化成每次 retire 都 O(H)</td></tr>
+    </tbody>
+  </table>
+
+  <p>实践中真正的性能问题不在 scan，而在读者侧：<strong>每一次解引用都要付一条 <code>seq_cst</code> 屏障</strong>。遍历一条 100 节点的链表就是 100 条屏障，在 x86 上大约几千个周期。这就是 Hazard Pointer 的定位——<strong>读延迟确定但不低</strong>，换来一个与运行时行为无关的内存上界。如果你的读路径是「查一次哈希桶、拿到值就走」，这个代价可以接受；如果是「长链表扫描」，它会主导整个开销，此时 EBR 或 RCU 明显更合适。</p>
+</section>
+
+<!-- ================================================================ §3 -->
+<section class="chapter" id="s3">
+  <div class="ch-head">
+    <div class="num">03</div>
+    <div class="t"><h2>Epoch-Based Reclamation</h2><p class="sub">不问「你在用哪个指针」，只问「你还在临界区里吗」</p></div>
+  </div>
+
+  <p>Hazard Pointer 的成本几乎全部来自精确性：它要逐个指针登记。EBR 走另一条路——<strong>把问题粗粒度化</strong>。它不关心你在用哪个节点，只关心你有没有处在「可能持有任何节点指针」的状态里。这样一来，读者只需要在临界区的进出两端各写一次本地变量，临界区内部解引用<strong>完全免费</strong>。</p>
+
+  <h3 id="s3-1">3.1 全局 epoch 与 pin / unpin</h3>
+
+  <p>机制由三样东西构成：一个全局 epoch 计数器；每个线程一个 local epoch（未进入临界区时标记为「离线」）；每个 epoch 一条 limbo list（待回收袋子）。</p>
+
+  <pre><code>constexpr uint64_t kOffline = ~0ull;
+std::atomic&lt;uint64_t&gt; g_epoch{0};          // 只需要三个取值：mod 3
+
+struct Local {
+    std::atomic&lt;uint64_t&gt; epoch{kOffline};
+    std::vector&lt;Garbage&gt;  limbo[3];        // 按 epoch mod 3 分袋
+};
+
+// 进入临界区：宣告「我在 epoch e 里活动」
+void pin(Local&amp; le) {
+    uint64_t e = g_epoch.load(std::memory_order_acquire);
+    le.epoch.store(e, std::memory_order_relaxed);
+    // 临界区内的读不能提前到这条 store 之前，否则我还没登记就已经在读了
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+}
+
+// 离开临界区：一条 release store，仅此而已
+void unpin(Local&amp; le) {
+    le.epoch.store(kOffline, std::memory_order_release);
+}
+
+// 回收方：只有确认「在线的线程全都已经到达当前 epoch」才能推进
+bool try_advance() {
+    uint64_t e = g_epoch.load(std::memory_order_acquire);
+    for (Local* le : g_threads) {
+        uint64_t x = le-&gt;epoch.load(std::memory_order_acquire);
+        if (x != kOffline &amp;&amp; x != e) return false;   // 有人还留在旧 epoch
+    }
+    if (!g_epoch.compare_exchange_strong(e, e + 1, std::memory_order_acq_rel))
+        return false;
+    // 推进成功 ⇒ (e+1) % 3 那条袋子里的垃圾，已经不可能被任何线程访问
+    free_bag((e + 1) % 3);
+    return true;
+}</code></pre>
+
+  <p>对比一下代价结构就能看出它和 HP 的分水岭：<strong>HP 的开销正比于解引用次数，EBR 的开销正比于临界区次数</strong>。一次 <code>pin</code> 之后遍历一万个节点，EBR 只付一条屏障，HP 要付一万条。这是数量级的差距，也是为什么读多写少的场景几乎都选 EBR 系。</p>
+
+  <h3 id="s3-2">3.2 为什么是三个 epoch</h3>
+
+  <p>几乎每个 EBR 实现（crossbeam、Fraser 的原始版本、各种 C++ 移植）都用三个 epoch 轮转。两个为什么不行，是这一节唯一值得讲清楚的问题。</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 960 300" role="img" aria-label="三个 epoch 轮转的角色分配示意：当前 epoch 收集新垃圾，上一个 epoch 可能仍有线程在读所以只能等待，上上个 epoch 确认无人访问可以整袋释放，三个角色每次推进整体右移一格">
+      <text class="tb" x="480" y="20" text-anchor="middle">三条 limbo 袋子，三个角色，每次推进整体轮换一格</text>
+
+      <rect class="box-a" x="30" y="42" width="280" height="132" rx="9"/>
+      <text class="ta" x="170" y="64" text-anchor="middle">epoch e · 正在收集</text>
+      <text class="ts" x="170" y="88" text-anchor="middle">此刻 retire 的垃圾进这条袋子</text>
+      <text class="ts" x="170" y="108" text-anchor="middle">当前 pin 的线程都在这里</text>
+      <rect class="box" x="58" y="122" width="224" height="26" rx="4"/>
+      <text class="tm" x="170" y="140" text-anchor="middle">limbo[e % 3] ← 新垃圾</text>
+      <text class="tg" x="170" y="166" text-anchor="middle">绝对不能碰</text>
+
+      <rect class="box-y" x="340" y="42" width="280" height="132" rx="9"/>
+      <text class="ty" x="480" y="64" text-anchor="middle">epoch e−1 · 等待中</text>
+      <text class="ts" x="480" y="88" text-anchor="middle">可能还有线程 pin 在 e−1 没走</text>
+      <text class="ts" x="480" y="108" text-anchor="middle">它们看得见 e−1 时刻的所有指针</text>
+      <rect class="box" x="368" y="122" width="224" height="26" rx="4"/>
+      <text class="tm" x="480" y="140" text-anchor="middle">limbo[(e−1) % 3] 冻结</text>
+      <text class="ty" x="480" y="166" text-anchor="middle">还不能释放</text>
+
+      <rect class="box-g" x="650" y="42" width="280" height="132" rx="9"/>
+      <text class="tg" x="790" y="64" text-anchor="middle">epoch e−2 · 可释放</text>
+      <text class="ts" x="790" y="88" text-anchor="middle">全局已推进两次 ⇒ 每个线程都至少</text>
+      <text class="ts" x="790" y="108" text-anchor="middle">完整地进出过一次临界区</text>
+      <rect class="box" x="678" y="122" width="224" height="26" rx="4"/>
+      <text class="tm" x="790" y="140" text-anchor="middle">limbo[(e+1) % 3] → free</text>
+      <text class="tg" x="790" y="166" text-anchor="middle">整袋一次性释放</text>
+
+      <path class="ln-a" d="M30 196 L60 196 L60 212 L900 212 L900 196 L930 196"/>
+      <polygon class="ar-a" points="26,191 26,201 16,196"/>
+      <text class="ta" x="480" y="232" text-anchor="middle">推进一次 ⇒ 三个角色整体右移：收集变等待，等待变可释放，可释放腾空后接管收集</text>
+
+      <text class="tr" x="480" y="264" text-anchor="middle">为什么两个不够：一个 pin 在 e−1 的线程和一个 pin 在 e 的线程可以同时存在</text>
+      <text class="ts" x="480" y="284" text-anchor="middle">只有两条袋子时，「正在收集」与「准备释放」会落到同一条上——正在被读的东西和正要被 free 的东西混在一起。<tspan class="ta">第三条就是那格缓冲</tspan></text>
+    </svg>
+  </div>
+
+  <p>换个说法：在 epoch <code>e</code> 里 retire 的节点，可能被<strong>任何在 <code>e</code> 之前就 pin 住的线程</strong>访问。要确保这些线程全部离开，全局 epoch 必须推进两次——一次证明「所有人都已到达 <code>e</code>」，再一次证明「所有人都已离开 <code>e</code>」。两次推进期间，<code>e</code> 那条袋子必须原样保留，同时新的 <code>e+1</code>、<code>e+2</code> 又各自要有地方放新垃圾。三条，一条都不能少。</p>
+
+  <h3 id="s3-3">3.3 致命弱点：一个人卡住全场</h3>
+
+  <p>现在来看 EBR 的代价，它非常尖锐：<strong>只要有一个线程 pin 住不 unpin，全局 epoch 就永远推进不了，所有线程的所有待回收内存无限堆积，直到 OOM。</strong></p>
+
+  <p>而「pin 住不放」在真实系统里一点都不罕见——它不需要死锁，只需要一次倒霉：临界区里不小心调了一次 <code>malloc</code> 而恰好触发了 <code>mmap</code>；被操作系统抢占后调度器半天没轮到它；跑在一个超卖的容器里被 cgroup 限流；甚至只是有人在临界区里加了一行日志，而那行日志写的是慢速磁盘。</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 960 288" role="img" aria-label="EBR 与 Hazard Pointer 在一个线程长时间不释放临界区时的内存行为对比：EBR 的待回收内存随时间线性无上限增长直至 OOM，Hazard Pointer 只留住该线程实际登记的少数几个节点，其余照常释放，总量维持在常数上界">
+      <text class="tb" x="480" y="20" text-anchor="middle">T3 在临界区里卡了 30 秒（被抢占 / 一次慢 IO / cgroup 限流）</text>
+
+      <rect class="box-r" x="20" y="38" width="450" height="190" rx="9"/>
+      <text class="tr" x="245" y="60" text-anchor="middle">EBR / RCU · 无上界</text>
+      <path class="ln" d="M60 200 L450 200 M60 200 L60 76"/>
+      <rect class="box-r" x="80" y="188" width="26" height="12" rx="2"/>
+      <rect class="box-r" x="116" y="170" width="26" height="30" rx="2"/>
+      <rect class="box-r" x="152" y="152" width="26" height="48" rx="2"/>
+      <rect class="box-r" x="188" y="134" width="26" height="66" rx="2"/>
+      <rect class="box-r" x="224" y="116" width="26" height="84" rx="2"/>
+      <rect class="box-r" x="260" y="98" width="26" height="102" rx="2"/>
+      <rect class="box-r" x="296" y="80" width="26" height="120" rx="2"/>
+      <path class="ln-r" d="M340 200 L340 76"/>
+      <text class="tr" x="392" y="106" text-anchor="middle">OOM</text>
+      <text class="ts" x="392" y="126" text-anchor="middle">或被 OOM</text>
+      <text class="ts" x="392" y="142" text-anchor="middle">killer 收走</text>
+      <text class="ts" x="255" y="220" text-anchor="middle">全局 epoch 冻在原地，<tspan class="tr">所有线程</tspan>的垃圾都释放不了</text>
+
+      <rect class="box-g" x="490" y="38" width="450" height="190" rx="9"/>
+      <text class="tg" x="715" y="60" text-anchor="middle">Hazard Pointer · 有界</text>
+      <path class="ln" d="M530 200 L920 200 M530 200 L530 76"/>
+      <rect class="box-g" x="550" y="182" width="26" height="18" rx="2"/>
+      <rect class="box-g" x="586" y="176" width="26" height="24" rx="2"/>
+      <rect class="box-g" x="622" y="178" width="26" height="22" rx="2"/>
+      <rect class="box-g" x="658" y="174" width="26" height="26" rx="2"/>
+      <rect class="box-g" x="694" y="177" width="26" height="23" rx="2"/>
+      <rect class="box-g" x="730" y="175" width="26" height="25" rx="2"/>
+      <rect class="box-g" x="766" y="176" width="26" height="24" rx="2"/>
+      <path class="ln-g" d="M545 170 L900 170"/>
+      <text class="tg" x="866" y="162" text-anchor="middle">上界</text>
+      <text class="ts" x="715" y="220" text-anchor="middle">T3 只护住它手里那 K 个指针，<tspan class="tg">其余照常释放</tspan></text>
+
+      <text class="ts" x="480" y="256" text-anchor="middle">这是两者最本质的分野，也是选型时第一个要问的问题：<tspan class="ta">你的线程会不会在临界区里被卡住？</tspan></text>
+      <text class="ts" x="480" y="276" text-anchor="middle">线程数 ≫ 核数、跑在 CPU 受限的容器里、临界区里有任何可能阻塞的调用 —— 三者中任意一条成立，EBR 就是定时炸弹</text>
+    </svg>
+  </div>
+
+  <p>缓解手段存在但都不彻底：限制临界区长度（靠纪律，会漂移）；给 limbo list 设水位，超了就<strong>退化成阻塞等待</strong>甚至 <code>abort</code>（把内存问题换成可用性问题）；crossbeam 式的「pin 计数超过阈值就强制尝试推进」（只是提高推进频率，卡住的线程照样卡住）。<strong>真正的结论是：这个弱点不能被修掉，只能被接受或者换方案。</strong></p>
+
+  <div class="box tip">「回收开销无上界」这一点让 EBR 严格来说<strong>不是 lock-free</strong>——虽然读写路径都是无锁的，但内存回收这一步依赖所有线程的进展。这与 <a href="./memory_model.html#s14">C++ 内存模型 §14</a> 里讲的三级进度保证是同一套语言：一个算法可以在操作层面 lock-free，而在<strong>空间</strong>层面 blocking。评审无锁设计时，这两件事要分开问。</div>
+</section>
+
+<!-- ================================================================ §4 -->
+<section class="chapter" id="s4">
+  <div class="ch-head">
+    <div class="num">04</div>
+    <div class="t"><h2>用户态 RCU（liburcu）</h2><p class="sub">同一个思想，但静止点得自己造出来</p></div>
+  </div>
+
+  <p>RCU 和 EBR 是近亲：都不追踪具体指针，都靠「所有线程都已离开过临界区一次」来判定宽限期。差别在工程形态——RCU 把这件事做成了一个通用库，并且提供了一个 EBR 通常不给的接口：<code>synchronize_rcu()</code>，同步等待宽限期结束，让写者能写出「改完、等一下、再释放」这种线性的代码。</p>
+
+  <h3 id="s4-1">4.1 三种风格的取舍</h3>
+
+  <p>liburcu 把同一套语义做成了几个链接期可选的变体。选哪个，取决于你愿不愿意改应用代码，以及内核给不给你 <code>membarrier</code>。</p>
+
+  <table>
+    <thead><tr><th>变体</th><th>读侧代价</th><th>写侧代价</th><th>对应用的要求</th><th>什么时候选</th></tr></thead>
+    <tbody>
+      <tr><td><strong><code>urcu-qsbr</code></strong></td><td><strong>接近零</strong>：<code>rcu_read_lock()</code> 编译后基本什么都不剩</td><td>等待所有线程报告静止点</td><td><strong>侵入</strong>：必须在主循环顶点周期性调 <code>rcu_quiescent_state()</code>，阻塞前调 <code>rcu_thread_offline()</code></td><td>自己的服务，能改主循环；追求极限读性能</td></tr>
+      <tr><td><strong><code>urcu-memb</code></strong>（默认）</td><td>一次本地 store + 编译器屏障</td><td>调 <code>sys_membarrier()</code>，代内核替所有 CPU 执行屏障</td><td>只要成对调用 lock / unlock</td><td><strong>绝大多数场景的默认选择</strong>；Linux 4.14+ 可用</td></tr>
+      <tr><td><code>urcu-signal</code></td><td>同 memb，很轻</td><td>给每个注册线程发信号，强制它执行屏障</td><td>要交出一个信号编号，不能与应用冲突</td><td>没有 <code>sys_membarrier</code> 的老内核 / 非 Linux</td></tr>
+      <tr><td><code>urcu-mb</code></td><td>读侧一条<strong>真屏障</strong>，明显更贵</td><td>无需系统调用</td><td>无</td><td>可移植兜底，性能垫底</td></tr>
+      <tr><td><code>urcu-bp</code></td><td>较重（每次检查是否已注册）</td><td>同 memb</td><td><strong>无需显式注册线程</strong></td><td>写库时用：你无法要求宿主程序配合注册</td></tr>
+    </tbody>
+  </table>
+
+  <p>把 memb 和 signal 放在一起看就明白它们在解决同一个问题：<strong>读者侧不想付屏障，那这条屏障就得由写者想办法强加给读者所在的 CPU</strong>。<code>sys_membarrier</code> 是内核提供的正规途径，发信号是它出现之前的土办法。成本从高频的读路径转移到了低频的写路径——这正是 RCU 系方案的核心交易。</p>
+
+  <h3 id="s4-2">4.2 QSBR 的零成本与它的账单</h3>
+
+  <p>QSBR 把这笔交易推到极致：读者侧<strong>一条指令都不加</strong>。代价是它不再能自己判断线程何时离开了临界区，只能要求应用主动汇报。</p>
+
+  <p>这个要求在实践中比听起来麻烦。「在主循环顶点调一次 <code>rcu_quiescent_state()</code>」对一个 <code>while(true){ poll(); handle(); }</code> 的事件循环很自然，但对一个线程池里跑任意用户回调的框架就很难——你不知道回调会不会一跑就是十分钟。更关键的是<strong>阻塞前必须 <code>rcu_thread_offline()</code></strong>：要去做一次磁盘 IO、要在条件变量上等、要调一个第三方库，都得先把自己标记为离线，否则整个进程的回收全部停摆，症状与 §3.3 的图一模一样。</p>
+
+  <p>所以 QSBR 的真实判据不是「要不要极限性能」，而是<strong>「这个进程里所有会碰 RCU 的线程，是不是都归你管」</strong>。是，选 QSBR；不是，选 memb 少操心。</p>
+
+  <h3 id="s4-3">4.3 和内核 RCU 的对照</h3>
+
+  <p>内核 RCU 的读侧同样几乎免费，但它的免费来源和用户态完全不同——而这个差别正是 liburcu 要费这么大劲搞出三种变体的原因。</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 960 272" role="img" aria-label="内核 RCU 与用户态 RCU 获取静止点的方式对照：内核能从上下文切换、进入 idle、返回用户态这些本来就会发生的事件里免费观察到静止点；用户态看不见这些事件，只能靠应用主动汇报、写者发 membarrier 系统调用或写者发信号三种方式人工制造">
+      <text class="tb" x="480" y="20" text-anchor="middle">静止点从哪来：内核捡现成的，用户态得自己造</text>
+
+      <rect class="box-g" x="20" y="38" width="440" height="170" rx="9"/>
+      <text class="tg" x="240" y="60" text-anchor="middle">内核 RCU · 静止点是免费的</text>
+      <rect class="box" x="48" y="76" width="176" height="28" rx="5"/>
+      <text class="ts" x="136" y="95" text-anchor="middle">上下文切换</text>
+      <rect class="box" x="240" y="76" width="176" height="28" rx="5"/>
+      <text class="ts" x="328" y="95" text-anchor="middle">CPU 进入 idle</text>
+      <rect class="box" x="48" y="112" width="368" height="28" rx="5"/>
+      <text class="ts" x="232" y="131" text-anchor="middle">从系统调用返回用户态</text>
+      <text class="ts" x="240" y="162" text-anchor="middle">这些事件本来就会发生，内核只需顺手记一笔</text>
+      <text class="tg" x="240" y="184" text-anchor="middle">读侧 rcu_read_lock() = preempt_disable，甚至什么都不做</text>
+
+      <rect class="box-y" x="490" y="38" width="450" height="170" rx="9"/>
+      <text class="ty" x="715" y="60" text-anchor="middle">用户态 · 一个免费的都没有</text>
+      <text class="ts" x="715" y="82" text-anchor="middle">线程被抢占、去做 IO、在锁上等 —— 应用<tspan class="tr">一概不知道</tspan></text>
+      <rect class="box-a" x="510" y="94" width="136" height="52" rx="5"/>
+      <text class="ta" x="578" y="114" text-anchor="middle">QSBR</text>
+      <text class="ts" x="578" y="132" text-anchor="middle">应用主动汇报</text>
+      <rect class="box-a" x="656" y="94" width="136" height="52" rx="5"/>
+      <text class="ta" x="724" y="114" text-anchor="middle">memb</text>
+      <text class="ts" x="724" y="132" text-anchor="middle">写者发系统调用</text>
+      <rect class="box-a" x="802" y="94" width="122" height="52" rx="5"/>
+      <text class="ta" x="863" y="114" text-anchor="middle">signal</text>
+      <text class="ts" x="863" y="132" text-anchor="middle">写者发信号</text>
+      <text class="ts" x="715" y="170" text-anchor="middle">三条路的共同点：把读侧省下的屏障，挪到写侧或应用代码里</text>
+      <text class="ty" x="715" y="192" text-anchor="middle">天下没有免费的静止点</text>
+
+      <text class="ts" x="480" y="238" text-anchor="middle">推论一：用户态 RCU 的<tspan class="ta">写侧比内核贵得多</tspan>（一次 membarrier 系统调用起步），所以它比内核 RCU 更偏向读多写少</text>
+      <text class="ts" x="480" y="260" text-anchor="middle">推论二：§3.3 那个「一个线程卡住全场」的弱点，用户态<tspan class="tr">同样存在且更严重</tspan>——内核至少能从调度器那里知道你被换下去了</text>
+    </svg>
+  </div>
+
+  <div class="box tip">内核 RCU 本身的机制——宽限期检测、<code>call_rcu</code> 的回调批处理、可抢占 RCU 与 RCU 陷阱——在 <a href="../system/kernel_synchronization.html">内核同步机制</a> 里有两整章，本文不重复。这里只需要记住对照关系：<strong>算法是同一个，难的部分被挪到了不同的地方</strong>。</div>
+</section>
+
+<!-- ================================================================ §5 -->
+<section class="chapter" id="s5">
+  <div class="ch-head">
+    <div class="num">05</div>
+    <div class="t"><h2>选型</h2><p class="sub">先回答「要不要」，再回答「用哪个」</p></div>
+  </div>
+
+  <h3 id="s5-1">5.1 六维判据表</h3>
+
+  <table>
+    <thead><tr><th>维度</th><th>Hazard Pointer</th><th>EBR</th><th>RCU（QSBR）</th><th><code>atomic&lt;shared_ptr&gt;</code></th></tr></thead>
+    <tbody>
+      <tr><td><strong>读延迟</strong></td><td>中：<strong>每次解引用</strong>一条 seq_cst 屏障</td><td>低：<strong>每个临界区</strong>一条屏障，区内免费</td><td><strong>最低</strong>：读侧近乎零指令</td><td>中高：每次读一次原子 RMW</td></tr>
+      <tr><td><strong>读伸缩性</strong></td><td>好：slot 是每线程独占写</td><td>好</td><td>好</td><td><strong>差</strong>：引用计数是全局热点缓存行</td></tr>
+      <tr><td><strong>写 / 回收延迟</strong></td><td>低：scan 是纯本地遍历</td><td>中：要扫所有线程的 local epoch</td><td>高：<code>synchronize_rcu()</code> 要等一整个宽限期</td><td>低</td></tr>
+      <tr><td><strong>内存上界</strong></td><td><strong>有界</strong> O(N²K)，与运行时行为无关</td><td><strong>无界</strong></td><td><strong>无界</strong></td><td><strong>精确</strong>：最后一个引用消失即释放</td></tr>
+      <tr><td><strong>容忍阻塞线程</strong></td><td><strong>是</strong>：只影响它自己护住的几个节点</td><td><strong>否</strong>：一个人卡住全场</td><td><strong>否</strong></td><td>是</td></tr>
+      <tr><td><strong>侵入性</strong></td><td>高：每个要保护的指针都得显式 protect，改算法代码</td><td>中：临界区两端加 pin / unpin</td><td>中～高：QSBR 还要改主循环与阻塞点</td><td><strong>低</strong>：换个类型而已</td></tr>
+      <tr><td><strong>实现复杂度</strong></td><td>高（别自己写）</td><td>中</td><td>低（用 liburcu）</td><td><strong>零</strong>（标准库给）</td></tr>
+    </tbody>
+  </table>
+
+  <p>把这张表压成三句话：<strong>读多写少、线程都归你管、能接受内存峰值不确定 → RCU / EBR</strong>；<strong>线程可能被卡住、或内存必须有硬上界（实时、嵌入式、多租户）→ Hazard Pointer</strong>；<strong>读写都不算极端、只是想要正确 → 下一节。</strong></p>
+
+  <div class="fig">
+    <svg viewBox="0 0 960 268" role="img" aria-label="三种回收方案在同一负载下的内存上界对比柱状示意：Hazard Pointer 维持在一条与业务无关的常数上界，EBR 与 RCU 在正常情况下低于它但一旦有线程停顿就线性上涨没有上限，原子 shared_ptr 则精确即时释放">
+      <text class="tb" x="480" y="20" text-anchor="middle">同一负载、同一时间轴上的未回收内存</text>
+
+      <path class="ln" d="M90 210 L930 210 M90 210 L90 46"/>
+      <text class="ts" x="52" y="52">内存</text>
+      <text class="ts" x="900" y="230">时间 →</text>
+
+      <path class="ln-g" d="M90 206 L200 178 L300 186 L400 176 L500 182 L600 174 L700 180 L800 176 L920 179"/>
+      <text class="tg" x="700" y="166" text-anchor="middle">Hazard Pointer</text>
+      <path class="ln-d" d="M90 158 L920 158"/>
+      <text class="tg" x="150" y="152">O(N²K) 硬上界 —— 与吞吐、与停顿时长都无关</text>
+
+      <path class="ln-a" d="M90 208 L200 200 L300 204 L400 198 L500 202 L560 196"/>
+      <path class="ln-r" d="M560 196 L660 152 L760 100 L860 54 L920 54"/>
+      <text class="ta" x="330" y="222" text-anchor="middle">EBR / RCU 正常时更省</text>
+      <path class="ln-r" d="M560 210 L560 190"/>
+      <text class="tr" x="600" y="228" text-anchor="middle">某个线程在临界区里停顿</text>
+      <text class="tr" x="820" y="44" text-anchor="middle">无上限 → OOM</text>
+
+      <path class="ln-d" d="M90 209 L920 205"/>
+      <text class="tp" x="200" y="202">atomic&lt;shared_ptr&gt;：贴地，但读侧付了引用计数的钱</text>
+
+      <text class="ts" x="480" y="252" text-anchor="middle">注意曲线在停顿之前的关系：<tspan class="ta">EBR 在正常情况下确实比 HP 更省内存</tspan>——它不是在所有维度都更差，而是把「最坏情况」换成了「平均情况」</text>
+    </svg>
+  </div>
+
+  <h3 id="s5-2">5.2 什么时候其实不该无锁</h3>
+
+  <p>这一节是本文最重要的一节，因为前面四章很容易给人一个错误印象：无锁回收是高手的默认选项。<strong>它不是。</strong>它是一个需要被论证的选项，而绝大多数场景论证不出来。</p>
+
+  <div class="vs">
+    <div class="bad">
+      <h5>❌ 常见的错误推理链</h5>
+      <p style="font-size:.85rem;margin:6px 0 0">「这段路径在热点上 → 锁会阻塞 → 改成无锁链表 → 需要 SMR → 引入 EBR」。</p>
+      <p style="font-size:.85rem;margin:8px 0 0">每一步看起来都成立，但整条链从未被<strong>量过</strong>：锁真的是瓶颈吗？争用率多少？临界区多长？换成无锁之后，省下的锁开销有没有被 SMR 的屏障吃回去？</p>
+      <p style="font-size:.85rem;margin:8px 0 0">实际结果常常是<strong>吞吐没涨、p99 反而更差</strong>（重试与缓存行弹跳），外加一整类以前不存在的内存安全 bug，和一个只有作者看得懂的模块。</p>
+    </div>
+    <div class="good">
+      <h5>✅ 先把便宜的办法试完</h5>
+      <p style="font-size:.85rem;margin:6px 0 0"><strong>1. 分片 + 普通锁。</strong>把一把大锁换成 64 把小锁，通常就能拿到无锁方案 80% 的收益，而复杂度几乎为零。争用是被<em>分散</em>掉的，不一定要被<em>消除</em>。</p>
+      <p style="font-size:.85rem;margin:8px 0 0"><strong>2. <code>atomic&lt;shared_ptr&lt;T&gt;&gt;</code>（C++20）。</strong>读多写少的配置表、路由表、特征表，这一个类型就够了：语义精确、无需宽限期、内存立刻回收。代价是每次读一次原子 RMW，且实现通常不是 lock-free。<strong>先量一下这个代价是否真的不可接受。</strong></p>
+      <p style="font-size:.85rem;margin:8px 0 0"><strong>3. 写时整体替换。</strong>配置类数据几秒才更新一次时，「造一份新的、原子换指针、旧的交给 SMR 延迟释放」比任何精细的并发容器都简单，而且此时宽限期长一点完全无所谓。</p>
+      <p style="font-size:.85rem;margin:8px 0 0"><strong>4. 确认无锁不可替代之后，用现成库。</strong>folly、liburcu、或等 C++26（§6）。</p>
+    </div>
+  </div>
+
+  <p>判据可以写成一句可执行的话：<strong>如果你无法用一个数字说清「换成无锁之后哪个指标改善了多少」，那就不该换。</strong>另外还有一条硬性门槛——<strong>只有一个写者、或写频率极低时，很多 SMR 的复杂性可以直接绕开</strong>（单写者时 <code>synchronize_rcu()</code> 的成本完全可以忍）。先确认自己是不是这种情况，能省掉一大半工作。</p>
+</section>
+
+<!-- ================================================================ §6 -->
+<section class="chapter" id="s6">
+  <div class="ch-head">
+    <div class="num">06</div>
+    <div class="t"><h2>标准化与现成实现</h2><p class="sub">这两个东西终于要进标准库了，而它们今天就能用</p></div>
+  </div>
+
+  <p>Hazard Pointer（P1121）与 RCU（P2530）都已被采纳进 <strong>C++26</strong>。这件事的意义不只是「少写点代码」，更在于<strong>接口被统一了</strong>——在此之前，每个项目的 hazard pointer 都是自己那一套，无法互操作也无法互相审查。</p>
+
+  <pre><code>// ── 今天就能用：folly ─────────────────────────────────────
+struct Node : folly::hazptr_obj_base&lt;Node&gt; { int payload; Node* next; };
+
+std::atomic&lt;Node*&gt; head_;
+
+int read_head() {
+    auto h = folly::make_hazard_pointer();
+    Node* p = h.protect(head_);      // §2.1 那四步，一行封装掉
+    return p ? p-&gt;payload : -1;
+}                                     // h 析构 = 自动 clear
+
+void remove(Node* p) { p-&gt;retire(); } // 进 retire 列表，攒够了库自己 scan
+
+// ── C++26：形态几乎一样，名字进了 std ─────────────────────
+// #include &lt;hazard_pointer&gt;
+struct Node2 : std::hazard_pointer_obj_base&lt;Node2&gt; { /* ... */ };
+std::hazard_pointer h = std::make_hazard_pointer();
+Node2* q = h.protect(head2_);
+// ... 用完 ...
+q-&gt;retire();
+
+// ── C++26 的 RCU 侧：#include &lt;rcu&gt; ───────────────────────
+struct Cfg : std::rcu_obj_base&lt;Cfg&gt; { /* ... */ };
+{
+    std::scoped_rcu_lock lock;        // 进入读侧临界区
+    use(cfg_.load(std::memory_order_acquire));
+}                                     // 离开
+old-&gt;retire();                        // 延迟释放
+std::rcu_synchronize();               // 或者同步等一个宽限期</code></pre>
+
+  <table>
+    <thead><tr><th>能力</th><th>folly（现在）</th><th>liburcu（现在）</th><th>C++26</th></tr></thead>
+    <tbody>
+      <tr><td>Hazard Pointer</td><td><code>hazptr_holder</code> / <code>hazptr_obj_base</code>，成熟、生产验证充分</td><td>无</td><td><code>std::hazard_pointer</code> / <code>std::hazard_pointer_obj_base</code>（P1121）</td></tr>
+      <tr><td>RCU</td><td><code>rcu_reader</code> / <code>rcu_retire</code> / <code>synchronize_rcu</code></td><td>五种变体，功能最全</td><td><code>std::rcu_obj_base</code> / <code>std::rcu_retire</code> / <code>std::rcu_synchronize</code>（P2530）</td></tr>
+      <tr><td>多域隔离</td><td>支持（自定义 domain）</td><td>按变体隔离</td><td><code>std::rcu_domain</code> / 默认域</td></tr>
+      <tr><td>依赖</td><td>整个 folly，不算轻</td><td>独立 C 库，很轻</td><td>无</td></tr>
+      <tr><td>今天的建议</td><td>已经在用 folly → 直接用</td><td>C 项目 / 只要 RCU → 首选</td><td><strong>按它的接口形状写自己的封装</strong>，将来好迁移</td></tr>
+    </tbody>
+  </table>
+
+  <p>一条实用建议：现在就<strong>照 C++26 的接口形状封装一层</strong>（<code>make_hazard_pointer()</code> 返回 RAII 句柄、<code>protect()</code> 一步到位、对象继承 <code>*_obj_base</code> 拿到 <code>retire()</code>）。底下先接 folly 或自己的实现，将来换成标准库只改一个头文件。<strong>这比「等标准落地再说」和「现在就自己造一套自创 API」都好</strong>——前者拖着不动，后者迁移时要改遍所有调用点。</p>
+</section>
+
+<!-- ================================================================ §7 -->
+<section class="chapter" id="s7">
+  <div class="ch-head">
+    <div class="num">07</div>
+    <div class="t"><h2>验证：为什么 TSan 靠不住</h2><p class="sub">「跑了一晚上压测没问题」在这个领域几乎不构成证据</p></div>
+  </div>
+
+  <h3 id="s7-1">7.1 窗口有多窄</h3>
+
+  <p>§1.1 那条时间线要出事，需要两个线程的指令流在<strong>几十纳秒</strong>的精度上对齐。在一台空闲的开发机上，这个概率低到可以跑一整夜都不复现；而在生产环境里，请求速率高三个数量级、CPU 被超卖、还有 NUMA 跨节点延迟，它每天都会命中几次。</p>
+
+  <p>更糟的是<strong>三重掩盖</strong>：即使 UAF 真的发生了，那块内存多半还没被分配器交给别人，读到的仍是旧值，程序继续正常运行；就算被复用了，也可能只是某个字段读出脏数据，表现为一次业务逻辑异常而不是崩溃；等真的崩了，栈顶早已跑到几百微秒之后的某个无关代码里。</p>
+
+  <table>
+    <thead><tr><th>手段</th><th>能抓到吗</th><th>为什么</th></tr></thead>
+    <tbody>
+      <tr><td><strong>TSan</strong></td><td><strong>不一定</strong></td><td>TSan 只报告<em>实际发生过</em>的交错，它不探索调度空间。而且它对 <code>std::atomic_thread_fence</code> 的建模是不完整的——SMR 恰恰重度依赖独立屏障，因此存在<strong>系统性的漏报</strong></td></tr>
+      <tr><td><strong>ASan</strong>（默认）</td><td>较难</td><td>只有当那块内存已经被 <code>free</code> 且还在 quarantine 里时才报。窗口一窄、quarantine 一满，就退化成静默</td></tr>
+      <tr><td><strong>ASan + 大 quarantine</strong></td><td><strong>能</strong>，推荐</td><td><code>ASAN_OPTIONS=quarantine_size_mb=4096:max_redzone=2048</code>，让释放的节点长时间不被复用，把「偶尔读到脏数据」变成「必然触发报告」</td></tr>
+      <tr><td><strong>手工毒化</strong></td><td>能，最便宜</td><td>真 <code>delete</code> 前把整块填 <code>0xDD</code> 并抹掉魔数；读者每次解引用先校验魔数。不依赖任何工具，生产的 debug 构建里也能开</td></tr>
+      <tr><td><strong>模型检验</strong>（GenMC / CDSChecker / Relacy）</td><td><strong>能，而且是穷举的</strong></td><td>在弱内存模型下枚举所有合法交错。只能验证几十行的核心算法，但那恰好就是 SMR 的全部代码量——<strong>这是唯一能给出"证明"而不是"没测出来"的手段</strong></td></tr>
+      <tr><td><strong>换 aarch64 跑一遍</strong></td><td>能抓一大类</td><td>x86 的 TSO 会掩盖所有缺失的 store-load 屏障（§2.2）。同一份代码在 ARM 上可能几分钟就崩</td></tr>
+    </tbody>
+  </table>
+
+  <h3 id="s7-2">7.2 压力测试怎么设计</h3>
+
+  <p>压测的目标不是「模拟生产负载」，而是<strong>主动把那个几十纳秒的窗口撑开</strong>。这是两种完全不同的设计思路，后者需要刻意制造在生产里罕见的条件。</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 960 278" role="img" aria-label="安全回收压力测试的五个设计杠杆：把数据结构缩到极小提高地址碰撞率、线程数远超核数强制抢占、把回收阈值设为一强制立即释放、在临界区内插入随机让出扩大窗口、用毒化与魔数把静默的读脏数据变成确定的断言失败">
+      <text class="tb" x="480" y="20" text-anchor="middle">五个把窗口撑开的杠杆 —— 每一个都在「反模拟生产」</text>
+
+      <rect class="box-a" x="18" y="38" width="182" height="118" rx="9"/>
+      <text class="ta" x="109" y="60" text-anchor="middle">① 缩小结构</text>
+      <text class="ts" x="109" y="84" text-anchor="middle">链表只放 2～4 个节点</text>
+      <text class="ts" x="109" y="104" text-anchor="middle">所有线程挤在同几个</text>
+      <text class="ts" x="109" y="124" text-anchor="middle">地址上抢</text>
+      <text class="tg" x="109" y="146" text-anchor="middle">碰撞率拉满</text>
+
+      <rect class="box-a" x="210" y="38" width="182" height="118" rx="9"/>
+      <text class="ta" x="301" y="60" text-anchor="middle">② 超卖 CPU</text>
+      <text class="ts" x="301" y="84" text-anchor="middle">线程数 = 核数 × 4</text>
+      <text class="ts" x="301" y="104" text-anchor="middle">或全部绑到 1～2 核</text>
+      <text class="ts" x="301" y="124" text-anchor="middle">强制频繁抢占</text>
+      <text class="tg" x="301" y="146" text-anchor="middle">复现「临界区里被换下去」</text>
+
+      <rect class="box-a" x="402" y="38" width="182" height="118" rx="9"/>
+      <text class="ta" x="493" y="60" text-anchor="middle">③ 阈值设为 1</text>
+      <text class="ts" x="493" y="84" text-anchor="middle">每次 retire 立刻 scan</text>
+      <text class="ts" x="493" y="104" text-anchor="middle">能 free 就马上 free</text>
+      <text class="ts" x="493" y="124" text-anchor="middle">批处理本身会掩盖 bug</text>
+      <text class="tg" x="493" y="146" text-anchor="middle">把延迟回收变成即时回收</text>
+
+      <rect class="box-a" x="594" y="38" width="182" height="118" rx="9"/>
+      <text class="ta" x="685" y="60" text-anchor="middle">④ 注入让出</text>
+      <text class="ts" x="685" y="84" text-anchor="middle">在 publish 与重新验证</text>
+      <text class="ts" x="685" y="104" text-anchor="middle">之间插随机 yield</text>
+      <text class="ts" x="685" y="124" text-anchor="middle">编译期开关，只在测试开</text>
+      <text class="tg" x="685" y="146" text-anchor="middle">窗口从 ns 撑到 μs</text>
+
+      <rect class="box-g" x="786" y="38" width="156" height="118" rx="9"/>
+      <text class="tg" x="864" y="60" text-anchor="middle">⑤ 毒化 + 魔数</text>
+      <text class="ts" x="864" y="84" text-anchor="middle">free 前填 0xDD</text>
+      <text class="ts" x="864" y="104" text-anchor="middle">解引用先校验</text>
+      <text class="ts" x="864" y="124" text-anchor="middle">静默 → 断言失败</text>
+      <text class="tg" x="864" y="146" text-anchor="middle">让命中变得可见</text>
+
+      <text class="ts" x="480" y="190" text-anchor="middle">前四个提高<tspan class="ta">命中概率</tspan>，第五个提高<tspan class="tg">命中后的可观测性</tspan>。缺了第五个，前四个撞上了你也不知道</text>
+      <text class="ts" x="480" y="214" text-anchor="middle">另外两条必做：跑<tspan class="ta">带计数的不变量校验</tspan>（每个节点只能被 free 一次、free 时引用数必须为 0），以及在 <tspan class="tm">aarch64</tspan> 上重跑一遍</text>
+      <text class="ts" x="480" y="240" text-anchor="middle">最后一句：<tspan class="tr">压测跑干净不等于正确</tspan>。核心算法只有几十行，值得送进 GenMC / CDSChecker 穷举一遍——那才是证明</text>
+      <text class="ts" x="480" y="264" text-anchor="middle">这也是「不要自己写 SMR」的现实理由：证明的成本远高于实现的成本</text>
+    </svg>
+  </div>
+
+  <div class="box warn">有一类假阴性特别值得警惕：<strong>在压测里把线程数设得比核数少</strong>。这看起来更「贴近生产配置」，实际上大幅降低了抢占频率，而抢占正是 §3.3 与 §1.1 两类 bug 的触发条件。<strong>SMR 的压测应该故意超卖 CPU</strong>，越挤越好。</div>
+</section>
+
+<!-- ================================================================ §8 -->
+<section class="chapter" id="s8">
+  <div class="ch-head">
+    <div class="num">08</div>
+    <div class="t"><h2>面试题集（12 道）</h2><p class="sub">按难度分三档，先自测再对照</p></div>
+  </div>
+
+  <p class="qa-hint">点击每道题展开参考答案（先自测，再对照）。</p>
+
+  <h3 id="s8-1">8.1 基础（必答）</h3>
+  <ol class="qa-list">
+    <li><details class="qa">
+      <summary><span class="lvl basic">基础</span>无锁链表里 CAS 成功摘下一个节点后，为什么不能立刻 <code>delete</code>？</summary>
+      <div class="ans">
+        <p>因为「节点在数据结构里不可达」不等于「没有线程正在使用它」。另一个读者可能在 CAS 发生之前的一瞬间读到了同一个指针，此刻正握着它准备解引用——它没有做错任何事，读到的确实是当时的合法状态。</p>
+        <p>所以删除必须拆成两个阶段：<strong>摘除</strong>（CAS，立即完成）与<strong>回收</strong>（真 <code>delete</code>，必须等所有在摘除之前就开始的读者结束）。两者之间的时间差叫宽限期，判断它何时结束正是 SMR 机制存在的全部理由。</p>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl basic">基础</span>ABA 问题和内存回收问题是一回事吗？</summary>
+      <div class="ans">
+        <p>不是，它们正交。<strong>ABA 是值的歧义</strong>：CAS 只比较值相等，无法区分「没变过」和「变成 B 又变回 A」，于是把陈旧的 <code>next</code> 写了回去。<strong>回收是生命周期问题</strong>：读者手里的指针指向已释放的内存，哪怕全程只有一个写者、零次 CAS 重试，照样 UAF。</p>
+        <p>唯一的联系是单向的：SMR 让节点不被释放，地址就不会被复用成同一个值，因此<strong>顺带消掉了大部分 ABA</strong>。反过来不成立——tagged pointer 只保护了那一个原子字，对它指向的整块内存毫无作用。正确顺序是先选 SMR，再看剩下的 ABA 面。</p>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl basic">基础</span>用一句话说清 Hazard Pointer 和 EBR 的核心差别。</summary>
+      <div class="ans">
+        <p><strong>HP 追踪「你在用哪几个指针」，EBR 只追踪「你还在临界区里吗」。</strong></p>
+        <p>由此推出全部差异：HP 的开销正比于<strong>解引用次数</strong>（每次一条 seq_cst 屏障），EBR 的开销正比于<strong>临界区次数</strong>（区内解引用免费）；HP 因为精确，所以内存有硬上界；EBR 因为粗粒度，一个线程卡在临界区里就让全体回收停摆，内存无上界。一个换来确定性，一个换来读性能。</p>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl basic">基础</span><code>retire()</code> 和 <code>delete</code> 的区别是什么？为什么回收总是批量的？</summary>
+      <div class="ans">
+        <p><code>retire()</code> 只是记账：把指针挂进本线程的待回收列表，<strong>不释放任何内存</strong>。真正的 <code>delete</code> 要等到一次判定（HP 的 scan、EBR 的 epoch 推进）确认没人可能访问它。</p>
+        <p>批量是因为判定本身有固定成本——HP 的 scan 要遍历全部 hazard slot，EBR 的推进要扫所有线程的 local epoch，都是 O(线程数)。每摘一个节点就判一次，成本会高到不可接受。所以实现都设一个阈值攒够再判，代价是<strong>内存用量必然高于逻辑用量</strong>，这一截有没有上界正是选型的关键。</p>
+      </div>
+    </details></li>
+  </ol>
+
+  <h3 id="s8-2">8.2 中级（区分熟练度）</h3>
+  <ol class="qa-list" start="5">
+    <li><details class="qa">
+      <summary><span class="lvl mid">中级</span>Hazard Pointer 的读者侧为什么 publish 之后必须重新读一次源指针？去掉会怎样？</summary>
+      <div class="ans">
+        <p>因为 publish 和「确认这个指针还没被摘除」无法在一步里完成。去掉重新验证，就会出现这个交错：读者读到 <code>p</code>（还没 publish）→ 写者摘除 <code>p</code> → 写者 scan，名单里当然没有 <code>p</code> → 读者才 publish（晚了）→ 写者 <code>delete p</code> → 读者用 <code>p</code>，UAF。</p>
+        <p>加上重新验证后，利用<strong>写者固定的「先摘除后 scan」顺序</strong>可以做完备论证：重读若仍等于 <code>p</code>，说明摘除尚未发生，而 scan 在摘除之后，所以 scan 一定看得见我的 publish，安全；重读若不等于 <code>p</code>，说明可能已被摘除，读者不赌，丢弃重来。<strong>没有第三种可能</strong>，这就是正确性证明的全部。</p>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl mid">中级</span>那条 <code>seq_cst</code> 屏障能不能换成 <code>release</code>？在 x86 上测不出问题说明什么？</summary>
+      <div class="ans">
+        <p>不能。需要挡住的是 publish 那个 <strong>store</strong> 与重新验证那个 <strong>load</strong> 之间的重排，而 <code>release</code> 语义管不到后续的 load。把 store 重排到 load 之后，验证就形同虚设——你在「确认完之后」才登记，正好回到上一题那个交错。</p>
+        <p>x86 是 TSO：它只允许 store-load 这一种重排，而这恰恰就是本算法唯一怕的那一种。所以<strong>在 x86 上测不出问题恰恰是最危险的情形</strong>：屏障被写错时，x86 可能跑几百亿次都不出事，换到 aarch64（store-store、load-load 都可能重排）第二天就崩。验证这类代码必须在弱序机器上重跑，或者送进模型检验器。</p>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl mid">中级</span>EBR 为什么需要三个 epoch，两个为什么不行？</summary>
+      <div class="ans">
+        <p>在 epoch <code>e</code> 里 retire 的节点，可能被任何在 <code>e</code> 之前就 pin 住的线程访问。要确认这些线程全部离开，全局 epoch 必须推进<strong>两次</strong>：第一次证明「所有在线线程都已到达 <code>e</code>」，第二次证明「所有线程都已离开 <code>e</code>」。</p>
+        <p>这两次推进期间，<code>e</code> 那条袋子必须原样冻结，而新产生的垃圾又得有地方放，于是需要三条：一条<strong>正在收集</strong>（当前 epoch）、一条<strong>冻结等待</strong>（上一个）、一条<strong>确认安全可整袋释放</strong>（上上个）。只有两条时，「正在被读的」和「正要被 free 的」会落到同一条上。</p>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl mid">中级</span>liburcu 的 QSBR 为什么读侧几乎零开销？它的代价在哪？</summary>
+      <div class="ans">
+        <p>因为它把「判断线程是否在临界区」这件事<strong>完全外包给了应用</strong>：读侧的 <code>rcu_read_lock()</code> 编译后基本什么都不剩，静止点靠应用在主循环顶点主动调 <code>rcu_quiescent_state()</code> 汇报。</p>
+        <p>代价是侵入性和一个很容易踩的坑：<strong>任何可能阻塞的操作之前必须 <code>rcu_thread_offline()</code></strong>——磁盘 IO、等条件变量、调第三方库都算。漏一处，那个线程就永远不报告静止点，整个进程的回收全部停摆，症状是内存线性上涨直到 OOM。所以 QSBR 的真实判据不是「要不要极限性能」，而是<strong>「进程里所有会碰 RCU 的线程是不是都归你管」</strong>；不是的话选 <code>urcu-memb</code>。</p>
+      </div>
+    </details></li>
+  </ol>
+
+  <h3 id="s8-3">8.3 高级（体现深度）</h3>
+  <ol class="qa-list" start="9">
+    <li><details class="qa">
+      <summary><span class="lvl adv">高级</span>一个算法可以是 lock-free 的，同时内存回收却是 blocking 的——怎么理解？</summary>
+      <div class="ans">
+        <p>进度保证是<strong>分维度</strong>的。EBR 的读写操作路径确实 lock-free：任一线程暂停都不会阻止其他线程完成操作。但<strong>空间维度</strong>不是：一个线程 pin 住不放，全局 epoch 就推进不了，所有线程的所有待回收内存无限堆积，最终 OOM——这在实践中和「被阻塞」没有区别，只是表现为内存而不是延迟。</p>
+        <p>Hazard Pointer 在这一维上更强：一个卡住的线程只护住它手里那 K 个指针，其余照常释放，总量守在 O(N²K) 的常数上界。<strong>所以评审无锁设计时要问两个问题而不是一个</strong>：操作是不是 lock-free，以及内存有没有上界。只问前一个，就会在超卖的容器里被第二个问题教做人。</p>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl adv">高级</span>为什么 TSan 对这类 bug 有系统性漏报？该用什么替代？</summary>
+      <div class="ans">
+        <p>两个原因。其一，TSan 只分析<strong>实际发生过</strong>的交错，它不探索调度空间；而 SMR 的 UAF 窗口只有几十纳秒，空闲机器上跑一夜都未必命中一次。其二更本质：TSan 对独立的 <code>std::atomic_thread_fence</code> 建模不完整，而 SMR 恰恰重度依赖独立屏障（§2.1 的 ② 就是），于是产生的是<strong>系统性</strong>漏报而不是偶然漏报。</p>
+        <p>替代方案要分层叠加：<strong>ASan 配大 quarantine</strong>（<code>quarantine_size_mb=4096</code>）让释放的节点不被复用，把静默读脏变成确定报告；<strong>手工毒化 + 魔数校验</strong>提高可观测性；<strong>在 aarch64 上重跑</strong>抓 x86 TSO 掩盖掉的缺失屏障；最后，核心算法只有几十行，<strong>送进 GenMC / CDSChecker 这类模型检验器穷举</strong>——那是唯一能给出"证明"而非"没测出来"的手段。压测本身也要反着设计：结构缩到 2～4 个节点、线程数超卖 4 倍、回收阈值设为 1、在 publish 与验证之间注入随机 yield。</p>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl adv">高级</span>做一个读多写极少的全局路由表，你会怎么选？请给出判据而不是答案。</summary>
+      <div class="ans">
+        <p>先问「要不要无锁」。读多写极少意味着读写锁的写侧几乎不争用，而<strong>写时整体替换</strong>（造一份新表、原子换指针、旧表延迟释放）往往就够了——此时宽限期长一点完全无所谓，甚至可以用最笨的方式等。<strong>能落在这一档就不要往下走。</strong></p>
+        <p>如果读侧确实被量出是瓶颈，再按三条判据往下：① <strong>线程是否都归你管、临界区里有没有可能阻塞的调用</strong>——都归你管且临界区短小紧凑，选 RCU（QSBR 最快，否则 <code>urcu-memb</code>）；② <strong>内存是否必须有硬上界</strong>（实时系统、嵌入式、多租户共享进程）——是则只能 Hazard Pointer，哪怕读延迟差一截；③ <strong>读路径是长遍历还是单次查找</strong>——长遍历时 HP 每次解引用都要付屏障，会主导整个开销，这种形态基本排除 HP。</p>
+        <p>还有一条容易被忽略的现实判据：<code>std::atomic&lt;std::shared_ptr&lt;T&gt;&gt;</code> 对「整表替换」这个形态是完美匹配的——语义精确、立即回收、零额外概念。它的问题是引用计数争用，但<strong>如果写频率极低、读者持有引用的时间极短</strong>，先量一遍再决定要不要上 SMR。</p>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl adv">高级</span>线上发现某服务内存缓慢线性上涨、GC 式的回收完全停滞，怎么定位到 SMR？</summary>
+      <div class="ans">
+        <p><strong>「线性上涨 + 回收停滞」这个组合本身就是 EBR / RCU 的签名症状</strong>，它和普通内存泄漏的区别在于：泄漏通常与请求量成正比且持续，而这个是<strong>某一时刻突然开始</strong>、之后不再回落，且往往在重启某个无关线程后自行恢复。</p>
+        <p>定位路径：① 导出所有线程的 local epoch / 静止点计数，<strong>找那个数值落后于全局 epoch 的线程</strong>——它就是元凶，一个就够；② 对该线程抓栈，看它卡在哪——常见是临界区里调了会阻塞的东西（一次 <code>mmap</code>、一次日志落盘、一个第三方库的锁），或者 QSBR 下漏了 <code>rcu_thread_offline()</code>；③ 确认 limbo list 长度是不是随时间单调增长。</p>
+        <p>根治要分两层：短期把那个阻塞调用挪出临界区；长期要认识到<strong>这个弱点不能被修掉</strong>——如果业务上无法保证临界区永远不阻塞（比如里面会跑用户回调），就该换成 Hazard Pointer，用读延迟换内存上界。给 limbo 设水位然后 <code>abort</code> 只是把内存问题换成可用性问题，不是解法。</p>
+      </div>
+    </details></li>
+  </ol>
+</section>
+
+<div class="footer-nav">
+  <a href="./memory_model.html">⬅️ C++ 内存模型</a>
+  <a href="./concurrency_deep.html">➡️ 并发编程进阶</a>
+  <a href="../communication/high_performance.html">⚡ 高性能通信编程</a>
+  <a href="../system/kernel_synchronization.html">🐧 内核同步机制</a>
+  <a href="modern_cpp_stl_directory.html">📚 目录</a>
+  <a href="../index.html">🏠 主页</a>
+</div>
+
+</main>
+</div>
+
+<footer>
+  <p>用户态安全内存回收 — Hazard Pointer · Epoch-Based Reclamation · 用户态 RCU · C++26 标准化 — Kavin Tech Notes · 2026</p>
+</footer>
+
+<script>
+document.querySelectorAll('aside.toc nav a').forEach(a=>{a.addEventListener('click',e=>{e.preventDefault();const t=document.querySelector(a.getAttribute('href'));if(t)t.scrollIntoView({behavior:'smooth'})})});
+const obs=new IntersectionObserver(es=>{es.forEach(e=>{if(e.isIntersecting){document.querySelectorAll('aside.toc nav a').forEach(a=>a.classList.remove('active'));const l=document.querySelector(`aside.toc nav a[href="#${e.target.id}"]`);if(l)l.classList.add('active')}})},{threshold:.2});
+document.querySelectorAll('section[id]').forEach(s=>obs.observe(s));
+</script>
+
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

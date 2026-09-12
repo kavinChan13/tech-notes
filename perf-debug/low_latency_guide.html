@@ -68,7 +68,7 @@
       <a class="tn-home" href="../index.html">← 主页</a>
       <a href="perf_debug_directory.html">目录</a>
       <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
-      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 15 min</span>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 20 min</span>
       <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
     </div>
   </div>
@@ -243,7 +243,7 @@
   <div class="meta-row">
     <span class="pill red">核心难度: ★★★★★</span>
     <span class="pill cyan">领域: 高吞吐/HFT/嵌入式</span>
-    <span class="pill green">阅读时长: ~15 min</span>
+    <span class="pill green">阅读时长: ~20 min</span>
     <span class="pill amber">前置: cpp_performance / cpp_memory_model</span>
   </div>
 </header>
@@ -462,6 +462,41 @@
     <tr><td>多线程共用一池？</td><td>per-thread arena，或 lock-free 池</td></tr>
     <tr><td>长期、形状未知？</td><td>jemalloc / tcmalloc 即可</td></tr>
   </table>
+
+  <h3 id="s3-4">3.4 通用分配器：三选一与关键旋钮</h3>
+
+  <p>上一行的「jemalloc / tcmalloc 即可」值得展开——这三者的差异不在平均性能（都比 glibc 的 ptmalloc 好），而在<strong>尾延迟形态和内存归还策略</strong>，而低延迟系统关心的正是这两样。</p>
+
+  <table>
+    <thead><tr><th></th><th>ptmalloc（glibc）</th><th>tcmalloc</th><th>jemalloc</th><th>mimalloc</th></tr></thead>
+    <tbody>
+      <tr><td>线程缓存</td><td>有 tcache，但 arena 数量有限</td><td>每线程 cache，小对象几乎无锁</td><td>每线程 tcache + 多 arena</td><td>每线程 heap，free list 分片</td></tr>
+      <tr><td>碎片表现</td><td>长跑后容易恶化</td><td>中等</td><td><strong>最好</strong>，size class 设计精细</td><td>好</td></tr>
+      <tr><td>归还 OS</td><td>保守，RSS 容易只涨不落</td><td><code>MALLOC_RELEASE_RATE</code></td><td><code>dirty_decay_ms</code> / <code>muzzy_decay_ms</code></td><td><code>mimalloc_option_reset_delay</code></td></tr>
+      <tr><td>可观测性</td><td><code>malloc_stats()</code>，很粗</td><td>pprof 集成好</td><td><strong>内置 prof</strong>，能出分配火焰图</td><td>基础统计</td></tr>
+      <tr><td>典型场合</td><td>默认，不选就是它</td><td>Google 系、大量小对象</td><td>长跑服务、要查泄漏</td><td>新项目、Windows 上优势明显</td></tr>
+    </tbody>
+  </table>
+
+  <div class="box danger">最常被误读的旋钮是 jemalloc 的 <code>dirty_decay_ms</code>。把它调成 <code>0</code>（立刻归还）能让 RSS 曲线好看，代价是<strong>每次归还都要 <code>madvise</code>，而下次分配又要重新缺页</strong>——缺页在热路径上是几微秒级的抖动源，正好打在你要优化的那个分位数上。低延迟服务通常反过来：<strong>把 decay 调长甚至关掉，用内存换确定性</strong>。RSS 高不是问题，RSS 高到被 OOM killer 盯上才是问题。</div>
+
+  <h3 id="s3-5">3.5 over-aligned new：<code>alignas</code> 之外还得有分配器配合</h3>
+
+  <p><code>alignas(64)</code> 只声明了<strong>类型的对齐要求</strong>。C++17 之前，<code>new T</code> 对超过 <code>max_align_t</code>（通常 16 字节）的对齐<strong>没有任何保证</strong>——你写了 <code>alignas(64) struct Slot</code>，<code>new Slot</code> 返回的地址照样可能只对齐到 16，于是精心设计的「一个 Slot 独占一条 cache line」在堆上直接失效，伪共享又回来了，而代码看起来完全正确。</p>
+
+  <table>
+    <thead><tr><th>场景</th><th>C++17 之前</th><th>C++17 起</th></tr></thead>
+    <tbody>
+      <tr><td><code>new T</code>，<code>alignof(T) &gt; __STDCPP_DEFAULT_NEW_ALIGNMENT__</code></td><td>无保证，要手动 <code>posix_memalign</code> + placement new</td><td>自动调用 <code>operator new(size, align_val_t)</code> 重载</td></tr>
+      <tr><td>自定义 <code>operator new</code></td><td>只需重载一个</td><td><strong>必须把带 <code>align_val_t</code> 的那组也重载</strong>，否则 over-aligned 类型会绕回全局版本</td></tr>
+      <tr><td>容器里的元素</td><td>取决于 allocator</td><td><code>std::allocator</code> 已遵守；自写 allocator 要自己处理</td></tr>
+      <tr><td>栈上对象</td><td><code>alignas</code> 一直有效</td><td>同左</td></tr>
+    </tbody>
+  </table>
+
+  <p>两个实际后果。其一，<strong>写了自定义 <code>operator new</code> 的类，如果只重载了不带对齐参数的那一组，over-aligned 分配会静默走全局 <code>::operator new</code></strong>——你以为对象都在自己的池里，实际上一部分跑到了系统堆上，池的统计和预热全部失真。其二，跨编译器时 <code>__STDCPP_DEFAULT_NEW_ALIGNMENT__</code> 并不都是 16，把它当常数写死会在别的平台上退化。</p>
+
+  <div class="box ok">自检方法很直接：在热路径对象的构造里加一句 <code>assert(reinterpret_cast&lt;uintptr_t&gt;(this) % alignof(decltype(*this)) == 0)</code>，或者用 UBSan 的 <code>-fsanitize=alignment</code> 跑一遍测试。伪共享本身的测量用 <code>perf c2c</code>，见 <a href="./memory_optimization_guide.html">内存优化</a> §2.2。</div>
 </section>
 
 <!-- ================================================================

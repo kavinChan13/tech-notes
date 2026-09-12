@@ -252,7 +252,7 @@
             <li><a href="#ch4-4">三种模式对比选型</a></li>
           </ol>
         </li>
-        <li><a href="#ch5">++20 Modules 深入：原理、迁移策略与工程实战</a>
+        <li><a href="#ch5">C++20 Modules 深入：原理、迁移策略与工程实战</a>
           <ol>
             <li><a href="#ch5-1">#include 的四大顽疾</a></li>
             <li><a href="#ch5-2">Modules 的工作原理</a></li>
@@ -784,6 +784,40 @@ Widget::~Widget() = <span class="kw">default</span>;
 车规：Adaptive 常用 Pimpl（堆要可控就配 PMR）；Classic↔Adaptive 走 C handle；ASIL-D 禁虚函数时用 CRTP，不要硬套工厂。
 </div>
 
+<h3 id="ch4-5">4.5 库 API 的契约：文档写不清的，类型要写清</h3>
+
+<p>前面四节解决的是「二进制层面怎么不破」。但一个库能不能被正确使用，还取决于一组<strong>源码层面的契约</strong>——它们不会让链接失败，只会让用户在半年后提一个「偶发崩溃」的 issue。这些契约有一个共同点：<strong>能写进类型的就别写进文档</strong>。</p>
+
+<table>
+  <thead><tr><th>契约</th><th>写进文档（会被忽略）</th><th>写进类型（编译器替你执行）</th></tr></thead>
+  <tbody>
+    <tr><td><strong>所有权</strong></td><td>「返回的指针请调用 xxx_free 释放」</td><td>返回 <code>unique_ptr&lt;T, Deleter&gt;</code>；跨 FFI 用 opaque handle + 配套释放函数</td></tr>
+    <tr><td><strong>可拷贝性</strong></td><td>「这个对象不要拷贝」</td><td><code>= delete</code> 拷贝构造，只留移动</td></tr>
+    <tr><td><strong>生命周期依赖</strong></td><td>「Session 不能活得比 Connection 久」</td><td>让 <code>Session</code> 只能由 <code>Connection::open()</code> 创建，且不可移出</td></tr>
+    <tr><td><strong>线程安全</strong></td><td>「本类非线程安全」</td><td>无法编码，但可以<strong>按类型分开</strong>：把只读视图做成独立类型，天然可共享</td></tr>
+    <tr><td><strong>参数含义</strong></td><td>「第三个参数是超时毫秒数」</td><td><code>std::chrono::milliseconds</code>；单位进类型，调用点不可能传错</td></tr>
+    <tr><td><strong>不变量</strong></td><td>「传入前请校验非空」</td><td>构造时校验一次，之后类型本身就是「已校验」的证明</td></tr>
+  </tbody>
+</table>
+
+<p>倒数第二行是投入产出比最高的一条：<code>connect(host, 3000)</code> 里那个 <code>3000</code> 是毫秒还是秒，读代码的人永远得回去翻文档，而 <code>connect(host, 3s)</code> 不需要。同理，用 strong typedef 把 <code>UserId</code> 和 <code>OrderId</code> 分开，能消灭一整类「参数顺序写反」的 bug——两者都是 <code>int64_t</code> 时编译器帮不上忙。</p>
+
+<h3 id="ch4-6">4.6 弃用：给用户一条能走的路</h3>
+
+<p>SONAME 管的是「能不能链上」，但<strong>怎么让用户从旧 API 迁走</strong>是另一件事，而且是库维护里最容易做得粗暴的一环。可用的完整梯度是四级：</p>
+
+<table>
+  <thead><tr><th>阶段</th><th>做什么</th><th>用户感受</th></tr></thead>
+  <tbody>
+    <tr><td>1 · 宣告</td><td>新 API 上线，旧 API 加 <code>[[deprecated("use Foo::bar_v2")]]</code></td><td>编译期<strong>警告</strong>，附带明确的替代方案。注意把替代方案写进那句话里——只说「已弃用」等于没说</td></tr>
+    <tr><td>2 · 并存</td><td>两套符号同时导出，旧的转发到新的</td><td>无感；这一阶段要留够长，跨越用户的一个发布周期</td></tr>
+    <tr><td>3 · 加压</td><td>警告升级为错误（可用宏开关临时放行）</td><td>被迫处理，但有逃生舱</td></tr>
+    <tr><td>4 · 移除</td><td>删符号，<strong>bump SONAME</strong></td><td>必须迁移；老二进制仍能跑在老 so 上</td></tr>
+  </tbody>
+</table>
+
+<div class="box tip">最常见的错误是<strong>跳过第 2 阶段</strong>——直接删了旧 API 再 bump 版本号。技术上完全合规（SONAME 变了，老程序不会误链），但它把迁移成本一次性全部转嫁给了下游，而下游往往有几十个调用点和自己的发布窗口。<strong>弃用是一个时间维度的设计，不是一次提交。</strong>跨语言边界上的 API 设计见 <a href="../cpp/ffi_interop_guide.html">跨语言互操作</a>；服务接口（REST/gRPC）的版本演进是另一套规则，见 <a href="./api_design.html#s7">API 设计 §7</a>。</div>
+
 </section>
 
 <!-- =========================================================== -->
@@ -793,7 +827,7 @@ Widget::~Widget() = <span class="kw">default</span>;
   <div class="ch-head">
     <div class="num">05</div>
     <div class="t">
-      <h2>++20 Modules 深入：原理、迁移策略与工程实战</h2>
+      <h2>C++20 Modules 深入：原理、迁移策略与工程实战</h2>
       <p class="sub">#include 的四大顽疾 · Modules 的工作原理 · Module 的四种文件类型 · 渐进迁移策略：Header Units 和 Shim 层 · CMake 3.28+ 的 Modules 支持 · …</p>
     </div>
   </div>

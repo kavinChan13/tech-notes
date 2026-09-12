@@ -1,0 +1,1025 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>并发正确性验证方法论 · TSan 之外的那半边 / 模型检查 / litmus test / 分层验证策略</title>
+<meta name="description" content="并发正确性验证方法论：TSan 绿灯不等于并发代码正确——它只能看见实际执行过的那一个交错。本文把验证目标拆成数据竞争、死锁、原子性违反、顺序违反、内存序错误、活性六类，给出工具覆盖矩阵，讲透 x86 TSO 为何掩盖重排、模型检查（GenMC / CDSChecker / Relacy）如何穷举交错与状态空间爆炸的现实边界、herd7 litmus test 如何十分钟回答一个内存序问题、压测的交错放大与多架构矩阵怎么设计，最后给出一套分层验证策略与「什么时候不该用无锁」的判据">
+<!-- tn-social:v1 -->
+<link rel="canonical" href="https://kavinchan13.github.io/tech-notes/perf-debug/concurrency_verification.html">
+<link rel="icon" type="image/svg+xml" href="../assets/favicon.svg">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0b0d12" media="(prefers-color-scheme: dark)">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="Kavin Tech Notes">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:url" content="https://kavinchan13.github.io/tech-notes/perf-debug/concurrency_verification.html">
+<meta property="og:title" content="并发正确性验证方法论 · TSan 之外的那半边 / 模型检查 / litmus test / 分层验证策略">
+<meta property="og:description" content="并发正确性验证方法论：TSan 绿灯不等于并发代码正确——它只能看见实际执行过的那一个交错。本文把验证目标拆成数据竞争、死锁、原子性违反、顺序违反、内存序错误、活性六类，给出工具覆盖矩阵，讲透 x86 TSO 为何掩盖重排、模型检查（GenMC / CDSChecker / Relacy）如何穷举交错与状态空间爆炸的现实边界、herd7 litmus test 如何十分钟回答一个内存序问题、压测的交错放大与多架构矩阵怎么设计，最后给出一套分层验证策略与「什么时候不该用无锁」的判据">
+<meta property="og:image" content="https://kavinchan13.github.io/tech-notes/assets/og-cover.jpg">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="628">
+<meta property="og:image:alt" content="技术笔记 · 系统 / 架构 / 工程">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="并发正确性验证方法论 · TSan 之外的那半边 / 模型检查 / litmus test / 分层验证策略">
+<meta name="twitter:description" content="并发正确性验证方法论：TSan 绿灯不等于并发代码正确——它只能看见实际执行过的那一个交错。本文把验证目标拆成数据竞争、死锁、原子性违反、顺序违反、内存序错误、活性六类，给出工具覆盖矩阵，讲透 x86 TSO 为何掩盖重排、模型检查（GenMC / CDSChecker / Relacy）如何穷举交错与状态空间爆炸的现实边界、herd7 litmus test 如何十分钟回答一个内存序问题、压测的交错放大与多架构矩阵怎么设计，最后给出一套分层验证策略与「什么时候不该用无锁」的判据">
+<meta name="twitter:image" content="https://kavinchan13.github.io/tech-notes/assets/og-cover.jpg">
+<!-- /tn-social:v1 -->
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<style>
+  html { scroll-behavior: smooth; }
+  body { line-height: 1.75; min-height: 100vh; overflow-x: hidden; }
+  main { min-width: 0; }
+  pre { font-family: var(--mono); font-size: .85rem; line-height: 1.6; }
+  code { font-family: var(--mono); }
+  svg text { font-family: var(--sans); }
+  table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: .9rem; }
+  th, td { border: 1px solid var(--border); padding: .55rem .85rem; text-align: left; vertical-align: top; }
+  th { background: var(--bg-card-2); color: var(--accent); }
+  tr:nth-child(even) { background: color-mix(in srgb, var(--text) 3%, transparent); }
+  .analogy::before { content: "🏠 生活类比 · "; color: var(--accent-4); font-weight: 700; font-size: .86rem; }
+  .def > strong:first-child { color: var(--accent); }
+  .fig { margin: 22px 0; overflow-x: auto; }
+  .fig svg { max-width: 100%; height: auto; }
+  .fig .box   { fill: var(--bg-card-2); stroke: var(--border-2); stroke-width: 1.2; }
+  .fig .box-a { fill: color-mix(in srgb, var(--accent) 14%, var(--bg-card)); stroke: var(--accent); stroke-width: 1.2; }
+  .fig .box-g { fill: color-mix(in srgb, var(--accent-3) 14%, var(--bg-card)); stroke: var(--accent-3); stroke-width: 1.2; }
+  .fig .box-p { fill: color-mix(in srgb, var(--accent-2) 14%, var(--bg-card)); stroke: var(--accent-2); stroke-width: 1.2; }
+  .fig .box-y { fill: color-mix(in srgb, var(--accent-4) 14%, var(--bg-card)); stroke: var(--accent-4); stroke-width: 1.2; }
+  .fig .box-r { fill: color-mix(in srgb, var(--danger) 14%, var(--bg-card)); stroke: var(--danger); stroke-width: 1.2; }
+  .fig .t   { fill: var(--text); font-size: 12px; }
+  .fig .tb  { fill: var(--text); font-size: 12.5px; font-weight: 700; }
+  .fig .ts  { fill: var(--text-dim); font-size: 10.5px; }
+  .fig .tm  { fill: var(--text-dim); font-size: 10.5px; font-family: var(--mono); }
+  .fig .ta  { fill: var(--accent); font-size: 12px; font-weight: 700; }
+  .fig .tg  { fill: var(--accent-3); font-size: 11px; font-weight: 600; }
+  .fig .tp  { fill: var(--accent-2); font-size: 11px; font-weight: 600; }
+  .fig .ty  { fill: var(--accent-4); font-size: 11px; font-weight: 600; }
+  .fig .tr  { fill: var(--danger); font-size: 11px; font-weight: 600; }
+  .fig .ln  { stroke: var(--border-2); stroke-width: 1.4; fill: none; }
+  .fig .ln-a{ stroke: var(--accent); stroke-width: 1.6; fill: none; }
+  .fig .ln-g{ stroke: var(--accent-3); stroke-width: 1.6; fill: none; }
+  .fig .ln-r{ stroke: var(--danger); stroke-width: 1.6; fill: none; stroke-dasharray: 5 4; }
+  .fig .ln-d{ stroke: var(--text-mute); stroke-width: 1.2; fill: none; stroke-dasharray: 4 3; }
+  .fig .ar-a{ fill: var(--accent); }
+  .fig .ar-g{ fill: var(--accent-3); }
+  .fig .ar-r{ fill: var(--danger); }
+  .vs { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 16px 0; }
+  @media (max-width: 860px) { .vs { grid-template-columns: 1fr; } }
+  .vs > div > h5 { margin: 0 0 6px; font-size: .88rem; }
+  .vs .bad  { border-color: color-mix(in srgb, var(--danger) 45%, var(--border)); background: color-mix(in srgb, var(--danger) 6%, var(--bg-card)); }
+  .vs .bad  > h5 { color: var(--danger); }
+  .vs .good { border-color: color-mix(in srgb, var(--accent-3) 45%, var(--border)); background: color-mix(in srgb, var(--accent-3) 6%, var(--bg-card)); }
+  .vs .good > h5 { color: var(--accent-3); }
+  .vs pre { margin: 6px 0 0; font-size: .78rem; }
+</style>
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="tn-shell-overlay has-topnav">
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="perf_debug_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 35 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="progress" id="progress"></div>
+<div class="layout">
+  <aside class="toc">
+    <h2>并发正确性验证</h2>
+    <nav>
+      <ol>
+        <li><a href="#s1">TSan 绿灯不等于正确</a>
+          <ol>
+            <li><a href="#s1-1">1.1 一条执行路径 vs 全部交错</a></li>
+            <li><a href="#s1-2">1.2 「跑了一万次」值多少钱</a></li>
+          </ol>
+        </li>
+        <li><a href="#s2">把验证目标拆成五类</a>
+          <ol>
+            <li><a href="#s2-1">2.1 五类并发缺陷</a></li>
+            <li><a href="#s2-2">2.2 工具覆盖矩阵</a></li>
+          </ol>
+        </li>
+        <li><a href="#s3">动态工具的天花板</a>
+          <ol>
+            <li><a href="#s3-1">3.1 x86 TSO 掩盖了什么</a></li>
+            <li><a href="#s3-2">3.2 TSan 建模的是 happens-before</a></li>
+            <li><a href="#s3-3">3.3 重复执行不是采样</a></li>
+          </ol>
+        </li>
+        <li><a href="#s4">穷举与模型检查</a>
+          <ol>
+            <li><a href="#s4-1">4.1 有界 vs 无状态</a></li>
+            <li><a href="#s4-2">4.2 写一个可穷举的测试</a></li>
+            <li><a href="#s4-3">4.3 状态空间爆炸的边界</a></li>
+          </ol>
+        </li>
+        <li><a href="#s5">litmus test 与 herd7</a>
+          <ol>
+            <li><a href="#s5-1">5.1 一个 litmus 长什么样</a></li>
+            <li><a href="#s5-2">5.2 它回答什么、不回答什么</a></li>
+          </ol>
+        </li>
+        <li><a href="#s6">压测怎么设计才有效</a>
+          <ol>
+            <li><a href="#s6-1">6.1 交错放大</a></li>
+            <li><a href="#s6-2">6.2 多架构矩阵</a></li>
+            <li><a href="#s6-3">6.3 可复现与覆盖度</a></li>
+          </ol>
+        </li>
+        <li><a href="#s7">确定性回放的位置</a></li>
+        <li><a href="#s8">分层验证策略</a>
+          <ol>
+            <li><a href="#s8-1">8.1 七层各花多少时间</a></li>
+            <li><a href="#s8-2">8.2 什么时候承认不该用无锁</a></li>
+          </ol>
+        </li>
+        <li><a href="#s9">面试题集（12 道）</a>
+          <ol>
+            <li><a href="#s9-1">9.1 基础</a></li>
+            <li><a href="#s9-2">9.2 中级</a></li>
+            <li><a href="#s9-3">9.3 高级</a></li>
+          </ol>
+        </li>
+      </ol>
+    </nav>
+  </aside>
+
+<main>
+
+  <header class="hero">
+    <div class="badge">Verification · Model Checking · litmus · 2026</div>
+    <h1>并发正确性验证方法论</h1>
+    <p class="sub">TSan 报了绿灯，说明的只有一件事：<strong>它这次跑过的那个交错里没有数据竞争</strong>。而并发 bug 恰恰住在没跑到的那些交错里。本文讲的是 TSan 之外的那半边——把缺陷分类、承认动态工具的天花板、用模型检查穷举核心几十行、用 litmus test 十分钟结掉一个内存序争论，最后把这些拼成一套能进 CI 的分层策略。</p>
+    <div class="meta-row">
+      <span class="pill red">核心难度 ★★★★★</span>
+      <span class="pill cyan">漏检代价 极高</span>
+      <span class="pill green">阅读时长 ~35 min</span>
+      <span class="pill amber">前置 内存模型 · TSan · 无锁编程</span>
+    </div>
+    <div class="meta">
+      <span>缺陷分类与覆盖矩阵</span>
+      <span>GenMC / CDSChecker / Relacy</span>
+      <span>herd7 litmus test</span>
+      <span>交错放大与多架构矩阵</span>
+    </div>
+  </header>
+
+<!-- ================================================================ §1 -->
+<section class="chapter" id="s1">
+  <div class="ch-head">
+    <div class="num">01</div>
+    <div class="t"><h2>TSan 绿灯不等于正确</h2><p class="sub">动态分析的观测对象是「这一次执行」，而不是「这段程序」</p></div>
+  </div>
+
+  <p>一个团队把并发验证做到了这一步：CI 里跑 TSan，全绿；本地压测循环跑十万次，不复现；code review 两个人签字。三周后线上出现一次十分钟的数据错乱，事后定位是一个 <code>memory_order_relaxed</code> 用错了地方。</p>
+
+  <p>这不是执行不到位，是<strong>方法论上本来就有一个洞</strong>。TSan 是动态分析：它在程序真实跑的时候插桩每一次内存访问，然后判断有没有两次访问落在同一地址上、彼此之间又没有 happens-before 关系。它的观测对象是<strong>这一次执行</strong>——线程被调度成什么样、每个分支走了哪边、每个 CAS 第几次成功，全都是这一次的具体取值。</p>
+
+  <div class="def"><strong>交错（interleaving）</strong>：多个线程的指令序列在一次具体执行中被排成的那一个全序。<em>n</em> 个线程各 <em>k</em> 步，可能的交错数是 <code>(nk)! / (k!)ⁿ</code>——两个线程各 10 步就是 184756 种。而弱内存模型下还要再乘上「每个 load 从哪个 store 读」的选择，数量级又往上翻。</div>
+
+  <h3 id="s1-1">1.1 一条执行路径 vs 全部交错</h3>
+
+  <div class="fig">
+    <svg viewBox="0 0 960 306" role="img" aria-label="左侧是 TSan 一次执行观察到的单条线性路径，右侧是同一段程序全部可能交错构成的展开树，两个线程各十步就有十八万四千多条路径，说明动态分析的样本只是这棵树上的一条">
+      <text class="tb" x="480" y="20" text-anchor="middle">动态工具看到的，和程序真正拥有的</text>
+
+      <rect class="box-a" x="20" y="34" width="290" height="216" rx="9"/>
+      <text class="ta" x="165" y="56" text-anchor="middle">TSan 这一次跑出来的</text>
+      <circle class="box-a" cx="165" cy="84" r="7"/>
+      <circle class="box-a" cx="165" cy="116" r="7"/>
+      <circle class="box-a" cx="165" cy="148" r="7"/>
+      <circle class="box-a" cx="165" cy="180" r="7"/>
+      <circle class="box-a" cx="165" cy="212" r="7"/>
+      <path class="ln-a" d="M165 91 L165 109 M165 123 L165 141 M165 155 L165 173 M165 187 L165 205"/>
+      <text class="ts" x="196" y="88">T1 写 buf</text>
+      <text class="ts" x="196" y="120">T1 发布 tail</text>
+      <text class="ts" x="196" y="152">T2 读 tail</text>
+      <text class="ts" x="196" y="184">T2 读 buf</text>
+      <text class="ts" x="196" y="216">join</text>
+      <text class="tg" x="165" y="240" text-anchor="middle">这一条上确实没有竞争</text>
+
+      <rect class="box" x="330" y="34" width="610" height="216" rx="9"/>
+      <text class="tb" x="635" y="56" text-anchor="middle">这段程序全部可能的交错</text>
+      <circle class="box-a" cx="635" cy="76" r="6"/>
+      <circle class="box" cx="555" cy="116" r="5"/>
+      <circle class="box-a" cx="715" cy="116" r="5"/>
+      <circle class="box" cx="515" cy="156" r="5"/>
+      <circle class="box" cx="595" cy="156" r="5"/>
+      <circle class="box-a" cx="675" cy="156" r="5"/>
+      <circle class="box-r" cx="755" cy="156" r="5"/>
+      <circle class="box" cx="495" cy="196" r="4"/>
+      <circle class="box" cx="535" cy="196" r="4"/>
+      <circle class="box" cx="575" cy="196" r="4"/>
+      <circle class="box" cx="615" cy="196" r="4"/>
+      <circle class="box-a" cx="655" cy="196" r="4"/>
+      <circle class="box" cx="695" cy="196" r="4"/>
+      <circle class="box-r" cx="735" cy="196" r="4"/>
+      <circle class="box-r" cx="775" cy="196" r="4"/>
+      <path class="ln-d" d="M635 76 L555 116 M635 76 L715 116 M555 116 L515 156 M555 116 L595 156 M715 116 L675 156 M715 116 L755 156 M515 156 L495 196 M515 156 L535 196 M595 156 L575 196 M595 156 L615 196 M675 156 L655 196 M675 156 L695 196 M755 156 L735 196 M755 156 L775 196"/>
+      <path class="ln-a" d="M635 76 L715 116 L675 156 L655 196"/>
+      <text class="ta" x="845" y="120">蓝色 = 跑到的那条</text>
+      <text class="tr" x="845" y="142">红色 = 会出错的那些</text>
+      <text class="ts" x="845" y="164">灰色 = 没跑到但正确</text>
+      <text class="ts" x="845" y="186">…还有 184740 条</text>
+      <text class="tr" x="635" y="226" text-anchor="middle">两个线程各 10 步 = 184756 条路径</text>
+      <text class="ts" x="635" y="244" text-anchor="middle">弱内存模型下还要乘上 reads-from 的选择</text>
+
+      <text class="ts" x="480" y="276" text-anchor="middle">所以「TSan 绿」的准确含义是：<tspan class="ta">在采到的这一条（或这几万条）路径上，没有找到数据竞争</tspan></text>
+      <text class="ts" x="480" y="296" text-anchor="middle">它是一个<tspan class="tg">存在性证据</tspan>（找到了就一定是真 bug），不是<tspan class="tr">全称证明</tspan>（没找到不能推出没有）</text>
+    </svg>
+  </div>
+
+  <p>这张图里最该记住的是颜色的<strong>不对称</strong>：TSan 报错几乎没有假阳性——它报了就是真的有竞争，值得立刻修；但 TSan 不报错，提供的信息量非常有限。<strong>把一个只有存在性能力的工具当成全称证明用，是并发验证里最常见的方法论错误。</strong></p>
+
+  <h3 id="s1-2">1.2 「跑了一万次」值多少钱</h3>
+
+  <p>压测报告里的「循环运行 10000 次无异常」几乎总是被高估。要看清它值多少钱，得同时算两件事：单次命中概率，以及这一万次之间是否独立。</p>
+
+  <p>竞争窗口的典型宽度是<strong>几个到几十个纳秒</strong>——从写完 payload 到发布指针之间也许就三条指令。而一次线程抢占的时间粒度是毫秒级，主动切换（futex、yield）是微秒级。要让另一个线程恰好挤进那几纳秒，概率量级在 10⁻⁶ 到 10⁻⁹。跑一万次，检出概率也就千分之一量级。</p>
+
+  <p>更要命的是第二件事：<strong>这一万次不是一万个独立样本</strong>。同一个二进制、同一台机器、同样的 cache 预热状态、同样的线程创建顺序，操作系统调度器会收敛到高度重复的模式。实测中经常出现「跑十万次，用调度指纹去重后只覆盖了三四种不同交错」的情形。次数和交错覆盖率之间根本不成正比，而报告里写的偏偏是次数。</p>
+
+  <div class="analogy">你要证明一条山路上没有落石，于是开车走了一万趟——但每次都是同一个时间出发、同一个车速、走同一条车道。这一万趟真正采样到的路况变化，可能还不如换三个不同时段各走一趟。<strong>压测的价值来自「交错的多样性」，不来自「循环的次数」</strong>；而多样性得靠主动设计（§6），不会自己出现。</div>
+</section>
+
+<!-- ================================================================ §2 -->
+<section class="chapter" id="s2">
+  <div class="ch-head">
+    <div class="num">02</div>
+    <div class="t"><h2>把验证目标拆成五类</h2><p class="sub">不分类就会拿一把工具去打五种钉子，然后以为都打完了</p></div>
+  </div>
+
+  <p>「并发 bug」不是一类缺陷，是至少五类，各自的定义域、发现手段、修复方式都不一样。混在一起谈，就必然出现「TSan 全绿所以并发是对的」这种推理。</p>
+
+  <h3 id="s2-1">2.1 五类并发缺陷</h3>
+
+  <table>
+    <thead><tr><th>类别</th><th>定义</th><th>最小例子</th><th>为什么 TSan 未必看得见</th></tr></thead>
+    <tbody>
+      <tr><td><strong>数据竞争</strong></td><td>两次访问同一地址、至少一个是写、至少一个非原子、彼此无 happens-before</td><td>两个线程同时 <code>++counter</code>（普通 <code>int</code>）</td><td>看得见，而且这是它唯一真正强的一类</td></tr>
+      <tr><td><strong>死锁 / 活锁</strong></td><td>线程互相等待，或反复重试却谁也不前进</td><td>ABBA 锁序反转；两个 CAS 循环互相打断</td><td>它是 happens-before 检测器，不是等待图检测器</td></tr>
+      <tr><td><strong>原子性违反</strong></td><td>每次访问都同步了，但<strong>该在一个临界区里的操作被拆成了两个</strong></td><td><code>if (m.count(k)) use(m[k]);</code> 两句各自加锁</td><td>每次访问都有锁保护，按定义就不是竞争</td></tr>
+      <tr><td><strong>顺序违反</strong></td><td>依赖「A 一定在 B 之前」，但没有任何机制保证</td><td>后台线程在 <code>init()</code> 完成前就开始用配置</td><td>同上：如果两侧都加了锁，只是顺序错了，无竞争可报</td></tr>
+      <tr><td><strong>内存序错误</strong></td><td>原子操作用了过弱的 <code>memory_order</code>，导致别的线程读到不该读到的值</td><td>发布指针用 <code>relaxed</code> 而不是 <code>release</code></td><td>payload 非原子时能报；<strong>全部是 atomic 时它按定义不报</strong></td></tr>
+    </tbody>
+  </table>
+
+  <p>加上第六类<strong>活性问题</strong>（饥饿、丢通知、优先级反转、假唤醒），它属于「程序没坏、只是不往前走」，任何以「检测非法状态」为原理的工具都拍不到——它要靠超时、看门狗和等待图。</p>
+
+  <p>这张表里最值得盯的是<strong>原子性违反</strong>那一行。它是生产环境里占比很高、而工具覆盖率最低的一类：所有访问都规规矩矩加了锁，静态检查满意，TSan 满意，唯一的问题是<strong>临界区的边界划错了</strong>。这类缺陷只能靠「不变量」来抓——你得先能写出「什么状态是非法的」，才有东西可检查。</p>
+
+  <h3 id="s2-2">2.2 工具覆盖矩阵</h3>
+
+  <p>下面这张图是全文的骨架。竖着看是缺陷分类，横着看是六种手段；每一格问同一个问题：<strong>这个工具在原理上能不能发现这类缺陷</strong>——不是「配置好了能不能」，而是「机制上有没有可能」。</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 960 372" role="img" aria-label="并发缺陷类别与验证手段的覆盖矩阵：TSan 只在数据竞争一列是覆盖，对原子性违反、顺序违反、内存序错误是盲区；模型检查在五类上全覆盖但只适用于几十行核心；litmus test 专攻内存序；压测与 rr 回放对多数类别只是部分覆盖">
+      <text class="tb" x="480" y="18" text-anchor="middle">缺陷类别 × 验证手段：机制上能不能发现</text>
+
+      <text class="ta" x="254" y="46" text-anchor="middle">TSan</text>
+      <text class="ts" x="254" y="62" text-anchor="middle">动态插桩</text>
+      <text class="ta" x="382" y="46" text-anchor="middle">锁序检测</text>
+      <text class="ts" x="382" y="62" text-anchor="middle">Helgrind 等</text>
+      <text class="ta" x="510" y="46" text-anchor="middle">模型检查</text>
+      <text class="ts" x="510" y="62" text-anchor="middle">GenMC / CDSChecker</text>
+      <text class="ta" x="638" y="46" text-anchor="middle">litmus</text>
+      <text class="ts" x="638" y="62" text-anchor="middle">herd7 / CppMem</text>
+      <text class="ta" x="766" y="46" text-anchor="middle">压测矩阵</text>
+      <text class="ts" x="766" y="62" text-anchor="middle">x86 + ARM 长跑</text>
+      <text class="ta" x="894" y="46" text-anchor="middle">rr 回放</text>
+      <text class="ts" x="894" y="62" text-anchor="middle">确定性复现</text>
+
+      <path class="ln" d="M14 76 L958 76 M14 122 L958 122 M14 168 L958 168 M14 214 L958 214 M14 260 L958 260 M14 306 L958 306"/>
+      <path class="ln-d" d="M190 32 L190 306 M318 76 L318 306 M446 76 L446 306 M574 76 L574 306 M702 76 L702 306 M830 76 L830 306"/>
+
+      <text class="t" x="24" y="103">数据竞争</text>
+      <text class="t" x="24" y="149">死锁 / 活锁</text>
+      <text class="t" x="24" y="195">原子性违反</text>
+      <text class="t" x="24" y="241">顺序违反</text>
+      <text class="t" x="24" y="287">内存序错误</text>
+
+      <circle class="box-g" cx="254" cy="93" r="9"/><text class="tg" x="254" y="115" text-anchor="middle">覆盖</text>
+      <circle class="box-r" cx="382" cy="93" r="9"/><text class="tr" x="382" y="115" text-anchor="middle">无关</text>
+      <circle class="box-g" cx="510" cy="93" r="9"/><text class="tg" x="510" y="115" text-anchor="middle">覆盖</text>
+      <circle class="box-y" cx="638" cy="93" r="9"/><text class="ty" x="638" y="115" text-anchor="middle">部分</text>
+      <circle class="box-y" cx="766" cy="93" r="9"/><text class="ty" x="766" y="115" text-anchor="middle">部分</text>
+      <circle class="box-y" cx="894" cy="93" r="9"/><text class="ty" x="894" y="115" text-anchor="middle">部分</text>
+
+      <circle class="box-y" cx="254" cy="139" r="9"/><text class="ty" x="254" y="161" text-anchor="middle">很弱</text>
+      <circle class="box-g" cx="382" cy="139" r="9"/><text class="tg" x="382" y="161" text-anchor="middle">覆盖</text>
+      <circle class="box-g" cx="510" cy="139" r="9"/><text class="tg" x="510" y="161" text-anchor="middle">覆盖</text>
+      <circle class="box-r" cx="638" cy="139" r="9"/><text class="tr" x="638" y="161" text-anchor="middle">盲区</text>
+      <circle class="box-y" cx="766" cy="139" r="9"/><text class="ty" x="766" y="161" text-anchor="middle">会挂住</text>
+      <circle class="box-g" cx="894" cy="139" r="9"/><text class="tg" x="894" y="161" text-anchor="middle">可复现</text>
+
+      <circle class="box-r" cx="254" cy="185" r="9"/><text class="tr" x="254" y="207" text-anchor="middle">盲区</text>
+      <circle class="box-r" cx="382" cy="185" r="9"/><text class="tr" x="382" y="207" text-anchor="middle">盲区</text>
+      <circle class="box-g" cx="510" cy="185" r="9"/><text class="tg" x="510" y="207" text-anchor="middle">覆盖</text>
+      <circle class="box-r" cx="638" cy="185" r="9"/><text class="tr" x="638" y="207" text-anchor="middle">盲区</text>
+      <circle class="box-y" cx="766" cy="185" r="9"/><text class="ty" x="766" y="207" text-anchor="middle">部分</text>
+      <circle class="box-y" cx="894" cy="185" r="9"/><text class="ty" x="894" y="207" text-anchor="middle">部分</text>
+
+      <circle class="box-r" cx="254" cy="231" r="9"/><text class="tr" x="254" y="253" text-anchor="middle">盲区</text>
+      <circle class="box-r" cx="382" cy="231" r="9"/><text class="tr" x="382" y="253" text-anchor="middle">盲区</text>
+      <circle class="box-g" cx="510" cy="231" r="9"/><text class="tg" x="510" y="253" text-anchor="middle">覆盖</text>
+      <circle class="box-y" cx="638" cy="231" r="9"/><text class="ty" x="638" y="253" text-anchor="middle">部分</text>
+      <circle class="box-y" cx="766" cy="231" r="9"/><text class="ty" x="766" y="253" text-anchor="middle">部分</text>
+      <circle class="box-y" cx="894" cy="231" r="9"/><text class="ty" x="894" y="253" text-anchor="middle">部分</text>
+
+      <circle class="box-y" cx="254" cy="277" r="9"/><text class="ty" x="254" y="299" text-anchor="middle">看情况</text>
+      <circle class="box-r" cx="382" cy="277" r="9"/><text class="tr" x="382" y="299" text-anchor="middle">盲区</text>
+      <circle class="box-g" cx="510" cy="277" r="9"/><text class="tg" x="510" y="299" text-anchor="middle">覆盖</text>
+      <circle class="box-g" cx="638" cy="277" r="9"/><text class="tg" x="638" y="299" text-anchor="middle">最擅长</text>
+      <circle class="box-y" cx="766" cy="277" r="9"/><text class="ty" x="766" y="299" text-anchor="middle">仅弱序机</text>
+      <circle class="box-r" cx="894" cy="277" r="9"/><text class="tr" x="894" y="299" text-anchor="middle">盲区</text>
+
+      <text class="ts" x="480" y="330" text-anchor="middle">读法一：<tspan class="tr">TSan 那一列只有一格是绿的</tspan>，而很多团队的并发验证只有这一列</text>
+      <text class="ts" x="480" y="350" text-anchor="middle">读法二：<tspan class="tg">模型检查那一列全绿</tspan>，代价是只能作用于「核心几十行」（§4.3），不是整个程序</text>
+      <text class="ts" x="480" y="368" text-anchor="middle">读法三：<tspan class="ta">rr 那一列是「定位」而不是「发现」</tspan>——它把已经出现过一次的问题变成可以反复调试的（§7）</text>
+    </svg>
+  </div>
+
+  <div class="box tip">TSan 自身的能力边界、插桩原理与 vector clock 机制，站内已有两整章系统展开，本文不重复：见 <a href="./sanitizers_guide.html">Sanitizers 实战</a>（TSan 能识别与不能识别什么、shadow memory 与影子字的结构）；TSan 对死锁的具体盲区见 <a href="./deadlock_debugging_guide.html">死锁排查</a>。本文只关心「这一列之外还剩什么」。</div>
+</section>
+
+<!-- ================================================================ §3 -->
+<section class="chapter" id="s3">
+  <div class="ch-head">
+    <div class="num">03</div>
+    <div class="t"><h2>动态工具的天花板</h2><p class="sub">你在 x86 上测的不是你的代码，是「你的代码 + 一台几乎不重排的机器」</p></div>
+  </div>
+
+  <h3 id="s3-1">3.1 x86 TSO 掩盖了什么</h3>
+
+  <p>「x86 上跑了半年都好好的，移植到 ARM 服务器第二天就崩」——这是内存序错误的标准剧本，而它的原因完全不神秘：<strong>x86 的硬件内存模型强到掩盖了你的大部分错误</strong>。</p>
+
+  <div class="def"><strong>x86-TSO</strong>：x86 的内存模型只允许一种重排——<code>store → load</code>（后面的 load 可以越过前面还在 store buffer 里的 store）。<code>load→load</code>、<code>load→store</code>、<code>store→store</code> 一律不允许。相比之下 ARMv8 四种都允许，POWER 还额外不保证 multi-copy atomicity（不同线程可以对同一组写观察到不同顺序）。</div>
+
+  <div class="fig">
+    <svg viewBox="0 0 960 316" role="img" aria-label="同一段 release 存储与 acquire 载入在 x86 和 ARM64 上编译出的指令对比：x86 上 relaxed 与 acquire 生成完全相同的普通 mov 指令因此写错内存序毫无痕迹，ARM64 上则分别是 str 与 ldar 等不同指令因此错误会真实暴露">
+      <text class="tb" x="480" y="18" text-anchor="middle">同一行源码，两种架构，两种命运</text>
+
+      <rect class="box-a" x="270" y="30" width="420" height="58" rx="9"/>
+      <text class="tm" x="480" y="52" text-anchor="middle">tail.store(t+1, release);  /* 若误写成 relaxed */</text>
+      <text class="tm" x="480" y="74" text-anchor="middle">h = head.load(acquire);    /* 若误写成 relaxed */</text>
+
+      <path class="ln-a" d="M300 88 L200 106 M660 88 L760 106"/>
+      <polygon class="ar-a" points="205,101 197,111 194,100"/>
+      <polygon class="ar-a" points="755,100 766,111 758,101"/>
+
+      <rect class="box-y" x="30" y="112" width="430" height="152" rx="9"/>
+      <text class="ty" x="245" y="134" text-anchor="middle">x86-64 · TSO</text>
+      <text class="tm" x="245" y="158" text-anchor="middle">release store → mov [tail], eax</text>
+      <text class="tm" x="245" y="178" text-anchor="middle">relaxed store → mov [tail], eax</text>
+      <text class="tm" x="245" y="198" text-anchor="middle">acquire load  → mov eax, [head]</text>
+      <text class="tm" x="245" y="218" text-anchor="middle">relaxed load  → mov eax, [head]</text>
+      <text class="tr" x="245" y="244" text-anchor="middle">四行里两两<tspan class="tb"> 完全相同 </tspan>——写错了，机器码一模一样</text>
+
+      <rect class="box-r" x="500" y="112" width="430" height="152" rx="9"/>
+      <text class="tr" x="715" y="134" text-anchor="middle">AArch64 · 弱序</text>
+      <text class="tm" x="715" y="158" text-anchor="middle">release store → stlr w0, [x1]</text>
+      <text class="tm" x="715" y="178" text-anchor="middle">relaxed store → str  w0, [x1]</text>
+      <text class="tm" x="715" y="198" text-anchor="middle">acquire load  → ldar w0, [x1]</text>
+      <text class="tm" x="715" y="218" text-anchor="middle">relaxed load  → ldr  w0, [x1]</text>
+      <text class="tg" x="715" y="244" text-anchor="middle">四条指令<tspan class="tb"> 互不相同 </tspan>——写错了硬件真的会重排</text>
+
+      <text class="ts" x="245" y="286" text-anchor="middle">允许重排：<tspan class="ty">仅 store→load</tspan></text>
+      <text class="ts" x="715" y="286" text-anchor="middle">允许重排：<tspan class="tr">四种全部</tspan>（POWER 还不保证 multi-copy atomic）</text>
+      <text class="ts" x="480" y="308" text-anchor="middle">推论：<tspan class="ta">在 x86 上「测不出来」这件事，本身没有携带任何关于代码正确性的信息</tspan></text>
+    </svg>
+  </div>
+
+  <p>把这件事说到底：内存序错误在 x86 上不是「概率低」，很多时候是<strong>概率为零</strong>——编译器生成的指令与正确写法完全相同，硬件也不会做那种重排。这类 bug 在 x86 上跑一亿次仍然是零命中，它不是被压测漏掉的，是压测<strong>在这台机器上根本无法命中</strong>。所以再多的 x86 长跑都不能替代一台弱序机器（§6.2）。</p>
+
+  <h3 id="s3-2">3.2 TSan 建模的是 happens-before</h3>
+
+  <p>还有一层更细的天花板：TSan 并不模拟硬件重排。它拦截原子操作、按 <code>memory_order</code> 维护 vector clock，判断的是<strong>C++ 抽象机层面的 happens-before 关系</strong>。这带来一个需要分情况看的结论。</p>
+
+  <div class="vs">
+    <div class="good">
+      <h5>✅ payload 是非原子的 → TSan 有戏</h5>
+      <pre><code>buf[t] = v;                       // 非原子写
+tail.store(t+1, relaxed);         // ❌ 该 release
+
+// 消费者
+if (tail.load(relaxed) &gt; t)       // ❌ 该 acquire
+    use(buf[t]);                  // 非原子读</code></pre>
+      <p style="font-size:.83rem;margin:8px 0 0"><code>relaxed</code> 不建立 happens-before，于是 <code>buf[t]</code> 上的写与读在 TSan 眼里就是一对无序访问 → <strong>报竞争</strong>。而且它不要求两次访问在时间上重叠，所以在 x86 上也能报出来。</p>
+    </div>
+    <div class="bad">
+      <h5>❌ 全部是 atomic → TSan 按定义沉默</h5>
+      <pre><code>// Dekker 的核心：没有一个非原子访问
+want[me].store(1, relaxed);       // ❌ 该 seq_cst
+if (want[other].load(relaxed) == 0)
+    enter_critical_section();     // 两个线程可能同时进来</code></pre>
+      <p style="font-size:.83rem;margin:8px 0 0">数据竞争的定义要求<strong>至少一个非原子访问</strong>。这里全是原子操作，无论内存序多弱都不构成竞争——TSan 不是漏报，是这件事不在它的定义域里。</p>
+    </div>
+  </div>
+
+  <p>这个区分很实用：它告诉你什么时候还能指望 TSan，什么时候必须换工具。<strong>凡是「算法的正确性依赖原子操作之间的顺序」的代码——无锁队列的 head/tail 协议、引用计数的最后一次递减、状态机的 CAS 转换、自旋锁本身——TSan 一格都覆盖不到</strong>，那正是 §4 和 §5 存在的理由。</p>
+
+  <h3 id="s3-3">3.3 重复执行不是采样</h3>
+
+  <p>§1.2 已经算过概率。这里补一个容易被忽略的工程推论：既然重复执行的样本不独立，那么<strong>压测的正确指标不是执行次数，而是覆盖到的不同交错数</strong>。这个数得自己测量——在关键点上记录一个全局递增序号，把一次执行经过的序号序列拼成「调度指纹」，然后统计去重后有多少种。</p>
+
+  <p>第一次这么量的团队通常会被结果吓一跳：十万次执行，去重后三到五种指纹。而这也直接给出了改进方向——不是把一万次加到一百万次，而是<strong>让每一次都不一样</strong>（§6.1）。</p>
+</section>
+
+<!-- ================================================================ §4 -->
+<section class="chapter" id="s4">
+  <div class="ch-head">
+    <div class="num">04</div>
+    <div class="t"><h2>穷举与模型检查</h2><p class="sub">唯一能把「没找到 bug」升级成「没有 bug」的手段，代价是范围极小</p></div>
+  </div>
+
+  <p>动态工具是在交错空间里<strong>随机撞</strong>，模型检查是<strong>系统地走完</strong>。走完之后得到的结论性质完全不同：不再是「这次没撞到」，而是「在这个规模内不存在违反」。这是并发验证里唯一能给出全称结论的工具类别。</p>
+
+  <h3 id="s4-1">4.1 有界 vs 无状态</h3>
+
+  <div class="fig">
+    <svg viewBox="0 0 960 330" role="img" aria-label="有界模型检查与无状态模型检查两种思路的对比，以及交错数量随线程数与步数增长的阶梯：两线程各五步是二百五十二种，三线程各五步是七十五万种，四线程各五步超过一百亿种">
+      <text class="tb" x="480" y="18" text-anchor="middle">两条技术路线，一个共同的敌人</text>
+
+      <rect class="box-p" x="20" y="32" width="300" height="188" rx="9"/>
+      <text class="tp" x="170" y="54" text-anchor="middle">有界模型检查 · BMC</text>
+      <text class="ts" x="170" y="78" text-anchor="middle">把程序展开到 N 步</text>
+      <text class="ts" x="170" y="98" text-anchor="middle">编码成一个巨大的逻辑公式</text>
+      <text class="ts" x="170" y="118" text-anchor="middle">交给 SAT / SMT 求解器</text>
+      <text class="tg" x="170" y="146" text-anchor="middle">强项：输入可以是符号变量</text>
+      <text class="ts" x="170" y="166" text-anchor="middle">不必给具体测试值，覆盖全部取值</text>
+      <text class="tr" x="170" y="192" text-anchor="middle">弱项：界限之外看不见</text>
+      <text class="tm" x="170" y="212" text-anchor="middle">CBMC / ESBMC</text>
+
+      <rect class="box-a" x="340" y="32" width="300" height="188" rx="9"/>
+      <text class="ta" x="490" y="54" text-anchor="middle">无状态模型检查 · SMC</text>
+      <text class="ts" x="490" y="78" text-anchor="middle">不存状态集合，反复真实执行</text>
+      <text class="ts" x="490" y="98" text-anchor="middle">每次系统地换一个调度决策</text>
+      <text class="ts" x="490" y="118" text-anchor="middle">和一组 reads-from 关系</text>
+      <text class="tg" x="490" y="146" text-anchor="middle">强项：直接跑真实代码</text>
+      <text class="ts" x="490" y="166" text-anchor="middle">DPOR 把等价交错折叠成一条</text>
+      <text class="tr" x="490" y="192" text-anchor="middle">弱项：测试必须封闭且有界</text>
+      <text class="tm" x="490" y="212" text-anchor="middle">GenMC / CDSChecker / Nidhugg</text>
+
+      <rect class="box-y" x="660" y="32" width="280" height="188" rx="9"/>
+      <text class="ty" x="800" y="54" text-anchor="middle">共同的敌人：状态爆炸</text>
+      <rect class="box-g" x="684" y="72" width="40" height="16" rx="3"/>
+      <text class="ts" x="736" y="85">2 线程 × 5 步 = 252</text>
+      <rect class="box-y" x="684" y="106" width="130" height="16" rx="3"/>
+      <text class="ts" x="822" y="119">3 × 5 = 7.6e5</text>
+      <rect class="box-r" x="684" y="140" width="232" height="16" rx="3"/>
+      <text class="ts" x="684" y="172">4 × 5 = 1.2e10（条已经跑不完）</text>
+      <text class="tm" x="800" y="196" text-anchor="middle">(nk)! / (k!)ⁿ</text>
+      <text class="tr" x="800" y="212" text-anchor="middle">指数增长，DPOR 只降底数</text>
+
+      <text class="ts" x="480" y="250" text-anchor="middle">2026 年的实务选择：<tspan class="ta">GenMC</tspan>——不用改写代码类型，支持 RC11 / IMM / Linux 内核内存模型，DPOR 成熟</text>
+      <text class="ts" x="480" y="270" text-anchor="middle"><tspan class="tp">CDSChecker</tspan> 是这条路线的开创者，第一个系统枚举 C/C++11 的 reads-from 关系而不只是交错</text>
+      <text class="ts" x="480" y="290" text-anchor="middle"><tspan class="ty">Relacy</tspan> 是纯头文件库，把 std::atomic 换成 rl::atomic 就能在自己的构建里跑，上手最快、维护最久无更新</text>
+      <text class="ts" x="480" y="312" text-anchor="middle">三者的共同前提都一样：<tspan class="tr">被验证的东西必须小</tspan>。这不是工具不成熟，是组合数学</text>
+    </svg>
+  </div>
+
+  <table>
+    <thead><tr><th>工具</th><th>路线</th><th>接入方式</th><th>能表达的内存模型</th><th>适合</th></tr></thead>
+    <tbody>
+      <tr><td><strong>GenMC</strong></td><td>无状态 + DPOR</td><td>直接编译 C/C++ 源码运行，无需改写类型</td><td>RC11、IMM、LKMM 可选</td><td>默认首选；核心算法 30–80 行</td></tr>
+      <tr><td><strong>CDSChecker</strong></td><td>无状态</td><td>链接它的 <code>libmodel</code>，用 C11 atomics 写测试</td><td>C/C++11 公理模型</td><td>需要精确控制 fence 语义的实验</td></tr>
+      <tr><td><strong>Relacy</strong></td><td>无状态 + 模拟弱序</td><td>头文件库，<code>rl::atomic</code> 替换 <code>std::atomic</code></td><td>自建的 relaxed 可见性模拟</td><td>不想装工具链、想直接写单测</td></tr>
+      <tr><td>Nidhugg</td><td>无状态（LLVM IR）</td><td>编译到 IR 后分析</td><td>SC / TSO / PSO</td><td>只关心 TSO 层面的问题</td></tr>
+      <tr><td>CBMC</td><td>有界（SAT/SMT）</td><td>把源码编码成公式</td><td>SC / TSO / PSO</td><td>输入组合也要覆盖时</td></tr>
+    </tbody>
+  </table>
+
+  <h3 id="s4-2">4.2 写一个可穷举的测试</h3>
+
+  <p>模型检查的门槛不在工具，在<strong>把代码改造成可被穷举的形状</strong>。约束很硬：线程数 2–3、每线程操作 2–4 步、没有外部输入、没有系统调用、循环必须有界。下面这个测试正好落在 §3.2 提到的「TSan 完全盲」那一类——全部是原子操作，只有一条断言。</p>
+
+  <pre><code>/* mutex_probe.c —— 两线程互斥协议：全是 atomic，TSan 按定义不报任何竞争
+ * $ genmc --unroll=2 -- -std=c11 mutex_probe.c                              */
+#include &lt;stdatomic.h&gt;
+#include &lt;assert.h&gt;
+#include &lt;pthread.h&gt;
+#include &lt;stdint.h&gt;
+
+static atomic_int want[2];   /* 我要进临界区 */
+static atomic_int inside;    /* 临界区内人数 —— 不变量：任何时刻 &lt;= 1 */
+
+static void *worker(void *arg) {
+    intptr_t me = (intptr_t)arg;
+    atomic_store_explicit(&amp;want[me], 1, memory_order_relaxed);            /* 疑点 A */
+    if (atomic_load_explicit(&amp;want[1 - me], memory_order_relaxed) == 0) { /* 疑点 B */
+        int n = atomic_fetch_add_explicit(&amp;inside, 1, memory_order_relaxed);
+        assert(n == 0);          /* ← 整个测试就为了这一行：不变量被打破了吗 */
+        atomic_fetch_sub_explicit(&amp;inside, 1, memory_order_relaxed);
+    }
+    atomic_store_explicit(&amp;want[me], 0, memory_order_relaxed);
+    return NULL;
+}
+
+int main(void) {
+    pthread_t t[2];
+    for (intptr_t i = 0; i &lt; 2; i++) pthread_create(&amp;t[i], NULL, worker, (void *)i);
+    for (int i = 0; i &lt; 2; i++)      pthread_join(t[i], NULL);
+    return 0;
+}</code></pre>
+
+  <p>GenMC 在秒级给出反例：两个 <code>relaxed</code> store 都还没对彼此可见，两个 load 各自读到 0，两个线程一起进临界区，<code>inside</code> 变成 2。把 A、B 都改成 <code>memory_order_seq_cst</code> 后再跑，它报「探索完毕、无违反」——注意这句话的分量：<strong>不是「这次没撞到」，而是这个规模内的执行已经走完了</strong>。</p>
+
+  <p>四个改造要点，每一个都是从「必须能穷举」推出来的：</p>
+
+  <table>
+    <thead><tr><th>要点</th><th>怎么做</th><th>不这么做会怎样</th></tr></thead>
+    <tbody>
+      <tr><td>规模压到最小</td><td>2 个线程，每个 3–4 个原子操作；<code>CAP</code> 之类的常量取 1 或 2</td><td>4 线程 × 5 步就是 1.2e10 条路径，跑不完</td></tr>
+      <tr><td>把正确性写成不变量</td><td><code>assert</code> 一个<strong>状态断言</strong>（人数 ≤ 1、值不为 0、顺序不倒置）</td><td>没有断言的穷举只能发现崩溃和死锁，逻辑错误照样漏</td></tr>
+      <tr><td>循环必须有界</td><td>CAS 重试循环加 <code>--unroll=N</code>，或改写成「最多重试两次」</td><td>无界重试在无状态模型检查下产生无限执行，工具挂住</td></tr>
+      <tr><td>切断外部世界</td><td>不 <code>malloc</code>、不 IO、不读时间、不用 <code>random</code>；输入写成固定常量</td><td>每个不确定来源都乘进状态空间，或者让工具直接放弃</td></tr>
+    </tbody>
+  </table>
+
+  <p>第二条最容易做砸。<strong>断言的质量决定了整件事的价值</strong>：穷举一遍只跑出「没崩」的结论，那这几天工作换来的信息量还不如一次 code review。写断言的正确姿势是先回答「这个结构的不变量是什么」——队列不丢不重不乱序、引用计数归零时无人持有、状态机不出现非法转换——写不出来这句话，说明还没想清楚要验证什么。</p>
+
+  <h3 id="s4-3">4.3 状态空间爆炸的边界</h3>
+
+  <p>指数增长是这条路线的硬边界，也是它的使用说明书：<strong>模型检查验证的是「核心几十行」，不是你的程序</strong>。它的合理用法是把无锁数据结构的 <code>push</code>/<code>pop</code>、引用计数的增减、状态机的转换单独摘出来做成上面那种探针，而不是指望它跑通业务代码。</p>
+
+  <p>DPOR（动态偏序归约）的作用是把「交换两个互不相干的操作得到的交错」认成同一条，从而把可行规模往上推几个数量级——但它降的是底数，不是指数。所以规划工作量时的现实预期是：<strong>写一个够小、够封闭、断言够狠的探针，通常比写实现本身更花时间</strong>。这个成本正是 §8.2 那些判据的来源。</p>
+
+  <div class="box tip">Relacy、CDSChecker、GenMC、<code>perf c2c</code> 这几个名字在 <a href="../cpp/memory_model.html#s14">C++ 内存模型 §14</a> 里被点到过，但那里没有展开怎么用；反过来，本文不重复内存模型本身（happens-before、<code>memory_order</code> 六档语义、fence 的作用域），需要补的话看那一篇。</div>
+</section>
+
+<!-- ================================================================ §5 -->
+<section class="chapter" id="s5">
+  <div class="ch-head">
+    <div class="num">05</div>
+    <div class="t"><h2>litmus test 与 herd7</h2><p class="sub">回答「这两个 relaxed 之间要不要加 fence」最快的方式，十分钟就有结论</p></div>
+  </div>
+
+  <p>内存序的争论在 code review 里最难收场：一方说「这里 relaxed 就够，反正有依赖」，另一方说「不加 release 迟早出事」，两边都举不出证据，最后按资历或按嗓门决定。<strong>litmus test 的意义就是把这种争论变成一条可执行的命令。</strong></p>
+
+  <div class="def"><strong>litmus test</strong>：一个只有几行、多线程、无循环无输入的最小程序，加上一个关于最终状态的断言。<code>herd7</code> 拿一份形式化的内存模型（<code>.cat</code> 文件）去<strong>穷举</strong>它在该模型下的所有允许结果；<code>litmus7</code> 则把同一个测试编译成真程序，在真机上跑几百万次看实际能不能出现。前者回答「标准允许吗」，后者回答「这颗 CPU 干不干」。</div>
+
+  <h3 id="s5-1">5.1 一个 litmus 长什么样</h3>
+
+  <p>用最经典的 message passing（MP）：一个线程写数据再置标志，另一个线程看到标志后读数据。问题是——标志用 <code>relaxed</code> 行不行？</p>
+
+  <pre><code>C MP-relaxed
+{ }
+P0 (atomic_int *x, atomic_int *y) {
+  atomic_store_explicit(x, 1, memory_order_relaxed);      // 写数据
+  atomic_store_explicit(y, 1, memory_order_relaxed);      // 置标志 ← 疑点
+}
+P1 (atomic_int *x, atomic_int *y) {
+  int r0 = atomic_load_explicit(y, memory_order_relaxed); // 看标志 ← 疑点
+  int r1 = atomic_load_explicit(x, memory_order_relaxed); // 读数据
+}
+exists (1:r0=1 /\ 1:r1=0)      /* 看见标志却读到旧数据 —— 这可能发生吗？ */
+
+$ herd7 -model rc11.cat MP-relaxed.litmus
+States 4
+1:r0=0; 1:r1=0;  1:r0=0; 1:r1=1;  1:r0=1; 1:r1=0;  1:r0=1; 1:r1=1;
+Ok
+Witnesses
+Positive: 1 Negative: 3
+Condition exists (1:r0=1 /\ 1:r1=0) is validated     ← 会发生！relaxed 不够
+Observation MP-relaxed Sometimes 1 3
+
+# 把 y 改成 release / acquire 再跑一遍：
+Condition exists (1:r0=1 /\ 1:r1=0) is NOT validated
+Observation MP-relacq Never 0 4                      ← 标准禁止，可以放心</code></pre>
+
+  <div class="fig">
+    <svg viewBox="0 0 960 300" role="img" aria-label="message passing litmus test 的结构示意：P0 先写数据再置标志，P1 先读标志再读数据，关键在于 P1 读数据这一步的 reads-from 边可以指向初始值零；用 relaxed 时该边合法结果为 Sometimes，用 release 与 acquire 时该边被禁止结果为 Never">
+      <text class="tb" x="480" y="18" text-anchor="middle">MP：两条 reads-from 边决定了答案</text>
+
+      <rect class="box-a" x="60" y="32" width="340" height="112" rx="9"/>
+      <text class="ta" x="230" y="54" text-anchor="middle">P0 · 发布方</text>
+      <rect class="box" x="86" y="66" width="288" height="26" rx="5"/>
+      <text class="tm" x="230" y="84" text-anchor="middle">store x = 1        (数据)</text>
+      <rect class="box" x="86" y="102" width="288" height="26" rx="5"/>
+      <text class="tm" x="230" y="120" text-anchor="middle">store y = 1        (标志)</text>
+
+      <rect class="box-g" x="560" y="32" width="340" height="112" rx="9"/>
+      <text class="tg" x="730" y="54" text-anchor="middle">P1 · 消费方</text>
+      <rect class="box" x="586" y="66" width="288" height="26" rx="5"/>
+      <text class="tm" x="730" y="84" text-anchor="middle">r0 = load y        (标志)</text>
+      <rect class="box" x="586" y="102" width="288" height="26" rx="5"/>
+      <text class="tm" x="730" y="120" text-anchor="middle">r1 = load x        (数据)</text>
+
+      <path class="ln-g" d="M374 115 L586 79"/>
+      <polygon class="ar-g" points="580,74 590,80 578,84"/>
+      <text class="tg" x="480" y="102" text-anchor="middle">rf：读到 1</text>
+
+      <path class="ln-r" d="M470 168 L586 115"/>
+      <polygon class="ar-r" points="580,110 590,116 578,120"/>
+      <rect class="box-r" x="330" y="158" width="150" height="28" rx="5"/>
+      <text class="tr" x="405" y="177" text-anchor="middle">x 的初始值 0</text>
+      <text class="tr" x="300" y="204" text-anchor="middle">争议全在这一条边上：r1 能不能读到初始值？</text>
+
+      <rect class="box-g" x="60" y="216" width="400" height="60" rx="9"/>
+      <text class="tg" x="260" y="238" text-anchor="middle">y 用 release / acquire</text>
+      <text class="ts" x="260" y="260" text-anchor="middle">这条边被模型禁止 → <tspan class="tg">Never 0 4</tspan>，代码是对的</text>
+
+      <rect class="box-r" x="500" y="216" width="400" height="60" rx="9"/>
+      <text class="tr" x="700" y="238" text-anchor="middle">y 用 relaxed</text>
+      <text class="ts" x="700" y="260" text-anchor="middle">这条边合法 → <tspan class="tr">Sometimes 1 3</tspan>，x86 上只是碰不到</text>
+
+      <text class="ts" x="480" y="294" text-anchor="middle">从写文件到拿到结论：<tspan class="ta">十几行、十分钟</tspan>。比在 review 里争半小时便宜得多</text>
+    </svg>
+  </div>
+
+  <h3 id="s5-2">5.2 它回答什么、不回答什么</h3>
+
+  <table>
+    <thead><tr><th>输出</th><th>含义</th><th>你该怎么办</th></tr></thead>
+    <tbody>
+      <tr><td><code>Never 0 N</code></td><td>该模型下不可能出现，任何符合标准的实现都不会</td><td>这个内存序够用，不必加 fence——<strong>省下的开销是有依据的</strong></td></tr>
+      <tr><td><code>Sometimes k N</code></td><td>标准允许出现</td><td>就是 bug，跟「x86 上测不出来」无关（§3.1）</td></tr>
+      <tr><td><code>Always N 0</code></td><td>断言在所有执行下都成立</td><td>通常说明断言写反了，检查一下 <code>exists</code></td></tr>
+      <tr><td><code>litmus7</code> 实测 0 次命中</td><td>这颗 CPU 这次没做这种重排</td><td><strong>不能推出安全</strong>——换代 CPU、换编译器、加个循环都可能变</td></tr>
+    </tbody>
+  </table>
+
+  <p>最后一行是关键判断：<code>herd7</code>（模型穷举）和 <code>litmus7</code>（真机实测）给出的结论强度差一个量级。<strong>标准说 <code>Sometimes</code> 就按 bug 处理，不要拿真机测不出来当挡箭牌</strong>——那只是复现了一遍 §3.1 的错误。反过来，如果 <code>litmus7</code> 在某颗 CPU 上真跑出来了，那就是一个铁证，可以直接结束争论。</p>
+
+  <p>litmus test 的适用面很窄但很锋利：它只回答<strong>「几个原子操作之间的顺序关系」</strong>这一类问题——两个 relaxed 之间要不要 fence、seq_cst 能不能降成 acq_rel、这个 fence 该放在 CAS 前还是后。它答不了「我这个队列在满的时候会不会丢元素」，那是 §4 的活。CppMem 是同一件事的网页版，针对 C++11 模型，能把候选执行连同 happens-before 边画出来，讲解和自学时比命令行更直观。</p>
+</section>
+
+<!-- ================================================================ §6 -->
+<section class="chapter" id="s6">
+  <div class="ch-head">
+    <div class="num">06</div>
+    <div class="t"><h2>压测怎么设计才有效</h2><p class="sub">目标从「跑很多次」换成「每次都不一样，且失败能复现」</p></div>
+  </div>
+
+  <p>模型检查只覆盖核心几十行，其余部分仍然要靠压测兜底。但压测必须重新设计——按 §1.2 的算法，默认写法的效率低到接近于零。三个方向：<strong>放大交错、换弱序机器、让失败可复现</strong>。</p>
+
+  <h3 id="s6-1">6.1 交错放大</h3>
+
+  <div class="fig">
+    <svg viewBox="0 0 960 286" role="img" aria-label="交错放大原理示意：不做注入时竞争窗口只有几纳秒宽而线程切换点稀疏，全部落在窗口之外；在窗口内插入随机 yield 或微秒级睡眠后窗口被拉宽数百倍，切换点大概率落进窗口从而暴露缺陷">
+      <text class="tb" x="480" y="18" text-anchor="middle">窗口只有几纳秒，那就把窗口撑开</text>
+
+      <text class="tr" x="20" y="52">❌ 原样长跑</text>
+      <rect class="box" x="150" y="60" width="790" height="26" rx="4"/>
+      <text class="ts" x="330" y="78">写 payload</text>
+      <rect class="box-r" x="470" y="60" width="8" height="26"/>
+      <text class="ts" x="600" y="78">发布指针</text>
+      <text class="tr" x="474" y="104" text-anchor="middle">窗口 ≈ 3 ns</text>
+      <path class="ln-d" d="M210 44 L210 60 M330 44 L330 60 M660 44 L660 60 M840 44 L840 60"/>
+      <text class="ts" x="150" y="38">↓ 线程切换点（μs–ms 粒度）</text>
+      <text class="tr" x="700" y="104">四个切换点<tspan class="tb"> 全部落在窗口外 </tspan>—— 跑一亿次也命中不了</text>
+
+      <path class="ln-d" d="M20 126 L940 126"/>
+
+      <text class="tg" x="20" y="156">✅ 窗口内注入</text>
+      <rect class="box" x="150" y="164" width="790" height="26" rx="4"/>
+      <text class="ts" x="250" y="182">写 payload</text>
+      <rect class="box-y" x="330" y="164" width="300" height="26" rx="4"/>
+      <text class="ty" x="480" y="182" text-anchor="middle">yield / pause / sleep(0–50 μs)</text>
+      <text class="ts" x="740" y="182">发布指针</text>
+      <path class="ln-d" d="M210 148 L210 164 M380 148 L380 164 M560 148 L560 164 M840 148 L840 164"/>
+      <text class="tg" x="480" y="212" text-anchor="middle">窗口被撑到 ≈ 50 μs，宽了一万倍</text>
+      <text class="tg" x="700" y="234">两个切换点<tspan class="tb"> 落进了窗口 </tspan>—— 几百次就能命中</text>
+
+      <text class="ts" x="480" y="262" text-anchor="middle">关键不是「撒随机延迟」，而是<tspan class="ta">撒在哪</tspan>：注入点由写代码的人标注，只放在真正的窗口里</text>
+      <text class="ts" x="480" y="280" text-anchor="middle">全局无脑撒点会把程序拖慢十倍，却大概率一个都没落在关键窗口上</text>
+    </svg>
+  </div>
+
+  <p>注入点的位置必须由<strong>知道协议的人</strong>来标，这是这套做法能不能奏效的分水岭。一个 <code>tn_interleave(site)</code> 应该恰好插在「payload 写完、还没发布」「CAS 读到旧值、还没写回」「解锁了、还没通知」这些真正的窗口里；均匀撒在每个函数入口，效果基本等于零。</p>
+
+  <pre><code>// ---- stress_harness.hpp：整段只在 -DTN_STRESS 的测试构建里有代码 ----
+inline uint64_t tn_seed() {                 // 全进程唯一随机源，失败时靠它复现
+    static const uint64_t s = [] {
+        const char *e = std::getenv("TN_SEED");
+        uint64_t v = e ? std::strtoull(e, nullptr, 10)
+                       : std::chrono::steady_clock::now().time_since_epoch().count();
+        std::fprintf(stderr, "TN_SEED=%llu\n", (unsigned long long)v);  // 日志第一行
+        return v;
+    }();
+    return s;
+}
+
+#ifdef TN_STRESS
+inline void tn_interleave(int site) {
+    thread_local std::minstd_rand rng{ (uint32_t)(tn_seed()
+        ^ std::hash&lt;std::thread::id&gt;{}(std::this_thread::get_id())) };
+    switch (rng() % 4) {                    // 四种强度，让每次执行都不一样
+    case 0: break;                                           // 什么都不做
+    case 1: std::this_thread::yield(); break;                // 让出一次
+    case 2: for (int i = rng() % 64; i--;) tn_cpu_relax(); break;   // 忙等几十周期
+    case 3: std::this_thread::sleep_for(
+                std::chrono::microseconds(rng() % 50)); break;      // 撑开窗口
+    }
+    tn_schedule_fingerprint(site);          // 记指纹，用来统计覆盖了多少种交错
+}
+#else
+inline void tn_interleave(int) {}           // 生产构建里彻底消失
+#endif
+
+// 用法：撒在协议的窗口里，而不是撒在每个函数入口
+buf[t % CAP] = v;
+tn_interleave(/*site=*/7);   // ← 消费者若能在此刻插进来，发布顺序错误就暴露了
+tail.store(t + 1, std::memory_order_release);</code></pre>
+
+  <p><code>#else</code> 那个空实现不是形式主义：注入点会散落在最热的代码路径上，必须保证它在生产构建里连一条指令都不剩。同理，注入用的随机数<strong>只能</strong>从 <code>tn_seed()</code> 派生——一旦有人图方便用了 <code>std::random_device</code> 或当前时间，整套复现机制就失效了，而且这种失效是静默的。</p>
+
+  <h3 id="s6-2">6.2 多架构矩阵</h3>
+
+  <p>§3.1 已经论证了 x86 单架构压测在内存序问题上的能力接近于零，所以矩阵里必须有一台弱序机器。这里有一个反直觉的坑：<strong>QEMU 模拟的 aarch64 不算</strong>。</p>
+
+  <table>
+    <thead><tr><th>环境</th><th>能不能暴露内存序错误</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td>x86-64 真机</td><td>只有 <code>store→load</code> 一类</td><td>Dekker / store buffering 那类能碰到，MP / LB 那类碰不到</td></tr>
+      <tr><td><strong>aarch64 真机</strong></td><td><strong>能，四种重排都真实发生</strong></td><td>云上 ARM 实例、Apple Silicon、国产 ARM 服务器都可以；<strong>矩阵里必须有一台</strong></td></tr>
+      <tr><td>QEMU 用户态模拟 aarch64</td><td><strong>基本不能</strong></td><td>翻译执行时访存顺序由宿主机决定，宿主是 x86 就得到 x86 的顺序——绿灯毫无意义</td></tr>
+      <tr><td>POWER / RISC-V 真机</td><td>能，且更弱</td><td>POWER 不保证 multi-copy atomicity，能抓到 ARM 都抓不到的 IRIW 类问题</td></tr>
+      <tr><td>Rosetta / 二进制翻译层</td><td>不可预期</td><td>翻译层通常会补强内存序以保证兼容，等于又盖了一层</td></tr>
+    </tbody>
+  </table>
+
+  <p>还有两个成本很低、收益却经常被低估的维度：<strong>用 <code>taskset</code> 把线程压到 1–2 个核上</strong>（抢占频率大幅上升，锁的交接路径完全不同）；<strong>用背景负载压满调度器</strong>（让线程在任意点被抢走，而不是总在系统调用处让出）。这两条不需要新硬件，只改运行方式，往往在夜间长跑里第一次抓到东西。</p>
+
+  <h3 id="s6-3">6.3 可复现与覆盖度</h3>
+
+  <p>并发压测最贵的浪费是：<strong>抓到了一次失败，但没法再抓到第二次</strong>。日志里只有一行断言失败，重跑不复现，两天后这个 issue 被标成 flaky test 关掉——真 bug 就这样被扔了。避免它只需要三条纪律：</p>
+
+  <table>
+    <thead><tr><th>纪律</th><th>具体做法</th><th>它救的是什么</th></tr></thead>
+    <tbody>
+      <tr><td>单一随机源</td><td>所有随机（延迟、操作序列、线程数、数据）都从一个 <code>TN_SEED</code> 派生；禁用 <code>random_device</code> 与读时间</td><td>让 <code>TN_SEED=12345 ./stress</code> 能重走同一条路</td></tr>
+      <tr><td>种子写在日志第一行</td><td>进程启动就打印，不等到失败时才打</td><td>失败时进程可能已经被 abort / OOM kill 了</td></tr>
+      <tr><td>用指纹量覆盖度</td><td><code>tn_schedule_fingerprint()</code> 把经过的注入点序列哈希起来，统计去重后的种数</td><td>把「跑了 N 次」换成「覆盖了 M 种交错」，才知道调参有没有用</td></tr>
+    </tbody>
+  </table>
+
+  <p>第三条是唯一能让压测调优脱离玄学的东西。加了一档 <code>sleep</code>、换了个注入点、限了核——覆盖度是从 4 种涨到 900 种还是原地不动？有这个数字，压测就变成一个可以优化的工程问题；没有它，只能凭「感觉这样更容易出问题」。</p>
+</section>
+
+<!-- ================================================================ §7 -->
+<section class="chapter" id="s7">
+  <div class="ch-head">
+    <div class="num">07</div>
+    <div class="t"><h2>确定性回放的位置</h2><p class="sub">它不负责发现问题，它负责把已经出现过一次的问题变成可以反复调试的</p></div>
+  </div>
+
+  <p>把 <code>rr</code> 放在验证体系里的哪个位置，是个容易搞错的问题。它的价值不在发现——<strong>在于把「三周出现一次」变成「随时能重放一次，而且每次一模一样」</strong>。抓到之后可以反向执行，从断言失败处倒着走回那个写坏了值的地方，这在并发问题上是量级上的效率差别。</p>
+
+  <table>
+    <thead><tr><th>性质</th><th>含义</th><th>推论</th></tr></thead>
+    <tbody>
+      <tr><td>录制时把线程串行到单核</td><td>靠记录调度切换点实现确定性</td><td><strong>只能探索单核可达的交错</strong>；真并行才出现的问题录不到</td></tr>
+      <tr><td>不模拟弱内存模型</td><td>录制回放的是实际发生的那一次执行</td><td>ARM 上的重排问题，rr 帮不上（矩阵里的 §6.2 才行）</td></tr>
+      <tr><td>串行化改变了时序</td><td>线程不再真正并行</td><td><strong>不能用来诊断性能问题</strong>：真伪共享、锁竞争的数据全变了</td></tr>
+      <tr><td><code>--chaos</code> 随机化调度</td><td>随机化线程优先级与时间片</td><td>专为让并发 bug 更容易出现而设计，是它唯一带一点「发现」能力的地方</td></tr>
+      <tr><td>开销 1.2–2×</td><td>远低于 TSan 的 5–15×</td><td>可以在夜间长跑里默认开着录，出事时手上就有录像</td></tr>
+    </tbody>
+  </table>
+
+  <p>最后一行是最实用的一条部署建议：<strong>让夜间压测在 <code>rr record --chaos</code> 下跑</strong>。开销低到可以承受，而一旦哪次断言失败了，手上直接就有一份能确定性回放的录像，省掉「先想办法复现」这个通常最耗时的环节。这也解释了为什么 §2.2 的矩阵里 rr 那一列写的是「可复现」而不是「覆盖」——它改变的是调试成本，不是检出能力。</p>
+
+  <div class="box tip"><code>rr</code> 的安装、<code>record</code> / <code>replay</code> 的具体用法、反向执行与 <code>--chaos</code> 的参数，在 <a href="./crash_debugging_guide.html">崩溃排查</a> 里已有展开，本文只讨论它在验证体系中的定位与边界。</div>
+</section>
+
+<!-- ================================================================ §8 -->
+<section class="chapter" id="s8">
+  <div class="ch-head">
+    <div class="num">08</div>
+    <div class="t"><h2>分层验证策略</h2><p class="sub">每层各自便宜、各自有洞，叠起来才有覆盖；最上面那一层是「别写它」</p></div>
+  </div>
+
+  <h3 id="s8-1">8.1 七层各花多少时间</h3>
+
+  <table>
+    <thead><tr><th>层</th><th>手段</th><th>覆盖什么</th><th>成本</th><th>频率</th></tr></thead>
+    <tbody>
+      <tr><td><strong>L0 设计</strong></td><td>能不能不写这段无锁代码</td><td>从源头消除整片风险</td><td>一次讨论</td><td>每次设计评审</td></tr>
+      <tr><td><strong>L1 模型检查</strong></td><td>GenMC / CDSChecker 穷举核心 30–80 行</td><td>五类缺陷全覆盖，含弱内存下的 reads-from</td><td><strong>2–5 人日</strong>（写探针比写实现久）</td><td>算法改动时</td></tr>
+      <tr><td><strong>L2 litmus</strong></td><td>herd7 / CppMem 结掉一个具体内存序问题</td><td>原子操作之间的顺序关系</td><td>10–30 分钟</td><td>每次有争论</td></tr>
+      <tr><td><strong>L3 TSan</strong></td><td>CI 上每个 PR 跑单测 + 集成测试</td><td>数据竞争，且只在跑到的交错上</td><td>CI 时间 ×5–15</td><td>每个 PR</td></tr>
+      <tr><td><strong>L4 压测矩阵</strong></td><td>x86 + ARM 真机、延迟注入、限核、长跑</td><td>概率性地捞漏网的，尤其内存序</td><td>一套夜间流水线</td><td>每晚</td></tr>
+      <tr><td><strong>L5 rr 回放</strong></td><td><code>rr record --chaos</code> 常开</td><td>不增加检出，把复现成本降到零</td><td>开销 1.2–2×</td><td>随 L4 一起</td></tr>
+      <tr><td><strong>L6 生产</strong></td><td>不变量断言、看门狗、崩溃聚合</td><td>兜住前面全漏掉的</td><td>少量运行时开销</td><td>持续</td></tr>
+    </tbody>
+  </table>
+
+  <p>这张表最反直觉的一格是 <strong>L1 的成本</strong>：2–5 人日，而且是每次算法改动都要付一遍。正因为这么贵，它<strong>不能作为默认要求</strong>——L1 只用在「自己手写的无锁结构」和「跨线程状态机」上。用 <code>std::mutex</code> 的普通并发代码，L3 + L4 就是合适的投入。</p>
+
+  <p>另一个容易被跳过的是 <strong>L2 只要十分钟</strong>。它的性价比在整张表里最高，却最常被省掉——因为「争论」在团队里不被当成一个需要工具的场合。把 herd7 装上、在仓库里存几个 <code>.litmus</code> 模板，可能是这七层里最容易拿到的收益。</p>
+
+  <h3 id="s8-2">8.2 什么时候承认不该用无锁</h3>
+
+  <p>L0 是整套策略里唯一能把成本降到零的一层，但它需要一个能在评审现场说得出口的判据。下面这条流程就是它：</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 960 366" role="img" aria-label="并发代码评审的决策流程：先判断有没有自己手写的原子或无锁代码，没有则 TSan 加压测矩阵即够；有则继续判断核心是否不超过八十行且已定型、团队是否有人能维护穷举测试、实测收益是否超过两倍，任一条不满足就改用互斥锁或现成无锁库，全部满足才值得写模型检查测试并进 CI">
+      <text class="tb" x="480" y="16" text-anchor="middle">评审现场用的判据：这段代码值不值得走 L1</text>
+
+      <rect class="box-a" x="330" y="28" width="300" height="34" rx="8"/>
+      <text class="ta" x="480" y="50" text-anchor="middle">一段并发代码进入评审</text>
+      <path class="ln-a" d="M480 62 L480 78"/>
+      <polygon class="ar-a" points="475,78 485,78 480,88"/>
+
+      <rect class="box-y" x="330" y="90" width="300" height="40" rx="8"/>
+      <text class="t" x="480" y="106" text-anchor="middle">① 有自己手写的原子操作</text>
+      <text class="t" x="480" y="123" text-anchor="middle">或无锁结构吗？</text>
+
+      <path class="ln-g" d="M630 110 L700 110"/>
+      <polygon class="ar-g" points="700,105 700,115 710,110"/>
+      <text class="tg" x="663" y="102" text-anchor="middle">否</text>
+      <rect class="box-g" x="712" y="86" width="228" height="66" rx="8"/>
+      <text class="tg" x="826" y="110" text-anchor="middle">L3 + L4 即够</text>
+      <text class="ts" x="826" y="132" text-anchor="middle">TSan + 压测矩阵，别过度投入</text>
+
+      <path class="ln-a" d="M480 130 L480 148"/>
+      <polygon class="ar-a" points="475,148 485,148 480,158"/>
+      <text class="ta" x="497" y="144">是</text>
+
+      <rect class="box-y" x="330" y="160" width="300" height="40" rx="8"/>
+      <text class="t" x="480" y="176" text-anchor="middle">② 核心 ≤ 80 行，且结构</text>
+      <text class="t" x="480" y="193" text-anchor="middle">已定型、不会每季度改？</text>
+
+      <path class="ln-a" d="M480 200 L480 218"/>
+      <polygon class="ar-a" points="475,218 485,218 480,228"/>
+      <text class="ta" x="497" y="214">是</text>
+
+      <rect class="box-y" x="330" y="230" width="300" height="40" rx="8"/>
+      <text class="t" x="480" y="246" text-anchor="middle">③ 有人能维护穷举测试，</text>
+      <text class="t" x="480" y="263" text-anchor="middle">且实测收益 &gt; 2×？</text>
+
+      <path class="ln-r" d="M330 180 L300 180 L300 130"/>
+      <polygon class="ar-r" points="295,130 305,130 300,120"/>
+      <path class="ln-r" d="M330 250 L300 250 L300 200"/>
+      <text class="tr" x="313" y="212">否</text>
+      <text class="tr" x="313" y="146">否</text>
+      <rect class="box-r" x="20" y="52" width="266" height="66" rx="8"/>
+      <text class="tr" x="153" y="76" text-anchor="middle">改用 mutex 或现成无锁库</text>
+      <text class="ts" x="153" y="98" text-anchor="middle">这不是妥协，是把维护成本算进来了</text>
+      <path class="ln-r" d="M300 120 L290 105"/>
+
+      <path class="ln-g" d="M480 270 L480 288"/>
+      <polygon class="ar-g" points="475,288 485,288 480,298"/>
+      <text class="tg" x="497" y="284">是</text>
+      <rect class="box-g" x="290" y="300" width="380" height="46" rx="8"/>
+      <text class="tg" x="480" y="320" text-anchor="middle">值得走 L1：写 GenMC 探针进 CI + 用 litmus 定内存序</text>
+      <text class="ts" x="480" y="338" text-anchor="middle">并把「改这段代码必须重跑探针」写进 README</text>
+
+      <text class="ts" x="480" y="362" text-anchor="middle">三个「否」指向同一个出口：<tspan class="tr">验证不起的并发代码，就不该以这种形式存在</tspan></text>
+    </svg>
+  </div>
+
+  <p>三个判据里最容易被忽略的是<strong>第二条的后半句</strong>。一个正确的无锁结构，只要它每季度都要加功能，L1 的成本就永远摊不薄——每次改动都得重写探针、重新论证内存序，而这份工作没人愿意反复做，结果就是探针慢慢过期，最后变成一个绿灯的装饰。<strong>「已定型」和「小」是同一个门槛的两半，缺一个都不行。</strong></p>
+
+  <p>第三条里那个 2× 也值得说清楚。低竞争下 <code>std::mutex</code> 几乎是免费的——快路径就是一次 CAS，压根不进内核。所以很多无锁改造的真实收益只有 10%–30%，却换来了一整条 L1 成本和一个只有原作者读得懂的算法。<strong>先量出来，再决定要不要接这份长期债务</strong>。这条判断的分量不比前面所有工具加起来轻：<em>省掉的验证工作，是唯一不会出错的验证工作</em>。</p>
+</section>
+
+<!-- ================================================================ §9 -->
+<section class="chapter" id="s9">
+  <div class="ch-head">
+    <div class="num">09</div>
+    <div class="t"><h2>面试题集（12 道）</h2><p class="sub">按难度分三档，先自测再对照</p></div>
+  </div>
+
+  <p class="qa-hint">点击每道题展开参考答案（先自测，再对照）。</p>
+
+  <h3 id="s9-1">9.1 基础（必答）</h3>
+  <ol class="qa-list">
+    <li><details class="qa">
+      <summary><span class="lvl basic">基础</span>TSan 报了绿灯，能说明什么、不能说明什么？</summary>
+      <div class="ans">
+        <p>能说明的只有一句：<strong>在它这次（或这几万次）实际跑过的交错上，没有找到数据竞争</strong>。TSan 是动态分析，观测对象是「这一次执行」——线程被调度成什么样、每个分支走了哪边，全是这一次的具体取值。</p>
+        <p>不能说明的是「这段代码没有并发缺陷」。两个线程各 10 步就有 184756 种交错，它采到的是其中一条。<strong>TSan 是存在性证据（报了就一定是真 bug，几乎无假阳性），不是全称证明。</strong>把它当全称证明用，是并发验证里最常见的方法论错误。</p>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl basic">基础</span>并发缺陷至少分成哪几类？为什么必须先分类？</summary>
+      <div class="ans">
+        <p>五类加一类活性：<strong>数据竞争</strong>（无同步的并发访问）、<strong>死锁 / 活锁</strong>、<strong>原子性违反</strong>（每次访问都同步了，但该在一个临界区里的操作被拆成两个）、<strong>顺序违反</strong>（依赖 A 在 B 之前但无机制保证）、<strong>内存序错误</strong>（<code>memory_order</code> 用得过弱）、以及<strong>活性问题</strong>（饥饿、丢通知、假唤醒）。</p>
+        <p>必须分类是因为工具的定义域各不相同。TSan 只在第一类上强；后三类里它有大片盲区。不分类就会出现「TSan 全绿所以并发是对的」这种推理——把一把工具的结论套到五种缺陷上。</p>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl basic">基础</span>「压测循环跑了一万次没问题」这个结论值多少钱？</summary>
+      <div class="ans">
+        <p>比直觉低得多，原因有两层。第一层是概率：竞争窗口典型宽度是几到几十纳秒，而线程切换的粒度是微秒到毫秒，单次命中概率量级在 10⁻⁶–10⁻⁹，一万次的检出概率也就千分之一。</p>
+        <p>第二层更关键：<strong>这一万次不是一万个独立样本</strong>。同一个二进制、同一台机器、同样的预热状态，调度器会收敛到高度重复的模式，用调度指纹去重后常常只有三五种不同交错。<strong>压测的价值来自交错的多样性，不来自循环次数</strong>，而多样性必须主动设计（注入延迟、限核、换架构），不会自己出现。</p>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl basic">基础</span>什么是 litmus test？它和普通单元测试的区别在哪？</summary>
+      <div class="ans">
+        <p>litmus test 是一个只有几行、多线程、无循环无输入的最小程序，加上一条关于最终状态的断言（<code>exists (1:r0=1 /\ 1:r1=0)</code>）。<code>herd7</code> 拿一份形式化的内存模型去<strong>穷举</strong>它在该模型下的所有允许结果，输出 <code>Never</code> / <code>Sometimes</code> / <code>Always</code>。</p>
+        <p>区别在结论的性质：单元测试跑一次得到「这次通过」，litmus + herd7 得到「标准允许 / 禁止这个结果」。所以它能直接结束「这两个 relaxed 之间要不要加 fence」这类争论——十几行文件、十分钟，比在 review 里争半小时便宜。</p>
+      </div>
+    </details></li>
+  </ol>
+
+  <h3 id="s9-2">9.2 中级（区分熟练度）</h3>
+  <ol class="qa-list" start="5">
+    <li><details class="qa">
+      <summary><span class="lvl mid">中级</span>为什么同一段代码在 x86 上跑半年没事，换到 ARM 服务器第二天就崩？</summary>
+      <div class="ans">
+        <p>因为 <strong>x86-TSO 只允许 <code>store→load</code> 一种重排</strong>，<code>load→load</code>、<code>load→store</code>、<code>store→store</code> 都不允许；ARMv8 四种全部允许。更直接的证据在指令层面：x86 上 <code>relaxed</code> 与 <code>acquire</code> 的 load 都编译成普通 <code>mov</code>，<code>relaxed</code> 与 <code>release</code> 的 store 也都是 <code>mov</code>——<strong>写错内存序，机器码完全一样</strong>。ARM64 上则分别是 <code>ldr</code> / <code>ldar</code>、<code>str</code> / <code>stlr</code>，写错了硬件真的会重排。</p>
+        <p>推论很硬：这类 bug 在 x86 上往往不是「概率低」而是<strong>概率为零</strong>，跑一亿次仍然零命中。所以「在 x86 上测不出来」这件事本身不携带任何关于正确性的信息，再多 x86 长跑也替代不了一台弱序真机。</p>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl mid">中级</span>什么情况下 TSan 能发现内存序错误，什么情况下按定义就发现不了？</summary>
+      <div class="ans">
+        <p>分水岭是<strong>有没有非原子访问参与</strong>。TSan 拦截原子操作、按 <code>memory_order</code> 维护 vector clock，判断的是 C++ 抽象机层面的 happens-before。</p>
+        <p><strong>能发现</strong>：payload 是非原子的。比如 <code>buf[t] = v;</code> 之后用 <code>relaxed</code> 发布 <code>tail</code>，消费者用 <code>relaxed</code> 读 <code>tail</code> 后读 <code>buf[t]</code>——<code>relaxed</code> 不建立 happens-before，<code>buf[t]</code> 上就是一对无序访问，TSan 报竞争。而且它不要求两次访问在时间上重叠，x86 上也能报。</p>
+        <p><strong>按定义发现不了</strong>：全部是原子操作。数据竞争的定义要求至少一个非原子访问，所以像 Dekker 那样两个线程各自 <code>want[me].store(1, relaxed)</code> 再读对方标志，无论内存序多弱都不构成竞争。凡是「正确性依赖原子操作之间顺序」的代码——无锁队列的 head/tail 协议、引用计数的最后一次递减、CAS 状态机、自旋锁本身——TSan 一格都覆盖不到。</p>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl mid">中级</span>什么是原子性违反？为什么它是覆盖率最低的一类？</summary>
+      <div class="ans">
+        <p>每次访问<strong>都</strong>正确加了锁，但<strong>临界区的边界划错了</strong>：本该在一个临界区里完成的若干操作被拆成了两个，中间被第三方修改插了进来。经典形态是 check-then-act：<code>if (m.count(k)) use(m[k]);</code> 两句各自加锁，中间 <code>k</code> 被别的线程删了。</p>
+        <p>覆盖率低是因为它<strong>同时躲过了两类工具</strong>：所有访问都有同步，TSan 按定义不报；语法上完全合法，静态检查也满意。唯一能抓它的是「不变量」——你得先能写出「什么状态是非法的」，才有东西可以检查。这也是模型检查那一列能覆盖它的原因：穷举执行加上一条状态断言。</p>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl mid">中级</span>设计一个并发压测，你会加哪些机制让它比「循环一万次」有效？</summary>
+      <div class="ans">
+        <p>三个方向。<strong>放大交错</strong>：在协议的真实窗口里（payload 写完还没发布、CAS 读到旧值还没写回、解锁了还没通知）插入注入点，随机执行 <code>yield</code> / 忙等 / 微秒级 <code>sleep</code>，把几纳秒的窗口撑到几十微秒。注入点必须由知道协议的人标注——全局无脑撒点会拖慢十倍却一个都落不进关键窗口，而且整段要用 <code>#ifdef</code> 保证生产构建里连一条指令都不剩。</p>
+        <p><strong>换机器</strong>：矩阵里必须有一台 aarch64 <strong>真机</strong>（QEMU 用户态模拟不算——访存顺序由宿主决定，宿主是 x86 就得到 x86 的顺序）；另外 <code>taskset</code> 限核和背景负载压调度器成本极低、收益常被低估。</p>
+        <p><strong>可复现</strong>：所有随机从一个 <code>TN_SEED</code> 派生、禁用 <code>random_device</code> 和读时间，种子在启动时就打印在日志第一行（失败时进程可能已被 abort）。再加一条：用调度指纹统计去重后覆盖了多少种交错，把「跑了 N 次」换成「覆盖了 M 种」——这是压测调优能脱离玄学的唯一办法。</p>
+      </div>
+    </details></li>
+  </ol>
+
+  <h3 id="s9-3">9.3 高级（体现深度）</h3>
+  <ol class="qa-list" start="9">
+    <li><details class="qa">
+      <summary><span class="lvl adv">高级</span>有界模型检查与无状态模型检查的区别是什么？各自的边界在哪？</summary>
+      <div class="ans">
+        <p><strong>有界模型检查（BMC，如 CBMC）</strong>把程序展开到 N 步，编码成一个逻辑公式交给 SAT/SMT 求解器。强项是输入可以是符号变量——不必给具体测试值就能覆盖全部取值组合；弱项是展开界限之外的行为完全看不见，公式规模也会爆。</p>
+        <p><strong>无状态模型检查（SMC，如 GenMC / CDSChecker / Nidhugg）</strong>不保存状态集合，而是反复真实执行，每次系统地更换一个调度决策和一组 <strong>reads-from</strong> 关系（弱内存模型下必须枚举「这个 load 从哪个 store 读」，光枚举交错不够），配合 DPOR 把等价交错折叠成一条。强项是直接跑真实代码、不需要抽象；弱项是测试必须封闭、确定、有界。</p>
+        <p>共同边界是组合数学：交错数 <code>(nk)!/(k!)ⁿ</code>，2 线程 × 5 步是 252，3 × 5 是 7.6×10⁵，4 × 5 超过 10¹⁰。DPOR 降的是底数不是指数。所以这类工具验证的永远是<strong>核心几十行</strong>，不是你的程序。</p>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl adv">高级</span>要把一个无锁队列改造成可被 GenMC 穷举的测试，你会做哪些取舍？</summary>
+      <div class="ans">
+        <p>四条，每条都是从「必须能穷举」推出来的。<strong>规模压到最小</strong>：2 个线程、每个 3–4 个原子操作，容量常量取 1 或 2（4 线程 × 5 步就是 10¹⁰ 条路径）。<strong>把正确性写成不变量断言</strong>：不丢不重不乱序、人数 ≤ 1、未发布的槽位读出来必须是初始值——没有断言的穷举只能发现崩溃和死锁。<strong>循环必须有界</strong>：CAS 重试循环在无状态模型检查下会产生无限执行，要用 <code>--unroll=N</code> 或改写成「最多重试两次」。<strong>切断外部世界</strong>：不 <code>malloc</code>、不 IO、不读时间、不用随机，输入写成固定常量。</p>
+        <p>最容易做砸的是第二条。<strong>断言的质量决定了整件事的价值</strong>——穷举一遍只得到「没崩」，信息量还不如一次 code review。写断言前要先能用一句话说出「这个结构的不变量是什么」；说不出来，说明还没想清楚要验证什么。</p>
+        <p>还要有成本预期：写一个够小、够封闭、断言够狠的探针，通常<strong>比写实现本身更花时间</strong>，2–5 人日是常态，而且每次算法改动都要付一遍。</p>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl adv">高级</span><code>rr</code> 在并发验证体系里应该放在什么位置？它的三个边界是什么？</summary>
+      <div class="ans">
+        <p>位置是<strong>定位而非发现</strong>：它把「三周出现一次」变成「随时能重放，每次一模一样」，还能反向执行，从断言失败处倒推到那个写坏值的地方。它改变的是调试成本，不是检出能力。</p>
+        <p>三个边界都源于「录制时把线程串行到单核、靠记录调度切换点实现确定性」：<strong>①</strong> 只能探索单核可达的交错，真并行才出现的问题录不到；<strong>②</strong> 不模拟弱内存模型，ARM 上的重排问题它帮不上，那要靠多架构矩阵；<strong>③</strong> 串行化改变了时序，<strong>不能用来诊断性能问题</strong>——伪共享、锁竞争的数据全变了。</p>
+        <p>最实用的部署方式是让夜间压测在 <code>rr record --chaos</code> 下跑：<code>--chaos</code> 随机化线程优先级与时间片，是它唯一带一点发现能力的地方；开销 1.2–2×（远低于 TSan 的 5–15×），低到可以常开，一旦断言失败手上直接就有录像，省掉最耗时的「先想办法复现」。</p>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl adv">高级</span>什么时候你会在评审里直接否掉一段无锁实现，让作者改用 <code>std::mutex</code>？</summary>
+      <div class="ans">
+        <p>三条判据，任一不满足就否。<strong>①核心超过 80 行，或结构还会持续演进</strong>——这两半是同一个门槛：一个正确的无锁结构如果每季度都加功能，模型检查的成本就永远摊不薄，每次改动都得重写探针、重新论证内存序，最后探针慢慢过期，变成一个绿灯的装饰。<strong>②团队里没人能维护那个穷举测试</strong>——只有原作者读得懂的算法，等于一个人一离职就无法安全修改的模块。<strong>③实测收益不到 2×</strong>——低竞争下 <code>std::mutex</code> 几乎免费，快路径就是一次 CAS、压根不进内核，很多无锁改造的真实收益只有 10%–30%。</p>
+        <p>三个「否」指向同一个出口：改用 mutex 或成熟的无锁库。这不是保守，是把<strong>长期维护成本算进了正确性预算</strong>。分层策略里成本最低的一层是 L0「能不能不写它」，因为省掉的验证工作是唯一不会出错的验证工作。</p>
+        <p>反过来，三条都满足时就该认真付这笔钱：写 GenMC 探针进 CI、用 litmus 把每个 <code>memory_order</code> 的选择钉死，并把「改这段代码必须重跑探针」写进 README——否则下一个人只会看到一段没有注释的 <code>relaxed</code>。</p>
+      </div>
+    </details></li>
+  </ol>
+</section>
+
+<div class="footer-nav">
+  <a href="./sanitizers_guide.html">⬅️ Sanitizers 实战</a>
+  <a href="./deadlock_debugging_guide.html">🔒 死锁排查</a>
+  <a href="./crash_debugging_guide.html">💥 崩溃排查</a>
+  <a href="../cpp/memory_model.html">🧠 C++ 内存模型</a>
+  <a href="perf_debug_directory.html">📚 目录</a>
+  <a href="../index.html">🏠 主页</a>
+</div>
+
+</main>
+</div>
+
+<footer>
+  <p>并发正确性验证方法论 — 缺陷分类与覆盖矩阵 · 模型检查与 litmus test · 交错放大与多架构矩阵 · 分层验证策略 — Kavin Tech Notes · 2026</p>
+</footer>
+
+<script>
+document.querySelectorAll('aside.toc nav a').forEach(a=>{a.addEventListener('click',e=>{e.preventDefault();const t=document.querySelector(a.getAttribute('href'));if(t)t.scrollIntoView({behavior:'smooth'})})});
+const obs=new IntersectionObserver(es=>{es.forEach(e=>{if(e.isIntersecting){document.querySelectorAll('aside.toc nav a').forEach(a=>a.classList.remove('active'));const l=document.querySelector(`aside.toc nav a[href="#${e.target.id}"]`);if(l)l.classList.add('active')}})},{threshold:.2});
+document.querySelectorAll('section[id]').forEach(s=>obs.observe(s));
+</script>
+
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

@@ -76,7 +76,7 @@
       <a class="tn-home" href="../index.html">← 主页</a>
       <a href="../cpp/modern_cpp_stl_directory.html">目录</a>
       <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
-      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 20 min</span>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 25 min</span>
       <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
     </div>
   </div>
@@ -92,7 +92,7 @@
       <li><a href="#s2">并发原语全景 + 选型决策图 ⭐</a></li>
       <li><a href="#s3">future / promise / async</a></li>
       <li><a href="#s4">shared_mutex 读写锁</a></li>
-      <li><a href="#s5">call_once / latch / barrier</a></li>
+      <li><a href="#s5">call_once / latch / barrier / semaphore</a></li>
       <li><a href="#s6">线程池完整实现</a>
         <ol>
           <li><a href="#s6-2">V2 submit（返回值 + 异常）</a></li>
@@ -127,7 +127,7 @@
       <div class="meta-row">
         <span class="pill red">核心难度 ★★★★★</span>
         <span class="pill cyan">面试出现率 高</span>
-        <span class="pill green">阅读时长 ~20 min</span>
+        <span class="pill green">阅读时长 ~25 min</span>
         <span class="pill amber">前置 std::thread · 内存模型</span>
       </div>
       <div class="meta">
@@ -356,6 +356,18 @@ std::<span class="fn">async</span>(std::launch::async, work2);
   <h3 id="s4-2">4.2 性能 — 反直觉</h3>
   <p>临界区极短时，shared_mutex 的 lock/unlock 开销会吃掉「多读并行」的收益。读一个 atomic 变量别上读写锁。</p>
 
+  <p>原因是<strong>共享锁本身要写一个共享计数器</strong>。N 个「只读」线程各自 <code>lock_shared()</code>，都在对同一条 cache line 做原子加减——从内存子系统看，这是 N 个<em>写者</em>在抢同一行，缓存行在各核之间来回弹跳。读得越并行，弹得越凶。</p>
+
+  <table>
+    <tr><th>临界区长度</th><th>谁更快</th><th>为什么</th></tr>
+    <tr><td>读一个 <code>int</code>（几纳秒）</td><td><code>atomic</code> 完胜</td><td>锁的开销是临界区的几十倍</td></tr>
+    <tr><td>几十纳秒</td><td><strong><code>mutex</code> 通常更快</strong></td><td>shared_mutex 的记账比 mutex 重，而并行度还来不及兑现</td></tr>
+    <tr><td>微秒级（查一棵树、算一段）</td><td><code>shared_mutex</code> 开始赢</td><td>并行读的收益终于盖过计数器争用</td></tr>
+    <tr><td>读极多写极少，且数据可整体替换</td><td>COW / RCU 更好</td><td>读者<strong>一个原子指令都不用写</strong>，见 §8 与 <a href="../cpp/safe_reclamation_guide.html">安全回收</a></td></tr>
+  </table>
+
+  <p>所以「读多写少就上读写锁」是个过度简化的口诀。真正的判据是<strong>临界区够不够长</strong>：短临界区下读写锁的记账成本收不回来，长临界区下才谈得上并行收益。拿不准就两种都测——这类差异在 <code>perf c2c</code> 里会直接显示为那条计数器 cache line 的高频 HITM。</p>
+
   <h3 id="s4-3">4.3 锁升级 / 降级 — 标准不支持</h3>
   <p>先放读锁再拿写锁，中间有窗口，必须重新检查条件（类似 DCLP）。两个线程同时升级会死锁。需要「先看再改」→ 一开始就拿写锁，或改成单 writer 队列。</p>
 
@@ -375,17 +387,14 @@ std::<span class="fn">async</span>(std::launch::async, work2);
   <div class="ch-head">
     <div class="num">05</div>
     <div class="t">
-      <h2>call_once</h2>
-      <p class="sub">latch · barrier · semaphore</p>
+      <h2>call_once / latch / barrier / semaphore</h2>
+      <p class="sub">一次性初始化与 C++20 的四件同步原语 · 以及它们底下的 atomic::wait</p>
     </div>
   </div>
 
   <h3 id="s5-1">5.1 std::call_once + once_flag</h3>
   <p>一次性初始化：<code>call_once</code> 能用，但 C++11 起<strong>函数内 static</strong>（Magic Static）更短，标准保证线程安全。异常时 static 会重试，<code>call_once</code> 失败则 flag 仍未置位、下次再调。</p>
 
-  <h3 id="s5-2">5.2 std::latch (C++20)</h3>
-  <h3 id="s5-3">5.3 std::barrier (C++20)</h3>
-  <h3 id="s5-4">5.4 counting_semaphore / binary_semaphore</h3>
   <table>
     <tr><th>原语</th><th>语义</th><th>典型场景</th></tr>
     <tr><td><code>latch</code></td><td>倒数一次，不能重置</td><td>等 N 个 worker 就绪再开下一阶段</td></tr>
@@ -393,7 +402,87 @@ std::<span class="fn">async</span>(std::launch::async, work2);
     <tr><td><code>counting_semaphore</code></td><td>有上限的许可证</td><td>限并发（连接数、飞行中 RPC）</td></tr>
     <tr><td><code>binary_semaphore</code></td><td>0/1 信号</td><td>简单通知；复杂谓词仍用 cv</td></tr>
   </table>
-  <p>这三件是同步原语，不是本页的模式课。业务层更常见的是线程池 + 有界队列。</p>
+
+  <p>这四件的共同价值是<strong>把「等待」这件事从 <code>mutex + condition_variable + 谓词</code> 的三件套里解放出来</strong>。用 cv 表达「等 8 个线程都到齐」要自己维护计数器、自己写 <code>while (cnt &lt; 8) cv.wait(lk)</code>、还要记得 <code>notify_all</code>；用 <code>latch</code> 就是两行，而且不可能写错谓词。</p>
+
+  <h3 id="s5-2">5.2 std::latch (C++20)</h3>
+
+  <p>一次性倒数门闩：<code>count_down()</code> 减一，<code>wait()</code> 阻塞到归零，<code>arrive_and_wait()</code> 是两者合一。<strong>没有 mutex、没有谓词、不会虚假唤醒</strong>，因为「计数归零」本身就是完整的条件。</p>
+
+  <p>两种用法方向相反，都很常见：<strong>收集</strong>（主线程 <code>latch done{N}</code>，每个 worker 完成时 <code>count_down()</code>，主线程 <code>wait()</code>）和<strong>起跑枪</strong>（<code>latch start{1}</code>，所有 worker 先 <code>wait()</code>，主线程准备好后 <code>count_down()</code> 一次放行——压测里要让 N 个线程尽量同时开始，这是标准做法）。</p>
+
+  <p>两个硬约束：<strong>不能重置</strong>，用完就废；<strong><code>count_down()</code> 的总次数超过初始值是 UB</strong>，不是「减到负数」也不是「忽略」。循环里每轮都要同步的场景，要的是下面的 <code>barrier</code> 而不是每轮 new 一个 latch。</p>
+
+  <h3 id="s5-3">5.3 std::barrier (C++20)</h3>
+
+  <p><code>barrier</code> 是可重复使用的集合点：所有参与者 <code>arrive_and_wait()</code>，最后一个到达时本<strong>阶段（phase）</strong>结束，计数自动重置、所有线程一起放行进入下一阶段。</p>
+
+  <p>它相对 latch 真正的增量是<strong>完成函数（completion function）</strong>：构造时传入的那个可调用体，会在<em>最后一个线程到达之后、任何线程被放行之前</em>执行，而且<strong>只执行一次、在单线程上下文里</strong>。这给了你一个天然安全的「阶段之间」窗口。</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 960 250" role="img" aria-label="barrier 的两个阶段时序：四个线程各自计算后在集合点等待，最后一个到达时触发完成函数在单线程上下文交换缓冲区，然后四个线程一起进入下一阶段">
+      <text class="tb" x="480" y="20" text-anchor="middle">barrier 的一个 phase：等齐 → 完成函数 → 一起放行</text>
+
+      <text class="ts" x="24" y="56">T1</text><text class="ts" x="24" y="86">T2</text>
+      <text class="ts" x="24" y="116">T3</text><text class="ts" x="24" y="146">T4</text>
+
+      <rect class="box-a" x="50" y="44" width="200" height="18" rx="4"/>
+      <rect class="box-a" x="50" y="74" width="290" height="18" rx="4"/>
+      <rect class="box-a" x="50" y="104" width="150" height="18" rx="4"/>
+      <rect class="box-a" x="50" y="134" width="240" height="18" rx="4"/>
+      <text class="ts" x="150" y="58" text-anchor="middle">计算</text>
+      <text class="ts" x="195" y="88" text-anchor="middle">计算（最慢的那个）</text>
+      <text class="ts" x="125" y="118" text-anchor="middle">计算</text>
+      <text class="ts" x="170" y="148" text-anchor="middle">计算</text>
+
+      <path class="ln-d" d="M250 44 L340 44 M200 104 L340 104 M290 134 L340 134"/>
+      <text class="ts" x="300" y="172" text-anchor="middle">先到的在等</text>
+
+      <path class="ln-r" d="M340 36 L340 160"/>
+      <text class="tr" x="340" y="188" text-anchor="middle">集合点</text>
+
+      <rect class="box-y" x="350" y="74" width="150" height="18" rx="4"/>
+      <text class="ts" x="425" y="88" text-anchor="middle">完成函数（单线程）</text>
+      <text class="ty" x="425" y="112" text-anchor="middle">交换缓冲 / 归约 / 判收敛</text>
+      <text class="ts" x="425" y="132" text-anchor="middle">此刻<tspan class="tg">无人在跑用户代码</tspan>，改共享状态是安全的</text>
+
+      <path class="ln-g" d="M500 98 L520 98"/>
+      <rect class="box-g" x="520" y="44" width="180" height="18" rx="4"/>
+      <rect class="box-g" x="520" y="74" width="180" height="18" rx="4"/>
+      <rect class="box-g" x="520" y="104" width="180" height="18" rx="4"/>
+      <rect class="box-g" x="520" y="134" width="180" height="18" rx="4"/>
+      <text class="tg" x="610" y="172" text-anchor="middle">下一 phase 一起开始</text>
+
+      <text class="ts" x="480" y="216" text-anchor="middle">代价：整组的节奏被<tspan class="tr">最慢的那个线程</tspan>决定——负载不均时 barrier 会把不均匀放大成串行</text>
+      <text class="ts" x="480" y="238" text-anchor="middle">线程要提前退出，用 <tspan class="tm">arrive_and_drop()</tspan> 把自己从后续 phase 的参与者里摘掉，否则剩下的人永远等不齐</text>
+    </svg>
+  </div>
+
+  <h3 id="s5-4">5.4 counting_semaphore / binary_semaphore</h3>
+
+  <p>信号量是「许可证池」：<code>acquire()</code> 取一张（没有就等），<code>release()</code> 还一张。<code>counting_semaphore&lt;N&gt;</code> 的模板参数是<strong>编译期上限</strong>，不是初始值——初始值在构造函数里给。</p>
+
+  <div class="box danger">信号量和 mutex 看起来都能「保护临界区」，但它<strong>没有所有者概念</strong>：A 线程 <code>acquire</code>、B 线程 <code>release</code> 是完全合法的。这正是它能做许可证的原因，也正是<strong>不能拿它当 mutex 用</strong>的原因——没有所有权就没有优先级继承（实时系统里会优先级反转）、没有递归检测、也没有「谁持有这把锁」可供调试器显示。要互斥就用 <code>mutex</code>，要限并发才用信号量。</div>
+
+  <h3 id="s5-5">5.5 atomic 的 wait / notify：前面几个都是拿它搭的</h3>
+
+  <p>C++20 给<strong>所有</strong> <code>std::atomic&lt;T&gt;</code> 加了 <code>wait(old)</code> / <code>notify_one()</code> / <code>notify_all()</code>。语义是：<em>如果当前值仍等于 <code>old</code> 就阻塞</em>，直到别人改了值并 notify。</p>
+
+  <pre><code>std::atomic&lt;bool&gt; ready{false};
+
+// 消费者：不需要 mutex，也不需要 condition_variable
+while (!ready.load(std::memory_order_acquire))
+    ready.wait(false, std::memory_order_acquire);   // 值还是 false 就睡
+
+// 生产者
+ready.store(true, std::memory_order_release);
+ready.notify_all();</code></pre>
+
+  <p>实现上它就是 Linux 的 <code>futex</code> / Windows 的 <code>WaitOnAddress</code>，和 <code>mutex</code>、<code>condition_variable</code> 走同一扇门（见 <a href="../cpp/concurrency_deep.html#s10">并发深入 §10</a>），通常还会先自旋若干次再进内核。<code>latch</code>、<code>barrier</code>、<code>semaphore</code> 的标准库实现基本都建立在它之上。</p>
+
+  <p>什么时候直接用它：<strong>条件就是「某一个原子变量变了」</strong>的时候。这种场景用 cv 要额外背一个 mutex，而 mutex 在这里保护不了任何东西——它只是 cv 的语法要求。反过来，条件涉及多个变量或复杂谓词时，仍然老老实实用 <code>mutex + cv</code>：那个 mutex 是用来让「检查谓词」和「进入等待」变成一个原子步骤的，不能省。</p>
+
+  <p>注意外面那层 <code>while</code> 不能省：<code>wait</code> 只保证「值变了会醒」，不保证「醒来时值是你要的」——中间可能又被改回去，也允许实现层面的伪唤醒。</p>
 </section>
 
 <!-- ================================================================
@@ -916,6 +1005,29 @@ std::<span class="fn">async</span>(std::launch::async, work2);
 
   <h3 id="s11c-4">11c.4 组合算子</h3>
   <p><code>then</code> 变换；<code>let_value</code> 动态下一段；<code>when_all</code> / <code>when_any</code>；<code>upon_error</code> / <code>upon_stopped</code>；<code>transfer</code> 换调度器；<code>bulk</code> 并行扇出。</p>
+
+  <h3 id="s11c-4b">11c.4b completion signatures：这条管道的类型契约</h3>
+
+  <p>上面那些算子能拼起来，靠的是每个 sender 都在<strong>类型层面</strong>声明了「我会以哪几种方式结束」。这份声明叫 <strong>completion signatures</strong>，是 S/R 与 future 最本质的区别——future 只有「值或异常」两种结局，而 sender 把三种通道都写进了类型：</p>
+
+  <table>
+    <tr><th>通道</th><th>签名形态</th><th>含义</th></tr>
+    <tr><td><code>set_value</code></td><td><code>set_value_t(int, std::string)</code></td><td>成功，可以带<strong>任意个</strong>值（future 只能带一个）</td></tr>
+    <tr><td><code>set_error</code></td><td><code>set_error_t(std::exception_ptr)</code>、<code>set_error_t(std::error_code)</code></td><td>失败。<strong>错误类型是管道类型的一部分</strong>，可以完全不用异常</td></tr>
+    <tr><td><code>set_stopped</code></td><td><code>set_stopped_t()</code></td><td>被取消。<strong>它不是错误</strong>——这是 S/R 的一个关键设计决定</td></tr>
+  </table>
+
+  <p>把取消单独做成第三条通道，而不是塞进 <code>set_error</code>，带来两个实际好处：取消<strong>不需要构造异常对象</strong>，因此在热路径上是免费的；而且 <code>upon_error</code> 的处理逻辑不会被取消误触发——「服务正在优雅关闭」和「读磁盘失败」不该走同一段补偿代码。</p>
+
+  <p>类型契约还意味着<strong>接错了是编译错误</strong>：把一个可能 <code>set_error(error_code)</code> 的 sender 接到只会处理 <code>exception_ptr</code> 的消费者上，编译期就挡住了。代价是错误信息会很长——这是所有重类型设计的共同账单。</p>
+
+  <h3 id="s11c-4c">11c.4c 取消是一棵树，不是一个 flag</h3>
+
+  <p><code>jthread</code> 的 <code>stop_token</code> 是<strong>一个</strong>令牌，你得自己传给每个需要它的地方。S/R 的取消是<strong>结构化</strong>的：子操作的 stop token 由父操作提供，于是取消沿着组合结构自动向下传播。</p>
+
+  <p>这正是「结构化并发」里「结构化」三个字的含义——<strong>异步操作的生命周期严格嵌套在它的父操作里</strong>，就像局部变量的生命周期嵌套在作用域里。具体后果是：<code>when_all</code> 里任何一个分支失败，其余分支<strong>自动收到 <code>set_stopped</code></strong>，而且 <code>when_all</code> 保证在自己完成之前所有子操作都已结束。父操作不可能先于子操作析构，那类「回调回来时对象已经没了」的经典竞态从结构上被消掉了。</p>
+
+  <div class="box danger">代价要说清楚：取消是<strong>协作式</strong>的。一个不检查 stop token 的长循环、或者一次阻塞的 <code>read()</code> 系统调用，照样会把整棵树卡住。S/R 消除的是「取消信号传不到」这类<em>结构性</em>问题，不是「代码不响应取消」这类<em>实现</em>问题。接入阻塞 API 时仍然要自己做超时或可中断的 IO。</div>
 
   <h3 id="s11c-5">11c.5 并行从属</h3>
   <p><code>when_all(read_a, read_b) | transfer(cpu) | then(merge)</code>。别在这里再贴一份 then 链，协程线性写法见下一章。</p>

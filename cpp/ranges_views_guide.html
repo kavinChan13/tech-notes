@@ -1,0 +1,1168 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>C++20/23 Ranges 与 views 深入 · view 的 O(1) 约束 / dangling 与 borrowed_range / 惰性的真实代价 / 自定义 adaptor</title>
+<meta name="description" content="C++20/23 Ranges 深入：view 概念为什么把移动与析构的复杂度写进语义要求，owning_view 为什么迟到；borrowed_range 与 std::ranges::dangling 如何把悬垂迭代器变成编译错误；filter 的 begin() 是 O(n)、transform 在 filter 之后被重复求值的真实代价；range adaptor closure 与 operator| 的两条规则、用 view_interface 自己写一个 adaptor；迭代器类别的退化对 ranges::sort 意味着什么；编译时间、报错、调试与抽象惩罚这些工程账单，以及 C++23 的 ranges::to / zip / enumerate / chunk / slide / join_with">
+<!-- tn-social:v1 -->
+<link rel="canonical" href="https://kavinchan13.github.io/tech-notes/cpp/ranges_views_guide.html">
+<link rel="icon" type="image/svg+xml" href="../assets/favicon.svg">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0b0d12" media="(prefers-color-scheme: dark)">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="Kavin Tech Notes">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:url" content="https://kavinchan13.github.io/tech-notes/cpp/ranges_views_guide.html">
+<meta property="og:title" content="C++20/23 Ranges 与 views 深入 · view 的 O(1) 约束 / dangling 与 borrowed_range / 惰性的真实代价 / 自定义 adaptor">
+<meta property="og:description" content="C++20/23 Ranges 深入：view 概念为什么把移动与析构的复杂度写进语义要求，owning_view 为什么迟到；borrowed_range 与 std::ranges::dangling 如何把悬垂迭代器变成编译错误；filter 的 begin() 是 O(n)、transform 在 filter 之后被重复求值的真实代价；range adaptor closure 与 operator| 的两条规则、用 view_interface 自己写一个 adaptor；迭代器类别的退化对 ranges::sort 意味着什么；编译时间、报错、调试与抽象惩罚这些工程账单，以及 C++23 的 ranges::to / zip / enumerate / chunk / slide / join_with">
+<meta property="og:image" content="https://kavinchan13.github.io/tech-notes/assets/og-cover.jpg">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="628">
+<meta property="og:image:alt" content="技术笔记 · 系统 / 架构 / 工程">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="C++20/23 Ranges 与 views 深入 · view 的 O(1) 约束 / dangling 与 borrowed_range / 惰性的真实代价 / 自定义 adaptor">
+<meta name="twitter:description" content="C++20/23 Ranges 深入：view 概念为什么把移动与析构的复杂度写进语义要求，owning_view 为什么迟到；borrowed_range 与 std::ranges::dangling 如何把悬垂迭代器变成编译错误；filter 的 begin() 是 O(n)、transform 在 filter 之后被重复求值的真实代价；range adaptor closure 与 operator| 的两条规则、用 view_interface 自己写一个 adaptor；迭代器类别的退化对 ranges::sort 意味着什么；编译时间、报错、调试与抽象惩罚这些工程账单，以及 C++23 的 ranges::to / zip / enumerate / chunk / slide / join_with">
+<meta name="twitter:image" content="https://kavinchan13.github.io/tech-notes/assets/og-cover.jpg">
+<!-- /tn-social:v1 -->
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<style>
+  html { scroll-behavior: smooth; }
+  body { line-height: 1.75; min-height: 100vh; overflow-x: hidden; }
+  main { min-width: 0; }
+  pre { font-family: var(--mono); font-size: .85rem; line-height: 1.6; }
+  code { font-family: var(--mono); }
+  svg text { font-family: var(--sans); }
+  table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: .9rem; }
+  th, td { border: 1px solid var(--border); padding: .55rem .85rem; text-align: left; vertical-align: top; }
+  th { background: var(--bg-card-2); color: var(--accent); }
+  tr:nth-child(even) { background: color-mix(in srgb, var(--text) 3%, transparent); }
+  .analogy::before { content: "🏠 生活类比 · "; color: var(--accent-4); font-weight: 700; font-size: .86rem; }
+  .def > strong:first-child { color: var(--accent); }
+  .fig { margin: 22px 0; overflow-x: auto; }
+  .fig svg { max-width: 100%; height: auto; }
+  .fig .box   { fill: var(--bg-card-2); stroke: var(--border-2); stroke-width: 1.2; }
+  .fig .box-a { fill: color-mix(in srgb, var(--accent) 14%, var(--bg-card)); stroke: var(--accent); stroke-width: 1.2; }
+  .fig .box-g { fill: color-mix(in srgb, var(--accent-3) 14%, var(--bg-card)); stroke: var(--accent-3); stroke-width: 1.2; }
+  .fig .box-p { fill: color-mix(in srgb, var(--accent-2) 14%, var(--bg-card)); stroke: var(--accent-2); stroke-width: 1.2; }
+  .fig .box-y { fill: color-mix(in srgb, var(--accent-4) 14%, var(--bg-card)); stroke: var(--accent-4); stroke-width: 1.2; }
+  .fig .box-r { fill: color-mix(in srgb, var(--danger) 14%, var(--bg-card)); stroke: var(--danger); stroke-width: 1.2; }
+  .fig .t   { fill: var(--text); font-size: 12px; }
+  .fig .tb  { fill: var(--text); font-size: 12.5px; font-weight: 700; }
+  .fig .ts  { fill: var(--text-dim); font-size: 10.5px; }
+  .fig .tm  { fill: var(--text-dim); font-size: 10.5px; font-family: var(--mono); }
+  .fig .ta  { fill: var(--accent); font-size: 12px; font-weight: 700; }
+  .fig .tg  { fill: var(--accent-3); font-size: 11px; font-weight: 600; }
+  .fig .tp  { fill: var(--accent-2); font-size: 11px; font-weight: 600; }
+  .fig .ty  { fill: var(--accent-4); font-size: 11px; font-weight: 600; }
+  .fig .tr  { fill: var(--danger); font-size: 11px; font-weight: 600; }
+  .fig .ln  { stroke: var(--border-2); stroke-width: 1.4; fill: none; }
+  .fig .ln-a{ stroke: var(--accent); stroke-width: 1.6; fill: none; }
+  .fig .ln-g{ stroke: var(--accent-3); stroke-width: 1.6; fill: none; }
+  .fig .ln-r{ stroke: var(--danger); stroke-width: 1.6; fill: none; stroke-dasharray: 5 4; }
+  .fig .ln-d{ stroke: var(--text-mute); stroke-width: 1.2; fill: none; stroke-dasharray: 4 3; }
+  .fig .ar-a{ fill: var(--accent); }
+  .fig .ar-g{ fill: var(--accent-3); }
+  .fig .ar-r{ fill: var(--danger); }
+</style>
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="tn-shell-overlay has-topnav">
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="modern_cpp_stl_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 35 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="progress" id="progress"></div>
+<div class="layout">
+  <aside class="toc">
+    <h2>Ranges 与 views</h2>
+    <nav>
+      <ol>
+        <li><a href="#s1">概念层次：range 之上的那层约束</a>
+          <ol>
+            <li><a href="#s1-1">1.1 range 只要求有 begin 和 end</a></li>
+            <li><a href="#s1-2">1.2 view 的那条复杂度约束</a></li>
+            <li><a href="#s1-3">1.3 owning_view 为什么迟到</a></li>
+          </ol>
+        </li>
+        <li><a href="#s2">引用语义与 dangling</a>
+          <ol>
+            <li><a href="#s2-1">2.1 三种持有方式，三种结局</a></li>
+            <li><a href="#s2-2">2.2 borrowed_range 到底在断言什么</a></li>
+            <li><a href="#s2-3">2.3 dangling：把 UB 变成编译错误</a></li>
+          </ol>
+        </li>
+        <li><a href="#s3">惰性求值的真实代价</a>
+          <ol>
+            <li><a href="#s3-1">3.1 filter 的 begin() 是 O(n)</a></li>
+            <li><a href="#s3-2">3.2 每次解引用都重算一遍</a></li>
+            <li><a href="#s3-3">3.3 什么时候惰性反而更慢</a></li>
+          </ol>
+        </li>
+        <li><a href="#s4">管道是怎么拼起来的</a>
+          <ol>
+            <li><a href="#s4-1">4.1 adaptor 对象与 closure 对象</a></li>
+            <li><a href="#s4-2">4.2 operator| 只有两条规则</a></li>
+            <li><a href="#s4-3">4.3 自己写一个 adaptor</a></li>
+          </ol>
+        </li>
+        <li><a href="#s5">迭代器类别的退化</a>
+          <ol>
+            <li><a href="#s5-1">5.1 filter 为什么到不了 random_access</a></li>
+            <li><a href="#s5-2">5.2 两套类别同时存在</a></li>
+            <li><a href="#s5-3">5.3 这对算法意味着什么</a></li>
+          </ol>
+        </li>
+        <li><a href="#s6">工程代价</a>
+          <ol>
+            <li><a href="#s6-1">6.1 编译时间与报错长度</a></li>
+            <li><a href="#s6-2">6.2 调试器里的黑盒</a></li>
+            <li><a href="#s6-3">6.3 抽象惩罚与「什么时候写 for」</a></li>
+          </ol>
+        </li>
+        <li><a href="#s7">C++23 的补充</a>
+          <ol>
+            <li><a href="#s7-1">7.1 ranges::to：链条的终点</a></li>
+            <li><a href="#s7-2">7.2 zip / enumerate / chunk / slide</a></li>
+            <li><a href="#s7-3">7.3 join_with 与其余</a></li>
+          </ol>
+        </li>
+        <li><a href="#s8">面试题集（12 道）</a>
+          <ol>
+            <li><a href="#s8-1">8.1 基础</a></li>
+            <li><a href="#s8-2">8.2 中级</a></li>
+            <li><a href="#s8-3">8.3 高级</a></li>
+          </ol>
+        </li>
+      </ol>
+    </nav>
+  </aside>
+
+<main>
+
+  <header class="hero">
+    <div class="badge">Ranges · views · C++20 / C++23 · 2026</div>
+    <h1>Ranges 与 views 深入</h1>
+    <p class="sub">Ranges 的教学材料几乎都停在「<code>v | filter | transform</code> 好漂亮」这一层。但真正决定你能不能在生产代码里用它的，是<strong>下面三件事</strong>：view 概念把<strong>复杂度</strong>写进了语义要求（于是 <code>owning_view</code> 要等两年才补上）；引用语义让一半的悬垂问题被 <code>dangling</code> 挡成编译错误、另一半照旧是 UB；惰性求值把一次遍历的代价重新分配了——有时更快，有时把同一个函数算了两遍。</p>
+    <div class="meta-row">
+      <span class="pill red">核心难度 ★★★★☆</span>
+      <span class="pill cyan">踩坑密度 高</span>
+      <span class="pill green">阅读时长 ~35 min</span>
+      <span class="pill amber">前置 迭代器 · 概念 · 模板</span>
+    </div>
+    <div class="meta">
+      <span>view 的 O(1) 约束</span>
+      <span>borrowed_range / dangling</span>
+      <span>重复求值与类别退化</span>
+      <span>自定义 adaptor</span>
+      <span>C++23 新增</span>
+    </div>
+  </header>
+
+<!-- ================================================================ §1 -->
+<section class="chapter" id="s1">
+  <div class="ch-head">
+    <div class="num">01</div>
+    <div class="t"><h2>概念层次：range 之上的那层约束</h2><p class="sub">「什么东西能当 view」这个问题的答案，编译器其实检查不了</p></div>
+  </div>
+
+  <p>Ranges 库表面上是一堆 <code>views::xxx</code>，骨架却是四五个互相叠加的 concept。搞不清这几个 concept 的关系，后面所有的坑都会显得像是随机的：为什么这个能进管道那个不能、为什么 <code>ranges::find</code> 有时返回不了迭代器、为什么 <code>const auto&amp;</code> 接一个 filter 就编译不过。</p>
+
+  <div class="analogy">把容器想成<strong>一本相册</strong>，view 就是<strong>一副眼镜</strong>。眼镜不复制任何照片，只改变你翻这本相册的方式（跳过没对焦的、给每张加个滤镜）。所以眼镜必须<strong>轻</strong>——随手能递给别人、能装进口袋、能戴两副叠着看。一件「戴上要花十分钟、摘下还得再花十分钟」的东西，无论效果多好都不是眼镜。<code>view</code> 概念里那条复杂度要求，就是在给「轻」下一个可执行的定义。</div>
+
+  <h3 id="s1-1">1.1 range 只要求有 begin 和 end</h3>
+
+  <div class="def"><strong>range</strong>：<code>std::ranges::range&lt;T&gt;</code> 只要求 <code>ranges::begin(t)</code> 和 <code>ranges::end(t)</code> 合法，且前者返回迭代器、后者返回一个能与之比较的 <strong>sentinel</strong>。注意 end 返回的不必是同类型迭代器——这一条松动是 Ranges 相对旧 STL 最大的结构性改动，它让「以 <code>'\0'</code> 结尾」「以谓词结尾」这类无界序列第一次成为一等公民。</div>
+
+  <p>在 <code>range</code> 之上，标准又叠了几层。它们不是继承关系，而是各自加一条独立的要求：</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 960 330" role="img" aria-label="range 概念家族阶梯图：range 只要求有 begin 与 end，sized_range 额外要求常数时间的 size，borrowed_range 断言迭代器可以活得比 range 对象本身更久，view 要求移动构造与析构的代价与元素个数无关，viewable_range 则是管道入口的条件。图末强调 view 的复杂度要求属于语义要求，编译器无法验证，只能由作者通过 enable_view 宣称" style="min-width:880px;height:auto">
+      <text class="tb" x="480" y="20" text-anchor="middle">五个 concept，五条互相独立的要求</text>
+
+      <rect class="box" x="20" y="34" width="180" height="46" rx="7"/>
+      <text class="tb" x="110" y="54" text-anchor="middle">range</text>
+      <text class="ts" x="110" y="70" text-anchor="middle">一切的地基</text>
+      <text class="t" x="220" y="52">有 <tspan class="tm">begin()</tspan> 和 <tspan class="tm">end()</tspan>，end 可以是 sentinel</text>
+      <text class="ts" x="220" y="70">vector · list · span · istream_view · C 数组</text>
+
+      <rect class="box-p" x="20" y="90" width="180" height="46" rx="7"/>
+      <text class="tp" x="110" y="110" text-anchor="middle">sized_range</text>
+      <text class="ts" x="110" y="126" text-anchor="middle">能问长度</text>
+      <text class="t" x="220" y="108"><tspan class="tm">ranges::size(r)</tspan> 合法<tspan class="tp">且是常数时间</tspan></text>
+      <text class="ts" x="220" y="126">forward_list 不满足；filter_view 也不满足（要扫才知道）</text>
+
+      <rect class="box-g" x="20" y="146" width="180" height="46" rx="7"/>
+      <text class="tg" x="110" y="166" text-anchor="middle">borrowed_range</text>
+      <text class="ts" x="110" y="182" text-anchor="middle">迭代器可以外带</text>
+      <text class="t" x="220" y="164">range 对象死了，它的<tspan class="tg">迭代器依然有效</tspan></text>
+      <text class="ts" x="220" y="182">左值 range 自动满足；右值要靠 <tspan class="tm">enable_borrowed_range</tspan> 显式开</text>
+
+      <rect class="box-a" x="20" y="202" width="180" height="46" rx="7"/>
+      <text class="ta" x="110" y="222" text-anchor="middle">view</text>
+      <text class="ts" x="110" y="238" text-anchor="middle">轻到能随手传</text>
+      <text class="t" x="220" y="220"><tspan class="tm">range &amp;&amp; movable &amp;&amp; enable_view</tspan> + <tspan class="ta">复杂度要求</tspan></text>
+      <text class="ts" x="220" y="238">移动构造 O(1)；析构的代价不随元素个数无限增长</text>
+
+      <rect class="box-y" x="20" y="258" width="180" height="46" rx="7"/>
+      <text class="ty" x="110" y="278" text-anchor="middle">viewable_range</text>
+      <text class="ts" x="110" y="294" text-anchor="middle">管道的入口条件</text>
+      <text class="t" x="220" y="276">能被 <tspan class="tm">|</tspan> 接受：<tspan class="ty">左值容器</tspan> / <tspan class="ty">可移动的右值容器</tspan> / <tspan class="ty">已经是 view</tspan></text>
+      <text class="ts" x="220" y="294">右值 <tspan class="tm">initializer_list</tspan> 被<tspan class="tr">显式排除</tspan>——它的底层数组是临时对象</text>
+
+      <text class="tr" x="480" y="322" text-anchor="middle">关键：只有前两条能被编译器验证。「O(1)」是语义要求，concept 检查不了 —— 见 §1.2</text>
+    </svg>
+  </div>
+
+  <table>
+    <thead><tr><th>concept</th><th>加了什么</th><th>典型满足者</th><th>典型不满足者</th></tr></thead>
+    <tbody>
+      <tr><td><code>range</code></td><td>有 <code>begin</code>/<code>end</code></td><td>所有容器、C 数组、<code>span</code></td><td>裸指针（没有 end）</td></tr>
+      <tr><td><code>sized_range</code></td><td><code>size()</code> 是常数时间</td><td><code>vector</code> · <code>span</code> · <code>iota_view</code>（有界）</td><td><code>forward_list</code> · <code>filter_view</code></td></tr>
+      <tr><td><code>common_range</code></td><td><code>begin</code> 与 <code>end</code> 同类型</td><td>所有旧 STL 容器</td><td><code>take_view</code> 套无界 range</td></tr>
+      <tr><td><code>borrowed_range</code></td><td>迭代器可以活得比 range 久</td><td><code>string_view</code> · <code>span</code> · <code>subrange</code> · <code>iota_view</code></td><td><code>vector</code>（右值）· <code>filter_view</code> · <code>transform_view</code></td></tr>
+      <tr><td><code>view</code></td><td>移动 / 析构的复杂度约束</td><td><code>ref_view</code> · <code>filter_view</code> · <code>owning_view</code></td><td><code>vector</code> · <code>string</code>（拷贝是 O(n)）</td></tr>
+    </tbody>
+  </table>
+
+  <h3 id="s1-2">1.2 view 的那条复杂度约束</h3>
+
+  <div class="def"><strong>view</strong>：<code>view&lt;T&gt;</code> 的语法部分只有三项——<code>range&lt;T&gt;</code>、<code>movable&lt;T&gt;</code>、<code>enable_view&lt;T&gt;</code>。真正的门槛在<strong>语义要求</strong>：移动构造必须是 O(1)；如果可拷贝，拷贝构造也必须是 O(1)；从一个含 M 个元素的 view 复制/移动出 N 个对象，这 N 个对象的析构总代价是 O(N+M)。</div>
+
+  <p>为什么要把复杂度写进概念？因为管道的每一步都在<strong>按值传递并存储</strong>整条链：<code>v | filter(p) | transform(f)</code> 的结果是 <code>transform_view&lt;filter_view&lt;ref_view&lt;vector&lt;int&gt;&gt;, P&gt;, F&gt;</code>，外层持有内层的一份<em>副本</em>。如果某一层的拷贝是 O(n)，那么「拼一条管道」这个动作本身就变成了 O(n) —— 而它在源码里长得像零成本的语法糖。这条约束的存在，正是为了让「管道拼装是免费的」这句话在标准里有依据，而不只是一个惯例。</p>
+
+  <div class="box tip"><strong>但编译器验证不了它。</strong><code>view&lt;T&gt;</code> 里的 <code>enable_view&lt;T&gt;</code> 是一个变量模板，默认值是「T 是否派生自 <code>view_base</code> 或 <code>view_interface</code>」。也就是说，<strong>「我是一个 view」是作者宣称的，不是编译器测出来的</strong>。你完全可以让一个每次拷贝都要 <code>memcpy</code> 一兆内存的类型满足 <code>view</code>，编译器一句话都不会说，只是所有依赖「管道拼装免费」的代码都会静默变慢。这是整个 Ranges 设计里最需要靠自觉的一处。</div>
+
+  <p>顺带解释了一个很多人碰到过的历史现象：C++20 刚发布时 <code>view</code> 还要求 <code>semiregular</code>（可默认构造 + 可拷贝），于是所有 view 都被迫要有默认构造函数，捕获了引用的 lambda 就没法直接塞进 <code>views::filter</code>。后来 P2325 把要求降到 <code>movable</code> 并作为 C++20 的缺陷报告追溯生效——<strong>「view 必须能默认构造」从一开始就是个错误的要求，它是为了满足旧 STL 的 <code>Iterator</code> 传统而不是为了满足任何真实需要</strong>。</p>
+
+  <h3 id="s1-3">1.3 owning_view 为什么迟到</h3>
+
+  <p>现在回头看那条复杂度要求，会发现它顺手禁掉了一整类东西：<strong>一个 view 不能拥有它的元素</strong>。因为析构 n 个元素的代价一定随 n 增长，而最初的措辞要求析构与元素个数无关。</p>
+
+  <p>后果是 C++20 刚定稿时，<code>get_vector() | views::filter(pred)</code> 这行代码<strong>根本编译不过</strong>——右值容器既不是 view（拷贝 O(n)），又不是 <code>borrowed_range</code>，于是不满足 <code>viewable_range</code>。这是一个刻意的编译错误：宁可拒绝，也不要生成一个指向已死临时对象的 view。</p>
+
+  <p>P2415（<em>What is a view?</em>）改的正是这一句：把析构那条要求松成「从一个含 M 个元素的 view 复制/移动出 N 个对象，这 N 个对象的析构总代价是 O(N+M)」。这句话读起来绕，意思其实很直白——<strong>允许有一个 view 真正拥有那 M 个元素，只要它的<em>副本</em>不各自再拥有一份</strong>。<code>owning_view</code> 于是成立：它 move-only（删掉了拷贝），所以永远只有一份所有权。</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 960 300" role="img" aria-label="views::all 面对三种输入时产出的三种包装：左值容器包成 ref_view 只存一个指针，右值可移动容器包成 owning_view 把容器整体移入自己内部因此只能移动不能拷贝，已经是 view 的原样透传。下方标注 P2415 之前右值容器这一路是编译错误" style="min-width:880px;height:auto">
+      <text class="tb" x="480" y="20" text-anchor="middle"><tspan class="tm">views::all_t</tspan>：管道入口处，你的 range 被包成了什么</text>
+
+      <rect class="box" x="20" y="38" width="200" height="66" rx="8"/>
+      <text class="t" x="120" y="62" text-anchor="middle">左值容器</text>
+      <text class="tm" x="120" y="82" text-anchor="middle">vector&lt;int&gt; v;  v | …</text>
+      <text class="ts" x="120" y="98" text-anchor="middle">你保证它活得够久</text>
+      <path class="ln-a" d="M220 71 L330 71"/><polygon class="ar-a" points="330,66 330,76 340,71"/>
+      <rect class="box-g" x="350" y="38" width="230" height="66" rx="8"/>
+      <text class="tg" x="465" y="60" text-anchor="middle">ref_view&lt;vector&lt;int&gt;&gt;</text>
+      <text class="tm" x="465" y="80" text-anchor="middle">sizeof == 8（一个指针）</text>
+      <text class="ts" x="465" y="98" text-anchor="middle">可拷贝、拷贝是 O(1)</text>
+      <text class="ts" x="600" y="66">✅ 是 <tspan class="tg">borrowed_range</tspan></text>
+      <text class="ts" x="600" y="86">⚠️ 容器先死 = 悬垂，编译器不管</text>
+
+      <rect class="box" x="20" y="122" width="200" height="66" rx="8"/>
+      <text class="t" x="120" y="146" text-anchor="middle">右值容器（可移动）</text>
+      <text class="tm" x="120" y="166" text-anchor="middle">get_vector() | …</text>
+      <text class="ts" x="120" y="182" text-anchor="middle">没人持有它</text>
+      <path class="ln-a" d="M220 155 L330 155"/><polygon class="ar-a" points="330,150 330,160 340,155"/>
+      <rect class="box-a" x="350" y="122" width="230" height="66" rx="8"/>
+      <text class="ta" x="465" y="144" text-anchor="middle">owning_view&lt;vector&lt;int&gt;&gt;</text>
+      <text class="tm" x="465" y="164" text-anchor="middle">容器整体 move 进来</text>
+      <text class="ts" x="465" y="182" text-anchor="middle">只能移动，<tspan class="tr">拷贝已删除</tspan></text>
+      <text class="ts" x="600" y="150">✅ 元素归它，<tspan class="tg">不会悬垂</tspan></text>
+      <text class="ts" x="600" y="170">❌ 不是 borrowed_range（迭代器指向它内部）</text>
+
+      <rect class="box" x="20" y="206" width="200" height="60" rx="8"/>
+      <text class="t" x="120" y="230" text-anchor="middle">已经是 view</text>
+      <text class="tm" x="120" y="250" text-anchor="middle">span / string_view / …</text>
+      <path class="ln-a" d="M220 236 L330 236"/><polygon class="ar-a" points="330,231 330,241 340,236"/>
+      <rect class="box-p" x="350" y="206" width="230" height="60" rx="8"/>
+      <text class="tp" x="465" y="230" text-anchor="middle">原样透传</text>
+      <text class="ts" x="465" y="250" text-anchor="middle">拷一份就是全部代价</text>
+      <text class="ts" x="600" y="240">这就是 view 概念服务的主场景</text>
+
+      <text class="tr" x="480" y="290" text-anchor="middle">P2415 之前<tspan class="tb">中间这一路不存在</tspan>：右值容器不满足 viewable_range，整行编译错误 —— 宁可拒绝，也不要造出悬垂的 view</text>
+    </svg>
+  </div>
+
+  <div class="box tip">这套「概念 + 语义要求」的写法本身是 C++20 concepts 的典型用法。concepts 的语法、约束求解、以及它相比 SFINAE 改善了什么，见 <a href="./templates_guide.html#s9-2">模板与元编程 §9.2</a>（SFINAE 的原始形态在 <a href="./templates_guide.html#s9-1">§9.1</a>）。常用 views 的一览表与投影（projection）的用法见 <a href="../stl/stl_algorithms_ppt.html#slide-11">STL 算法 · slide 11</a>，本文不再重复。</div>
+</section>
+
+<!-- ================================================================ §2 -->
+<section class="chapter" id="s2">
+  <div class="ch-head">
+    <div class="num">02</div>
+    <div class="t"><h2>引用语义与 dangling</h2><p class="sub">一半的悬垂被挡成了编译错误，另一半照旧是 UB —— 分界线在哪很值得记住</p></div>
+  </div>
+
+  <p>「views 有悬垂风险」这句话流传很广，但流传的版本大多是错的。最常见的一个说法是「<code>views::filter(get_vector(), pred)</code> 很危险」——它在 C++20 的<strong>最初版本</strong>里确实有问题（编译不过），而 P2415 之后这一行反而是<strong>安全的</strong>：临时容器被移进了 <code>owning_view</code>，元素的所有权跟着视图走。</p>
+
+  <p>所以真正需要记住的不是某一行代码，而是那条分界线：<strong>视图究竟是「引用了别人的元素」还是「自己拥有元素」</strong>。前者才有悬垂风险，而它的三种典型形状如下。</p>
+
+  <h3 id="s2-1">2.1 三种持有方式，三种结局</h3>
+
+  <div class="fig">
+    <svg viewBox="0 0 960 320" role="img" aria-label="三种形状的对照：把临时容器直接接入管道会被 owning_view 接管因此安全；从函数返回一个建立在引用形参之上的视图会得到 ref_view，调用方传临时对象时就悬垂，而编译器完全不报错；把右值容器交给 ranges 算法则返回 dangling 类型，任何使用都是编译错误" style="min-width:880px;height:auto">
+      <text class="tb" x="480" y="20" text-anchor="middle">同一个「临时容器」，三种用法三种结局</text>
+
+      <rect class="box-g" x="20" y="36" width="300" height="200" rx="9"/>
+      <text class="tg" x="170" y="58" text-anchor="middle">① 直接接进管道 → 安全</text>
+      <text class="tm" x="170" y="80" text-anchor="middle">make_data() | filter(p)</text>
+      <rect class="box" x="46" y="94" width="248" height="52" rx="6"/>
+      <text class="tm" x="170" y="114" text-anchor="middle">filter_view&lt;</text>
+      <text class="tm" x="170" y="132" text-anchor="middle">  owning_view&lt;vector&gt;, P&gt;</text>
+      <text class="ts" x="170" y="166" text-anchor="middle">容器被 <tspan class="tg">move 进视图内部</tspan></text>
+      <text class="ts" x="170" y="186" text-anchor="middle">视图活着，元素就活着</text>
+      <text class="tg" x="170" y="212" text-anchor="middle">代价：视图变成 move-only</text>
+      <text class="ts" x="170" y="228" text-anchor="middle">不能放进要求可拷贝的容器/接口</text>
+
+      <rect class="box-r" x="335" y="36" width="300" height="200" rx="9"/>
+      <text class="tr" x="485" y="58" text-anchor="middle">② 从函数返回视图 → 悬垂</text>
+      <text class="tm" x="485" y="80" text-anchor="middle">f(const vector&amp; v){return v|filter;}</text>
+      <rect class="box" x="361" y="94" width="248" height="52" rx="6"/>
+      <text class="tm" x="485" y="114" text-anchor="middle">filter_view&lt;</text>
+      <text class="tm" x="485" y="132" text-anchor="middle">  ref_view&lt;const vector&gt;, P&gt;</text>
+      <text class="ts" x="485" y="166" text-anchor="middle">形参是引用 ⇒ 包成 <tspan class="tr">ref_view</tspan></text>
+      <text class="ts" x="485" y="186" text-anchor="middle">调用方传临时对象 → 语句末就死了</text>
+      <text class="tr" x="485" y="212" text-anchor="middle">编译器完全不报错</text>
+      <text class="ts" x="485" y="228" text-anchor="middle">和「返回局部变量的引用」是同一个 bug</text>
+
+      <rect class="box-a" x="650" y="36" width="290" height="200" rx="9"/>
+      <text class="ta" x="795" y="58" text-anchor="middle">③ 交给算法 → 编译错误</text>
+      <text class="tm" x="795" y="80" text-anchor="middle">ranges::find(make_data(), 42)</text>
+      <rect class="box" x="676" y="94" width="238" height="52" rx="6"/>
+      <text class="tm" x="795" y="114" text-anchor="middle">decltype(it) ==</text>
+      <text class="tm" x="795" y="132" text-anchor="middle">  std::ranges::dangling</text>
+      <text class="ts" x="795" y="166" text-anchor="middle">vector 不是 borrowed_range</text>
+      <text class="ts" x="795" y="186" text-anchor="middle">于是<tspan class="ta">压根不返回迭代器</tspan></text>
+      <text class="tg" x="795" y="212" text-anchor="middle">*it 一写就编译失败</text>
+      <text class="ts" x="795" y="228" text-anchor="middle">UB 被降级成了编译期诊断</text>
+
+      <path class="ln-d" d="M20 254 L940 254"/>
+      <text class="ts" x="480" y="278" text-anchor="middle">分界线不是「有没有用到临时对象」，而是<tspan class="ta">视图是引用别人的元素、还是自己拥有元素</tspan></text>
+      <text class="ts" x="480" y="300" text-anchor="middle">而第 ② 种之所以逃过检查，是因为「形参会不会绑到临时对象」这件事，被调用的函数里<tspan class="tr">看不见</tspan></text>
+    </svg>
+  </div>
+
+  <pre><code>#include &lt;ranges&gt;
+#include &lt;vector&gt;
+namespace rg = std::ranges;
+
+std::vector&lt;int&gt; make_data();
+constexpr auto pos = [](int x){ return x &gt; 0; };
+
+// ① 安全：临时容器被 move 进 owning_view，元素归视图所有
+auto a = make_data() | std::views::filter(pos);
+//   → filter_view&lt;owning_view&lt;std::vector&lt;int&gt;&gt;, decltype(pos)&gt;
+static_assert(!std::copyable&lt;decltype(a)&gt;);        // 代价：move-only
+
+// ② 悬垂：形参是引用 ⇒ ref_view，而形参可能绑在临时对象上
+auto positives(const std::vector&lt;int&gt;&amp; v) {
+    return v | std::views::filter(pos);            // ref_view&lt;const vector&gt;
+}
+for (int x : positives(make_data())) { /* ☠️ 临时容器已析构，且无任何警告 */ }
+
+// ③ 编译错误：vector 不是 borrowed_range，返回类型退化成 dangling
+auto it = rg::find(make_data(), 42);
+static_assert(std::same_as&lt;decltype(it), rg::dangling&gt;);
+// *it;   // error: 'std::ranges::dangling' 没有 operator*</code></pre>
+
+  <p>第 ② 种是实际项目里唯一真正常见的形状，而且它<strong>不是 Ranges 独有的问题</strong>——它和「返回指向局部对象的引用」是同一个 bug，只是被一层视图类型包住之后更难看出来。防御手段也和那个老问题一样：<strong>接受 range 的函数不要返回视图</strong>，要么返回容器，要么让调用方自己拼管道；实在要返回视图，就把参数改成按值收 <code>R&amp;&amp;</code> 再 <code>views::all(std::forward&lt;R&gt;(r))</code>，让右值走 <code>owning_view</code> 那一路。</p>
+
+  <h3 id="s2-2">2.2 borrowed_range 到底在断言什么</h3>
+
+  <div class="def"><strong>borrowed_range</strong>：<code>range&lt;T&gt; &amp;&amp; (T 是左值引用 || enable_borrowed_range&lt;remove_cvref_t&lt;T&gt;&gt;)</code>。语义上它断言一件事——<strong>从这个 range 取出的迭代器，其有效性不依赖 range 对象本身是否还活着</strong>。左值自动满足（对象在调用方手里活着）；右值必须由类型作者显式特化 <code>enable_borrowed_range</code> 来开启。</div>
+
+  <p>判断某个类型该不该开这个开关，只需要问一句：<strong>它的迭代器里有没有指回视图对象自己的指针？</strong></p>
+
+  <table>
+    <thead><tr><th>类型</th><th>迭代器里存了什么</th><th>borrowed?</th><th>为什么</th></tr></thead>
+    <tbody>
+      <tr><td><code>span</code> · <code>string_view</code> · <code>subrange</code></td><td>指向外部缓冲的裸指针</td><td>✅</td><td>视图本身只是一对指针，析构它不影响缓冲</td></tr>
+      <tr><td><code>iota_view</code> · <code>empty_view</code></td><td>一个计数值 / 什么都没有</td><td>✅</td><td>元素是算出来的，不存在「被谁持有」</td></tr>
+      <tr><td><code>ref_view&lt;C&gt;</code></td><td>底层容器的迭代器</td><td>✅</td><td>迭代器指向容器，与 <code>ref_view</code> 无关</td></tr>
+      <tr><td><code>take_view</code> · <code>drop_view</code> · <code>reverse_view</code></td><td>底层迭代器（+ 计数）</td><td>条件成立</td><td>底层 borrowed 就 borrowed，没有额外状态</td></tr>
+      <tr><td><strong><code>filter_view</code></strong></td><td>底层迭代器 <strong>+ 指回视图的指针</strong></td><td>❌</td><td>递进时要读谓词，谓词存在视图里</td></tr>
+      <tr><td><strong><code>transform_view</code></strong></td><td>底层迭代器 <strong>+ 指回视图的指针</strong></td><td>❌</td><td>解引用时要读函数对象，函数存在视图里</td></tr>
+      <tr><td><code>owning_view&lt;C&gt;</code></td><td>底层容器的迭代器</td><td>❌</td><td>容器就在视图内部，视图死了元素也没了</td></tr>
+    </tbody>
+  </table>
+
+  <p>这张表解释了一个让人意外的现象：<code>filter_view</code> 和 <code>transform_view</code> 明明可能只是引用了别人的元素，却不是 <code>borrowed_range</code>。原因不在元素上，在<strong>谓词/函数对象</strong>上——它们存在视图里，而迭代器必须能访问到它们，所以迭代器持有一个 <code>parent_</code> 指针。视图一死，指针就悬垂，跟元素在哪毫无关系。</p>
+
+  <h3 id="s2-3">2.3 dangling：把 UB 变成编译错误</h3>
+
+  <p><code>std::ranges::dangling</code> 是一个<strong>空结构体</strong>，除了「能被任何参数构造出来」之外什么都不做。它的全部价值在于成为一个返回类型：</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 960 250" role="img" aria-label="borrowed_iterator_t 的分支：ranges 算法的返回类型在编译期做一次判断，如果传入的 range 是 borrowed_range 就返回真正的迭代器，否则返回空类型 dangling，任何对它解引用的写法都会立即编译失败" style="min-width:820px;height:auto">
+      <text class="tb" x="480" y="20" text-anchor="middle">每个返回迭代器的 ranges 算法，返回类型都过一遍这个岔口</text>
+
+      <rect class="box" x="330" y="36" width="300" height="46" rx="8"/>
+      <text class="tm" x="480" y="56" text-anchor="middle">rg::borrowed_iterator_t&lt;R&gt;</text>
+      <text class="ts" x="480" y="74" text-anchor="middle">编译期一次 if constexpr，零运行期成本</text>
+
+      <path class="ln-a" d="M400 82 L400 106 L230 106 L230 128"/>
+      <polygon class="ar-a" points="225,128 235,128 230,138"/>
+      <path class="ln-r" d="M560 82 L560 106 L730 106 L730 128"/>
+      <polygon class="ar-r" points="725,128 735,128 730,138"/>
+      <text class="tg" x="300" y="100">borrowed_range&lt;R&gt; 成立</text>
+      <text class="tr" x="600" y="100">不成立</text>
+
+      <rect class="box-g" x="80" y="140" width="300" height="76" rx="9"/>
+      <text class="tg" x="230" y="162" text-anchor="middle">iterator_t&lt;R&gt;</text>
+      <text class="ts" x="230" y="182" text-anchor="middle">真迭代器，照常用</text>
+      <text class="tm" x="230" y="204" text-anchor="middle">rg::find(v, 42)  // v 是左值</text>
+
+      <rect class="box-r" x="580" y="140" width="300" height="76" rx="9"/>
+      <text class="tr" x="730" y="162" text-anchor="middle">std::ranges::dangling</text>
+      <text class="ts" x="730" y="182" text-anchor="middle">空结构体：没有 * 没有 -&gt; 没有 ++</text>
+      <text class="tm" x="730" y="204" text-anchor="middle">rg::find(make_data(), 42)</text>
+
+      <text class="ts" x="480" y="242" text-anchor="middle">妙处在于<tspan class="ta">失败点被搬到了产生它的那一行</tspan>：不是运行期读到垃圾，而是「dangling 没有 operator*」这句编译错误</text>
+    </svg>
+  </div>
+
+  <p>值得注意的是这个设计的<strong>边界</strong>，它同时说明了为什么 §2.1 的第 ② 种情况救不了：<code>dangling</code> 只能在<strong>单个表达式内</strong>看到「实参是右值」这个事实。一旦跨过函数边界，被调用方拿到的只是一个 <code>const&amp;</code>，它无法知道上游绑的是变量还是临时对象。同一类问题在 C++26 的生命周期标注提案里仍在讨论——<strong>目前这条防线只能挡住「当场就错」的那一半</strong>。</p>
+
+  <p>另外，<code>ranges::find</code> 之类返回单个迭代器的算法用 <code>borrowed_iterator_t</code>，而 <code>ranges::equal_range</code>、<code>ranges::search</code> 这些返回区间的用 <code>borrowed_subrange_t</code>，退化目标同样是 <code>dangling</code>。而 <code>ranges::for_each</code> 这类返回 <code>{iterator, function}</code> 的，退化的只是其中的迭代器成员。</p>
+</section>
+
+<!-- ================================================================ §3 -->
+<section class="chapter" id="s3">
+  <div class="ch-head">
+    <div class="num">03</div>
+    <div class="t"><h2>惰性求值的真实代价</h2><p class="sub">惰性不是「免费」，是「把代价换了一种分配方式」</p></div>
+  </div>
+
+  <p>惰性求值的宣传语是「不产生中间容器」，这是真的。但它同时带来了三件很少被提起的事：<code>begin()</code> 可能不是 O(1)；同一个元素可能被算多次；以及为了让前两件事不太糟，标准往视图里塞了缓存，而缓存又带来了自己的怪毛病。</p>
+
+  <h3 id="s3-1">3.1 filter 的 begin() 是 O(n)</h3>
+
+  <p><code>range</code> 概念要求 <code>begin()</code> 是<strong>摊还常数</strong>时间。<code>filter_view</code> 天然做不到：第一个满足谓词的元素可能在最后，也可能压根不存在，找到它就是一次 <code>find_if</code>。标准的解法是<strong>缓存</strong>——第一次 <code>begin()</code> 扫一遍并把结果存进视图，后续调用直接返回。</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 960 300" role="img" aria-label="filter_view 的 begin 缓存机制：第一次调用要从头扫描到第一个满足谓词的元素，代价与前缀长度成正比，结果被存进视图内部的缓存，第二次调用变成常数时间。但缓存是可变状态，导致 filter_view 没有 const 版本的 begin，因此不能用 const 引用迭代，而且拷贝视图时缓存不会跟着走" style="min-width:880px;height:auto">
+      <text class="tb" x="480" y="20" text-anchor="middle">第一次 <tspan class="tm">begin()</tspan>：从头扫到第一个满足谓词的元素</text>
+
+      <g>
+        <rect class="box-r" x="30" y="38" width="56" height="34" rx="5"/><text class="tm" x="58" y="60" text-anchor="middle">1 ✗</text>
+        <rect class="box-r" x="92" y="38" width="56" height="34" rx="5"/><text class="tm" x="120" y="60" text-anchor="middle">3 ✗</text>
+        <rect class="box-r" x="154" y="38" width="56" height="34" rx="5"/><text class="tm" x="182" y="60" text-anchor="middle">7 ✗</text>
+        <rect class="box-r" x="216" y="38" width="56" height="34" rx="5"/><text class="tm" x="244" y="60" text-anchor="middle">5 ✗</text>
+        <rect class="box-r" x="278" y="38" width="56" height="34" rx="5"/><text class="tm" x="306" y="60" text-anchor="middle">9 ✗</text>
+        <rect class="box-g" x="340" y="38" width="56" height="34" rx="5"/><text class="tm" x="368" y="60" text-anchor="middle">4 ✓</text>
+        <rect class="box" x="402" y="38" width="56" height="34" rx="5" opacity=".5"/><text class="tm" x="430" y="60" text-anchor="middle">…</text>
+      </g>
+      <path class="ln-r" d="M58 84 L360 84"/><polygon class="ar-r" points="360,79 360,89 370,84"/>
+      <text class="tr" x="200" y="102" text-anchor="middle">谓词被调用 6 次，代价 ∝ 前缀长度</text>
+      <text class="tg" x="500" y="60">← 这就是 begin()</text>
+      <text class="ts" x="500" y="80">如果整个 range 一个都不满足，begin() 就是完整的 O(n)</text>
+
+      <path class="ln-a" d="M368 106 L368 130"/><polygon class="ar-a" points="363,130 373,130 368,140"/>
+      <rect class="box-a" x="240" y="144" width="260" height="42" rx="7"/>
+      <text class="tm" x="370" y="164" text-anchor="middle">filter_view::begin_（缓存）</text>
+      <text class="ts" x="370" y="180" text-anchor="middle">第二次起 O(1)，满足「摊还常数」</text>
+      <text class="tg" x="520" y="168">代价是：视图里多了一块<tspan class="ta">可变状态</tspan></text>
+
+      <path class="ln-d" d="M20 202 L940 202"/>
+      <text class="tb" x="480" y="224" text-anchor="middle">这块缓存带来两个「看起来毫无道理」的现象</text>
+
+      <rect class="box-r" x="60" y="236" width="390" height="52" rx="8"/>
+      <text class="tr" x="255" y="256" text-anchor="middle">filter_view 没有 const 版的 begin()</text>
+      <text class="ts" x="255" y="276" text-anchor="middle"><tspan class="tm">const auto&amp; r = v | filter(p);</tspan> 之后 r 不是 range</text>
+
+      <rect class="box-r" x="480" y="236" width="420" height="52" rx="8"/>
+      <text class="tr" x="690" y="256" text-anchor="middle">缓存不随拷贝传播</text>
+      <text class="ts" x="690" y="276" text-anchor="middle">把视图拷进另一个变量，下次 begin() 重新扫一遍 O(n)</text>
+    </svg>
+  </div>
+
+  <p>左边那个现象在实际编码里出现频率极高：习惯性地写 <code>const auto&amp; r = v | views::filter(p);</code>，然后 <code>for (int x : r)</code> 编译失败，报错还在 <code>&lt;ranges&gt;</code> 深处。原因就是 <code>begin()</code> 要改缓存所以不能是 <code>const</code>，于是 <code>const filter_view&amp;</code> 不满足 <code>range</code>。</p>
+
+  <p>可以从中提炼出一条可推广的判据：<strong>凡是 <code>begin()</code> 需要先扫描再缓存的视图，都没有 <code>const begin()</code></strong>。属于这一类的有 <code>filter_view</code>、<code>drop_while_view</code>、<code>split_view</code>、<code>chunk_by_view</code>，以及底层不是 <code>common_range</code> 时的 <code>reverse_view</code>。反过来 <code>transform_view</code>、<code>take_view</code>、<code>elements_view</code> 都是可 <code>const</code> 迭代的。</p>
+
+  <h3 id="s3-2">3.2 每次解引用都重算一遍</h3>
+
+  <p>视图<strong>不缓存元素值</strong>。<code>transform_view</code> 的 <code>operator*</code> 就是 <code>invoke(f, *base_it)</code>，每次解引用都真的调一次 <code>f</code>。这在单趟遍历里是想要的行为（这才叫惰性），但只要谁在你背后多解引用了一次，代价就翻倍。</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 960 300" role="img" aria-label="两种拼装顺序的函数调用次数对照：先 transform 再 filter 时，filter 为了找下一个满足元素必须先解引用 transform 从而调用一次变换函数，用户随后再解引用一次又调一次，通过的元素被算两遍；先 filter 再 transform 时谓词读的是原始元素，变换函数只在用户解引用时调一次" style="min-width:880px;height:auto">
+      <text class="tb" x="480" y="20" text-anchor="middle">同样的语义，两种顺序，<tspan class="tm">f</tspan> 的调用次数差 3 倍</text>
+
+      <rect class="box-r" x="20" y="34" width="450" height="220" rx="9"/>
+      <text class="tr" x="245" y="56" text-anchor="middle">❌ transform 在前：filter 撞上「双重求值」</text>
+      <text class="tm" x="245" y="76" text-anchor="middle">v | transform(f) | filter(even)</text>
+
+      <rect class="box" x="46" y="90" width="180" height="30" rx="5"/>
+      <text class="ts" x="136" y="110" text-anchor="middle">filter 找下一个元素</text>
+      <path class="ln-r" d="M226 105 L286 105"/><polygon class="ar-r" points="286,100 286,110 296,105"/>
+      <rect class="box-r" x="300" y="90" width="146" height="30" rx="5"/>
+      <text class="tm" x="373" y="110" text-anchor="middle">f(x) 第 1 次</text>
+      <text class="ts" x="136" y="140" text-anchor="middle">谓词要看的是 f 的结果</text>
+
+      <rect class="box" x="46" y="158" width="180" height="30" rx="5"/>
+      <text class="ts" x="136" y="178" text-anchor="middle">用户 <tspan class="tm">*it</tspan></text>
+      <path class="ln-r" d="M226 173 L286 173"/><polygon class="ar-r" points="286,168 286,178 296,173"/>
+      <rect class="box-r" x="300" y="158" width="146" height="30" rx="5"/>
+      <text class="tm" x="373" y="178" text-anchor="middle">f(x) 第 2 次</text>
+      <text class="ts" x="136" y="208" text-anchor="middle">视图不存值，只好再算</text>
+
+      <text class="tr" x="245" y="238" text-anchor="middle">8 元素 / 4 个通过 → f 被调用 <tspan class="tb">12</tspan> 次</text>
+
+      <rect class="box-g" x="490" y="34" width="450" height="220" rx="9"/>
+      <text class="tg" x="715" y="56" text-anchor="middle">✅ filter 在前：谓词读原始值，f 只算一次</text>
+      <text class="tm" x="715" y="76" text-anchor="middle">v | filter(even) | transform(f)</text>
+
+      <rect class="box" x="516" y="90" width="180" height="30" rx="5"/>
+      <text class="ts" x="606" y="110" text-anchor="middle">filter 找下一个元素</text>
+      <path class="ln-g" d="M696 105 L756 105"/><polygon class="ar-g" points="756,100 756,110 766,105"/>
+      <rect class="box" x="770" y="90" width="146" height="30" rx="5"/>
+      <text class="tm" x="843" y="110" text-anchor="middle">只调 even(x)</text>
+      <text class="ts" x="606" y="140" text-anchor="middle">谓词看的是原始元素</text>
+
+      <rect class="box" x="516" y="158" width="180" height="30" rx="5"/>
+      <text class="ts" x="606" y="178" text-anchor="middle">用户 <tspan class="tm">*it</tspan></text>
+      <path class="ln-g" d="M696 173 L756 173"/><polygon class="ar-g" points="756,168 756,178 766,173"/>
+      <rect class="box-g" x="770" y="158" width="146" height="30" rx="5"/>
+      <text class="tm" x="843" y="178" text-anchor="middle">f(x) 唯一一次</text>
+      <text class="ts" x="606" y="208" text-anchor="middle">而且 f 只作用在通过的元素上</text>
+
+      <text class="tg" x="715" y="238" text-anchor="middle">同样输入 → f 被调用 <tspan class="tb">4</tspan> 次</text>
+
+      <text class="ts" x="480" y="278" text-anchor="middle">通用规则：<tspan class="ta">能先筛就先筛</tspan>。只有当谓词必须看变换后的值时才被迫用左边那种顺序</text>
+      <text class="ts" x="480" y="296" text-anchor="middle">被迫时的解法：把 f 拆成「便宜的键 + 昂贵的主体」，让 filter 只依赖便宜的那半</text>
+    </svg>
+  </div>
+
+  <pre><code>int calls = 0;
+auto f = [&amp;calls](int x){ ++calls; return x * x; };
+std::vector&lt;int&gt; v{1,2,3,4,5,6,7,8};
+
+// ❌ 先变换再筛：filter 递进时解引用 transform（调 f），用户再解引用一次（又调 f）
+for (int y : v | std::views::transform(f)
+               | std::views::filter([](int y){ return y % 2 == 0; }))
+    (void)y;
+// calls == 12   —— 8 次扫描 + 4 个通过元素各再算一遍
+
+// ✅ 先筛再变换：谓词读原始值，f 只在输出时算一次
+calls = 0;
+for (int y : v | std::views::filter([](int x){ return x % 2 == 0; })
+               | std::views::transform(f))
+    (void)y;
+// calls == 4</code></pre>
+
+  <p>这就是为什么<strong>视图链里的函数对象必须是纯函数</strong>。带副作用的 <code>transform</code>（打日志、递增计数器、往队列里塞东西）在管道里的行为无法预测：调用次数取决于下游有几个 <code>filter</code>、你遍历了几趟、有没有算法在背后多解引用一次。<code>ranges::max_element</code> 就会对同一位置解引用多次；写成 <code>ranges::max_element(v | views::transform(expensive))</code>，那个 <code>expensive</code> 会被调用远超 n 次。</p>
+
+  <h3 id="s3-3">3.3 什么时候惰性反而更慢</h3>
+
+  <table>
+    <thead><tr><th>场景</th><th>惰性的表现</th><th>该怎么办</th></tr></thead>
+    <tbody>
+      <tr><td>要遍历<strong>多趟</strong></td><td>每趟把整条链重算一遍</td><td>先 <code>ranges::to&lt;vector&gt;()</code> 落地，再多趟用</td></tr>
+      <tr><td>变换函数昂贵（解压、查表、算哈希）</td><td>调用次数不可控，可能远超元素数</td><td>落地成容器；或把结果 memo 在容器里</td></tr>
+      <tr><td>下游需要随机访问 / 排序</td><td>类别退化后压根编译不过（§5）</td><td>落地；或改成对原容器排序</td></tr>
+      <tr><td>元素很小、管道很长（≥4 段）</td><td>调试构建里每个元素几十次函数调用</td><td>合并成一次 <code>transform</code>；或写循环</td></tr>
+      <tr><td><code>filter</code> 命中率极低</td><td>每次 <code>begin()</code> 都可能是完整 O(n)</td><td>注意别反复重建视图（缓存不随拷贝走）</td></tr>
+      <tr><td>数据本来就在内存里、只遍历一趟</td><td><strong>这是惰性真正赢的场景</strong></td><td>放心用，中间容器省下的分配是纯赚</td></tr>
+    </tbody>
+  </table>
+
+  <p>把最后一行和前面五行放在一起看，结论就清楚了：<strong>惰性的收益是「省掉中间容器的分配与拷贝」，代价是「元素的求值次数不再由你直接掌握」</strong>。数据量大、只走一趟、函数便宜 → 收益压倒代价；反过来任何一项不成立，就要具体算一算。</p>
+
+  <div class="box tip">协程 generator 是另一种惰性序列，它和 views 可以互通（<code>generator | views::take(10)</code>），代价结构却完全不同——generator 的每次 <code>++</code> 是一次协程恢复，有实打实的间接跳转，但它天然只能单趟、也天然不会重复求值。对照见 <a href="./coroutines_deep_dive.html#s16-3">协程深入 §16.3</a>。</div>
+</section>
+
+<!-- ================================================================ §4 -->
+<section class="chapter" id="s4">
+  <div class="ch-head">
+    <div class="num">04</div>
+    <div class="t"><h2>管道是怎么拼起来的</h2><p class="sub">整套机制只有两条规则，比看起来简单得多</p></div>
+  </div>
+
+  <h3 id="s4-1">4.1 adaptor 对象与 closure 对象</h3>
+
+  <p><code>views::filter</code> 这个名字下其实藏着两种可调用对象，区别只在于「参数够不够」：</p>
+
+  <div class="def"><strong>range adaptor object</strong>：参数齐全时直接产出视图（<code>views::filter(v, pred)</code> → <code>filter_view</code>）。<br><strong>range adaptor closure object</strong>：只给了除 range 之外的参数时，返回一个「等着 range」的可调用对象（<code>views::filter(pred)</code>）。<strong><code>operator|</code> 只认识后者。</strong></div>
+
+  <p><code>views::all</code>、<code>views::reverse</code>、<code>views::join</code> 这类不需要额外参数的，本身就是 closure；<code>views::filter</code>、<code>views::take</code>、<code>views::transform</code> 则是「调用一次生成 closure」的工厂。理解这个二分之后，<code>v | views::take(3)</code> 就不再神秘：<code>views::take(3)</code> 先产出一个 closure，然后 <code>|</code> 把 <code>v</code> 喂给它。</p>
+
+  <h3 id="s4-2">4.2 operator| 只有两条规则</h3>
+
+  <div class="fig">
+    <svg viewBox="0 0 960 320" role="img" aria-label="operator 管道的两条规则：range 与 closure 相遇时直接调用产出视图，closure 与 closure 相遇时合成一个新的复合 closure。下方展示一条四段管道的类型嵌套洋葱结构，最外层是 take_view，依次包着 transform_view、filter_view、ref_view，最内层是原容器" style="min-width:880px;height:auto">
+      <text class="tb" x="480" y="20" text-anchor="middle"><tspan class="tm">operator|</tspan> 的全部内容</text>
+
+      <rect class="box-a" x="30" y="34" width="430" height="86" rx="9"/>
+      <text class="ta" x="245" y="56" text-anchor="middle">规则一 · range | closure</text>
+      <text class="tm" x="245" y="80" text-anchor="middle">R | C   ⟶   C(R)</text>
+      <text class="ts" x="245" y="102" text-anchor="middle">立刻构造出视图对象。要求 R 满足 <tspan class="tm">viewable_range</tspan>（§1.1）</text>
+
+      <rect class="box-g" x="500" y="34" width="430" height="86" rx="9"/>
+      <text class="tg" x="715" y="56" text-anchor="middle">规则二 · closure | closure</text>
+      <text class="tm" x="715" y="80" text-anchor="middle">C1 | C2 ⟶ 新 closure：x ↦ C2(C1(x))</text>
+      <text class="ts" x="715" y="102" text-anchor="middle">这条让「管道片段」能被命名、存起来、当参数传</text>
+
+      <text class="ts" x="480" y="142" text-anchor="middle">规则二是很多人没意识到的能力：<tspan class="tm">auto clean = views::filter(ok) | views::transform(norm);</tspan> 之后 <tspan class="tm">a | clean</tspan> 和 <tspan class="tm">b | clean</tspan> 都成立</text>
+
+      <path class="ln-d" d="M20 158 L940 158"/>
+      <text class="tb" x="480" y="182" text-anchor="middle">拼完之后的类型：一层套一层，外层持有内层的<tspan class="ta">副本</tspan></text>
+      <text class="tm" x="480" y="202" text-anchor="middle">v | filter(p) | transform(f) | take(3)</text>
+
+      <rect class="box-y" x="150" y="216" width="660" height="88" rx="9"/>
+      <text class="ty" x="170" y="234">take_view&lt;</text>
+      <rect class="box-p" x="196" y="240" width="570" height="58" rx="8"/>
+      <text class="tp" x="216" y="258">transform_view&lt;</text>
+      <rect class="box-a" x="242" y="264" width="480" height="30" rx="7"/>
+      <text class="ta" x="262" y="284">filter_view&lt;  <tspan class="tg">ref_view&lt;vector&lt;int&gt;&gt;</tspan>, P &gt;, F &gt;, 3&gt;</text>
+      <text class="ts" x="828" y="248">每一层都按值存着</text>
+      <text class="ts" x="828" y="266">下一层 + 自己的谓词/函数</text>
+      <text class="ts" x="828" y="284">所以 §1.2 那条 O(1) 是必须的</text>
+    </svg>
+  </div>
+
+  <h3 id="s4-3">4.3 自己写一个 adaptor</h3>
+
+  <p>C++20 有一个尴尬的空缺：标准描述了 <code>|</code> 对<strong>标准</strong> adaptor 的行为，却没提供任何让用户类型接入 <code>|</code> 的机制。于是各家库（range-v3、libstdc++ 的内部实现）各写一套，用户想自定义就只能抄实现细节。C++23 的 <code>std::ranges::range_adaptor_closure&lt;D&gt;</code> 补上了这一块：CRTP 继承它，就自动获得 §4.2 的两条规则。</p>
+
+  <p>下面是一个完整骨架，功能是「跳过相邻的重复元素」。三个部件缺一不可：<strong>视图本体</strong>（继承 <code>view_interface</code>）、<strong>CTAD 推导指引</strong>（把容器包成 <code>ref_view</code> 或 <code>owning_view</code>）、<strong>closure 对象</strong>（接入 <code>|</code>）。</p>
+
+  <pre><code>namespace rg = std::ranges;
+
+// ① 视图本体。继承 view_interface 后，empty() / front() / operator bool /
+//    （在满足条件时）size() / operator[] 都由基类从 begin()、end() 推导出来，
+//    同时 enable_view 自动为 true —— 这是「宣称我是 view」的标准方式。
+template&lt;rg::forward_range V&gt; requires rg::view&lt;V&gt;
+class dedup_view : public rg::view_interface&lt;dedup_view&lt;V&gt;&gt; {
+    V base_{};
+public:
+    dedup_view() requires std::default_initializable&lt;V&gt; = default;
+    constexpr explicit dedup_view(V b) : base_(std::move(b)) {}
+
+    class iterator {
+        rg::iterator_t&lt;V&gt; cur_{}, end_{};
+    public:
+        using value_type      = rg::range_value_t&lt;V&gt;;
+        using difference_type = rg::range_difference_t&lt;V&gt;;
+        iterator() = default;
+        constexpr iterator(rg::iterator_t&lt;V&gt; c, rg::iterator_t&lt;V&gt; e)
+            : cur_(std::move(c)), end_(std::move(e)) {}
+        constexpr decltype(auto) operator*() const { return *cur_; }
+        // 前进要跳过重复 ⇒ 不是 O(1) ⇒ 这个视图最高只能是 forward（§5）
+        constexpr iterator&amp; operator++() {
+            auto prev = cur_++;
+            while (cur_ != end_ &amp;&amp; *cur_ == *prev) ++cur_;
+            return *this;
+        }
+        constexpr bool operator==(std::default_sentinel_t) const { return cur_ == end_; }
+        // …后置 ++、operator==(iterator) 略
+    };
+
+    constexpr iterator begin() { return {rg::begin(base_), rg::end(base_)}; }
+    constexpr std::default_sentinel_t end() const { return {}; }
+};
+
+// ② CTAD：左值容器 → ref_view，右值容器 → owning_view，已是 view → 原样（§1.3）
+template&lt;class R&gt; dedup_view(R&amp;&amp;) -&gt; dedup_view&lt;std::views::all_t&lt;R&amp;&amp;&gt;&gt;;
+
+// ③ closure 对象：继承 range_adaptor_closure 即获得 operator| 的两条规则
+struct dedup_fn : rg::range_adaptor_closure&lt;dedup_fn&gt; {
+    template&lt;rg::viewable_range R&gt;
+    constexpr auto operator()(R&amp;&amp; r) const { return dedup_view{std::forward&lt;R&gt;(r)}; }
+};
+inline constexpr dedup_fn dedup{};
+
+// 用起来和标准 adaptor 没有区别，也能被规则二合成
+auto r = v | std::views::filter(odd) | dedup | std::views::take(3);</code></pre>
+
+  <table>
+    <thead><tr><th>部件</th><th>不写会怎样</th></tr></thead>
+    <tbody>
+      <tr><td>继承 <code>view_interface</code></td><td><code>enable_view</code> 为 false → 不满足 <code>view</code> → 不能出现在管道中间；<code>empty()</code>/<code>front()</code> 也要自己写</td></tr>
+      <tr><td>CTAD 推导指引</td><td><code>dedup_view{v}</code> 会试图用 <code>vector</code> 本身当模板参数 → 不满足 <code>view</code>，编译失败</td></tr>
+      <tr><td>继承 <code>range_adaptor_closure</code></td><td><code>v | dedup</code> 没有匹配的 <code>operator|</code>；只能写成 <code>dedup(v)</code>，也无法与其它 closure 合成</td></tr>
+      <tr><td><code>iterator::difference_type</code></td><td>不满足 <code>input_iterator</code>（<code>iter_difference_t</code> 取不到）→ 报错在很深的地方</td></tr>
+      <tr><td>默认构造的 <code>requires</code> 子句</td><td>底层 view 不可默认构造时，整个类的默认构造被硬错误而非 SFINAE 掉</td></tr>
+    </tbody>
+  </table>
+
+  <p>值得强调的是 <code>view_interface</code> 的性质：它<strong>不提供任何虚函数</strong>，全部靠 CRTP 把 <code>static_cast&lt;D&amp;&gt;(*this)</code> 转回派生类去调 <code>begin()</code>/<code>end()</code>。所以「继承一个基类拿到十几个成员函数」在这里是零运行期成本的。CRTP 的一般形态与它相对虚函数的取舍见 <a href="./templates_guide.html#s9-3">模板与元编程 §9.3</a>。</p>
+</section>
+
+<!-- ================================================================ §5 -->
+<section class="chapter" id="s5">
+  <div class="ch-head">
+    <div class="num">05</div>
+    <div class="t"><h2>迭代器类别的退化</h2><p class="sub">管道每加一段，能力就可能掉一级，而算法约束是按级别写的</p></div>
+  </div>
+
+  <h3 id="s5-1">5.1 filter 为什么到不了 random_access</h3>
+
+  <p><code>random_access_iterator</code> 的语义要求里有一条：<code>it + n</code> 和 <code>it2 - it1</code> 必须是<strong>常数时间</strong>。对 <code>filter_view</code> 来说，「第 n 个满足谓词的元素在哪」除了从头数没有别的办法，<code>it + n</code> 注定是 O(n)。<strong>所以这不是实现偷懒，是「诚实地不宣称做不到的事」</strong>——如果 <code>filter_view</code> 谎称 random_access，所有基于「随机访问 ⇒ 可以做二分」的算法都会静默退化成 O(n) 甚至 O(n log n) 的扫描。</p>
+
+  <p>同样的逻辑决定了每个 adaptor 的天花板：</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 960 340" role="img" aria-label="迭代器类别的阶梯与各个视图适配器的天花板：contiguous 最强、依次是 random_access、bidirectional、forward、input。span 与 vector 处于 contiguous；transform、take、drop、reverse、elements、zip、enumerate 最高到 random_access 但都到不了 contiguous；filter 与 join 的天花板是 bidirectional；split 与自定义 dedup 是 forward；istream_view 与输入范围上的 chunk 只有 input" style="min-width:880px;height:auto">
+      <text class="tb" x="480" y="20" text-anchor="middle">类别阶梯：越往上能力越强，而 adaptor 只会往下掉、不会往上升</text>
+
+      <rect class="box-g" x="30" y="36" width="230" height="42" rx="7"/>
+      <text class="tg" x="145" y="53" text-anchor="middle">contiguous</text>
+      <text class="ts" x="145" y="70" text-anchor="middle">元素在内存里连续，可取裸指针</text>
+      <text class="t" x="285" y="52">vector · array · span · string</text>
+      <text class="tr" x="285" y="70">没有任何 adaptor 能保住这一级 —— 连 <tspan class="tm">views::take</tspan> 也不行</text>
+
+      <rect class="box-a" x="30" y="88" width="230" height="42" rx="7"/>
+      <text class="ta" x="145" y="105" text-anchor="middle">random_access</text>
+      <text class="ts" x="145" y="122" text-anchor="middle">it + n 是 O(1)</text>
+      <text class="t" x="285" y="104">transform · take · drop · reverse · elements · zip · enumerate · stride</text>
+      <text class="ts" x="285" y="122">底层是 random_access 就保住这一级；<tspan class="ta">这是 adaptor 的上限</tspan></text>
+
+      <rect class="box-p" x="30" y="140" width="230" height="42" rx="7"/>
+      <text class="tp" x="145" y="157" text-anchor="middle">bidirectional</text>
+      <text class="ts" x="145" y="174" text-anchor="middle">能 --，但跳跃是 O(n)</text>
+      <text class="t" x="285" y="156">list · map · set · <tspan class="tr">filter</tspan> · join</text>
+      <text class="ts" x="285" y="174"><tspan class="tm">filter</tspan> 的天花板就在这里：第 n 个满足元素只能数出来</text>
+
+      <rect class="box-y" x="30" y="192" width="230" height="42" rx="7"/>
+      <text class="ty" x="145" y="209" text-anchor="middle">forward</text>
+      <text class="ts" x="145" y="226" text-anchor="middle">可多趟，但只能往前</text>
+      <text class="t" x="285" y="208">forward_list · unordered_map · split · chunk_by · 自定义 dedup（§4.3）</text>
+      <text class="ts" x="285" y="226">需要「记住上一个元素」的 adaptor 通常停在这一级</text>
+
+      <rect class="box-r" x="30" y="244" width="230" height="42" rx="7"/>
+      <text class="tr" x="145" y="261" text-anchor="middle">input</text>
+      <text class="ts" x="145" y="278" text-anchor="middle">只能走一趟，走过就没了</text>
+      <text class="t" x="285" y="260">istream_view · 输入范围上的 chunk / join</text>
+      <text class="ts" x="285" y="278">一旦掉到这里，<tspan class="tr">连「遍历两次」都不成立</tspan></text>
+
+      <path class="ln-r" d="M145 78 L145 244"/>
+      <polygon class="ar-r" points="140,244 150,244 145,254"/>
+      <text class="tr" x="480" y="312" text-anchor="middle">一条管道的最终类别 = 各段天花板的最小值。加 <tspan class="tm">| filter</tspan> 就永久告别随机访问，后面再加 <tspan class="tm">| take</tspan> 也救不回来</text>
+      <text class="ts" x="480" y="332" text-anchor="middle">调试时用 <tspan class="tm">static_assert(rg::random_access_range&lt;decltype(r)&gt;)</tspan> 直接问，比读几百行报错快得多</text>
+    </svg>
+  </div>
+
+  <h3 id="s5-2">5.2 两套类别同时存在</h3>
+
+  <p>还有一层容易混淆的东西：Ranges 的迭代器同时带着<strong>两个</strong>类别标签。</p>
+
+  <table>
+    <thead><tr><th></th><th><code>iterator_concept</code></th><th><code>iterator_category</code></th></tr></thead>
+    <tbody>
+      <tr><td>服务对象</td><td>C++20 的 <code>ranges::*</code> 算法与 concept</td><td>旧 <code>std::*</code> 算法，通过 <code>iterator_traits</code></td></tr>
+      <tr><td>判据</td><td>看操作是否可用、复杂度是否达标</td><td>额外要求 <code>operator*</code> 返回<strong>真引用</strong></td></tr>
+      <tr><td><code>transform</code> 返回 prvalue 时</td><td>可以是 <code>random_access</code></td><td>退化成 <code>input_iterator_tag</code></td></tr>
+    </tbody>
+  </table>
+
+  <p>第三行是个真实会咬人的差异：一个返回值（而非引用）的 <code>transform_view</code>，在 <code>ranges::</code> 算法眼里是随机访问的，在 <code>std::</code> 算法眼里只是输入迭代器。所以 <code>std::sort(sq.begin(), sq.end())</code> 和 <code>ranges::sort(sq)</code> 会因为<strong>完全不同的原因</strong>失败——前者是「类别不够」，后者是「元素不可写」。这也是「不要混用 <code>std::</code> 和 <code>ranges::</code> 算法」的一个具体理由。</p>
+
+  <h3 id="s5-3">5.3 这对算法意味着什么</h3>
+
+  <pre><code>namespace rg = std::ranges;
+std::vector&lt;int&gt; v{5,3,8,1,9,2};
+auto odd = v | std::views::filter([](int x){ return x % 2; });
+
+static_assert(rg::bidirectional_range&lt;decltype(odd)&gt;);
+static_assert(!rg::random_access_range&lt;decltype(odd)&gt;);
+
+// rg::sort(odd);              // ❌ 约束不满足：sort 要 random_access_range
+// rg::nth_element(odd, ...);  // ❌ 同理
+// rg::shuffle(odd, gen);      // ❌ 同理
+
+// 三条出路
+rg::sort(v);                                       // 甲：先排容器再筛，顺序换一下就行
+auto tmp = odd | rg::to&lt;std::vector&gt;(); rg::sort(tmp);   // 乙：C++23 落地后再排
+auto mid = rg::stable_partition(v, [](int x){ return x % 2; });  // 丙：换个只要双向的算法
+
+// 另一种退化：transform 返回 prvalue ⇒ 元素不可写
+auto sq = v | std::views::transform([](int x){ return x * x; });
+// rg::sort(sq);   // ❌ 这次不是类别问题，是 sortable 要求元素可交换</code></pre>
+
+  <p>甲式往往被忽略，但它常常是最好的答案：<strong>要排序就排拥有元素的那个容器</strong>，视图只负责「怎么看」。乙式的成本要算清楚——它把「省掉中间容器」这个惰性最大的收益直接还回去了，所以只在确实需要一个独立结果时才用。丙式最考验对算法库的熟悉度：<code>partition</code>、<code>rotate</code>、<code>unique</code> 这些只要求双向甚至前向的算法，往往能替掉一次排序。</p>
+
+  <p>最后一段的失败是另一回事。<code>ranges::sort</code> 要求 <code>sortable</code>，其中包含「元素可交换」；而 <code>transform_view</code> 的 <code>operator*</code> 返回的是一个临时值，交换两个临时值毫无意义，所以约束不成立。<strong>这条规则可以推广：所有<em>计算出</em>元素的视图都是只读的</strong>，包括 <code>transform</code>、<code>iota</code>、<code>repeat</code>、<code>zip_transform</code>。反过来 <code>filter</code>、<code>take</code>、<code>reverse</code>、<code>elements</code> 转发的是底层的真引用，通过它们写回原容器是合法的。</p>
+</section>
+
+<!-- ================================================================ §6 -->
+<section class="chapter" id="s6">
+  <div class="ch-head">
+    <div class="num">06</div>
+    <div class="t"><h2>工程代价</h2><p class="sub">这些账单没写在任何教程里，但每个真上了规模的项目都会收到</p></div>
+  </div>
+
+  <h3 id="s6-1">6.1 编译时间与报错长度</h3>
+
+  <p><code>&lt;ranges&gt;</code> 是标准库里最重的头文件之一：它拖进 <code>&lt;concepts&gt;</code>、<code>&lt;iterator&gt;</code>、<code>&lt;compare&gt;</code>，自己又定义了几十个类模板和成打的 concept。单纯 <code>#include &lt;ranges&gt;</code> 在一个空 TU 里就有可观的固定开销，而每写一段管道就要实例化一整串嵌套类型和它们的迭代器。</p>
+
+  <p>更麻烦的是<strong>报错</strong>。Concepts 确实改善了错误信息的<em>开头</em>——第一行会明确告诉你「约束 <code>random_access_range&lt;...&gt;</code> 不满足」，这比旧 STL 那种从模板深处爆出来的十几屏替换失败好得多。但紧接着打印的类型名是灾难级的：一条四段管道的完整类型能有几百个字符，而报错里往往要重复它五六次。</p>
+
+  <table>
+    <thead><tr><th>症状</th><th>手段</th></tr></thead>
+    <tbody>
+      <tr><td>不知道哪一段掉了级别</td><td>逐段 <code>static_assert(rg::random_access_range&lt;decltype(r)&gt;)</code>，二分定位</td></tr>
+      <tr><td>报错刷屏</td><td>GCC 用 <code>-fconcepts-diagnostics-depth=2</code>；Clang 的约束诊断通常更短，可以拿它复现一遍</td></tr>
+      <tr><td>不知道时间花在哪</td><td>Clang <code>-ftime-trace</code> / MSVC <code>/d1reportTime</code>，看是不是某个 TU 的管道在吃编译时间</td></tr>
+      <tr><td>头文件扩散</td><td>管道写在 <code>.cpp</code> 里，接口层暴露 <code>span</code> / <code>vector</code> 而不是视图类型</td></tr>
+      <tr><td><code>const auto&amp;</code> 接视图编译失败</td><td>见 §3.1：改成 <code>auto</code> 或 <code>auto&amp;&amp;</code></td></tr>
+    </tbody>
+  </table>
+
+  <p>「接口层不暴露视图类型」这一条值得单独强调。视图类型名进了函数签名，就意味着它进了 mangled 符号名、进了每个包含该头文件的 TU、也进了链接器要处理的符号表。<strong>把管道当实现细节、在边界上落地成 <code>span</code> 或容器，是控制这笔账最有效的一招</strong>——顺带也解决了 §2.1 的悬垂问题。</p>
+
+  <h3 id="s6-2">6.2 调试器里的黑盒</h3>
+
+  <div class="fig">
+    <svg viewBox="0 0 960 280" role="img" aria-label="调试视图与调试容器的对照：容器在监视窗口里能直接展开看到每个元素，而一条管道展开后只有层层嵌套的成员指针和函数对象，看不到任何元素值，因为元素根本还不存在。右侧给出三条应对手段：临时落地成容器、在谓词里下断点、用日志打印" style="min-width:880px;height:auto">
+      <text class="tb" x="480" y="20" text-anchor="middle">监视窗口里展开一个视图，你会看到什么</text>
+
+      <rect class="box-g" x="20" y="36" width="290" height="180" rx="9"/>
+      <text class="tg" x="165" y="58" text-anchor="middle">容器：所见即所得</text>
+      <rect class="box" x="44" y="72" width="242" height="126" rx="6"/>
+      <text class="tm" x="60" y="92">▾ v : vector&lt;int&gt;</text>
+      <text class="tm" x="76" y="110">[0] = 5</text>
+      <text class="tm" x="76" y="128">[1] = 3</text>
+      <text class="tm" x="76" y="146">[2] = 8</text>
+      <text class="tm" x="76" y="164">…</text>
+      <text class="tg" x="165" y="190" text-anchor="middle">pretty-printer 直接展开</text>
+
+      <rect class="box-r" x="330" y="36" width="300" height="180" rx="9"/>
+      <text class="tr" x="480" y="58" text-anchor="middle">视图：全是壳，没有货</text>
+      <rect class="box" x="354" y="72" width="252" height="126" rx="6"/>
+      <text class="tm" x="368" y="92">▾ r : take_view&lt;transform…</text>
+      <text class="tm" x="384" y="110">▾ _M_base : transform_view…</text>
+      <text class="tm" x="400" y="128">▾ _M_base : filter_view…</text>
+      <text class="tm" x="416" y="146">_M_pred : {…}</text>
+      <text class="tm" x="416" y="164">_M_begin : {不可用}</text>
+      <text class="tr" x="480" y="190" text-anchor="middle">元素<tspan class="tb">还不存在</tspan>，所以看不到</text>
+
+      <rect class="box-a" x="650" y="36" width="290" height="180" rx="9"/>
+      <text class="ta" x="795" y="58" text-anchor="middle">三条应对手段</text>
+      <text class="t" x="668" y="86">① 临时落地看一眼</text>
+      <text class="tm" x="668" y="104">auto dbg = r | rg::to&lt;vector&gt;();</text>
+      <text class="t" x="668" y="130">② 在谓词/变换里下断点</text>
+      <text class="ts" x="668" y="148">能看到每个元素流过的顺序</text>
+      <text class="t" x="668" y="174">③ 插一段 transform 打日志</text>
+      <text class="ts" x="668" y="192">注意：§3.2 说过它会被多次调用</text>
+
+      <text class="ts" x="480" y="248" text-anchor="middle">这不是工具链不成熟，而是<tspan class="ta">惰性的直接推论</tspan>：调试器只能看内存里已有的东西，而视图的元素在被解引用前压根没算出来</text>
+      <text class="ts" x="480" y="270" text-anchor="middle">推论：管道越长，一次调试要落地的中间结果就越多。把长管道<tspan class="tg">拆成两三个命名的中间视图</tspan>，可调试性明显更好</text>
+    </svg>
+  </div>
+
+  <h3 id="s6-3">6.3 抽象惩罚与「什么时候写 for」</h3>
+
+  <div class="fig">
+    <svg viewBox="0 0 960 300" role="img" aria-label="三档优化下手写循环与三段管道的相对耗时示意：在 O0 时管道慢一个数量级，Og 时仍有数倍差距，O2 时简单管道通常与手写循环基本持平。同时编译时间在加入 ranges 后有明显增长。图末强调具体倍数必须自己测量" style="min-width:880px;height:auto">
+      <text class="tb" x="480" y="20" text-anchor="middle">同一个「筛偶数、求平方、累加」：手写循环 vs 三段管道（<tspan class="tr">量级示意，务必自己量</tspan>）</text>
+
+      <text class="ts" x="20" y="52">-O0</text>
+      <rect class="box-g" x="80" y="38" width="60" height="20" rx="4"/>
+      <text class="ts" x="150" y="53">手写循环 1×</text>
+      <rect class="box-r" x="80" y="62" width="600" height="20" rx="4"/>
+      <text class="tr" x="700" y="77">管道 ≈ 10× 上下：每个元素几十次未内联的调用</text>
+
+      <text class="ts" x="20" y="122">-Og</text>
+      <rect class="box-g" x="80" y="108" width="60" height="20" rx="4"/>
+      <text class="ts" x="150" y="123">手写循环 1×</text>
+      <rect class="box-y" x="80" y="132" width="280" height="20" rx="4"/>
+      <text class="ty" x="380" y="147">管道 ≈ 数倍：内联受限，sentinel 比较也留着</text>
+
+      <text class="ts" x="20" y="192">-O2</text>
+      <rect class="box-g" x="80" y="178" width="60" height="20" rx="4"/>
+      <text class="ts" x="150" y="193">手写循环 1×</text>
+      <rect class="box-a" x="80" y="202" width="72" height="20" rx="4"/>
+      <text class="ta" x="170" y="217">管道 ≈ 持平：简单管道常能被完全展平</text>
+
+      <path class="ln-d" d="M20 236 L940 236"/>
+      <text class="ts" x="20" y="258">两条推论：</text>
+      <text class="t" x="120" y="258">① <tspan class="tr">调试构建的差距是真实的用户体验</tspan> —— 跑 Debug 的测试套件、游戏/机器人的开发态帧率都会被它拖住</text>
+      <text class="t" x="120" y="278">② -O2 下「持平」只覆盖<tspan class="ta">简单管道</tspan>；<tspan class="tm">filter</tspan> / <tspan class="tm">join</tspan> 参与、或谓词无法内联时，仍然要实测才知道</text>
+    </svg>
+  </div>
+
+  <p>那么什么时候老老实实写 for 循环？下面这张表比「能用 ranges 就用」有用得多：</p>
+
+  <table>
+    <thead><tr><th>情形</th><th>为什么循环更好</th></tr></thead>
+    <tbody>
+      <tr><td>循环体三行以内、只走一趟</td><td>管道没省下任何东西，却多了一层类型和一次心智跳转</td></tr>
+      <tr><td>需要同时读写、或写回另一个容器</td><td>计算型视图是只读的（§5.3）；<code>for</code> 里想写哪儿写哪儿</td></tr>
+      <tr><td>需要下标算术（<code>i</code> 与 <code>i-1</code> 一起用）</td><td><code>enumerate</code> + <code>slide</code> 拼出来的可读性通常反而更差</td></tr>
+      <tr><td>提前退出的条件依赖累积状态</td><td><code>take_while</code> 只能看单个元素；带状态的谓词等于隐藏的副作用</td></tr>
+      <tr><td>元素求值昂贵且有副作用</td><td>调用次数不可控（§3.2）</td></tr>
+      <tr><td>热路径且已经量出抽象惩罚</td><td>「量出来了」是唯一站得住的理由，别凭直觉</td></tr>
+      <tr><td>团队里多数人没读过 <code>&lt;ranges&gt;</code></td><td>代码要被人读、被人改，这也是工程成本</td></tr>
+    </tbody>
+  </table>
+
+  <p>反过来，ranges 真正赢得漂亮的场景也很集中：<strong>多段变换串在一起、只遍历一趟、每段都便宜、且中间结果不需要落地</strong>。这时手写循环会退化成一个塞了三四个 <code>if</code> 与临时变量的大块头，而管道恰好把「做什么」和「怎么遍历」分开了。判据不是喜好，是「省下的中间容器」和「多付的类型复杂度」哪个更重。</p>
+</section>
+
+<!-- ================================================================ §7 -->
+<section class="chapter" id="s7">
+  <div class="ch-head">
+    <div class="num">07</div>
+    <div class="t"><h2>C++23 的补充</h2><p class="sub">补的不是花样，是 C++20 用起来最别扭的那几处</p></div>
+  </div>
+
+  <h3 id="s7-1">7.1 ranges::to：链条的终点</h3>
+
+  <p>C++20 的 Ranges 有一个非常显眼的缺口：<strong>没有标准办法把视图变回容器</strong>。老写法 <code>std::vector&lt;int&gt; out(r.begin(), r.end())</code> 对视图常常不成立，因为许多视图不是 <code>common_range</code>（<code>begin</code> 与 <code>end</code> 类型不同），而容器的迭代器对构造函数要求两者同类型。于是所有人都在自己项目里手写一个 <code>to_vector</code>。</p>
+
+  <p><code>std::ranges::to</code> 把这件事标准化了，而且做了三件手写版本通常会漏掉的事：<strong>能问长度就先 <code>reserve</code></strong>；<strong>支持递归转换</strong>（<code>range&lt;range&lt;char&gt;&gt;</code> → <code>vector&lt;string&gt;</code>）；<strong>能通过尾随参数转发给容器的构造函数</strong>（分配器、比较器）。它既能当函数调 <code>rg::to&lt;std::vector&gt;(r)</code>，也是一个 closure，可以写在管道末尾 <code>r | rg::to&lt;std::vector&gt;()</code>。</p>
+
+  <h3 id="s7-2">7.2 zip / enumerate / chunk / slide</h3>
+
+  <div class="fig">
+    <svg viewBox="0 0 960 330" role="img" aria-label="C++23 四个新视图的元素映射示意：zip 把两个序列配对并在较短者处结束，enumerate 给每个元素配一个下标，chunk 把序列切成不重叠的定长块最后一块可能不满，slide 产出重叠的滑动窗口且窗口数是元素数减窗口宽再加一" style="min-width:880px;height:auto">
+      <text class="tb" x="480" y="20" text-anchor="middle">四个新 view，看一眼元素怎么映射就够了</text>
+
+      <text class="ta" x="20" y="48">zip</text>
+      <text class="ts" x="20" y="64">配对，在<tspan class="tr">短的那个</tspan>结束</text>
+      <rect class="box" x="160" y="34" width="44" height="24" rx="4"/><text class="tm" x="182" y="51" text-anchor="middle">ada</text>
+      <rect class="box" x="208" y="34" width="44" height="24" rx="4"/><text class="tm" x="230" y="51" text-anchor="middle">bob</text>
+      <rect class="box" x="256" y="34" width="44" height="24" rx="4"/><text class="tm" x="278" y="51" text-anchor="middle">cy</text>
+      <rect class="box" x="160" y="62" width="44" height="24" rx="4"/><text class="tm" x="182" y="79" text-anchor="middle">36</text>
+      <rect class="box" x="208" y="62" width="44" height="24" rx="4"/><text class="tm" x="230" y="79" text-anchor="middle">41</text>
+      <path class="ln-a" d="M312 60 L352 60"/><polygon class="ar-a" points="352,55 352,65 362,60"/>
+      <rect class="box-a" x="372" y="46" width="120" height="28" rx="5"/><text class="tm" x="432" y="65" text-anchor="middle">(ada,36)</text>
+      <rect class="box-a" x="500" y="46" width="120" height="28" rx="5"/><text class="tm" x="560" y="65" text-anchor="middle">(bob,41)</text>
+      <text class="tr" x="700" y="65">cy 被丢掉：长度取 min</text>
+
+      <text class="ta" x="20" y="118">enumerate</text>
+      <text class="ts" x="20" y="134">配下标，省掉计数器</text>
+      <rect class="box" x="160" y="104" width="44" height="24" rx="4"/><text class="tm" x="182" y="121" text-anchor="middle">ada</text>
+      <rect class="box" x="208" y="104" width="44" height="24" rx="4"/><text class="tm" x="230" y="121" text-anchor="middle">bob</text>
+      <rect class="box" x="256" y="104" width="44" height="24" rx="4"/><text class="tm" x="278" y="121" text-anchor="middle">cy</text>
+      <path class="ln-a" d="M312 116 L352 116"/><polygon class="ar-a" points="352,111 352,121 362,116"/>
+      <rect class="box-p" x="372" y="102" width="104" height="28" rx="5"/><text class="tm" x="424" y="121" text-anchor="middle">(0,ada)</text>
+      <rect class="box-p" x="484" y="102" width="104" height="28" rx="5"/><text class="tm" x="536" y="121" text-anchor="middle">(1,bob)</text>
+      <rect class="box-p" x="596" y="102" width="104" height="28" rx="5"/><text class="tm" x="648" y="121" text-anchor="middle">(2,cy)</text>
+      <text class="ts" x="716" y="121">下标类型是 <tspan class="tm">difference_type</tspan>（有符号）</text>
+
+      <text class="ta" x="20" y="188">chunk(3)</text>
+      <text class="ts" x="20" y="204">切块，<tspan class="tg">不重叠</tspan></text>
+      <text class="tm" x="160" y="182">1 2 3 4 5 6 7</text>
+      <path class="ln-a" d="M312 186 L352 186"/><polygon class="ar-a" points="352,181 352,191 362,186"/>
+      <rect class="box-g" x="372" y="172" width="92" height="28" rx="5"/><text class="tm" x="418" y="191" text-anchor="middle">1 2 3</text>
+      <rect class="box-g" x="472" y="172" width="92" height="28" rx="5"/><text class="tm" x="518" y="191" text-anchor="middle">4 5 6</text>
+      <rect class="box-y" x="572" y="172" width="60" height="28" rx="5"/><text class="tm" x="602" y="191" text-anchor="middle">7</text>
+      <text class="ty" x="648" y="191">最后一块可能不满</text>
+      <text class="tr" x="160" y="212">⚠️ 底层只是 input_range 时，块必须<tspan class="tb">按顺序消费完</tspan>（块之间共享状态）</text>
+
+      <text class="ta" x="20" y="262">slide(3)</text>
+      <text class="ts" x="20" y="278">滑窗，<tspan class="tr">重叠</tspan></text>
+      <text class="tm" x="160" y="256">1 2 3 4 5 6 7</text>
+      <path class="ln-a" d="M312 260 L352 260"/><polygon class="ar-a" points="352,255 352,265 362,260"/>
+      <rect class="box-a" x="372" y="246" width="80" height="28" rx="5"/><text class="tm" x="412" y="265" text-anchor="middle">1 2 3</text>
+      <rect class="box-a" x="458" y="246" width="80" height="28" rx="5"/><text class="tm" x="498" y="265" text-anchor="middle">2 3 4</text>
+      <rect class="box-a" x="544" y="246" width="80" height="28" rx="5"/><text class="tm" x="584" y="265" text-anchor="middle">3 4 5</text>
+      <rect class="box" x="630" y="246" width="80" height="28" rx="5" opacity=".55"/><text class="tm" x="670" y="265" text-anchor="middle">…</text>
+      <text class="ts" x="726" y="265">共 7 − 3 + 1 = <tspan class="tb">5</tspan> 个窗口</text>
+
+      <text class="ts" x="480" y="310" text-anchor="middle"><tspan class="tm">slide(n)</tspan> 的宽度是<tspan class="ta">运行期值</tspan>且产出的是子视图；<tspan class="tm">adjacent&lt;N&gt;</tspan> 的宽度是<tspan class="ta">编译期常量</tspan>、产出 tuple —— 需要结构化绑定时选后者</text>
+      <text class="ts" x="480" y="326" text-anchor="middle">7 个元素、窗口 3：chunk 给 <tspan class="tb">3</tspan> 块，slide 给 <tspan class="tb">5</tspan> 个窗口。差一个元素结果就完全不同，用错很难从结果反推</text>
+    </svg>
+  </div>
+
+  <pre><code>namespace rg = std::ranges;
+namespace rv = std::views;
+
+std::vector&lt;std::string&gt; names{"ada","bob","cy"};
+std::vector&lt;int&gt;         ages {36, 41, 29};
+
+// zip：yield tuple&lt;string&amp;, int&amp;&gt;，长度取两者较短
+for (auto&amp;&amp; [n, a] : rv::zip(names, ages)) std::print("{}={}\n", n, a);
+
+// enumerate：i 是有符号的 difference_type，n 仍是原容器元素的引用
+for (auto&amp;&amp; [i, n] : names | rv::enumerate) std::print("#{} {}\n", i, n);
+
+// chunk vs slide：同样的输入、同样的 3，结果个数不同
+auto blocks  = rv::iota(1, 8) | rv::chunk(3);   // [1,2,3] [4,5,6] [7]      → 3 块
+auto windows = rv::iota(1, 8) | rv::slide(3);   // [1,2,3] [2,3,4] … [5,6,7] → 5 个窗口
+
+// join_with：ranges 版的 string join，惰性，不建中间字符串
+auto line = names | rv::join_with(',') | rg::to&lt;std::string&gt;();   // "ada,bob,cy"</code></pre>
+
+  <h3 id="s7-3">7.3 join_with 与其余</h3>
+
+  <p><code>views::join_with(sep)</code> 补的是 <code>join</code> 的一个很常见的变体：把嵌套序列摊平的<strong>同时</strong>插入分隔符。它最实际的用途就是 string join——一个每种语言都有、C++ 却一直要么手写要么依赖第三方的操作。而且它是惰性的，直接接 <code>rg::to&lt;std::string&gt;()</code> 时只有一次分配。</p>
+
+  <table>
+    <thead><tr><th>C++23 新增</th><th>补的是什么缺口</th><th>注意</th></tr></thead>
+    <tbody>
+      <tr><td><code>ranges::to&lt;C&gt;</code></td><td>视图无法变回容器</td><td>会 <code>reserve</code>、支持递归转换与容器额外构造参数</td></tr>
+      <tr><td><code>views::zip</code> / <code>zip_transform</code></td><td>并行遍历多个序列</td><td>长度取 min；元素是 <code>tuple</code> 而非 <code>pair</code></td></tr>
+      <tr><td><code>views::enumerate</code></td><td>手写下标计数器</td><td>下标是<strong>有符号</strong>的 <code>difference_type</code></td></tr>
+      <tr><td><code>views::chunk</code> / <code>slide</code></td><td>定长分块 / 滑动窗口</td><td>见上图；<code>chunk</code> 在 input_range 上的块必须顺序消费</td></tr>
+      <tr><td><code>views::adjacent&lt;N&gt;</code> / <code>pairwise</code></td><td>编译期定宽的相邻窗口</td><td>产出 <code>tuple</code>，可直接结构化绑定</td></tr>
+      <tr><td><code>views::chunk_by</code></td><td>按「相邻两元素的关系」分组</td><td>没有 const <code>begin()</code>（§3.1）</td></tr>
+      <tr><td><code>views::join_with</code></td><td>摊平 + 分隔符</td><td>string join 的标准答案</td></tr>
+      <tr><td><code>views::stride</code></td><td>每隔 n 个取一个</td><td>能保住 random_access</td></tr>
+      <tr><td><code>views::cartesian_product</code></td><td>多重嵌套循环</td><td>规模是各维度<strong>相乘</strong>，容易失手</td></tr>
+      <tr><td><code>views::as_const</code> / <code>as_rvalue</code></td><td>只读化 / 批量 move 出元素</td><td><code>as_rvalue</code> + <code>ranges::to</code> 可以搬空源容器</td></tr>
+      <tr><td><code>views::repeat</code></td><td><code>iota</code> 的常量版</td><td>无界或定长，配 <code>zip</code> 很好用</td></tr>
+      <tr><td><code>ranges::range_adaptor_closure</code></td><td>用户类型接入 <code>|</code></td><td>见 §4.3，C++20 完全没有对应机制</td></tr>
+    </tbody>
+  </table>
+
+  <div class="box tip">这些设施在三大实现里的到位时间差得比较远（<code>ranges::to</code>、<code>cartesian_product</code> 是较晚才齐的一批）。要在有编译器版本下限的项目里用，<strong>先查一遍支持表再动手</strong>，别按标准年份想当然——「代码写完才发现 CI 上那台旧编译器不认」是这一节最常见的返工来源。</div>
+</section>
+
+<!-- ================================================================ §8 -->
+<section class="chapter" id="s8">
+  <div class="ch-head">
+    <div class="num">08</div>
+    <div class="t"><h2>面试题集（12 道）</h2><p class="sub">按难度分三档，先自测再对照</p></div>
+  </div>
+
+  <p class="qa-hint">点击每道题展开参考答案（先自测，再对照）。</p>
+
+  <h3 id="s8-1">8.1 基础（必答）</h3>
+  <ol class="qa-list">
+    <li><details class="qa">
+      <summary><span class="lvl basic">基础</span><code>range</code> 和 <code>view</code> 的区别是什么？</summary>
+      <div class="ans">
+        <p><code>range</code> 只要求「有 <code>begin()</code> 和 <code>end()</code>」，<code>end()</code> 甚至可以返回一个不同类型的 sentinel。容器、C 数组、<code>span</code> 全是 range。</p>
+        <p><code>view</code> 是 range 的一个子集，额外要求 <code>movable</code>、<code>enable_view</code>，以及一组<strong>复杂度</strong>语义要求：移动构造 O(1)，可拷贝时拷贝构造也 O(1)。这条要求存在的理由是管道的每一层都<strong>按值持有</strong>下一层，如果某层拷贝是 O(n)，「拼装管道」这个看起来免费的动作就变成了 O(n)。</p>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl basic">基础</span><code>const auto&amp; r = v | views::filter(p);</code> 之后 <code>for (int x : r)</code> 编译失败，为什么？</summary>
+      <div class="ans">
+        <p><code>filter_view::begin()</code> 需要扫描到第一个满足谓词的元素，并把结果<strong>缓存</strong>在视图内部（否则 <code>begin()</code> 无法满足 <code>range</code> 要求的摊还常数时间）。缓存是可变状态，所以 <code>begin()</code> 不能是 <code>const</code> 成员——于是 <code>const filter_view&amp;</code> 压根不满足 <code>range</code>。</p>
+        <p>可推广的判据：<strong>凡是 <code>begin()</code> 要先扫描再缓存的视图都没有 <code>const begin()</code></strong>，包括 <code>filter_view</code>、<code>drop_while_view</code>、<code>split_view</code>、<code>chunk_by_view</code>。写 <code>auto</code> 或 <code>auto&amp;&amp;</code> 即可。</p>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl basic">基础</span>惰性求值到底省了什么？什么时候它不省反赔？</summary>
+      <div class="ans">
+        <p>省的是<strong>中间容器的分配与拷贝</strong>：<code>v | filter | transform</code> 全程不产生任何临时 <code>vector</code>，元素在被解引用的那一刻才算出来。数据量大、只遍历一趟时，这是纯赚。</p>
+        <p>不省反赔有三种典型情形：要遍历<strong>多趟</strong>（每趟把整条链重算）；变换函数<strong>昂贵</strong>（调用次数不由你掌握，见 §3.2）；下游需要<strong>随机访问或排序</strong>（类别退化后压根编译不过）。这几种都该先 <code>ranges::to</code> 落地。</p>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl basic">基础</span><code>views::transform</code> 产出的视图能不能写回原容器？<code>views::filter</code> 呢？</summary>
+      <div class="ans">
+        <p><code>transform</code> 不能。它的 <code>operator*</code> 返回的是 <code>invoke(f, *base_it)</code>——一个计算出来的<strong>临时值</strong>，往它赋值没有意义，所以 <code>ranges::sort</code> 之类要求元素可交换的算法会直接约束不满足。</p>
+        <p><code>filter</code> 能。它只是转发底层的真引用，<code>for (int&amp; x : v | views::filter(p)) x = 0;</code> 是合法的，会改到 <code>v</code>。</p>
+        <p>一般规律：<strong>「计算出元素」的视图都是只读的</strong>（<code>transform</code>、<code>iota</code>、<code>repeat</code>、<code>zip_transform</code>）；<strong>「转发引用」的视图可写</strong>（<code>filter</code>、<code>take</code>、<code>drop</code>、<code>reverse</code>、<code>elements</code>）。</p>
+      </div>
+    </details></li>
+  </ol>
+
+  <h3 id="s8-2">8.2 中级（区分熟练度）</h3>
+  <ol class="qa-list" start="5">
+    <li><details class="qa">
+      <summary><span class="lvl mid">中级</span><code>ranges::find(get_vector(), 42)</code> 返回什么？为什么这么设计？</summary>
+      <div class="ans">
+        <p>返回 <code>std::ranges::dangling</code>——一个空结构体，没有 <code>operator*</code>、没有 <code>operator-&gt;</code>、没有 <code>++</code>。机制是每个返回迭代器的 ranges 算法都用 <code>borrowed_iterator_t&lt;R&gt;</code> 做返回类型：<code>borrowed_range&lt;R&gt;</code> 成立就是真迭代器，否则退化成 <code>dangling</code>。<code>vector</code> 的右值不是 borrowed_range，于是走后一路。</p>
+        <p>设计意图是<strong>把运行期 UB 降级成编译期诊断</strong>：临时容器在语句末就析构了，返回真迭代器的话使用它就是 use-after-free，而这类 bug 往往在生产环境才暴露。现在失败点被搬回产生它的那一行，错误消息是「dangling 没有 operator*」。</p>
+        <p>局限也要说清：<code>dangling</code> 只在<strong>单个表达式内</strong>看得见「实参是右值」。跨过函数边界之后，被调用方拿到的只是 <code>const&amp;</code>，无从知道上游绑的是变量还是临时对象。</p>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl mid">中级</span><code>filter_view</code> 明明可能只是引用别人的元素，为什么不是 <code>borrowed_range</code>？</summary>
+      <div class="ans">
+        <p>问题不在元素上，在<strong>谓词</strong>上。<code>filter_view::iterator</code> 递进时要调用谓词，而谓词存在视图对象里，所以迭代器必须持有一个指回视图的 <code>parent_</code> 指针。视图一析构，这个指针就悬垂了——跟元素在哪毫无关系。<code>transform_view</code> 同理（解引用要读函数对象）。</p>
+        <p>判据可以推广：<strong>迭代器里有没有指回视图自己的指针</strong>。没有的（<code>ref_view</code>、<code>take_view</code>、<code>drop_view</code>、<code>reverse_view</code>）可以是 borrowed；有的一定不行。<code>owning_view</code> 不是 borrowed 则是另一个理由——容器就在它内部。</p>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl mid">中级</span><code>v | transform(f) | filter(p)</code> 和 <code>v | filter(p') | transform(f)</code> 在性能上有什么区别？</summary>
+      <div class="ans">
+        <p>前者会<strong>重复求值</strong>。<code>filter</code> 为了找到下一个满足元素，必须先解引用 <code>transform</code>（调一次 <code>f</code>）让谓词看到变换后的值；用户随后再解引用一次，又调一次 <code>f</code>。所以每个<em>通过</em>的元素 <code>f</code> 被调 2 次、每个被筛掉的调 1 次。8 个元素 4 个通过 → 12 次。</p>
+        <p>后者只调 4 次：谓词读的是原始元素，<code>f</code> 只在用户解引用时算一次，而且只作用在通过筛选的元素上。</p>
+        <p>所以通用规则是<strong>能先筛就先筛</strong>。只有当谓词必须看变换后的值时才被迫用前一种顺序；此时的解法是把 <code>f</code> 拆成「便宜的键 + 昂贵的主体」，让 <code>filter</code> 只依赖便宜的那半。这也是为什么<strong>视图链里的函数对象必须是纯函数</strong>——带副作用的话，调用次数取决于下游结构，无法预测。</p>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl mid">中级</span><code>ranges::sort(v | views::filter(pred))</code> 为什么编译不过？有哪几种解法？</summary>
+      <div class="ans">
+        <p><code>ranges::sort</code> 要求 <code>random_access_range</code>，而 <code>filter_view</code> 最高只能到 <code>bidirectional</code>：「第 n 个满足谓词的元素在哪」除了从头数没有办法，<code>it + n</code> 注定是 O(n)，宣称 random_access 就是撒谎。</p>
+        <p>三条解法：<strong>甲</strong>——先 <code>ranges::sort(v)</code> 再筛，把顺序换一下（通常是最好的答案，排序本来就该作用在拥有元素的容器上）；<strong>乙</strong>——<code>ranges::to&lt;vector&gt;()</code> 落地后再排（但这把惰性最大的收益还回去了）；<strong>丙</strong>——换成只要求双向/前向的算法，<code>stable_partition</code>、<code>rotate</code>、<code>unique</code> 常能替掉一次排序。</p>
+      </div>
+    </details></li>
+  </ol>
+
+  <h3 id="s8-3">8.3 高级（体现深度）</h3>
+  <ol class="qa-list" start="9">
+    <li><details class="qa">
+      <summary><span class="lvl adv">高级</span><code>owning_view</code> 为什么不是 C++20 一开始就有的？它的加入改了什么规则？</summary>
+      <div class="ans">
+        <p>因为最初的 <code>view</code> 语义要求把<strong>析构</strong>的复杂度也写成了与元素个数无关，这直接禁掉了「视图拥有元素」这件事——析构 n 个元素的代价一定随 n 增长。后果是 <code>get_vector() | views::filter(p)</code> 在当时<strong>编译不过</strong>：右值容器既不是 view（拷贝 O(n)），又不是 borrowed_range，不满足 <code>viewable_range</code>。这是刻意的：宁可拒绝，也不要造出指向已死临时对象的视图。</p>
+        <p>P2415（<em>What is a view?</em>）把那条改成「从一个含 M 个元素的 view 复制/移动出 N 个对象，这 N 个对象的析构总代价是 O(N+M)」。意思是<strong>允许有一份真正的所有权，只要副本不各自再拥有一份</strong>。<code>owning_view</code> 因此删掉了拷贝构造、只保留移动。</p>
+        <p>连带的影响有两个：<code>viewable_range</code> 放开了可移动的右值容器（但<strong>显式排除右值 <code>initializer_list</code></strong>，因为它的底层数组本身是临时对象，包起来照样悬垂）；以及以 <code>owning_view</code> 开头的整条管道都变成 move-only，塞不进要求可拷贝的接口。</p>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl adv">高级</span>「<code>view</code> 的操作必须是 O(1)」这条要求，编译器是怎么检查的？</summary>
+      <div class="ans">
+        <p><strong>不检查。</strong>这是本题的全部要点。<code>view&lt;T&gt;</code> 的语法部分只有 <code>range&lt;T&gt; &amp;&amp; movable&lt;T&gt; &amp;&amp; enable_view&lt;T&gt;</code>，而 <code>enable_view&lt;T&gt;</code> 默认就是「T 是否派生自 <code>view_base</code> 或 <code>view_interface</code>」。也就是说<strong>「我是一个 view」是作者宣称的，不是编译器测出来的</strong>。</p>
+        <p>你完全可以让一个每次拷贝都 <code>memcpy</code> 一兆内存的类型满足 <code>view</code>，编译器一句话都不会说，只是所有依赖「管道拼装免费」的代码都会静默变慢——而且慢在一个语法上看不出成本的位置。</p>
+        <p>这是标准库里「语义要求」这一类条款的典型形态（<code>std::less</code> 要求严格弱序、<code>hash</code> 要求相等即同值也是同一类）：违反它不是 ill-formed，而是把契约打破后的行为交给你自己承担。自定义视图时，这条要靠 code review 而不是编译器。</p>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl adv">高级</span>要给团队写一个自定义 range adaptor，最小需要哪些部件？各自不写会怎样？</summary>
+      <div class="ans">
+        <p>三个部件（见 §4.3）。<strong>视图本体</strong>继承 <code>view_interface&lt;D&gt;</code>：这既让 <code>enable_view</code> 自动为真、从而满足 <code>view</code> 能出现在管道中间，又通过 CRTP 从你的 <code>begin()</code>/<code>end()</code> 白送 <code>empty()</code>/<code>front()</code>/<code>operator bool</code>/条件性的 <code>size()</code> 与 <code>operator[]</code>——全部零运行期成本，没有虚函数。</p>
+        <p><strong>CTAD 推导指引</strong> <code>template&lt;class R&gt; my_view(R&amp;&amp;) -&gt; my_view&lt;views::all_t&lt;R&amp;&amp;&gt;&gt;;</code>：不写的话 <code>my_view{v}</code> 会拿 <code>vector</code> 本身当模板参数，而 <code>vector</code> 不满足 <code>view</code>，直接编译失败。有了它，左值自动包成 <code>ref_view</code>、右值包成 <code>owning_view</code>。</p>
+        <p><strong>closure 对象</strong>继承 C++23 的 <code>ranges::range_adaptor_closure&lt;D&gt;</code>：这才是接入 <code>|</code> 的唯一标准途径，同时也让你的 adaptor 能被「closure | closure」规则合成进别人的管道片段。C++20 完全没有这个机制，这也是当年自定义 adaptor 只能抄标准库实现细节的原因。</p>
+        <p>另外两个易漏点：迭代器要定义 <code>difference_type</code>（否则连 <code>input_iterator</code> 都不满足，报错会出现在很深的地方）；默认构造要加 <code>requires std::default_initializable&lt;V&gt;</code>，否则底层视图不可默认构造时会变成硬错误而不是被 SFINAE 掉。</p>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl adv">高级</span>团队要在一个百万行的 C++ 项目里引入 Ranges，你会定哪几条规则？</summary>
+      <div class="ans">
+        <p><strong>一、管道是实现细节，不上接口。</strong>视图类型名进了函数签名，就进了 mangled 符号名、进了每个包含该头的 TU、也进了链接器的符号表。边界上落地成 <code>span</code> 或容器，顺带也消掉了 §2.1 那类悬垂（返回建立在引用形参之上的视图）。</p>
+        <p><strong>二、不返回视图，也不长期存储视图。</strong>视图是「一次遍历的计划」，不是数据结构。要跨作用域保存就 <code>ranges::to</code> 落地。</p>
+        <p><strong>三、函数对象必须是纯函数。</strong>调用次数取决于下游有几个 <code>filter</code>、遍历几趟、算法有没有多解引用，不可预测（§3.2）。</p>
+        <p><strong>四、管道长度设上限（比如 3 段），能先筛就先筛。</strong>前者是可调试性与调试构建性能，后者是重复求值。</p>
+        <p><strong>五、性能结论必须来自测量。</strong>-O2 下简单管道通常与手写循环持平，但<strong>调试构建的差距是真实的</strong>——跑 Debug 测试套件、开发态帧率都会被它拖住，而这一点在只看 Release benchmark 时完全看不见。</p>
+        <p><strong>六、先查编译器支持表再用 C++23 的部分。</strong><code>ranges::to</code>、<code>cartesian_product</code> 这批在三大实现里到位得晚，「写完才发现 CI 上那台旧编译器不认」是最常见的返工来源。</p>
+      </div>
+    </details></li>
+  </ol>
+</section>
+
+<div class="footer-nav">
+  <a href="./templates_guide.html">⬅️ 模板与元编程</a>
+  <a href="../stl/stl_algorithms_ppt.html">🧰 STL 算法</a>
+  <a href="./coroutines_deep_dive.html">🔁 协程深入</a>
+  <a href="./lambda_deep_dive.html">λ Lambda 深入</a>
+  <a href="modern_cpp_stl_directory.html">📚 目录</a>
+  <a href="../index.html">🏠 主页</a>
+</div>
+
+</main>
+</div>
+
+<footer>
+  <p>Ranges 与 views 深入 — view 的 O(1) 约束 · borrowed_range 与 dangling · 惰性的真实代价 · 自定义 adaptor — Kavin Tech Notes · 2026</p>
+</footer>
+
+<script>
+document.querySelectorAll('aside.toc nav a').forEach(a=>{a.addEventListener('click',e=>{e.preventDefault();const t=document.querySelector(a.getAttribute('href'));if(t)t.scrollIntoView({behavior:'smooth'})})});
+const obs=new IntersectionObserver(es=>{es.forEach(e=>{if(e.isIntersecting){document.querySelectorAll('aside.toc nav a').forEach(a=>a.classList.remove('active'));const l=document.querySelector(`aside.toc nav a[href="#${e.target.id}"]`);if(l)l.classList.add('active')}})},{threshold:.2});
+document.querySelectorAll('section[id]').forEach(s=>obs.observe(s));
+</script>
+
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>

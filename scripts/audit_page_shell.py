@@ -22,6 +22,8 @@ consistency, search-index):
      <script> in <head>, and is only loaded by pages that actually use it
  10. icon-only buttons carry an aria-label, and every page has a
      <meta name="description">
+ 11. an inline <svg> holding three or more <text> labels is a figure, so it
+     must be role="img" + aria-label rather than aria-hidden
 
 Chrome pages (home, *_directory.html, template indexes) deliberately use a
 different shell — they get the checks that still apply (1, 2, 3, 7, 8).
@@ -58,6 +60,13 @@ VENDOR_TAG = re.compile(
 ICON_BTN = re.compile(r"<button\b([^>]*)>([\s\S]{0,60}?)</button>", re.I)
 # Any letter, digit or CJK ideograph counts as a real, self-labelling caption.
 WORDY = re.compile(r"[0-9A-Za-z\u3400-\u9fff\u3040-\u30ff]")
+
+SCRIPT_BODY = re.compile(r"<script\b[^>]*>[\s\S]*?</script>", re.I)
+SVG_BLOCK = re.compile(r"<svg\b[^>]*>[\s\S]*?</svg>", re.I)
+SVG_TEXT = re.compile(r"<text\b[^>]*>[\s\S]*?</text>", re.I)
+# Two labels can still be a decorated icon (a badge with a number, say). Three
+# or more is a diagram: nobody puts that much prose into decoration.
+SVG_TEXT_MIN = 3
 
 THEME_INIT = "tn-theme-init"
 TOKENS = "site-tokens.css"
@@ -177,6 +186,26 @@ def audit(path: Path) -> list[str]:
             out.append(f"icon-only <button> without aria-label: {inner or '(empty)'!r}")
     if not re.search(r'<meta[^>]+name=["\']description["\']', head, re.I):
         out.append("no <meta name=\"description\"> (search engines will invent a snippet)")
+
+    # 11. an inline <svg> carrying real text is a figure, not decoration.
+    #     Marking it aria-hidden makes a screen reader skip the meaning while
+    #     still reading out every stray <text> label inside it — the worst of
+    #     both. It also makes report_page_density count the page as having no
+    #     figures, so code-wall pages look better than they are.
+    #     Scan with <script> bodies blanked out: interactive pages build SVG
+    #     inside JS template literals, and that markup is generated at runtime
+    #     by code that sets its own attributes. Flagging it is a false positive,
+    #     and a check that cries wolf is one nobody will trust.
+    for m in SVG_BLOCK.finditer(SCRIPT_BODY.sub("", text)):
+        svg = m.group(0)
+        head_tag = svg[: svg.index(">") + 1]
+        if 'role="img"' in head_tag or "aria-hidden" not in head_tag:
+            continue
+        if len(SVG_TEXT.findall(svg)) >= SVG_TEXT_MIN:
+            label = html_unescape(re.sub(r"<[^>]+>", "", SVG_TEXT.search(svg).group(0)))
+            out.append(
+                f'informative <svg> marked aria-hidden (first label: {label.strip()[:30]!r}); '
+                'use role="img" + a Chinese aria-label')
 
     return out
 

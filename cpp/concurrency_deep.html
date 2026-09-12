@@ -71,7 +71,7 @@
       <a class="tn-home" href="../index.html">← 主页</a>
       <a href="modern_cpp_stl_directory.html">目录</a>
       <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
-      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 10 min</span>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 25 min</span>
       <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
     </div>
   </div>
@@ -108,7 +108,7 @@
   <div class="meta-row">
     <span class="pill red">核心难度 ★★★★</span>
     <span class="pill cyan">面试出现率 高</span>
-    <span class="pill green">阅读时长 ~10 min</span>
+    <span class="pill green">阅读时长 ~25 min</span>
     <span class="pill amber">前置 对象模型 · 智能指针</span>
   </div>
   <div class="meta">
@@ -180,6 +180,34 @@
 <pre><span class="kw">std</span>::jthread worker([](<span class="kw">std</span>::stop_token st) {
   <span class="kw">while</span> (!st.stop_requested()) do_work();
 });  <span class="cm">// 析构：request_stop() + join()，不再 terminate</span></pre>
+
+  <h3 id="s1-1">1.1 一条线程的真实成本账</h3>
+  <p>「线程贵」贵在哪、贵多少，决定了你该在多细的粒度上并行。账分三段：创建一次的、一直占着的、每次切换的。</p>
+  <table>
+    <thead><tr><th>成本项</th><th>量级（x86-64 Linux）</th><th>备注</th></tr></thead>
+    <tbody>
+      <tr><td>创建 / 销毁</td><td>10–30 μs</td><td><code>clone</code> + <code>task_struct</code> + 调度器入队</td></tr>
+      <tr><td>用户栈</td><td>默认 8 MiB 虚拟预留</td><td>按页 fault 进来，但一万条线程就是 80 GiB 地址空间</td></tr>
+      <tr><td>内核栈</td><td>16 KiB 真实物理内存</td><td>不会因为「没用到」而省掉</td></tr>
+      <tr><td>上下文切换</td><td>直接成本 1–3 μs</td><td>存寄存器 + 切页表 + TLB 失效</td></tr>
+      <tr><td>切换的余波</td><td>常是直接成本的几倍</td><td>L1/L2 被新线程冲刷，切回来全是 cold miss，profiler 里看不见</td></tr>
+    </tbody>
+  </table>
+  <p>判据：<strong>单个任务的执行时间要远大于一次上下文切换</strong>，经验上是百微秒量级。这就是「一请求一线程」在 QPS 上万时必崩的原因——请求本身只要 20 μs CPU，线程数却跟着请求数走。上界则看线程在等什么：CPU 密集取核数，阻塞 IO 密集可超配几倍，天花板是内存而不是 CPU。</p>
+
+  <h3 id="s1-2">1.2 协程省掉的是哪一部分</h3>
+  <p>协程不是「更便宜的线程」，而是<strong>有选择地</strong>省掉上面几项。一次 <code>co_await</code> 挂起 = 把活跃变量存进 coroutine frame 加一次间接跳转，<strong>几十纳秒</strong>，不进内核、不切页表，cache 还是热的。</p>
+  <table>
+    <thead><tr><th>维度</th><th>OS 线程</th><th>C++20 协程</th></tr></thead>
+    <tbody>
+      <tr><td>切换</td><td>μs 级，含 syscall 与 TLB 失效</td><td>ns 级，一次返回加跳转</td></tr>
+      <tr><td>栈</td><td>独立栈，MiB 级虚拟预留</td><td>帧在堆上，只存活跃变量，百字节级</td></tr>
+      <tr><td>谁决定下一个跑谁</td><td>内核，可抢占</td><td>你写的调度器，<strong>不可抢占</strong></td></tr>
+      <tr><td>能否吃多核</td><td>能</td><td>不能，仍要分发到多条线程上</td></tr>
+      <tr><td>撞上阻塞 syscall</td><td>本线程睡，其它照跑</td><td><strong>整条载体线程卡住</strong>，上面所有协程陪葬</td></tr>
+    </tbody>
+  </table>
+  <div class="warn">最后一行是协程最常见的翻车点：协程里调了同步 <code>read()</code>，它不会「只让当前协程等」，而是把整个 event loop 线程钉住。这个「栈上不许阻塞」的约束会传染给你依赖的每一个库。</div>
 </section>
 
 <section class="chapter" id="s2">
@@ -230,6 +258,28 @@
       <text class="ts" x="680" y="112" text-anchor="middle">happens-before · MESI · Seqlock · Hazard / RCU</text>
     </svg>
   </div>
+
+  <h3 id="s2-1">2.1 数据竞争 ≠ 竞态条件</h3>
+  <p>中文都叫「竞争」，层次却不同。<strong>数据竞争</strong>是语言层的机械判定（同一地址、至少一写、无 happens-before），后果是 UB；<strong>竞态条件</strong>是逻辑错误，指结果依赖执行时序，标准对它没有任何意见。两者可以各自单独出现。</p>
+  <table>
+    <thead><tr><th></th><th>有数据竞争</th><th>无数据竞争</th></tr></thead>
+    <tbody>
+      <tr><td><strong>有竞态条件</strong></td><td>最常见：两线程裸 <code>x++</code>，既 UB 又丢更新</td><td>「查了再用」：<code>if (!m.count(k)) m.insert(k, v);</code> 每步都持锁，两个线程却都能通过检查</td></tr>
+      <tr><td><strong>无竞态条件</strong></td><td>两线程写同一个值——标准照样判 UB，不认「反正值一样」</td><td>目标状态</td></tr>
+    </tbody>
+  </table>
+  <p>右上角那格最难查：TSan 一声不吭，因为确实每次访问都持锁了。错在<strong>不变量的边界画错了</strong>——「检查」和「使用」被拆进两个临界区，只能靠人推理。左下角那格则提醒反面：别用「反正只是个统计计数器」给裸共享写开脱，标准不承认「良性竞争」。</p>
+
+  <h3 id="s2-2">2.2 编译器凭什么敢把你的循环优化没</h3>
+  <p>「无数据竞争」不是道德要求，而是<strong>优化器的输入假设</strong>。既然标准保证它不会发生，编译器就能断定：非原子变量在两个同步点之间不可能被别人改。于是重复的 load 被提到循环外，值留在寄存器里。</p>
+<pre><span class="cm">// 源码：等别人置位。done 非原子、中间没有任何同步</span>
+<span class="kw">bool</span> done = <span class="kw">false</span>;
+<span class="kw">while</span> (!done) { }
+
+<span class="cm">// 编译器眼里的合法等价变换（前提：不可能有数据竞争）</span>
+<span class="kw">if</span> (!done) <span class="kw">for</span> (;;) { }   <span class="cm">// load 一次 → 永远出不来</span></pre>
+  <p>后果不是「读到旧值」那么温和：这条线程<strong>永远</strong>看不到变化，因为内存根本不再被访问。同一份代码 <code>-O0</code> 能跑、<code>-O2</code> 死循环，于是 bug 被归因成「优化器有问题」。同类变换还有把一次写撕成两次、把条件写变成无条件写（<code>x = c ? 1 : x;</code> 会凭空覆盖别人）。竞争的后果不是「结果不确定」，是<strong>任意</strong>。</p>
+  <div class="danger">把 <code>volatile</code> 当同步用是这里最常见的错解。它只要求编译器不省略这一次访问，<strong>既不阻止 CPU 乱序，也不建立 happens-before</strong>，更不保证原子。修上面那个死循环要用 <code>std::atomic&lt;bool&gt;</code>。</div>
 </section>
 
 <section class="chapter" id="s3">
@@ -282,6 +332,53 @@ mtx.unlock();
   use(shared);
 }</pre>
 
+  <h3 id="s3-1">3.1 粒度：粗锁与细锁各付什么代价</h3>
+  <p>确定「一把锁对应一组不变量」之后，下一问是这组不变量画多大。两头的坑性质不同：粗锁的代价是性能，可以量；细锁的代价是正确性。</p>
+  <table>
+    <thead><tr><th></th><th>一把大锁</th><th>多把小锁</th></tr></thead>
+    <tbody>
+      <tr><td>主要代价</td><td>争用：并行被打回串行</td><td>死锁与锁序；两把锁之间的瞬间不变量不成立</td></tr>
+      <tr><td>失败形态</td><td>吞吐上不去，但结果是对的</td><td>平时正常，压测或换机器后偶发挂死</td></tr>
+      <tr><td>可观测性</td><td>好：futex 等待时间直接看得到</td><td>差：要靠 TSan 和死锁现场的全线程栈</td></tr>
+    </tbody>
+  </table>
+  <p>默认选粗，<strong>有 profile 证明这把锁是瓶颈了再拆</strong>。拆的时候优先拆<strong>数据</strong>而不是拆锁：把大容器切成 N 个分片、每片自带一把锁、key 决定落哪片——一次操作永远只碰一把锁，环路无从产生。</p>
+
+  <h3 id="s3-2">3.2 四个 guard 怎么选</h3>
+  <table>
+    <thead><tr><th>类型</th><th>能力</th><th>什么时候用</th></tr></thead>
+    <tbody>
+      <tr><td><code>lock_guard</code></td><td>构造 lock、析构 unlock，没别的</td><td><strong>默认选它</strong>：一把锁，进出即整段临界区</td></tr>
+      <tr><td><code>unique_lock</code></td><td>可延迟加锁、中途 <code>unlock</code>、可移动、可交给 <code>cv.wait</code></td><td>配条件变量（<strong>硬性要求</strong>）；中途要放锁做慢操作；要把所有权交出去。代价是多一个持有状态标记</td></tr>
+      <tr><td><code>scoped_lock</code></td><td>一次锁住 N 把，内部走免死锁算法</td><td>确实要同时持有多把锁时；N=1 时与 <code>lock_guard</code> 等价</td></tr>
+      <tr><td><code>shared_lock</code></td><td>取 <code>shared_mutex</code> 的读侧</td><td>见 §7，判据很窄</td></tr>
+    </tbody>
+  </table>
+  <p>还有一条低级但真实的坑：guard <strong>必须有名字</strong>。<code>std::lock_guard lk(mtx);</code> 是临界区；<code>std::lock_guard{mtx};</code> 构造的是临时量，在分号处就析构，临界区长度为零。</p>
+
+  <h3 id="s3-3">3.3 把内部引用漏出去，锁就白加了</h3>
+  <p>最隐蔽的破锁方式不是忘了加锁，而是<strong>在锁内把被保护数据的引用、指针或迭代器交出去</strong>。调用者在锁外使用它，类型上看不出任何异常，而 guard 早就析构了。</p>
+<pre><span class="kw">class</span> Registry {
+  <span class="kw">std</span>::mutex m_;
+  <span class="kw">std</span>::vector&lt;Item&gt; items_;
+<span class="kw">public</span>:
+  <span class="cm">// ❌ 引用逃出临界区：调用者拿到它时锁已经放了</span>
+  <span class="kw">const</span> <span class="kw">std</span>::vector&lt;Item&gt;&amp; all() {
+    <span class="kw">std</span>::lock_guard lk(m_);
+    <span class="kw">return</span> items_;
+  }
+
+  <span class="cm">// ✅ 要么给拷贝，要么把操作送进来执行</span>
+  <span class="kw">std</span>::vector&lt;Item&gt; snapshot() {
+    <span class="kw">std</span>::lock_guard lk(m_);
+    <span class="kw">return</span> items_;
+  }
+  <span class="kw">template</span>&lt;<span class="kw">class</span> F&gt; <span class="kw">auto</span> with_lock(F&amp;&amp; f) {
+    <span class="kw">std</span>::lock_guard lk(m_);
+    <span class="kw">return</span> f(items_);   <span class="cm">// 前提：f 不把引用存下来</span>
+  }
+};</pre>
+  <p>同一个漏洞有好几副面孔：返回 <code>T&amp;</code> 或 <code>T*</code>、返回迭代器、把 <code>&amp;data_</code> 存进别的成员，以及<strong>在锁内调用外部回调并把数据递给它</strong>。最后一种最难防：回调可能把引用存下来，也可能反手调你另一个加锁方法造成自锁。正确姿势是<strong>让数据不出临界区</strong>——给拷贝或快照，或把操作送进去执行。</p>
 </section>
 
 <section class="chapter" id="s4">
@@ -327,6 +424,24 @@ mtx.unlock();
   cv.wait(lk);             <span class="cm">// 内部 unlock；被唤醒后重新 lock</span>
 }
 <span class="cm">// 此时持锁，且 ready == true</span></pre>
+
+  <h3 id="s4-1">4.1 那把 mutex 保护的是「检查 + 睡下」这一步</h3>
+  <p>既然 <code>wait</code> 内部会 unlock，为什么还非得先持锁？去掉锁推演一遍：消费者在「谓词为假」和「真正挂进等待队列」之间必然有一个窗口；生产者恰好在窗口里改了条件并 <code>notify</code>——通知打在空气上，因为队列里还没有人。等消费者挂上去，条件早已满足，它却要睡到下一次通知。</p>
+  <p>所以 <code>wait</code> 的契约是：<strong>「放锁」和「入队」对外必须是原子的一步</strong>。生产者拿不到锁就改不了条件，窗口不存在。这是 mutex 在这里的<strong>全部</strong>作用，跟「保护谓词读到的变量」是两件事，只是顺带也做到了。</p>
+  <div class="box tip">推论：谓词涉及的状态<strong>必须</strong>由交给 <code>wait</code> 的那把 mutex 保护。用一个 <code>atomic</code> 当谓词、再锁另一把 mutex 去 wait，窗口就又回来了——原子性保证的是单个变量，不是「检查 + 睡」这个复合动作。</div>
+
+  <h3 id="s4-2">4.2 notify_one、notify_all 与惊群</h3>
+  <p><code>notify_one</code> 省，但<strong>只在等待者完全等价时才安全</strong>。一旦它们在等不同谓词（典型是有界队列上消费者和生产者共用一个 cv），唤醒可能发给一个谓词仍为假的线程，它看一眼又睡回去，<strong>这次通知就此丢失</strong>。</p>
+  <table>
+    <thead><tr><th>场景</th><th>选择</th><th>理由</th></tr></thead>
+    <tbody>
+      <tr><td>等待者同质，一次通知只让一个能前进</td><td><code>notify_one</code></td><td>叫醒 N 个只有 1 个能干活，其余白跑</td></tr>
+      <tr><td>等待者在等不同谓词，或共用一个 cv</td><td><code>notify_all</code></td><td>唯一不丢唤醒的做法；更好的是<strong>拆成两个 cv</strong></td></tr>
+      <tr><td>等待者上百却只有一个能干活</td><td><code>notify_one</code> + 拆 cv</td><td>此处 <code>notify_all</code> 就是惊群</td></tr>
+    </tbody>
+  </table>
+  <p><strong>持锁 notify 还是解锁后 notify</strong>：两者都正确，区别只在性能。持锁时 notify，被唤醒者发现锁还在通知者手上，只能再睡一次；解锁后少这一跳，但前提是<strong>cv 所属的对象此刻还活着</strong>。生命周期有一点不确定，就老实在锁内 notify。</p>
+
   <div class="box tip">面试只问「wait 要不要 while」：答「假醒是规范允许的，丢唤醒是时序问题，谓词一次收掉两件」。再往下才是内存序，带到 <a href="./memory_model.html">内存模型</a>。</div>
 </section>
 
@@ -387,6 +502,31 @@ use(f.get());   <span class="cm">// 真有工作线程；get 阻塞到完成</sp
 
 <span class="kw">auto</span> g = <span class="kw">std</span>::async(<span class="kw">std</span>::launch::deferred, []{ <span class="kw">return</span> work(); });
 use(g.get());   <span class="cm">// 延后：get 才在本线程跑</span></pre>
+
+  <h3 id="s5-1">5.1 它是标准里唯一会在析构时阻塞的 future</h3>
+  <p><code>std::future</code> 的析构函数通常什么都不做。唯一的例外是<strong>由 <code>std::async</code> 创建、且真起了线程的那一个</strong>：它的 shared state 带着「最后一个引用析构时要 join」的标记。这是为了堵住「线程还在跑而 <code>main</code> 已退出」打的补丁，代价是让一次析构变成可能阻塞任意久的操作。</p>
+<pre><span class="cm">// ❌ 丢弃返回值 = 这一行就同步等完，两个任务纯串行</span>
+<span class="kw">std</span>::async(<span class="kw">std</span>::launch::async, taskA);   <span class="cm">// 临时 future 在分号处析构 → join</span>
+<span class="kw">std</span>::async(<span class="kw">std</span>::launch::async, taskB);   <span class="cm">// A 跑完才轮到 B</span>
+
+<span class="cm">// ✅ 先全部启动，再统一收结果</span>
+<span class="kw">auto</span> fa = <span class="kw">std</span>::async(<span class="kw">std</span>::launch::async, taskA);
+<span class="kw">auto</span> fb = <span class="kw">std</span>::async(<span class="kw">std</span>::launch::async, taskB);
+use(fa.get(), fb.get());</pre>
+  <p>丢弃返回值时，临时 future 在分号处就析构，整句退化成同步调用——看起来开了并发，实际一条都没并行。而 <code>packaged_task</code>、手写 <code>promise</code>、<code>deferred</code> 的 future 都<strong>没有</strong>这层隐式等待：同样一行析构，行为取决于它是怎么来的。对偶的陷阱是 <code>promise</code> 析构时还没 <code>set</code>，等在那边的 <code>get()</code> 收到 <code>broken_promise</code> 异常而不是永久阻塞。</p>
+
+  <h3 id="s5-2">5.2 为什么工程上几乎不用 std::async</h3>
+  <table>
+    <thead><tr><th></th><th><code>std::async</code></th><th>线程池 + <code>packaged_task</code></th></tr></thead>
+    <tbody>
+      <tr><td>线程从哪来</td><td>实现决定，不要求复用；libstdc++ <strong>每次新开一条</strong></td><td>固定 worker，创建成本只付一次</td></tr>
+      <tr><td>并发度</td><td>不可控，一千次调用可能就是一千条线程</td><td>由池大小决定，能跟核数对齐</td></tr>
+      <tr><td>背压</td><td>没有，来多少开多少</td><td>队列满了可阻塞、丢弃或拒绝，是个策略点</td></tr>
+      <tr><td>析构语义</td><td>future 析构可能阻塞（见 §5.1）</td><td>普通 future，析构不阻塞</td></tr>
+      <tr><td>线程属性</td><td>名字、亲和性、优先级、栈大小都无从设置</td><td>建池时一次设好，<code>top</code> 里也认得出是谁</td></tr>
+    </tbody>
+  </table>
+  <p><code>std::async</code> 真正合适的只剩<strong>一次性、数量可数的</strong>后台任务（启动时并行加载三个配置文件）。任务数量由输入规模决定的地方，都该换成「有界队列 + 固定 worker + <code>packaged_task</code> 产出 future」。C++26 的 <code>std::execution</code> 要解决的正是这件事：把「在哪执行」从「怎么表达异步」里拆出来。</p>
 </section>
 
 <section class="chapter" id="s6">
@@ -425,6 +565,27 @@ use(g.get());   <span class="cm">// 延后：get 才在本线程跑</span></pre>
       <text class="ts" x="480" y="214" text-anchor="middle">破环：全局地址序 / scoped_lock 一次拿齐 / 不持锁做回调</text>
     </svg>
   </div>
+
+  <h3 id="s6-1">6.1 四条件各自怎么破</h3>
+  <table>
+    <thead><tr><th>条件</th><th>C++ 里的破法</th><th>代价</th></tr></thead>
+    <tbody>
+      <tr><td>① 互斥</td><td>无锁结构；不可变数据 + 写时拷贝；每线程一份副本最后归并</td><td>多数可变共享状态做不到</td></tr>
+      <tr><td>② 持有并等待</td><td><code>std::scoped_lock(m1, m2)</code> 一次拿齐；或先拷出数据、放锁、再干活</td><td>「要拿哪些锁」有时运行时才知道</td></tr>
+      <tr><td>③ 不可剥夺</td><td><code>try_lock</code> 失败就把手上的全放掉、退避、重来</td><td>把死锁换成活锁风险和不确定的延迟</td></tr>
+      <tr><td>④ 环路等待</td><td>按 <code>std::mutex*</code> 的地址排序；或给每把锁一个层级号</td><td><strong>几乎没有</strong>，还能静态检查</td></tr>
+    </tbody>
+  </table>
+  <p>①②③ 都在改变程序结构，④ 只是加一条约定，所以默认从 ④ 下手。</p>
+
+  <h3 id="s6-2">6.2 锁序怎么形式化，scoped_lock 又是怎么免死锁的</h3>
+  <p>「先 A 后 B」写在注释里撑不住：两个模块各自的 A、B 不是同一对对象，一重构顺序就反。要让它可执行，得把顺序变成<strong>可比较的数值</strong>：</p>
+  <ul>
+    <li><strong>地址序</strong>：<code>if (&amp;a &lt; &amp;b) { lock(a); lock(b); } else { lock(b); lock(a); }</code>。不需要注册，对同类型的任意两个对象天然成立，典型场景是两账户转账；缺点是顺序没有语义。</li>
+    <li><strong>层级锁</strong>：给每把锁一个层级号，线程在 <code>thread_local</code> 里记住当前持有的最低层级，加锁时断言新锁层级<strong>严格更低</strong>，于是<strong>第一次违规就抛异常</strong>，不必等环路形成。</li>
+  </ul>
+  <p><code>std::lock</code> 与 <code>std::scoped_lock</code> 走第三条路，对应破条件 ③：先阻塞式锁住第一把，其余用 <code>try_lock</code>；<strong>任何一把失败就把已拿到的全部释放</strong>，再以失败的那把重来。它在等的时候手上一把锁都没有，条件 ② 不成立，所以不会死锁；但它不保证公平，高争用下会反复 try-release。</p>
+  <p>顺带分开三种失败模式：<strong>死锁</strong>所有人都停着；<strong>活锁</strong>所有人都在动却谁也不前进；<strong>饥饿</strong>整体在前进、只有某个线程排不上。</p>
 </section>
 
 <section class="chapter" id="s7">
@@ -462,6 +623,10 @@ use(g.get());   <span class="cm">// 延后：get 才在本线程跑</span></pre>
       <text class="ts" x="480" y="182" text-anchor="middle">shared_lock 读 · unique_lock / lock_guard 写 · 不要升级</text>
     </svg>
   </div>
+
+  <h3 id="s7-1">7.1 为什么没有「锁升级」这个操作</h3>
+  <p>「持着 shared 读完了，发现要改，就地升级成 unique」——这个想法自然到几乎人人会提，却<strong>在原理上无法安全实现</strong>：两个读者同时想升级，各自都要求对方先退出，A 等 B 放、B 等 A 放。这个环<strong>只要两线程同时尝试就必然出现</strong>，不是概率问题，所以标准干脆不提供这个 API。能做的只有放掉读锁、重新取写锁、<strong>再重新检查</strong>——窗口里别人可能已经改过，这一步就是 §2.1 说的 check-then-act。</p>
+  <p>另一个反直觉点：<strong>短临界区下 <code>shared_mutex</code> 常比普通 mutex 更慢</strong>——读侧要维护共享计数器，多核在同一条 cache line 上弹跳，代价可能超过省下的并行，实测见 <a href="../stl/concurrency_patterns_guide.html#s4-2">并发模式 §4.2</a>。判据：<strong>读临界区长到微秒级、且读写比悬殊</strong>，它才开始赢；写极少而延迟敏感时，双缓冲或 RCU 更合适。</p>
 </section>
 
 <section class="chapter" id="s8">
@@ -490,6 +655,60 @@ use(g.get());   <span class="cm">// 延后：get 才在本线程跑</span></pre>
       <text class="tr" x="480" y="168" text-anchor="middle">跨线程拿走 &amp;x = 用完即悬空。它不是 mutex 的替代品</text>
     </svg>
   </div>
+
+  <h3 id="s8-1">8.1 构造、析构与动态库卸载</h3>
+  <table>
+    <thead><tr><th>时机</th><th>规则</th><th>坑</th></tr></thead>
+    <tbody>
+      <tr><td>构造</td><td>常量初始化的在线程启动前就绪；动态初始化的在该线程<strong>首次 odr-use 时</strong>惰性构造</td><td>「启动时统一初始化完」是错觉；每次访问背后可能藏着一次「构造了吗」的检查</td></tr>
+      <tr><td>析构</td><td>线程退出时按<strong>构造的逆序</strong>销毁本线程那一份</td><td>析构里又访问另一个 <code>thread_local</code>，可能把已析构的那个重新构造出来</td></tr>
+      <tr><td><code>dlclose</code></td><td>库卸载时，其它活着的线程里那一份的<strong>析构代码可能已不在内存里</strong></td><td>退出时段错误，栈回溯指向已 unmap 的地址；插件架构的高发故障</td></tr>
+      <tr><td><code>detach</code> 的线程</td><td>进程退出不等它，析构可能根本不跑</td><td>靠析构做 flush 的（日志缓冲、统计上报）丢数据</td></tr>
+    </tbody>
+  </table>
+  <p>由此得出一条收缩原则：<strong>thread_local 对象尽量做成平凡可析构的</strong>。一旦析构有副作用，上表里多半都会变成真实风险。</p>
+
+  <h3 id="s8-2">8.2 线程池里的 thread_local 会串味</h3>
+  <p>这是本章唯一的高频线上事故。<code>thread_local</code> 绑的是<strong>线程</strong>，而线程池里<strong>任务和线程不是一一对应</strong>的：同一条 worker 先后跑成千上万个不相关的任务，A 留下的东西会被后来的 B 原样读到。</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 960 240" style="min-width:720px;height:auto" role="img" aria-label="线程池 worker W1 先后执行任务 A 与任务 B：任务 A 在 thread_local 里写入租户甲后结束却没有清理，任务 B 在同一条线程上读到了残留的租户甲">
+      <text class="tb" x="480" y="22" text-anchor="middle">thread_local 绑的是 worker，不是任务</text>
+      <rect class="box" x="24" y="52" width="136" height="112" rx="8"/>
+      <text class="tb" x="92" y="76" text-anchor="middle">任务队列</text>
+      <rect class="box-a" x="40" y="88" width="104" height="30" rx="6"/>
+      <text class="t" x="92" y="108" text-anchor="middle">任务 A · 租户甲</text>
+      <rect class="box-p" x="40" y="124" width="104" height="30" rx="6"/>
+      <text class="t" x="92" y="144" text-anchor="middle">任务 B · 租户乙</text>
+      <line class="ln-a" x1="160" y1="108" x2="204" y2="108"/>
+      <polygon class="ar-a" points="212,108 200,102 200,114"/>
+
+      <text class="tb" x="216" y="46" text-anchor="start">worker W1 —— 同一条线程，同一份 thread_local</text>
+      <rect class="box-a" x="216" y="58" width="204" height="80" rx="8"/>
+      <text class="tb" x="318" y="84" text-anchor="middle">跑任务 A</text>
+      <text class="tm" x="318" y="104" text-anchor="middle">tl_tenant = 甲</text>
+      <text class="tg" x="318" y="124" text-anchor="middle">正常</text>
+      <line class="ln-a" x1="420" y1="98" x2="440" y2="98"/>
+      <polygon class="ar-a" points="448,98 436,92 436,104"/>
+      <rect class="box-r" x="452" y="58" width="204" height="80" rx="8"/>
+      <text class="tr" x="554" y="84" text-anchor="middle">A 返回，未清理</text>
+      <text class="tm" x="554" y="104" text-anchor="middle">tl_tenant 仍是 甲</text>
+      <text class="ts" x="554" y="124" text-anchor="middle">线程没结束，值就还在</text>
+      <line class="ln-a" x1="656" y1="98" x2="676" y2="98"/>
+      <polygon class="ar-a" points="684,98 672,92 672,104"/>
+      <rect class="box-p" x="688" y="58" width="240" height="80" rx="8"/>
+      <text class="tb" x="808" y="84" text-anchor="middle">跑任务 B（属于乙）</text>
+      <text class="tr" x="808" y="104" text-anchor="middle">读到 tl_tenant == 甲</text>
+      <text class="ts" x="808" y="124" text-anchor="middle">以甲的身份查了乙的数据</text>
+      <line class="ln" x1="216" y1="160" x2="928" y2="160"/>
+      <text class="ts" x="572" y="190" text-anchor="middle">每一份 thread_local 始终只被一条线程访问 → 没有数据竞争 → TSan 全绿</text>
+      <text class="tr" x="572" y="216" text-anchor="middle">对策：任务边界上 RAII 无条件恢复，或根本不用 thread_local 存请求态</text>
+    </svg>
+  </div>
+
+  <p>最经典的载体是「请求上下文」：trace id、租户 id、事务句柄——天生适合放 thread_local，不用一层层传参。换成线程池后就是两种表现：<strong>日志串号</strong>，B 的日志打着 A 的 trace id；<strong>权限泄漏</strong>，A 设过「当前租户 = 甲」，B 忘了设直接读，于是以甲的身份查了乙的数据。QPS 低时复用率低、几乎不复现，一上量才开始串。</p>
+  <div class="danger">它<strong>不是数据竞争</strong>，而是纯粹的生命周期错配，任何并发检测工具都发现不了。</div>
+  <p>对策：<strong>不要用 thread_local 存请求态</strong>，把上下文做成随任务走的对象；非用不可就<strong>在任务边界上 RAII 强制清理</strong>，进任务时存旧值设新值，出任务时（含抛异常的路径）无条件恢复。</p>
 </section>
 
 <section class="chapter" id="s9">
@@ -529,6 +748,23 @@ use(g.get());   <span class="cm">// 延后：get 才在本线程跑</span></pre>
       <text class="tr" x="480" y="176" text-anchor="middle">detach 不是停止，是放弃回收。pthread_cancel 不可移植，C++ 标准里没有</text>
     </svg>
   </div>
+
+  <h3 id="s9-1">9.1 叫不醒的三种线程</h3>
+  <p>合作式取消的前提是被取消方<strong>会回来看</strong>。线程停在一个不检查 token 的地方，<code>request_stop()</code> 就只是置了个标志位，<code>join</code> 一直卡着——而卡住的往往是进程退出路径。</p>
+  <table>
+    <thead><tr><th>卡在哪</th><th>为什么醒不了</th><th>怎么办</th></tr></thead>
+    <tbody>
+      <tr><td><code>cv.wait(lk, pred)</code></td><td>谓词里不含停止状态，没人 notify 就不会醒</td><td>用 <code>condition_variable_any</code> 带 <code>stop_token</code> 的重载；或把 <code>st.stop_requested()</code> 并进谓词，再在 <code>stop_callback</code> 里唤醒</td></tr>
+      <tr><td>阻塞的 <code>read</code> / <code>accept</code></td><td>线程在内核里睡，用户态的标志它看不见</td><td>把 fd 纳入 <code>epoll</code>，另加 eventfd 作唤醒通道；或设收发超时</td></tr>
+      <tr><td>第三方库的同步调用</td><td>你进不去它的循环</td><td>只能用它自己的 cancel 接口；没有就隔离到独立进程，用杀进程代替</td></tr>
+    </tbody>
+  </table>
+  <p>轮询周期本身也是取舍：短则空转耗电，长则退出慢，常见折中是 <strong>100 ms 量级的超时</strong>加一条真正的唤醒通道。再往下就是边界了——<strong>标准 C++ 里不存在强制终止线程的办法</strong>，<code>pthread_cancel</code> 只在特定取消点生效，还会让栈上对象的析构变成实现定义行为。这是设计结论：线程被强杀时手上可能正持着锁。</p>
+
+  <h3 id="s9-2">9.2 stop_callback 在哪条线程上跑</h3>
+  <p><code>std::stop_callback</code> 的执行线程<strong>不固定</strong>：注册时尚未请求停止，回调就在将来调 <code>request_stop()</code> 的那条线程上同步执行，且 <code>request_stop()</code> 要等所有回调跑完才返回；注册时已经请求过，回调就在<strong>注册的那条线程</strong>上立即跑完。</p>
+  <p>所以回调里碰的东西都得能承受「被任意线程、在任意时刻调用」，还要避开两个坑：<strong>不要在回调里做耗时或阻塞的事</strong>，它会拖住调 <code>request_stop()</code> 的线程，而那常常正是在析构 <code>jthread</code> 的那条；<strong>不要在回调里 join 被停止的线程</strong>，那可能是自 join 死锁。</p>
+  <p><strong>析构</strong>同样带同步语义：返回之后回调不会再被调用，若此刻回调正在别的线程上跑，析构会等它跑完——这正是它被设计成 RAII 对象的原因。典型用法只有一行：在等待循环外层建一个 <code>stop_callback</code>，内容是 <code>cv.notify_all()</code>，把「停止请求」翻译成「条件变量事件」。</p>
 </section>
 
 <section class="chapter" id="s10">
@@ -540,7 +776,7 @@ use(g.get());   <span class="cm">// 延后：get 才在本线程跑</span></pre>
     </div>
   </div>
 
-  <p>Linux 上 <code>std::mutex</code> 无争用时是用户态 atomic（uncontended fast path）；有人要睡才 <code>futex</code> 进内核等待队列。所以「锁很贵」描述的是<strong>争用</strong>，不是每次 <code>lock_guard</code>。<code>atomic::wait</code> / <code>notify</code> 也是同一条系统调用。验证用 TSan；设计期把 happens-before 画出来再写代码。无锁队列、Hazard Pointer、RCU 见 <a href="./memory_model.html#s14">内存模型 §14</a> 与 <a href="../stl/concurrency_patterns_guide.html">并发模式</a>。</p>
+  <p>Linux 上 <code>std::mutex</code> 无争用时是用户态 atomic（uncontended fast path）；有人要睡才 <code>futex</code> 进内核等待队列。所以「锁很贵」描述的是<strong>争用</strong>，不是每次 <code>lock_guard</code>。<code>atomic::wait</code> / <code>notify</code> 也是同一条系统调用。验证用 TSan；设计期把 happens-before 画出来再写代码。无锁队列、Hazard Pointer、RCU 见 <a href="./memory_model.html#s14">内存模型 §14</a> 与 <a href="../stl/concurrency_patterns_guide.html">并发模式</a>；要看完整可编译的 SPSC 环与 ABA 解法，去 <a href="../communication/high_performance.html#s2">高性能通信 §2–§3</a>。</p>
   <p>实时线程才值得开优先级继承（PI futex）：持锁的低优先级会被临时抬到等待者的优先级，避免反转。用户态先自旋再睡（adaptive mutex）赌的是临界区极短，只改 P99，不改正确性。TSan 慢 5–15 倍，CI 必开，生产别开。形式化小例子用 cppmem，现场复现用 rr。</p>
 
   <div class="fig">
@@ -564,6 +800,18 @@ use(g.get());   <span class="cm">// 延后：get 才在本线程跑</span></pre>
     </svg>
   </div>
 
+  <h3 id="s10-1">10.1 自旋多久才划算</h3>
+  <p>「先自旋一会儿再睡」（adaptive mutex）赌的是<strong>持锁方马上就放</strong>。睡下去再被唤醒是两次系统调用加一次上下文切换，<strong>1–3 μs</strong>；自旋每次 <code>pause</code> 几十纳秒。</p>
+  <div class="box info">临界区的<strong>剩余</strong>执行时间明显小于一次「睡 + 醒」时，自旋赢；否则既没省下切换，还白占了一个本可以让持锁方更早放锁的核。</div>
+  <table>
+    <thead><tr><th>情形</th><th>该不该自旋</th><th>原因</th></tr></thead>
+    <tbody>
+      <tr><td>临界区几十条指令，线程数 ≤ 核数</td><td>自旋几十到几百次</td><td>持锁方正在别的核上跑，很快就放；glibc 自适应锁就这么假设</td></tr>
+      <tr><td>线程数 &gt; 核数，或容器 CPU 有配额</td><td><strong>不要自旋</strong></td><td>持锁方可能已被调度走，自旋到时间片耗尽它都回不来</td></tr>
+    </tbody>
+  </table>
+  <p>真要手写，形态是 <strong>test-and-test-and-set</strong>：先用普通 load 自旋（裸 CAS 会让这条 cache line 一直被争抢），看到可能空闲了再发 CAS。但更常见的答案是<strong>不要手写</strong>。</p>
+
   <table>
     <thead><tr><th>原语</th><th>保护什么</th><th>典型坑</th></tr></thead>
     <tbody>
@@ -580,6 +828,7 @@ use(g.get());   <span class="cm">// 延后：get 才在本线程跑</span></pre>
   <a href="./memory_model.html">🧠 内存模型</a>
   <a href="./toolchain_landscape.html">⚙️ 工具链全景</a>
   <a href="../stl/concurrency_patterns_guide.html">🔀 并发模式</a>
+  <a href="../communication/high_performance.html">🚀 无锁队列实现</a>
   <a href="../perf-debug/low_latency_guide.html">⚡ 低延迟实战</a>
   <a href="../interview/cpp_interview_cards.html?cats=并发,无锁,内存模型">🎴 并发面试卡</a>
   <a href="../index.html">🏠 主页</a>

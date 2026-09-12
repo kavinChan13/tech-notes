@@ -1,0 +1,892 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<!-- tn-theme-init --><script>try{var d=document.documentElement,t=localStorage.getItem('theme')||localStorage.getItem('tn-theme');if(t==='dark')d.setAttribute('data-theme','dark');}catch(e){}</script>
+
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>C++ 跨语言互操作 · 稳定 C API / pybind11 与 nanobind / C++ ↔ Rust / 所有权与异常边界</title>
+<meta name="description" content="C++ 跨语言互操作：C++ 没有标准 ABI，跨语言边界上唯一能依赖的只有 C ABI。本文讲透边界的四条铁律（所有权、异常、类型、生命周期），手写 opaque handle 式稳定 C API，pybind11 与 nanobind 的 GIL、零拷贝与 return_value_policy，cxx 如何把 C++ ↔ Rust 的所有权编码进类型系统，以及 protobuf 生成码的真实代价">
+<!-- tn-social:v1 -->
+<link rel="canonical" href="https://kavinchan13.github.io/tech-notes/cpp/ffi_interop_guide.html">
+<link rel="icon" type="image/svg+xml" href="../assets/favicon.svg">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0b0d12" media="(prefers-color-scheme: dark)">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="Kavin Tech Notes">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:url" content="https://kavinchan13.github.io/tech-notes/cpp/ffi_interop_guide.html">
+<meta property="og:title" content="C++ 跨语言互操作 · 稳定 C API / pybind11 与 nanobind / C++ ↔ Rust / 所有权与异常边界">
+<meta property="og:description" content="C++ 跨语言互操作：C++ 没有标准 ABI，跨语言边界上唯一能依赖的只有 C ABI。本文讲透边界的四条铁律（所有权、异常、类型、生命周期），手写 opaque handle 式稳定 C API，pybind11 与 nanobind 的 GIL、零拷贝与 return_value_policy，cxx 如何把 C++ ↔ Rust 的所有权编码进类型系统，以及 protobuf 生成码的真实代价">
+<meta property="og:image" content="https://kavinchan13.github.io/tech-notes/assets/og-cover.jpg">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="628">
+<meta property="og:image:alt" content="技术笔记 · 系统 / 架构 / 工程">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="C++ 跨语言互操作 · 稳定 C API / pybind11 与 nanobind / C++ ↔ Rust / 所有权与异常边界">
+<meta name="twitter:description" content="C++ 跨语言互操作：C++ 没有标准 ABI，跨语言边界上唯一能依赖的只有 C ABI。本文讲透边界的四条铁律（所有权、异常、类型、生命周期），手写 opaque handle 式稳定 C API，pybind11 与 nanobind 的 GIL、零拷贝与 return_value_policy，cxx 如何把 C++ ↔ Rust 的所有权编码进类型系统，以及 protobuf 生成码的真实代价">
+<meta name="twitter:image" content="https://kavinchan13.github.io/tech-notes/assets/og-cover.jpg">
+<!-- /tn-social:v1 -->
+<link rel="stylesheet" href="../assets/guide-theme.css">
+<style>
+  html { scroll-behavior: smooth; }
+  body { line-height: 1.75; min-height: 100vh; overflow-x: hidden; }
+  main { min-width: 0; }
+  pre { font-family: var(--mono); font-size: .85rem; line-height: 1.6; }
+  code { font-family: var(--mono); }
+  svg text { font-family: var(--sans); }
+  table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: .9rem; }
+  th, td { border: 1px solid var(--border); padding: .55rem .85rem; text-align: left; vertical-align: top; }
+  th { background: var(--bg-card-2); color: var(--accent); }
+  tr:nth-child(even) { background: color-mix(in srgb, var(--text) 3%, transparent); }
+  .analogy::before { content: "🏠 生活类比 · "; color: var(--accent-4); font-weight: 700; font-size: .86rem; }
+  .def > strong:first-child { color: var(--accent); }
+  .fig { margin: 22px 0; overflow-x: auto; }
+  .fig svg { max-width: 100%; height: auto; }
+  .fig .box   { fill: var(--bg-card-2); stroke: var(--border-2); stroke-width: 1.2; }
+  .fig .box-a { fill: color-mix(in srgb, var(--accent) 14%, var(--bg-card)); stroke: var(--accent); stroke-width: 1.2; }
+  .fig .box-g { fill: color-mix(in srgb, var(--accent-3) 14%, var(--bg-card)); stroke: var(--accent-3); stroke-width: 1.2; }
+  .fig .box-p { fill: color-mix(in srgb, var(--accent-2) 14%, var(--bg-card)); stroke: var(--accent-2); stroke-width: 1.2; }
+  .fig .box-y { fill: color-mix(in srgb, var(--accent-4) 14%, var(--bg-card)); stroke: var(--accent-4); stroke-width: 1.2; }
+  .fig .box-r { fill: color-mix(in srgb, var(--danger) 14%, var(--bg-card)); stroke: var(--danger); stroke-width: 1.2; }
+  .fig .t   { fill: var(--text); font-size: 12px; }
+  .fig .tb  { fill: var(--text); font-size: 12.5px; font-weight: 700; }
+  .fig .ts  { fill: var(--text-dim); font-size: 10.5px; }
+  .fig .tm  { fill: var(--text-dim); font-size: 10.5px; font-family: var(--mono); }
+  .fig .ta  { fill: var(--accent); font-size: 12px; font-weight: 700; }
+  .fig .tg  { fill: var(--accent-3); font-size: 11px; font-weight: 600; }
+  .fig .tp  { fill: var(--accent-2); font-size: 11px; font-weight: 600; }
+  .fig .ty  { fill: var(--accent-4); font-size: 11px; font-weight: 600; }
+  .fig .tr  { fill: var(--danger); font-size: 11px; font-weight: 600; }
+  .fig .ln  { stroke: var(--border-2); stroke-width: 1.4; fill: none; }
+  .fig .ln-a{ stroke: var(--accent); stroke-width: 1.6; fill: none; }
+  .fig .ln-g{ stroke: var(--accent-3); stroke-width: 1.6; fill: none; }
+  .fig .ln-r{ stroke: var(--danger); stroke-width: 1.6; fill: none; stroke-dasharray: 5 4; }
+  .fig .ln-d{ stroke: var(--text-mute); stroke-width: 1.2; fill: none; stroke-dasharray: 4 3; }
+  .fig .ar-a{ fill: var(--accent); }
+  .fig .ar-g{ fill: var(--accent-3); }
+  .fig .ar-r{ fill: var(--danger); }
+  .vs { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 16px 0; }
+  @media (max-width: 860px) { .vs { grid-template-columns: 1fr; } }
+  .vs > div > h5 { margin: 0 0 6px; font-size: .88rem; }
+  .vs .bad  { border-color: color-mix(in srgb, var(--danger) 45%, var(--border)); background: color-mix(in srgb, var(--danger) 6%, var(--bg-card)); }
+  .vs .bad  > h5 { color: var(--danger); }
+  .vs .good { border-color: color-mix(in srgb, var(--accent-3) 45%, var(--border)); background: color-mix(in srgb, var(--accent-3) 6%, var(--bg-card)); }
+  .vs .good > h5 { color: var(--accent-3); }
+  .vs pre { margin: 6px 0 0; font-size: .78rem; }
+</style>
+<link rel="stylesheet" href="../assets/site-tokens.css">
+<link rel="stylesheet" href="../assets/article.css">
+</head>
+<body class="tn-shell-overlay has-topnav">
+<!-- tn-nav:v2 -->
+<nav class="tn-topnav" aria-label="站点导航">
+  <div class="tn-topnav-in">
+    <a class="tn-brand" href="../index.html">Kavin <b>Tech Notes</b></a>
+    <div class="tn-navlinks">
+      <a class="tn-home" href="../index.html">← 主页</a>
+      <a href="modern_cpp_stl_directory.html">目录</a>
+      <a class="tn-icon" href="https://github.com/kavinChan13/tech-notes" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库"><svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 012-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+      <span class="tn-readmeta" title="预计阅读时长"><svg class="tn-clock" viewBox="0 0 16 16" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-2px"><path d="M8 0a8 8 0 110 16A8 8 0 018 0ZM1.5 8a6.5 6.5 0 1013 0 6.5 6.5 0 00-13 0Zm7-3.25v2.992l2.028.812a.75.75 0 01-.557 1.392l-2.5-1A.751.751 0 017 8.25v-3.5a.75.75 0 011.5 0Z"/></svg> 25 min</span>
+      <button class="theme-btn" id="themeBtn" type="button" aria-label="切换浅色 / 深色">◐</button>
+    </div>
+  </div>
+</nav>
+<!-- /tn-nav:v2 -->
+<div class="progress" id="progress"></div>
+<div class="layout">
+  <aside class="toc">
+    <h2>跨语言互操作</h2>
+    <nav>
+      <ol>
+        <li><a href="#s1">C++ 出不了自己的家门</a>
+          <ol>
+            <li><a href="#s1-1">1.1 三家编译器三套名字</a></li>
+            <li><a href="#s1-2">1.2 同一个编译器也会变卦</a></li>
+            <li><a href="#s1-3">1.3 所有绑定技术的同一个形状</a></li>
+          </ol>
+        </li>
+        <li><a href="#s2">边界四铁律</a>
+          <ol>
+            <li><a href="#s2-1">2.1 异常绝不能穿过边界</a></li>
+            <li><a href="#s2-2">2.2 谁分配谁释放</a></li>
+          </ol>
+        </li>
+        <li><a href="#s3">手写稳定 C API</a>
+          <ol>
+            <li><a href="#s3-1">3.1 不完整类型冻结 ABI</a></li>
+            <li><a href="#s3-2">3.2 五个设计决策</a></li>
+            <li><a href="#s3-3">3.3 实现侧的防漏网</a></li>
+          </ol>
+        </li>
+        <li><a href="#s4">Python 绑定</a>
+          <ol>
+            <li><a href="#s4-1">4.1 六种方案选型</a></li>
+            <li><a href="#s4-2">4.2 GIL：没变快的头号原因</a></li>
+            <li><a href="#s4-3">4.3 零拷贝与生命周期</a></li>
+            <li><a href="#s4-4">4.4 异常双向映射</a></li>
+          </ol>
+        </li>
+        <li><a href="#s5">C++ ↔ Rust</a>
+          <ol>
+            <li><a href="#s5-1">5.1 三条路线</a></li>
+            <li><a href="#s5-2">5.2 cxx 把所有权编进类型</a></li>
+            <li><a href="#s5-3">5.3 panic 与异常</a></li>
+          </ol>
+        </li>
+        <li><a href="#s6">protobuf / gRPC 的代价</a></li>
+        <li><a href="#s7">失败模式与排障</a></li>
+        <li><a href="#s8">面试题集（12 道）</a>
+          <ol>
+            <li><a href="#s8-1">8.1 基础</a></li>
+            <li><a href="#s8-2">8.2 中级</a></li>
+            <li><a href="#s8-3">8.3 高级</a></li>
+          </ol>
+        </li>
+      </ol>
+    </nav>
+  </aside>
+
+<main>
+
+  <header class="hero">
+    <div class="badge">Interop · C ABI · FFI · 2026</div>
+    <h1>C++ 跨语言互操作</h1>
+    <p class="sub">C++ 有模板、有异常、有虚表，唯独<strong>没有标准 ABI</strong>。所以当 Python、Rust、Java、Go 想调用你的 C++ 代码时，它们看不见 <code>std::string</code>，也看不见 <code>MyClass</code>——能看见的只有一扇窄门：<strong>C ABI</strong>。所有绑定技术都是在这扇门两侧各搭一座塔，区别只在于塔由谁来写、所有权规则写在哪里。</p>
+    <div class="meta-row">
+      <span class="pill red">核心难度 ★★★★☆</span>
+      <span class="pill cyan">线上事故密度 高</span>
+      <span class="pill green">阅读时长 ~25 min</span>
+      <span class="pill amber">前置 ABI · 智能指针 · 异常</span>
+    </div>
+    <div class="meta">
+      <span>稳定 C API 设计</span>
+      <span>pybind11 / nanobind</span>
+      <span>cxx ↔ Rust</span>
+      <span>所有权与异常边界</span>
+    </div>
+  </header>
+
+<!-- ================================================================ §1 -->
+<section class="chapter" id="s1">
+  <div class="ch-head">
+    <div class="num">01</div>
+    <div class="t"><h2>C++ 出不了自己的家门</h2><p class="sub">不是别的语言不想调它，是它根本没给出一个能被调的形状</p></div>
+  </div>
+
+  <p>写一个 C 函数 <code>int add(int, int)</code>，编译成 <code>.so</code> 之后，Python 的 <code>ctypes</code>、Rust 的 <code>extern "C"</code>、Java 的 JNI、C# 的 P/Invoke 都能直接调，不需要知道它是谁编译的。换成 C++ 的 <code>int add(int, int)</code>，同样一行代码，上面这些全都调不了。</p>
+
+  <p>差别不在语言能力，在于<strong>有没有一份所有人都同意的二进制约定</strong>。C 有：参数怎么放寄存器、结构体怎么对齐、符号叫什么名字，这些在每个平台上都由 psABI 钉死了。C++ 没有——它把这件事留给了各家实现。</p>
+
+  <div class="def"><strong>ABI（Application Binary Interface）</strong>：两段<em>已经编译完</em>的代码要能互相调用，必须先约定好的那些二进制细节——符号名、调用约定、类型布局、对象生命周期。API 谈的是源码层面「怎么写」，ABI 谈的是链接与运行期「内存里长什么样」。<strong>C++ 标准定义了 API，从未定义 ABI。</strong></div>
+
+  <div class="analogy">C++ 像一个词汇量极大的母语使用者：他能说「移动语义」「偏特化」「虚继承」。但国际机场的广播只用一种简化英语，词汇表只有名词、数字和指路。<strong>C ABI 就是那份广播词汇表</strong>：整数、指针、平坦结构体、函数指针，没了。你要让外国人听懂，不是让他们学会你的母语，而是把要说的话翻译成广播词汇——这正是所有 FFI 绑定在做的事。</div>
+
+  <h3 id="s1-1">1.1 三家编译器三套名字</h3>
+
+  <p>C++ 允许重载，所以 <code>add(int,int)</code> 和 <code>add(double,double)</code> 必须在目标文件里有不同的符号名。把参数类型编码进符号名的过程叫 <strong>name mangling</strong>，而这套编码规则各家自己定：GCC 与 Clang 在类 Unix 上都遵循 Itanium C++ ABI，MSVC 则是完全另一套。</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 960 268" role="img" aria-label="同一个 C++ 函数声明在 GCC/Clang 与 MSVC 下被修饰成完全不同的符号名，而加上 extern C 后三者收敛到同一个裸符号 add，成为跨语言唯一可依赖的窄门">
+      <text class="tb" x="480" y="20" text-anchor="middle">同一行源码 <tspan class="tm">int add(int, int);</tspan> 编译出来的符号名</text>
+
+      <rect class="box-r" x="20" y="38" width="290" height="86" rx="9"/>
+      <text class="tr" x="165" y="60" text-anchor="middle">GCC / Clang（Itanium ABI）</text>
+      <text class="tm" x="165" y="82" text-anchor="middle">_Z3addii</text>
+      <text class="ts" x="165" y="104" text-anchor="middle">_Z 前缀 · 3add 名长+名 · ii 两个 int</text>
+
+      <rect class="box-r" x="335" y="38" width="290" height="86" rx="9"/>
+      <text class="tr" x="480" y="60" text-anchor="middle">MSVC</text>
+      <text class="tm" x="480" y="82" text-anchor="middle">?add@@YAHHH@Z</text>
+      <text class="ts" x="480" y="104" text-anchor="middle">另一套语法，与上面毫无关系</text>
+
+      <rect class="box-r" x="650" y="38" width="290" height="86" rx="9"/>
+      <text class="tr" x="795" y="60" text-anchor="middle">换个签名就又变一个</text>
+      <text class="tm" x="795" y="82" text-anchor="middle">_Z3adddd</text>
+      <text class="ts" x="795" y="104" text-anchor="middle">重载的代价：类型进了符号名</text>
+
+      <path class="ln-a" d="M165 124 L165 152 M480 124 L480 152 M795 124 L795 152"/>
+      <polygon class="ar-a" points="160,152 170,152 165,162"/>
+      <polygon class="ar-a" points="475,152 485,152 480,162"/>
+      <polygon class="ar-a" points="790,152 800,152 795,162"/>
+
+      <rect class="box-g" x="270" y="166" width="420" height="56" rx="9"/>
+      <text class="tg" x="480" y="190" text-anchor="middle">extern "C" int add(int, int);</text>
+      <text class="tm" x="480" y="210" text-anchor="middle">符号名就是 add —— 三家一致</text>
+
+      <text class="ts" x="480" y="246" text-anchor="middle">代价：<tspan class="tr">不能重载、不能有模板、不能抛异常穿过</tspan>。这就是「窄门」三个字的具体含义</text>
+      <text class="ts" x="480" y="262" text-anchor="middle">用 <tspan class="tm">nm -D --defined-only lib.so | c++filt</tspan> 可以随时看到你导出的到底是哪一种</text>
+    </svg>
+  </div>
+
+  <h3 id="s1-2">1.2 同一个编译器也会变卦</h3>
+
+  <p>更糟的是，就算钉死用 GCC，ABI 也不是永恒的。最著名的一次是 GCC 5：C++11 要求 <code>std::string</code> 不能再用写时复制（COW），于是 libstdc++ 引入了 <code>_GLIBCXX_USE_CXX11_ABI</code> 宏，同时提供新旧两套 <code>std::string</code> 与 <code>std::list</code>。两边编译出的库混用时，链接器要么报未定义符号，要么——更可怕——链接成功而在运行期读到错位的成员。</p>
+
+  <p>所以结论不是「小心一点就能跨编译器传 <code>std::string</code>」，而是<strong>根本不要在边界上出现任何 C++ 类型</strong>。标准库的布局、异常的展开表、虚表的位置、RTTI 的比较方式，全都是实现细节。</p>
+
+  <div class="box tip">这一节只讲「为什么必须退到 C ABI」。ABI 本身的机制——Itanium mangling 的完整语法、vtable 布局、版本脚本与 <code>-fvisibility=hidden</code> 的用法——在 <a href="../perf-debug/abi_compatibility_guide.html">ABI 兼容性</a> 与 <a href="../architect/large_scale_engineering.html#ch2">大型 C++ 工程化 §2</a> 里有系统展开；<code>extern "C"</code> 与 mangling 的编译期视角见 <a href="./compilation_guide.html">编译与链接</a>。</div>
+
+  <h3 id="s1-3">1.3 所有绑定技术的同一个形状</h3>
+
+  <p>认清这一点之后，pybind11、cxx、JNI、P/Invoke 这些看起来风格迥异的东西就露出了同一个骨架：<strong>边界处永远是 C ABI，两侧各有一层胶水把本语言的概念翻译过去</strong>。区别只在于胶水由谁写、写在哪里。</p>
+
+  <table>
+    <thead><tr><th>方案</th><th>胶水由谁生成</th><th>所有权规则写在哪</th><th>典型代价</th></tr></thead>
+    <tbody>
+      <tr><td>手写 <code>extern "C"</code> + ctypes</td><td>你自己，两侧都写</td><td>文档里（编译器不检查）</td><td>最易错，但零依赖</td></tr>
+      <tr><td>pybind11 / nanobind</td><td>C++ 模板元编程，编译期生成</td><td><code>return_value_policy</code> 与 holder 类型</td><td>编译慢、二进制大</td></tr>
+      <tr><td>cxx（Rust）</td><td>宏 + 代码生成器，两侧都生成</td><td><strong>类型系统里</strong>（<code>UniquePtr</code> / <code>Box</code>）</td><td>桥接类型受限</td></tr>
+      <tr><td>SWIG</td><td>解析头文件后生成</td><td><code>%newobject</code> 之类的注解</td><td>生成码难读难调</td></tr>
+      <tr><td>JNI</td><td>你自己，按固定签名规则</td><td>局部/全局引用的显式管理</td><td>样板代码极多</td></tr>
+    </tbody>
+  </table>
+
+  <p>把「所有权规则写在哪」这一列单独拎出来看，会发现它就是这些方案的<strong>质量排序</strong>：写在文档里最差（没人看），写在注解里次之（会漏），写进类型系统最好（编译器替你检查）。cxx 之所以被认为是目前最稳的方案，原因就在这一列。</p>
+</section>
+
+<!-- ================================================================ §2 -->
+<section class="chapter" id="s2">
+  <div class="ch-head">
+    <div class="num">02</div>
+    <div class="t"><h2>边界四铁律</h2><p class="sub">四条都是从「对面不是 C++」这一个事实推出来的</p></div>
+  </div>
+
+  <p>无论你用哪种绑定技术，下面四条都成立。它们不是最佳实践，是<strong>违反了就一定会出事</strong>的那一档。</p>
+
+  <table>
+    <thead><tr><th>#</th><th>铁律</th><th>为什么</th><th>违反后的现场</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>边界上只出现 <strong>C ABI 类型</strong></td><td>对面不知道 <code>std::string</code> 长什么样，也不知道它哪天会变</td><td>读到错位成员；升级编译器后突然崩</td></tr>
+      <tr><td>2</td><td><strong>异常绝不能穿过</strong>边界</td><td>展开器要走对面的栈帧，而对面没有展开信息</td><td><code>std::terminate</code>，或栈损坏后的随机崩溃</td></tr>
+      <tr><td>3</td><td><strong>谁分配谁释放</strong></td><td>两侧可能链接到不同的堆（不同 CRT / 不同 allocator）</td><td>崩在 <code>free</code> 里，栈顶跟真正的 bug 毫无关系</td></tr>
+      <tr><td>4</td><td>生命周期要有<strong>书面契约</strong></td><td>对面的 GC / 借用检查器管不到你这半边</td><td>use-after-free；Python 侧 numpy 数组指向已释放内存</td></tr>
+    </tbody>
+  </table>
+
+  <h3 id="s2-1">2.1 异常绝不能穿过边界</h3>
+
+  <p>第 2 条最容易被低估，因为它<strong>在测试里往往不触发</strong>——正常路径上没有异常，只有线上遇到那个畸形输入时才第一次穿过边界。</p>
+
+  <p>C++ 异常的传播依赖编译期生成的展开表（unwind tables）：抛出时运行时库沿调用栈逐帧查表，找到匹配的 handler，沿途调用析构函数。当中间夹着一帧 C 代码或 Rust 代码时，那一帧可能压根没有展开信息，也可能有但语义完全不同。</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 960 250" role="img" aria-label="异常从 C++ 实现层向上抛，穿过中间的 C 或 Rust 帧时的三种结局：终止进程、跳过析构导致资源泄漏、以及正确做法在边界处捕获并转成错误码">
+      <text class="tb" x="480" y="20" text-anchor="middle">一个 throw 撞上边界，只有三种结局</text>
+
+      <rect class="box-r" x="20" y="40" width="290" height="150" rx="9"/>
+      <text class="tr" x="165" y="62" text-anchor="middle">结局 A · 直接终止</text>
+      <text class="ts" x="165" y="86" text-anchor="middle">对面帧标了 noexcept 或不可展开</text>
+      <text class="tm" x="165" y="106" text-anchor="middle">std::terminate()</text>
+      <text class="ts" x="165" y="130" text-anchor="middle">整个 Python 解释器一起没</text>
+      <text class="ts" x="165" y="150" text-anchor="middle">好消息是：崩得响，容易发现</text>
+      <text class="tg" x="165" y="176" text-anchor="middle">相对最不坏的一种</text>
+
+      <rect class="box-r" x="335" y="40" width="290" height="150" rx="9"/>
+      <text class="tr" x="480" y="62" text-anchor="middle">结局 B · 静默损坏</text>
+      <text class="ts" x="480" y="86" text-anchor="middle">勉强穿过去了，但沿途的</text>
+      <text class="ts" x="480" y="106" text-anchor="middle">C 帧没有析构可调</text>
+      <text class="ts" x="480" y="130" text-anchor="middle">锁没解、fd 没关、refcount 没减</text>
+      <text class="ts" x="480" y="150" text-anchor="middle">进程还活着，状态已经烂了</text>
+      <text class="tr" x="480" y="176" text-anchor="middle">最危险：几小时后才表现出来</text>
+
+      <rect class="box-g" x="650" y="40" width="290" height="150" rx="9"/>
+      <text class="tg" x="795" y="62" text-anchor="middle">结局 C · 正确做法</text>
+      <text class="ts" x="795" y="86" text-anchor="middle">边界函数自己是一道墙</text>
+      <text class="tm" x="795" y="106" text-anchor="middle">catch (...) → 错误码</text>
+      <text class="ts" x="795" y="130" text-anchor="middle">异常在 C++ 侧就被吃掉</text>
+      <text class="ts" x="795" y="150" text-anchor="middle">对面拿到的是它看得懂的整数</text>
+      <text class="tg" x="795" y="176" text-anchor="middle">每个导出函数都要写这道墙</text>
+
+      <text class="ts" x="480" y="216" text-anchor="middle">推论：<tspan class="ta">每一个 extern "C" 函数体都应该整个包在 try 里</tspan>，没有例外。漏一个就是一颗定时炸弹</text>
+      <text class="ts" x="480" y="238" text-anchor="middle">Rust 的 panic 完全对称：它也不能穿过 C++ 帧，cxx 生成的 shim 会替你 catch_unwind</text>
+    </svg>
+  </div>
+
+  <h3 id="s2-2">2.2 谁分配谁释放</h3>
+
+  <p>第 3 条的典型现场是这样的：C++ 库返回一个 <code>char*</code>，说「用完 <code>free</code> 掉」。调用方是一个 Python 扩展，它老老实实调了 <code>free</code>——然后崩在 glibc 的 <code>free</code> 内部，栈顶全是 malloc 的实现细节，看上去跟业务代码毫无关系。</p>
+
+  <p>原因是两侧链接到了不同的分配器实例：Windows 上是不同的 CRT（<code>/MT</code> 静态 CRT 会让每个 DLL 各有一份堆），Linux 上可能是一侧 <code>LD_PRELOAD</code> 了 jemalloc 而另一侧没有。<strong>「一块内存必须由分配它的那个分配器释放」</strong>，跨边界时这个前提不再自动成立。</p>
+
+  <div class="vs">
+    <div class="bad">
+      <h5>❌ 让对面释放你的内存</h5>
+      <pre><code>/* 返回堆上字符串，文档里写"请 free" */
+const char* tn_describe(tn_engine* e);</code></pre>
+      <p style="font-size:.83rem;margin:8px 0 0">对面用哪个 <code>free</code> 你管不着；对面是 Rust 或 Java 时甚至没有 <code>free</code> 可用。</p>
+    </div>
+    <div class="good">
+      <h5>✅ 两种解法，任选一种</h5>
+      <pre><code>/* 甲：调用方给缓冲区，库只填 */
+tn_status tn_describe(tn_engine*, char* buf,
+                      size_t cap, size_t* need);
+
+/* 乙：库配一个成对的释放函数 */
+char* tn_describe_alloc(tn_engine*);
+void  tn_string_free(char*);</code></pre>
+      <p style="font-size:.83rem;margin:8px 0 0">甲最省事（对面用自己的栈或堆）；乙适合长度不可预知，关键是<strong>释放也走你的 <code>.so</code></strong>。</p>
+    </div>
+  </div>
+
+  <p>甲式还有一个常被忽略的好处：<code>need</code> 参数让调用方可以先传 <code>cap = 0</code> 探长度，再分配一次刚好的缓冲。这是 POSIX 和 Win32 用了几十年的惯例，对面的语言绑定层也最容易自动化。</p>
+</section>
+
+<!-- ================================================================ §3 -->
+<section class="chapter" id="s3">
+  <div class="ch-head">
+    <div class="num">03</div>
+    <div class="t"><h2>手写稳定 C API</h2><p class="sub">opaque handle 是这里唯一值得背下来的模式</p></div>
+  </div>
+
+  <p>不管最终用哪种绑定工具，<strong>底下都应该先有一层干净的 C API</strong>。这一层写好了，pybind11、cxx、ctypes、JNI 都只是它的不同包装；写砸了，每种绑定都要各自绕一遍坑。</p>
+
+  <h3 id="s3-1">3.1 不完整类型冻结 ABI</h3>
+
+  <pre><code>/* engine.h —— 纯 C 头文件，任何语言都能 FFI */
+#ifndef TN_ENGINE_H
+#define TN_ENGINE_H
+#include &lt;stddef.h&gt;
+#include &lt;stdint.h&gt;
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* 不完整类型：调用方只能持有指针，看不到、也不依赖内部布局 */
+typedef struct tn_engine tn_engine;
+
+typedef enum {
+    TN_OK        = 0,
+    TN_EINVAL    = 1,
+    TN_ENOMEM    = 2,
+    TN_ETOOSMALL = 3,   /* 缓冲区不够，*out_len 返回所需长度 */
+    TN_EINTERNAL = 4
+} tn_status;
+
+/* 版本号随头文件走，运行期可校验，防止头与 .so 不匹配 */
+#define TN_ABI_VERSION 3
+uint32_t     tn_abi_version(void);
+
+tn_engine*   tn_engine_create(const char* cfg_json, tn_status* out_err);
+void         tn_engine_destroy(tn_engine* e);
+
+tn_status    tn_engine_run(tn_engine* e,
+                           const uint8_t* in,  size_t in_len,
+                           uint8_t*       out, size_t out_cap,
+                           size_t*        out_len);
+
+/* 指向 thread_local 缓冲；调用方不得释放，下次调用即失效 */
+const char*  tn_last_error(void);
+
+#ifdef __cplusplus
+}
+#endif
+#endif</code></pre>
+
+  <h3 id="s3-2">3.2 五个设计决策</h3>
+
+  <p>这段头文件里每一处都是在回答一个具体的跨语言问题，值得逐条看：</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 960 230" role="img" aria-label="opaque handle 的内存视图：调用方一侧只有一个指针大小的句柄和一份纯 C 的枚举，实现方一侧是完整的 C++ 对象，包含 std::string、std::vector 和虚表指针，两侧之间只通过指针传递">
+      <text class="tb" x="480" y="20" text-anchor="middle">opaque handle：同一个指针，两侧看到的东西完全不同</text>
+
+      <rect class="box-p" x="20" y="40" width="330" height="160" rx="9"/>
+      <text class="tp" x="185" y="62" text-anchor="middle">调用方（Python / Rust / C）</text>
+      <rect class="box" x="60" y="78" width="250" height="34" rx="6"/>
+      <text class="tm" x="185" y="100" text-anchor="middle">tn_engine* e;  // 8 字节</text>
+      <text class="ts" x="185" y="132" text-anchor="middle">它知道的全部：这是一个指针</text>
+      <text class="ts" x="185" y="152" text-anchor="middle">不能 sizeof、不能解引用、不能继承</text>
+      <text class="tg" x="185" y="180" text-anchor="middle">正因为什么都不知道，才什么都不会依赖</text>
+
+      <path class="ln-a" d="M350 120 L610 120"/>
+      <polygon class="ar-a" points="610,115 610,125 620,120"/>
+      <text class="ta" x="480" y="110" text-anchor="middle">只传这一个指针</text>
+      <text class="ts" x="480" y="140" text-anchor="middle">窄门宽度 = 8 字节</text>
+
+      <rect class="box-a" x="630" y="40" width="310" height="160" rx="9"/>
+      <text class="ta" x="785" y="62" text-anchor="middle">实现方（你的 C++）</text>
+      <rect class="box" x="660" y="78" width="250" height="100" rx="6"/>
+      <text class="tm" x="785" y="98" text-anchor="middle">struct tn_engine {</text>
+      <text class="tm" x="785" y="116" text-anchor="middle">  std::string cfg;</text>
+      <text class="tm" x="785" y="134" text-anchor="middle">  std::vector&lt;Node&gt; graph;</text>
+      <text class="tm" x="785" y="152" text-anchor="middle">  std::unique_ptr&lt;Pool&gt; pool;</text>
+      <text class="tm" x="785" y="170" text-anchor="middle">};</text>
+
+      <text class="ts" x="480" y="220" text-anchor="middle">加字段、换 STL 实现、升级编译器 —— 调用方<tspan class="tg">不需要重新编译</tspan>。这就是「冻结 ABI」的全部含义</text>
+    </svg>
+  </div>
+
+  <table>
+    <thead><tr><th>决策</th><th>它替代了什么</th><th>理由</th></tr></thead>
+    <tbody>
+      <tr><td>不完整类型 <code>struct tn_engine;</code></td><td>在头里暴露完整结构体</td><td>结构体一旦可见，字段顺序和大小就进了调用方的编译产物，加一个字段就是 ABI 破坏</td></tr>
+      <tr><td>创建函数返回指针，错误走 <code>out_err</code></td><td>返回一个 <code>expected</code> 式的结构体</td><td>返回聚合体涉及调用约定里最不统一的部分；指针 + 输出参数在所有平台上一致</td></tr>
+      <tr><td>输出缓冲由调用方给</td><td>库内 <code>malloc</code> 后让对面 <code>free</code></td><td>见 §2.2。<code>TN_ETOOSMALL</code> + <code>out_len</code> 让调用方能先探长度</td></tr>
+      <tr><td><code>tn_abi_version()</code> 运行期可查</td><td>只靠头文件宏</td><td>宏在编译期，查不出「头是新的、<code>.so</code> 是旧的」这种部署事故</td></tr>
+      <tr><td><code>tn_last_error()</code> 用 thread_local</td><td>返回 <code>char*</code> 让对面释放</td><td>零分配、线程安全；代价是必须写明「下次调用即失效」，绑定层要立刻拷走</td></tr>
+    </tbody>
+  </table>
+
+  <h3 id="s3-3">3.3 实现侧的防漏网</h3>
+
+  <p>头文件只是契约，真正的功夫在实现文件。每个导出函数都要做同一件事：<strong>把 C++ 世界完整地包起来，只让整数出去</strong>。</p>
+
+  <pre><code>namespace {
+thread_local std::string g_last_error;   // 每线程一份，互不干扰
+
+void set_error(const char* what) { g_last_error = what; }
+}
+
+extern "C" tn_status tn_engine_run(tn_engine* e,
+                                   const uint8_t* in,  size_t in_len,
+                                   uint8_t*       out, size_t out_cap,
+                                   size_t*        out_len) noexcept
+{
+    if (!e || (!in &amp;&amp; in_len) || !out_len) return TN_EINVAL;   // 先挡住空指针
+    try {
+        auto r = e-&gt;run({in, in_len});          // 这里面可以尽情用 C++
+        *out_len = r.size();
+        if (r.size() &gt; out_cap) return TN_ETOOSMALL;
+        std::memcpy(out, r.data(), r.size());
+        return TN_OK;
+    }
+    catch (const std::bad_alloc&amp;)    { return TN_ENOMEM; }
+    catch (const std::exception&amp; ex) { set_error(ex.what()); return TN_EINTERNAL; }
+    catch (...)                      { set_error("unknown"); return TN_EINTERNAL; }
+}</code></pre>
+
+  <p>三个细节值得说明。<code>noexcept</code> 不是装饰：万一你漏了某条抛出路径，它会让程序<strong>确定地</strong> <code>std::terminate</code>，而不是滑向结局 B 的静默损坏——这是刻意选择「崩得响」而不是「崩得晚」。<code>catch (const std::bad_alloc&amp;)</code> 单独列在前面，是因为内存耗尽时连 <code>ex.what()</code> 拷进 <code>g_last_error</code> 都可能再抛一次。最后，<code>*out_len</code> 在长度检查<strong>之前</strong>就写好了，调用方才能靠 <code>TN_ETOOSMALL</code> 拿到所需长度重试。</p>
+
+  <div class="box tip">这一层写完之后，它同时也是你自己项目的 ABI 防火墙：主程序和插件之间用同一套模式，就能各自独立升级编译器。插件化架构的完整设计见 <a href="../architect/large_scale_engineering.html#ch8">大型 C++ 工程化 §8</a>，<code>dlopen</code> 的坑在 <a href="../architect/large_scale_engineering.html#ch9">§9</a>。</div>
+</section>
+
+<!-- ================================================================ §4 -->
+<section class="chapter" id="s4">
+  <div class="ch-head">
+    <div class="num">04</div>
+    <div class="t"><h2>Python 绑定</h2><p class="sub">最常见的需求，也是最容易「接上了但没变快」的一个</p></div>
+  </div>
+
+  <h3 id="s4-1">4.1 六种方案选型</h3>
+
+  <table>
+    <thead><tr><th>方案</th><th>形态</th><th>适合</th><th>不适合</th></tr></thead>
+    <tbody>
+      <tr><td><code>ctypes</code></td><td>标准库，运行期加载 <code>.so</code></td><td>原型验证、只有几个 C 函数、不想引入构建步骤</td><td>大量 API、复杂类型、需要性能</td></tr>
+      <tr><td><code>cffi</code></td><td>解析 C 声明，有 ABI / API 两种模式</td><td>比 ctypes 更规整的 C 绑定</td><td>C++ 类与模板</td></tr>
+      <tr><td><strong>pybind11</strong></td><td>header-only，C++ 模板元编程</td><td>绝大多数 C++ 项目；生态与文档最成熟</td><td>对编译时间和二进制体积敏感的场景</td></tr>
+      <tr><td><strong>nanobind</strong></td><td>pybind11 作者的重写版</td><td>新项目；二进制显著更小、编译更快、调用开销更低</td><td>需要 pybind11 老特性或旧 Python 的项目</td></tr>
+      <tr><td>Cython</td><td>写 <code>.pyx</code>，编译成扩展</td><td>主体是 Python、只想下沉热点循环</td><td>包装一个已有的大型 C++ 库</td></tr>
+      <tr><td>SWIG</td><td>解析头文件自动生成</td><td>同一套 C++ 要绑到多种语言</td><td>只绑 Python——生成码可读性差，调试痛苦</td></tr>
+    </tbody>
+  </table>
+
+  <p>2026 年给新项目的默认选择是 <strong>nanobind</strong>：它砍掉了 pybind11 为兼容旧 Python 和旧编译器背的历史包袱，官方基准上二进制体积和编译时间都有数倍改善。但如果项目已经在用 pybind11 且没有体积压力，<strong>不值得为此迁移</strong>——两者的 API 相似但不兼容，迁移成本是实打实的。</p>
+
+  <h3 id="s4-2">4.2 GIL：没变快的头号原因</h3>
+
+  <p>这是本章最该记住的一条。Python 的全局解释器锁（GIL）保证同一时刻只有一个线程在执行 Python 字节码。当 Python 调进你的 C++ 函数时，<strong>GIL 默认仍然被持有着</strong>——也就是说，你那个跑了 200 毫秒的 C++ 计算，全程把整个解释器锁死了。</p>
+
+  <p>后果很具体：用户把热点用 C++ 重写，单线程确实快了 10 倍，然后开 8 个线程想再快 8 倍，结果发现<strong>总吞吐几乎没动</strong>。</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 960 264" role="img" aria-label="GIL 时间线对比：不释放 GIL 时四个线程的 C++ 计算被串行化，总耗时是四段之和；调用 gil_scoped_release 后四段计算真正并行重叠，总耗时接近一段">
+      <text class="tb" x="480" y="20" text-anchor="middle">四个 Python 线程各调一次 50 ms 的 C++ 计算</text>
+
+      <text class="tr" x="20" y="48">❌ 不释放 GIL — 被串行化</text>
+      <rect class="box" x="150" y="58" width="790" height="22" rx="4" opacity=".35"/>
+      <rect class="box-r" x="150" y="58" width="190" height="22" rx="4"/>
+      <rect class="box-r" x="345" y="58" width="190" height="22" rx="4"/>
+      <rect class="box-r" x="540" y="58" width="190" height="22" rx="4"/>
+      <rect class="box-r" x="735" y="58" width="190" height="22" rx="4"/>
+      <text class="ts" x="245" y="74" text-anchor="middle">T1 · 50 ms</text>
+      <text class="ts" x="440" y="74" text-anchor="middle">T2 · 50 ms</text>
+      <text class="ts" x="635" y="74" text-anchor="middle">T3 · 50 ms</text>
+      <text class="ts" x="830" y="74" text-anchor="middle">T4 · 50 ms</text>
+      <text class="tr" x="545" y="102" text-anchor="middle">墙钟 200 ms —— 加线程完全没用，CPU 只跑满一个核</text>
+
+      <path class="ln-d" d="M20 124 L940 124"/>
+
+      <text class="tg" x="20" y="152">✅ py::gil_scoped_release — 真并行</text>
+      <rect class="box-g" x="150" y="162" width="190" height="18" rx="4"/>
+      <rect class="box-g" x="150" y="184" width="190" height="18" rx="4"/>
+      <rect class="box-g" x="150" y="206" width="190" height="18" rx="4"/>
+      <rect class="box-g" x="150" y="228" width="190" height="18" rx="4"/>
+      <text class="ts" x="245" y="176" text-anchor="middle">T1 · 50 ms</text>
+      <text class="ts" x="245" y="198" text-anchor="middle">T2 · 50 ms</text>
+      <text class="ts" x="245" y="220" text-anchor="middle">T3 · 50 ms</text>
+      <text class="ts" x="245" y="242" text-anchor="middle">T4 · 50 ms</text>
+      <path class="ln-g" d="M348 204 L520 204"/>
+      <polygon class="ar-g" points="520,199 520,209 530,204"/>
+      <text class="tg" x="700" y="198" text-anchor="middle">墙钟 ≈ 50 ms，四个核都在干活</text>
+      <text class="ts" x="700" y="220" text-anchor="middle">前提：这段 C++ 期间<tspan class="tr">一行 Python API 都不能碰</tspan></text>
+
+      <text class="ts" x="480" y="262" text-anchor="middle">判据很简单：这个函数要跑超过几十微秒、且不碰 Python 对象 → 就该释放 GIL</text>
+    </svg>
+  </div>
+
+  <pre><code>m.def("solve", [](const Matrix&amp; a) {
+        py::gil_scoped_release unlock;      // 出了作用域自动重新获取
+        return heavy_cpp_solve(a);          // 纯 C++，不碰任何 py:: 对象
+      },
+      py::call_guard&lt;py::gil_scoped_release&gt;());   // 或者用 call_guard 一行搞定
+
+// 反向：C++ 后台线程要回调 Python，必须先拿 GIL
+void on_done(const py::function&amp; cb, int code) {
+    py::gil_scoped_acquire lock;            // 忘了这行 → 解释器状态损坏
+    cb(code);
+}</code></pre>
+
+  <p>两个方向都要小心。释放时的铁律是<strong>那段代码里一个 Python 对象都不能碰</strong>——包括析构一个 <code>py::object</code>，因为那会减引用计数。反向获取时忘了加锁，症状通常不是立刻崩溃，而是引用计数错乱后在几分钟后的某次 GC 里崩掉，现场毫无线索。</p>
+
+  <h3 id="s4-3">4.3 零拷贝与生命周期</h3>
+
+  <p>把一个 <code>std::vector&lt;float&gt;</code> 返回给 Python，默认行为是<strong>整块拷贝</strong>成 Python list。数据一大，绑定层本身就成了瓶颈。零拷贝的做法是让 numpy 数组直接指向 C++ 的缓冲区——但这样一来，「C++ 侧什么时候释放这块内存」就变成了一个必须回答的问题。</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 960 246" role="img" aria-label="pybind11 return_value_policy 的四种所有权语义对照：copy 拷贝一份、take_ownership 移交所有权给 Python、reference 不管理生命周期有悬垂风险、reference_internal 把生命周期绑定到父对象">
+      <text class="tb" x="480" y="20" text-anchor="middle">return_value_policy：这个返回值的内存，谁负责回收？</text>
+
+      <rect class="box-g" x="20" y="38" width="222" height="132" rx="9"/>
+      <text class="tg" x="131" y="60" text-anchor="middle">copy</text>
+      <text class="ts" x="131" y="84" text-anchor="middle">拷一份给 Python</text>
+      <text class="ts" x="131" y="104" text-anchor="middle">两边各管各的</text>
+      <text class="tg" x="131" y="132" text-anchor="middle">永远安全</text>
+      <text class="ts" x="131" y="152" text-anchor="middle">代价：大数据上就是瓶颈</text>
+
+      <rect class="box-a" x="254" y="38" width="222" height="132" rx="9"/>
+      <text class="ta" x="365" y="60" text-anchor="middle">take_ownership</text>
+      <text class="ts" x="365" y="84" text-anchor="middle">指针交给 Python</text>
+      <text class="ts" x="365" y="104" text-anchor="middle">GC 时调 C++ 析构</text>
+      <text class="tg" x="365" y="132" text-anchor="middle">适合工厂函数</text>
+      <text class="ts" x="365" y="152" text-anchor="middle">前提：确实是 new 出来的</text>
+
+      <rect class="box-r" x="488" y="38" width="222" height="132" rx="9"/>
+      <text class="tr" x="599" y="60" text-anchor="middle">reference</text>
+      <text class="ts" x="599" y="84" text-anchor="middle">只给指针，谁都不管</text>
+      <text class="ts" x="599" y="104" text-anchor="middle">C++ 先释放 → 悬垂</text>
+      <text class="tr" x="599" y="132" text-anchor="middle">默认就该怀疑它</text>
+      <text class="ts" x="599" y="152" text-anchor="middle">只在生命周期是全局时用</text>
+
+      <rect class="box-p" x="722" y="38" width="218" height="132" rx="9"/>
+      <text class="tp" x="831" y="60" text-anchor="middle">reference_internal</text>
+      <text class="ts" x="831" y="84" text-anchor="middle">指针 + keep_alive</text>
+      <text class="ts" x="831" y="104" text-anchor="middle">父对象活着它就活着</text>
+      <text class="tg" x="831" y="132" text-anchor="middle">成员访问器的正解</text>
+      <text class="ts" x="831" y="152" text-anchor="middle">返回内部引用时选它</text>
+
+      <text class="ts" x="480" y="200" text-anchor="middle">选错的后果不对称：选 <tspan class="tg">copy</tspan> 最坏是慢，选 <tspan class="tr">reference</tspan> 最坏是 use-after-free</text>
+      <text class="ts" x="480" y="222" text-anchor="middle">所以默认从 copy 起步，<tspan class="ta">量出来确实是瓶颈</tspan>再往左移，并且每移一格都要能说清谁持有</text>
+      <text class="ts" x="480" y="240" text-anchor="middle">零拷贝返回裸缓冲时，用 <tspan class="tm">py::capsule</tspan> 把释放函数一起交出去，让 numpy 数组持有它</text>
+    </svg>
+  </div>
+
+  <p>最实用的一条经验：<strong>默认用 <code>copy</code>，等 profiler 指出绑定层是瓶颈了再优化</strong>。这不是保守，而是因为这四个选项的错误代价完全不对称——选 <code>copy</code> 选错了只是慢，选 <code>reference</code> 选错了是内存安全问题，而且往往在生产环境才暴露。</p>
+
+  <h3 id="s4-4">4.4 异常双向映射</h3>
+
+  <p>§2.1 说异常不能穿过边界，但 Python 绑定是个例外——因为 pybind11 已经在每个导出函数外面替你加了那道墙。它会把标准异常自动翻译成对应的 Python 异常（<code>std::invalid_argument</code> → <code>ValueError</code>，<code>std::out_of_range</code> → <code>IndexError</code>），自定义异常则用 <code>py::register_exception</code> 注册。</p>
+
+  <p>反方向同样要处理：从 C++ 里调 Python 回调时，如果 Python 侧抛了异常，pybind11 会在 C++ 侧抛出 <code>py::error_already_set</code>。这个异常<strong>持有 Python 的异常对象</strong>，所以它的析构需要 GIL——在一个已经释放了 GIL 的作用域里让它析构，就是死锁。</p>
+</section>
+
+<!-- ================================================================ §5 -->
+<section class="chapter" id="s5">
+  <div class="ch-head">
+    <div class="num">05</div>
+    <div class="t"><h2>C++ ↔ Rust</h2><p class="sub">唯一把所有权规则写进类型系统的主流方案</p></div>
+  </div>
+
+  <h3 id="s5-1">5.1 三条路线</h3>
+
+  <table>
+    <thead><tr><th>工具</th><th>方向</th><th>做法</th><th>安全性</th></tr></thead>
+    <tbody>
+      <tr><td><code>bindgen</code></td><td>Rust 调 C/C++</td><td>解析 C 头，生成 Rust 的 <code>extern "C"</code> 声明</td><td>生成的全是 <code>unsafe</code>，安全封装要你自己写</td></tr>
+      <tr><td><code>cbindgen</code></td><td>C/C++ 调 Rust</td><td>从 Rust 代码生成 C 头文件</td><td>同上，方向相反</td></tr>
+      <tr><td><strong><code>cxx</code></strong></td><td>双向</td><td>在一个 <code>#[cxx::bridge]</code> 模块里声明双方类型，生成两侧 shim</td><td><strong>桥接处无 <code>unsafe</code></strong>，所有权由类型表达</td></tr>
+    </tbody>
+  </table>
+
+  <p>前两个是「把 C ABI 翻译成能编译的声明」，边界安全仍然靠人；cxx 不一样，它要求你把接口<strong>声明一遍</strong>，然后由它生成两侧代码，从而能在类型层面拒绝一批错误用法。</p>
+
+  <h3 id="s5-2">5.2 cxx 把所有权编进类型</h3>
+
+  <pre><code>#[cxx::bridge(namespace = "tn")]
+mod ffi {
+    // 从 C++ 引进来的不透明类型：Rust 只能通过指针持有
+    unsafe extern "C++" {
+        include!("engine/engine.h");
+        type Engine;
+        fn new_engine(cfg: &amp;str) -&gt; UniquePtr&lt;Engine&gt;;   // 所有权归 Rust
+        fn run(self: Pin&lt;&amp;mut Engine&gt;, input: &amp;[u8]) -&gt; Result&lt;Vec&lt;u8&gt;&gt;;
+    }
+
+    // 暴露给 C++ 的 Rust 类型与函数
+    extern "Rust" {
+        type Session;                                   // C++ 侧见到 rust::Box
+        fn open_session(id: u64) -&gt; Box&lt;Session&gt;;
+        fn feed(self: &amp;mut Session, chunk: &amp;[u8]) -&gt; Result&lt;usize&gt;;
+    }
+}</code></pre>
+
+  <p>这段声明里，跨语言的所有权全部由类型名表达，不需要任何文档约定：</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 960 250" role="img" aria-label="cxx 双向桥的所有权映射：UniquePtr 在 Rust 侧代表 C++ 的 unique_ptr 析构时调 C++ 析构函数，Box 在 C++ 侧表现为 rust Box 由 Rust 负责回收，引用类型只借用不转移所有权，Result 把两侧的错误统一成可检查的返回值">
+      <text class="tb" x="480" y="20" text-anchor="middle">同一个对象，两侧各自用本语言的所有权工具持有它</text>
+
+      <rect class="box-a" x="20" y="40" width="280" height="172" rx="9"/>
+      <text class="ta" x="160" y="62" text-anchor="middle">Rust 侧</text>
+      <rect class="box" x="44" y="76" width="232" height="30" rx="6"/>
+      <text class="tm" x="160" y="96" text-anchor="middle">UniquePtr&lt;Engine&gt;</text>
+      <text class="ts" x="160" y="124" text-anchor="middle">drop 时调用 C++ 的 ~Engine()</text>
+      <rect class="box" x="44" y="140" width="232" height="30" rx="6"/>
+      <text class="tm" x="160" y="160" text-anchor="middle">Box&lt;Session&gt;</text>
+      <text class="ts" x="160" y="188" text-anchor="middle">Rust 自己的堆对象</text>
+
+      <path class="ln-a" d="M300 110 L640 110"/>
+      <polygon class="ar-a" points="640,105 640,115 650,110"/>
+      <text class="ta" x="470" y="100" text-anchor="middle">生成的 shim</text>
+      <text class="ts" x="470" y="128" text-anchor="middle">底下仍然是 C ABI</text>
+      <path class="ln-g" d="M650 166 L310 166"/>
+      <polygon class="ar-g" points="310,161 310,171 300,166"/>
+      <text class="tg" x="470" y="156" text-anchor="middle">反向同理</text>
+
+      <rect class="box-g" x="660" y="40" width="280" height="172" rx="9"/>
+      <text class="tg" x="800" y="62" text-anchor="middle">C++ 侧</text>
+      <rect class="box" x="684" y="76" width="232" height="30" rx="6"/>
+      <text class="tm" x="800" y="96" text-anchor="middle">std::unique_ptr&lt;Engine&gt;</text>
+      <text class="ts" x="800" y="124" text-anchor="middle">熟悉的 RAII，没有新概念</text>
+      <rect class="box" x="684" y="140" width="232" height="30" rx="6"/>
+      <text class="tm" x="800" y="160" text-anchor="middle">rust::Box&lt;Session&gt;</text>
+      <text class="ts" x="800" y="188" text-anchor="middle">析构时回调 Rust 释放</text>
+
+      <text class="ts" x="480" y="238" text-anchor="middle">关键不在「能互调」，而在<tspan class="ta">忘了释放 / 释放两次这类错误，在声明阶段就编译不过</tspan></text>
+    </svg>
+  </div>
+
+  <p><code>UniquePtr&lt;Engine&gt;</code> 出现在 Rust 侧，意味着这个 C++ 对象的所有权确实交给了 Rust，Rust 的 <code>drop</code> 会去调 C++ 的析构函数；<code>Box&lt;Session&gt;</code> 出现在 C++ 侧则相反。而 <code>&amp;[u8]</code> 这类引用只是借用，编译器保证它不会活得比被借用者更久。<strong>「谁分配谁释放」这条原本只能写在文档里的铁律，在这里变成了编译错误。</strong></p>
+
+  <h3 id="s5-3">5.3 panic 与异常</h3>
+
+  <p>Rust 的 <code>panic!</code> 和 C++ 的 <code>throw</code> 在跨边界这件事上是完全对称的：都不能穿过对面的栈帧。cxx 的处理方式是在生成的 shim 里两头都设墙——Rust 函数被 <code>catch_unwind</code> 包住，C++ 函数的异常被捕获。</p>
+
+  <p>连接两者的是声明里的 <code>Result</code>：把返回类型写成 <code>Result&lt;T&gt;</code>，就是在告诉生成器「这个方向可能失败，请把对面的错误转换成本侧的错误表示」。C++ 抛出的 <code>std::exception</code> 会变成 Rust 的 <code>Err</code>（携带 <code>what()</code> 字符串），Rust 的 <code>Err</code> 则变成 C++ 侧抛出的异常。<strong>没写 <code>Result</code> 却真的 panic 了，结果是进程 abort</strong>——和 §2.1 的结局 A 一样，这是刻意设计的。</p>
+</section>
+
+<!-- ================================================================ §6 -->
+<section class="chapter" id="s6">
+  <div class="ch-head">
+    <div class="num">06</div>
+    <div class="t"><h2>protobuf / gRPC 的代价</h2><p class="sub">它也是一种跨语言边界，只是代价藏在编译期和二进制里</p></div>
+  </div>
+
+  <p>用 protobuf 做跨语言通信，回避了前面所有 ABI 问题——两侧各自生成本语言的代码，边界上只有字节流。代价转移到了别处，而且往往没人算过这笔账。</p>
+
+  <table>
+    <thead><tr><th>代价</th><th>量级</th><th>缓解手段</th></tr></thead>
+    <tbody>
+      <tr><td>生成码体积</td><td>一个中等 <code>.proto</code> 生成几千行 <code>.pb.cc</code>；每个消息一个类、一套反射元数据</td><td>拆分 <code>.proto</code>；<code>optimize_for = LITE_RUNTIME</code> 去掉反射与 descriptor</td></tr>
+      <tr><td>编译时间</td><td><code>.pb.h</code> 层层 include，成为整个项目的头文件热点</td><td>只在 <code>.cpp</code> 里 include；接口层用自己的 POD 结构隔离</td></tr>
+      <tr><td>分配次数</td><td>一个嵌套消息树可能是几十次 <code>new</code>，热路径上很显眼</td><td><code>google::protobuf::Arena</code>：整棵树一次分配、一次释放</td></tr>
+      <tr><td>所有权语义变化</td><td>Arena 上的消息<strong>不能 <code>delete</code></strong>，<code>release_xxx()</code> 的行为也随之改变</td><td>团队里统一「是否用 Arena」，不要混用</td></tr>
+      <tr><td>符号膨胀</td><td>模板 + 反射注册让动态符号表变大，拖慢动态链接</td><td><code>-fvisibility=hidden</code> + version script</td></tr>
+    </tbody>
+  </table>
+
+  <div class="fig">
+    <svg viewBox="0 0 960 236" role="img" aria-label="protobuf 默认分配与 Arena 分配的对比：默认模式下嵌套消息树的每个节点各自 new 和 delete，共十余次分配；Arena 模式下整棵树在一块连续内存上构造，只有一次分配和一次整体释放，但树上的对象不能单独 delete">
+      <text class="tb" x="480" y="20" text-anchor="middle">一棵嵌套消息树的分配账单</text>
+
+      <rect class="box-y" x="20" y="38" width="430" height="150" rx="9"/>
+      <text class="ty" x="235" y="60" text-anchor="middle">默认：每个节点自己 new</text>
+      <rect class="box" x="200" y="72" width="70" height="24" rx="4"/>
+      <text class="tm" x="235" y="89" text-anchor="middle">Request</text>
+      <rect class="box" x="90" y="112" width="70" height="24" rx="4"/>
+      <rect class="box" x="200" y="112" width="70" height="24" rx="4"/>
+      <rect class="box" x="310" y="112" width="70" height="24" rx="4"/>
+      <rect class="box" x="60" y="152" width="60" height="22" rx="4"/>
+      <rect class="box" x="140" y="152" width="60" height="22" rx="4"/>
+      <rect class="box" x="230" y="152" width="60" height="22" rx="4"/>
+      <rect class="box" x="320" y="152" width="60" height="22" rx="4"/>
+      <path class="ln" d="M235 96 L235 112 M125 112 L235 104 M345 112 L235 104 M90 152 L125 136 M170 152 L125 136 M260 152 L235 136 M350 152 L345 136"/>
+      <text class="tr" x="235" y="184" text-anchor="middle">14 次 new + 14 次 delete，散落在堆各处</text>
+
+      <rect class="box-g" x="470" y="38" width="470" height="150" rx="9"/>
+      <text class="tg" x="705" y="60" text-anchor="middle">Arena：一整块，一次分配</text>
+      <rect class="box" x="500" y="76" width="410" height="46" rx="6"/>
+      <path class="ln-d" d="M560 76 L560 122 M620 76 L620 122 M680 76 L680 122 M740 76 L740 122 M800 76 L800 122 M860 76 L860 122"/>
+      <text class="tm" x="705" y="104" text-anchor="middle">同一块连续内存，指针碰撞式前移</text>
+      <text class="tg" x="705" y="144" text-anchor="middle">1 次分配 + 1 次整体释放，缓存局部性也更好</text>
+      <text class="tr" x="705" y="170" text-anchor="middle">代价：树上任何一个对象都不能单独 delete</text>
+
+      <text class="ts" x="480" y="212" text-anchor="middle">收益真实，但它把「每个消息自己管自己」换成了「整块一起活一起死」</text>
+      <text class="ts" x="480" y="230" text-anchor="middle">而 <tspan class="tm">delete msg</tspan> 从正确代码变成 UB 这件事，<tspan class="tr">编译器一句话都不会说</tspan></text>
+    </svg>
+  </div>
+
+  <p>Arena 那一行是最容易踩的：它把「每个消息自己管自己」换成了「整块内存一起活一起死」，性能收益明显，但 <code>delete msg</code> 从正确代码变成了未定义行为。这个改动不会有编译错误提醒你，所以它应该是一个<strong>项目级决定</strong>，而不是某个人在某个热点函数里的局部优化。</p>
+</section>
+
+<!-- ================================================================ §7 -->
+<section class="chapter" id="s7">
+  <div class="ch-head">
+    <div class="num">07</div>
+    <div class="t"><h2>失败模式与排障</h2><p class="sub">这些崩溃的共同点是：栈顶跟真正的 bug 没有关系</p></div>
+  </div>
+
+  <p>跨语言 bug 难查，不是因为机制复杂，而是因为<strong>症状出现的地方离原因很远</strong>。下面这张表按「你看到的现场」来索引，而不是按原因。</p>
+
+  <table>
+    <thead><tr><th>你看到的</th><th>大概率是什么</th><th>怎么确认</th></tr></thead>
+    <tbody>
+      <tr><td>崩在 <code>free</code> / <code>_int_free</code> 里，栈上全是 libc</td><td>跨边界的分配/释放不配对（§2.2）</td><td>ASan 会直接报 <code>alloc-dealloc-mismatch</code>；或看两侧是否链接了不同的 CRT</td></tr>
+      <tr><td><code>undefined symbol: _ZN2tn6Engine3runE...</code></td><td>忘了 <code>extern "C"</code>，导出的是 mangled 名</td><td><code>nm -D --defined-only lib.so | c++filt</code> 对一遍</td></tr>
+      <tr><td>链接过了，运行期字段全是垃圾</td><td>两侧 STL ABI 不一致（<code>_GLIBCXX_USE_CXX11_ABI</code>）</td><td>比对两侧的宏定义；根治办法是边界上别出现 STL 类型</td></tr>
+      <tr><td><code>terminate called after throwing...</code></td><td>异常穿过了 C 边界（§2.1）</td><td>给每个导出函数加 <code>noexcept</code>，让它崩在第一现场</td></tr>
+      <tr><td>Python 跑几分钟后随机崩在 GC 里</td><td>引用计数错乱：C++ 线程回调时没拿 GIL</td><td><code>faulthandler</code> + <code>PYTHONMALLOC=debug</code>；审查所有 <code>gil_scoped_*</code></td></tr>
+      <tr><td>numpy 数组里的数值莫名其妙变了</td><td>零拷贝返回的缓冲已被 C++ 释放（§4.3）</td><td>暂时把 policy 改回 <code>copy</code>，问题消失即确诊</td></tr>
+      <tr><td>多线程加了没变快</td><td>没释放 GIL（§4.2）</td><td><code>py-spy top</code> 看是不是只有一个线程在跑</td></tr>
+    </tbody>
+  </table>
+
+  <p>把最后三行放在一起看会发现一个规律：<strong>Python 侧的问题几乎都不在 C++ 代码里，而在绑定层的三个决策上</strong>——GIL 何时释放、返回值归谁、回调在哪个线程。这三处写对了，剩下的调试就退化成普通的 C++ 调试。</p>
+
+  <div class="box tip">跨语言崩溃的通用调试流程（core 文件、符号化、线程栈）与 C++ 内部崩溃并无不同，见 <a href="../perf-debug/crash_debugging_guide.html">崩溃排查</a> 与 <a href="./gdb_crash_debugging.html">GDB 崩溃实战</a>；ASan 对 <code>alloc-dealloc-mismatch</code> 的检测原理见 <a href="./sanitizer_internals.html">Sanitizer 原理</a>。</div>
+</section>
+
+<!-- ================================================================ §8 -->
+<section class="chapter" id="s8">
+  <div class="ch-head">
+    <div class="num">08</div>
+    <div class="t"><h2>面试题集（12 道）</h2><p class="sub">按难度分三档，先自测再对照</p></div>
+  </div>
+
+  <p class="qa-hint">点击每道题展开参考答案（先自测，再对照）。</p>
+
+  <h3 id="s8-1">8.1 基础（必答）</h3>
+  <ol class="qa-list">
+    <li><details class="qa">
+      <summary><span class="lvl basic">基础</span>为什么跨语言调用几乎总是要退到 C ABI？</summary>
+      <div class="ans">
+        <p>因为 <strong>C++ 标准从未定义 ABI</strong>。name mangling、异常展开、虚表布局、标准库类型的内存布局全是实现细节：GCC/Clang 用 Itanium ABI，MSVC 用另一套；即便同为 GCC，libstdc++ 在 5.0 还因 C++11 的 <code>std::string</code> 要求换过一次布局。</p>
+        <p>C 则由各平台的 psABI 钉死了参数传递、结构体对齐和符号命名，所有语言的 FFI 都实现了它。所以 C ABI 不是「更好」，只是<strong>唯一一个大家都同意的东西</strong>。</p>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl basic">基础</span><code>extern "C"</code> 到底关掉了什么？没关掉什么？</summary>
+      <div class="ans">
+        <p>关掉的是 <strong>name mangling</strong>，并指定使用 C 的调用约定。符号名变成裸的函数名，因此<strong>不能重载</strong>、不能是模板、不能是类的非静态成员。</p>
+        <p>没关掉的是函数体：里面照样可以用模板、异常、STL、虚函数——只要这些东西<strong>不出现在签名上、也不逃出函数体</strong>。这正是 §3 那套写法成立的基础。</p>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl basic">基础</span>什么是 opaque handle？它解决了什么问题？</summary>
+      <div class="ans">
+        <p>在头文件里只写 <code>typedef struct tn_engine tn_engine;</code> 而不给出定义，调用方就只能持有指针，无法 <code>sizeof</code>、无法解引用、无法访问成员。</p>
+        <p>收益是 <strong>ABI 冻结</strong>：实现结构体加字段、换成员类型、升级编译器，调用方都不需要重新编译，因为它的编译产物里根本没有关于布局的任何假设。代价是所有操作都得经过函数调用，无法内联。</p>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl basic">基础</span>C++ 库返回一个 <code>char*</code>，让调用方 <code>free</code>——为什么这是坏设计？</summary>
+      <div class="ans">
+        <p>因为两侧可能用不同的分配器：Windows 上静态链接 CRT 时每个模块各有一份堆，Linux 上一侧可能 <code>LD_PRELOAD</code> 了 jemalloc。用 A 的堆分配、用 B 的堆释放是未定义行为，典型现场是崩在 <code>free</code> 内部、栈顶与业务代码无关。</p>
+        <p>而且对面如果是 Rust 或 Java，根本没有 <code>free</code> 可调。正解见 §2.2：要么调用方给缓冲区，要么库自己配一个 <code>tn_string_free()</code>。</p>
+      </div>
+    </details></li>
+  </ol>
+
+  <h3 id="s8-2">8.2 中级（区分熟练度）</h3>
+  <ol class="qa-list" start="5">
+    <li><details class="qa">
+      <summary><span class="lvl mid">中级</span>为什么每个 <code>extern "C"</code> 函数都该写 <code>noexcept</code> 并整个包在 <code>try</code> 里？</summary>
+      <div class="ans">
+        <p>异常穿过非 C++ 帧时，要么因为对面不可展开而 <code>terminate</code>，要么勉强穿过去但沿途的 C 帧没有析构可调——锁没解、fd 没关、引用计数没减，进程带着损坏的状态继续跑，几小时后才表现出来。</p>
+        <p><code>try</code> + <code>catch (...)</code> 把异常在 C++ 侧就转成错误码，这是正解。加 <code>noexcept</code> 是第二道保险：万一漏了某条抛出路径，它保证<strong>确定地</strong>在第一现场 <code>terminate</code>，而不是滑向那种查不出来的静默损坏。这是刻意选择「崩得响」而不是「崩得晚」。</p>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl mid">中级</span>把热点用 C++ 重写、再开 8 个 Python 线程，为什么总吞吐几乎没动？</summary>
+      <div class="ans">
+        <p>因为 GIL 没释放。Python 调进 C++ 时默认仍持有全局解释器锁，你那段 C++ 计算全程锁死了整个解释器，8 个线程被串行化成一个。</p>
+        <p>解法是 <code>py::gil_scoped_release</code>（或 <code>py::call_guard&lt;py::gil_scoped_release&gt;()</code>）。前提是那段代码<strong>一个 Python 对象都不能碰</strong>，包括让某个 <code>py::object</code> 在此期间析构——那会动引用计数。确认手段：<code>py-spy top</code> 看是不是只有一个线程在跑。</p>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl mid">中级</span>pybind11 的 <code>return_value_policy</code> 有哪几种？怎么选？</summary>
+      <div class="ans">
+        <p>常用四种：<code>copy</code>（拷一份，两边各管各的）、<code>take_ownership</code>（指针交给 Python，GC 时调 C++ 析构）、<code>reference</code>（只给指针，谁都不管生命周期）、<code>reference_internal</code>（指针 + <code>keep_alive</code>，父对象活着它就活着）。</p>
+        <p>选法的关键是<strong>错误代价不对称</strong>：<code>copy</code> 选错只是慢，<code>reference</code> 选错是 use-after-free。所以默认从 <code>copy</code> 起步，等 profiler 确认绑定层真的是瓶颈再往下走，而且每换一档都要能说清谁持有这块内存。返回成员的访问器用 <code>reference_internal</code>，工厂函数用 <code>take_ownership</code>。</p>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl mid">中级</span>C++ 后台线程要回调 Python 函数，需要注意什么？</summary>
+      <div class="ans">
+        <p>必须先 <code>py::gil_scoped_acquire</code>。不加锁直接碰 Python 对象会破坏引用计数，症状通常不是立刻崩溃，而是几分钟后在某次 GC 里崩掉，现场毫无线索。</p>
+        <p>还有两个连带问题：回调里 Python 抛出的异常会在 C++ 侧变成 <code>py::error_already_set</code>，而这个异常对象<strong>持有 Python 对象、析构需要 GIL</strong>，让它在已释放 GIL 的作用域里析构就是死锁；另外要确认解释器还活着——进程退出时后台线程还在回调，是常见的关停期崩溃。</p>
+      </div>
+    </details></li>
+  </ol>
+
+  <h3 id="s8-3">8.3 高级（体现深度）</h3>
+  <ol class="qa-list" start="9">
+    <li><details class="qa">
+      <summary><span class="lvl adv">高级</span>cxx 相比 bindgen / 手写 <code>extern "C"</code>，本质上多做了什么？</summary>
+      <div class="ans">
+        <p>它把<strong>所有权规则从文档搬进了类型系统</strong>。<code>UniquePtr&lt;Engine&gt;</code> 出现在 Rust 侧就意味着所有权真的转移了，Rust 的 <code>drop</code> 会调 C++ 的析构函数；<code>Box&lt;Session&gt;</code> 出现在 C++ 侧则相反；<code>&amp;[u8]</code> 只是借用，借用检查器保证它不会活得比来源更久。</p>
+        <p>bindgen 只是把 C 头翻译成能编译的 Rust 声明，生成的全是 <code>unsafe</code>，安全封装还得人写。判断一个 FFI 方案好坏，看「所有权规则写在哪」这一列就够了：写在文档里最差，写在注解里次之，写进类型系统最好——因为只有最后一种，编译器会替你检查。</p>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl adv">高级</span>两个都用 GCC 编译的 <code>.so</code>，链接成功但运行期读到的字符串是乱码，怎么查？</summary>
+      <div class="ans">
+        <p>典型的 <code>_GLIBCXX_USE_CXX11_ABI</code> 不一致：GCC 5 为满足 C++11 对 <code>std::string</code> 的要求引入了新布局，同时保留旧的 COW 实现。两边编译期宏不同，<code>std::string</code> 的成员偏移就不同——而符号名里恰好带了 ABI 标记的那部分可能仍然匹配上，于是链接器放行。</p>
+        <p>确认：比对两侧的编译命令与宏、用 <code>nm</code> 看符号里有没有 <code>__cxx11</code> 命名空间。但真正的教训是<strong>根治而非排查</strong>——只要边界上不出现任何 STL 类型，这类问题从定义上就不会发生。这正是 §3 那套 C API 的价值。</p>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl adv">高级</span>要给一个 C++ 引擎同时提供 Python、Rust、Java 三种绑定，怎么设计分层？</summary>
+      <div class="ans">
+        <p>中间放<strong>一层稳定的 C API</strong>（§3 的 opaque handle + 错误码 + 版本号），三种绑定都只依赖它，谁都不直接碰 C++ 类型。</p>
+        <p>这样做的收益有三层：绑定层各自独立演进、互不牵连；C++ 侧可以自由重构与升级编译器；新增第四种语言时不用动 C++ 一行代码。代价是多一层转发开销和一次类型转换——对绝大多数场景可以忽略，只有在每秒百万次调用的边界上才需要重新权衡。</p>
+        <p>反模式是让每种绑定各自直接包装 C++ 类：pybind11 那份会用 <code>std::shared_ptr</code> 做 holder，Rust 那份会另搞一套 <code>unsafe</code> 封装，Java 那份又是一套 JNI 局部引用规则——同一个生命周期问题要以三种不同的方式解决三遍，而且三边会逐渐漂移。</p>
+      </div>
+    </details></li>
+    <li><details class="qa">
+      <summary><span class="lvl adv">高级</span>什么时候<strong>不</strong>该做进程内 FFI，而该改用进程间通信？</summary>
+      <div class="ans">
+        <p>四种情况：其一，对面的运行时有自己的 GC 或信号处理，与你的冲突（JVM 的信号处理与 C++ 的段错误处理抢同一个 handler）；其二，对面不稳定，你不希望它的崩溃带走你的进程；其三，两侧的依赖版本互斥，同一进程里根本装不下；其四，调用频率低而单次数据量大——此时序列化开销被摊薄，进程隔离几乎免费。</p>
+        <p>反过来，高频小数据的调用（每秒数十万次、每次几十字节）才是 FFI 真正不可替代的场景，因为一次 IPC 往返的开销就足以吃掉全部收益。判据是<strong>把「调用频率 × 单次开销」和「隔离带来的运维收益」放在一起算</strong>，而不是凭「进程内一定更快」的直觉。</p>
+      </div>
+    </details></li>
+  </ol>
+</section>
+
+<div class="footer-nav">
+  <a href="./compilation_guide.html">⬅️ 编译与链接</a>
+  <a href="../perf-debug/abi_compatibility_guide.html">🔗 ABI 兼容性</a>
+  <a href="../architect/large_scale_engineering.html">🏗️ 大型 C++ 工程化</a>
+  <a href="./smart_pointers_deep_dive.html">📦 智能指针</a>
+  <a href="modern_cpp_stl_directory.html">📚 目录</a>
+  <a href="../index.html">🏠 主页</a>
+</div>
+
+</main>
+</div>
+
+<footer>
+  <p>C++ 跨语言互操作 — 稳定 C API · pybind11 与 nanobind · C++ ↔ Rust · 所有权与异常边界 — Kavin Tech Notes · 2026</p>
+</footer>
+
+<script>
+document.querySelectorAll('aside.toc nav a').forEach(a=>{a.addEventListener('click',e=>{e.preventDefault();const t=document.querySelector(a.getAttribute('href'));if(t)t.scrollIntoView({behavior:'smooth'})})});
+const obs=new IntersectionObserver(es=>{es.forEach(e=>{if(e.isIntersecting){document.querySelectorAll('aside.toc nav a').forEach(a=>a.classList.remove('active'));const l=document.querySelector(`aside.toc nav a[href="#${e.target.id}"]`);if(l)l.classList.add('active')}})},{threshold:.2});
+document.querySelectorAll('section[id]').forEach(s=>obs.observe(s));
+</script>
+
+<script src="../assets/site-theme-toggle.js" defer></script>
+</body>
+</html>
